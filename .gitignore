@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+dist/
+.claude/settings.local.json
+# raw exports / customer data — never commit
+data/
+*.local.csv

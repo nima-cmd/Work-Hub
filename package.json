@@ -1,0 +1,21 @@
+{
+  "name": "work-hub",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Warehouse order pipeline tracker — aggregates NetSuite saved-search exports (and later Orderful EDI + Airtable) into one aging-aware view so nothing sits ignored.",
+  "author": "Nima Erfani",
+  "scripts": {
+    "test": "node --test",
+    "analyze": "node scripts/analyze.js",
+    "migrate": "node --env-file=.env.local scripts/migrate.js",
+    "ingest": "node --env-file=.env.local scripts/ingest.js",
+    "server": "node --env-file=.env.local server/index.js",
+    "client:build": "npm --prefix client install && npm --prefix client run build",
+    "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\""
+  },
+  "dependencies": {
+    "concurrently": "^10.0.3",
+    "express": "^5.2.1",
+    "pg": "^8.22.0"
+  }
+}
