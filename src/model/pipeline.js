@@ -156,6 +156,24 @@ export function computeFlags(o, today) {
     })
   }
 
+  // Partially fulfilled: one batch already shipped/invoiced, but open units
+  // remain that need a SECOND fulfillment or a disposition (ship the rest, or
+  // close). Without this, the shipped invoice pushes the order to Approved and
+  // it looks done — the open units would silently fall through the cracks.
+  // This is the multi-document case we handle by flagging for manual review
+  // rather than engineering full multi-IF tracking (see the project decision).
+  if (/partially fulfilled/i.test(o.soStatus || '')) {
+    const remaining = o.qtyOrdered != null ? o.qtyOrdered - (o.qtyFulfilled ?? 0) : null
+    flags.push({
+      key: 'PARTIAL',
+      label:
+        remaining != null && remaining > 0
+          ? `Partially fulfilled — ${remaining} units still open, needs 2nd fulfillment or disposition`
+          : 'Partially fulfilled — open units need disposition',
+      severity: 2,
+    })
+  }
+
   // Shortage, read through ATS (see the warehouse-order-lifecycle notes):
   //  - ATS order short      → real STOCK exception; ATS is supposed to ship from
   //                           on-hand stock, so a shortfall means inquire now.

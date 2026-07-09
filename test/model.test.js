@@ -98,6 +98,18 @@ test('computeFlags flags an overdue ship date', () => {
   assert.ok(flags.some((f) => f.key === 'OVERDUE'))
 })
 
+test('computeFlags flags a partially-fulfilled order with open units', () => {
+  // SO12074 case: shipped 26 of 38 with an invoice, so it reads as Approved —
+  // the flag must surface that 12 units still need a 2nd IF or disposition.
+  const flags = computeFlags(
+    { stage: STAGE.APPROVED, soStatus: 'Partially Fulfilled', qtyOrdered: 38, qtyFulfilled: 26, fulfillments: [] },
+    new Date('2026-07-09'),
+  )
+  const partial = flags.find((f) => f.key === 'PARTIAL')
+  assert.ok(partial, 'PARTIAL flag should fire')
+  assert.match(partial.label, /12 units/)
+})
+
 test('deriveSource classifies EDI partners', () => {
   assert.equal(deriveSource('599 Nordstrom - Cedar Rapids'), 'edi')
   assert.equal(deriveSource('166 ShopBop'), 'edi')
