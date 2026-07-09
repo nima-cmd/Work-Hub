@@ -1,4 +1,4 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, ifList, SourceBadge } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge } from '../lib.jsx'
 
 // Attention-first: what needs action now, up top; pipeline overview above it.
 export default function Dashboard({ orders }) {
@@ -35,7 +35,9 @@ export default function Dashboard({ orders }) {
             </div>
             <div className="next">
               → {o.nextAction}
-              {ifList(o) && <span className="ifs"> · {ifList(o)}</span>}
+              {docRef(o) && (
+                <span className="ifs"> · {docRef(o)}{docDate(o) && ` · ${docDate(o)}`}</span>
+              )}
             </div>
             <Flags flags={o.flags} />
           </div>

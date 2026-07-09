@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate } from '../lib.jsx'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
 export default function TableView({ orders }) {
@@ -30,7 +30,10 @@ export default function TableView({ orders }) {
           <tr>
             <Th k="soNumber">SO</Th>
             <Th k="customer">Customer</Th>
+            <Th k="location">Location</Th>
+            <Th k="poNumber">PO#</Th>
             <Th k="stageRank">Stage</Th>
+            <th>IF / Invoice #</th>
             <Th k="daysPending">Days pending</Th>
             <th>Next action</th>
             <th>Flags</th>
@@ -41,7 +44,13 @@ export default function TableView({ orders }) {
             <tr key={o.soNumber} className={sevClass(o.severity)}>
               <td className="mono">{o.soNumber} <SourceBadge source={o.source} /></td>
               <td>{o.customer}</td>
+              <td>{o.location}</td>
+              <td className="mono">{o.poNumber}</td>
               <td>{STAGE_SHORT[o.stage] || o.stage}</td>
+              <td className="mono">
+                {docRef(o)}
+                {docDate(o) && <span className="docdate"> · {docDate(o)}</span>}
+              </td>
               <td className="num">{o.daysPending ?? ''}</td>
               <td>{o.nextAction}</td>
               <td className="flagcell">

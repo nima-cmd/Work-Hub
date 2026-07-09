@@ -8,12 +8,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { parseCsv } from '../src/ingest/csv.js'
-import {
-  fromOpenSalesOrders,
-  fromUnpackedFulfillments,
-  fromPendingOrders,
-  fromInvoicedPending,
-} from '../src/ingest/savedSearches.js'
+import { fromOpenSalesOrders, fromFulfillmentPipeline } from '../src/ingest/savedSearches.js'
 import { buildPipeline } from '../src/model/pipeline.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 
@@ -24,10 +19,8 @@ const DATA_DIR =
 const read = (file) => parseCsv(readFileSync(join(DATA_DIR, file), 'utf8'))
 
 const records = [
-  ...fromOpenSalesOrders(read('WarehouseOpenSalesOrders.csv')),
-  ...fromUnpackedFulfillments(read('Item Fulfilment unpacked.csv')),
-  ...fromPendingOrders(read('Pending Orders.csv')),
-  ...fromInvoicedPending(read('invoiced order pending status.csv')),
+  ...fromOpenSalesOrders(read('WarehouseOrderPipelinev2.csv')),
+  ...fromFulfillmentPipeline(read('WarehouseFulfillmentPipeline.csv')),
 ]
 
 const orders = buildPipeline(records, { today: new Date() })

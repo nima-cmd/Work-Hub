@@ -46,6 +46,24 @@ body {
 .pill.fresh { color: #7ee787; border-color: rgba(126,231,135,0.4); }
 .pill.warn { color: var(--mid); border-color: rgba(217,130,43,0.5); }
 .pill.stale { color: var(--hi); border-color: rgba(248,81,73,0.5); }
+.pill.missing { color: var(--hi); border-color: rgba(248,81,73,0.6); }
+
+/* per-source freshness panel */
+.freshWrap { position: relative; display: inline-block; }
+.freshWrap .pill { cursor: pointer; }
+.freshPanel { position: absolute; right: 0; top: 30px; z-index: 20; min-width: 280px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.freshHead { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 4px 6px 8px; }
+.freshRow { display: flex; align-items: center; gap: 8px; padding: 5px 6px; font-size: 12px; }
+.freshRow .fname { flex: 1; color: var(--text); }
+.freshRow .fage { color: var(--muted); font-variant-numeric: tabular-nums; }
+.freshRow .fage.stale, .freshRow .fage.missing { color: var(--hi); }
+.freshRow .fage.warn { color: var(--mid); }
+.dot { width: 8px; height: 8px; border-radius: 999px; flex: none; background: var(--muted); }
+.dot.fresh { background: #7ee787; }
+.dot.warn { background: var(--mid); }
+.dot.stale, .dot.missing { background: var(--hi); }
 
 main { padding: 20px; }
 .banner { padding: 16px; color: var(--muted); }
@@ -123,7 +141,7 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .krow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 
 /* calendar (agenda) */
-.calendar { max-width: 760px; }
+.calendar { max-width: 980px; }
 .calGroup { margin-bottom: 22px; }
 .calHead { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
 .calHead.sev-hi { color: var(--hi); }
@@ -137,3 +155,29 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .caltag.sev-lo { color: #a9c8ff; border-color: rgba(59,130,246,0.5); }
 .calRow .so { font-weight: 700; font-variant-numeric: tabular-nums; }
 .calRow .cust { color: var(--muted); flex: 1; }
+
+/* related-document date (when the IF entered its current state) */
+.docdate { color: var(--muted); }
+
+/* calendar (shipped grid) */
+.shipCal { margin-top: 8px; }
+.calNav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.calNavBtn { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 15px; }
+.calNavBtn:hover { background: var(--panel); }
+.calTitle { font-size: 15px; margin: 0; min-width: 160px; text-align: center; }
+.calToday { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.calToday:hover { color: var(--text); }
+.calModeToggle { display: flex; margin-left: auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.calModeToggle button { background: transparent; border: none; color: var(--muted); padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.calModeToggle button.active { background: var(--panel2); color: var(--text); }
+.calGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.calWeekday { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; padding-bottom: 4px; }
+.calCell { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; min-height: 76px; }
+.calGridWeek .calCell { min-height: 120px; }
+.calCell-dim { opacity: 0.4; }
+.calCell-today { border-color: var(--accent); }
+.calDayNum { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.calCell-today .calDayNum { color: var(--accent); font-weight: 700; }
+.calEvt { font-size: 11px; background: var(--panel2); border-radius: 5px; padding: 2px 6px; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.calEvt .so { font-weight: 700; font-variant-numeric: tabular-nums; }
+.calEvtMore { font-size: 10px; color: var(--muted); }

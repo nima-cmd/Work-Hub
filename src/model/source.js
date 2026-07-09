@@ -7,7 +7,11 @@
 
 const EDI_PATTERNS = [/shopbop/i, /nordstrom/i, /bloomingdale/i]
 
-export function deriveSource(customer) {
+// Location (e.g. "Warehouse Bulk : Nordstrom") is the authoritative NetSuite
+// signal when present; customer name is the fallback for sources that don't
+// carry a location column (e.g. the Item Fulfillment / Invoice searches).
+export function deriveSource(customer, location) {
+  const l = location || ''
   const c = customer || ''
-  return EDI_PATTERNS.some((re) => re.test(c)) ? 'edi' : 'boutique'
+  return EDI_PATTERNS.some((re) => re.test(l) || re.test(c)) ? 'edi' : 'boutique'
 }

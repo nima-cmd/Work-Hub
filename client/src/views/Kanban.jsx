@@ -1,4 +1,4 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, SourceBadge } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge } from '../lib.jsx'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped.
 export default function Kanban({ orders }) {
@@ -23,6 +23,12 @@ export default function Kanban({ orders }) {
                 <SourceBadge source={o.source} />
               </div>
               <div className="cust">{o.customer}</div>
+              {docRef(o) && (
+                <div className="ifs">
+                  {docRef(o)}
+                  {docDate(o) && <span className="docdate"> · {docDate(o)}</span>}
+                </div>
+              )}
               <Flags flags={o.flags} />
             </div>
           ))}

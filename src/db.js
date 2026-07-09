@@ -19,3 +19,22 @@ export const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 // Convenience wrapper: query(text, params) -> result
 export const query = (text, params) => pool.query(text, params)
+
+// Run `fn` inside a single transaction, passing it a dedicated client.
+// COMMIT on success, ROLLBACK on any throw — so a mid-ingest failure can never
+// leave the tables half-written (which previously stranded orders at the wrong
+// stage until a clean re-run). Pass the client through to the load* functions.
+export async function withTransaction(fn) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    client.release()
+  }
+}

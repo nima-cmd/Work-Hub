@@ -6,6 +6,47 @@ import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
 
+const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
+
+// Per-source freshness panel. The header pill shows the WORST source; clicking
+// it lists every required export with its own age, so you know exactly which
+// one to re-pull — a stale IF/Invoice export silently misclassifies orders
+// (they sit at an earlier stage than they really are).
+function FreshnessPanel({ fresh }) {
+  const [open, setOpen] = useState(false)
+  if (!fresh) return null
+  const bad = fresh.sources.filter((s) => s.status === 'stale' || s.status === 'missing').length
+  const summary =
+    bad > 0
+      ? `${bad} ${bad === 1 ? 'export' : 'exports'} need re-upload`
+      : fresh.status === 'fresh'
+        ? 'data current'
+        : 'data aging'
+
+  return (
+    <span className="freshWrap">
+      <button className={'pill ' + fresh.status} onClick={() => setOpen((o) => !o)}>
+        {summary} ▾
+      </button>
+      {open && (
+        <div className="freshPanel">
+          <div className="freshHead">Saved-search exports</div>
+          {fresh.sources.map((s) => (
+            <div key={s.key} className="freshRow">
+              <span className={'dot ' + s.status} />
+              <span className="fname">{s.label}</span>
+              <span className={'fage ' + s.status}>
+                {s.status === 'missing' ? 'not uploaded' : fmtAge(s.ageHours)}
+                {(s.status === 'stale' || s.status === 'missing') && ' · re-upload'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  )
+}
+
 const VIEWS = [
   { key: 'dashboard', label: 'Dashboard', C: Dashboard },
   { key: 'kanban', label: 'Kanban', C: Kanban },
@@ -80,12 +121,7 @@ export default function App() {
             {importing ? 'Importing…' : '⤓ Import CSV'}
           </button>
           <input ref={fileRef} type="file" accept=".csv" multiple hidden onChange={onFiles} />
-          {fresh && fresh.status !== 'none' && (
-            <span className={'pill ' + fresh.status} title="Age of the underlying saved-search export">
-              data {fmtAge(fresh.maxAgeHours)}
-              {(fresh.status === 'warn' || fresh.status === 'stale') && ' · re-upload'}
-            </span>
-          )}
+          <FreshnessPanel fresh={fresh} />
           {orders && (
             <>
               <span className="pill danger">{attention} need attention</span>

@@ -35,44 +35,120 @@ export function toDate(s) {
   return isNaN(d.getTime()) ? null : d
 }
 
-// ── 1) WarehouseOpenSalesOrders.csv — SOs still needing fulfillment ─────────
+// ── 1) Warehouse Order Pipeline (SO-based) — the consolidated demand+invoice search
+// One row per Sales Order carrying demand, approval, and (via the Billing
+// Transaction join) its invoice. Because the invoice is on the same row, this
+// search alone drives On Hold / Open / Invoiced / Approved. Picked/Packed come
+// from the separate fulfillment search and merge in by SO#.
+//
+// The invoice join columns arrive with generic/duplicate headers, so we read
+// them by their exact (parser-disambiguated) names AND accept clean custom
+// labels if they're set later:
+//   - INV#            = "Invoice Number" | "Maximum of Document Number"
+//   - Open/Paid       = "Invoice Status"  | "Maximum of Status (2)" (2nd "Status")
+//   - shipping status = "Invoice Shipping Status" | "Maximum of Invoice Status"
 export function fromOpenSalesOrders(rows) {
   return rows
     .filter((r) => r['Document Number'] && r['Document Number'] !== 'Total')
-    .map((r) => ({
-      source: 'WarehouseOpenSalesOrders',
-      stage: STAGE.OPEN,
-      soNumber: refNumber(r['Document Number']),
-      customer: r['Maximum of Company Name'] || '',
-      poNumber: r['Maximum of PO/Check Number'] || '',
-      isAts: /yes/i.test(r['Maximum of Is ATS Order'] || ''),
-      startDate: toDate(r['Maximum of Start Date']),
-      endDate: toDate(r['Maximum of End Date']),
-      qtyOrdered: num(r['Sum of Quantity']),
-      qtyAllocated: num(r['Sum of Allocated Supply']),
-      qtyFulfilled: num(r['Sum of Quantity Fulfilled/Received']),
-    }))
+    .map((r) => {
+      const approvalStatus = r['Maximum of Approval Status'] || ''
+      const invoice = refNumber(r['Invoice Number'] || r['Maximum of Document Number'] || '')
+      const invoiceStatus = r['Invoice Status'] || r['Maximum of Status (2)'] || '' // Open / Paid In Full
+      const shippingStatus = r['Invoice Shipping Status'] || r['Maximum of Invoice Status'] || ''
+      const hasInvoice = !!invoice
+
+      // Stage from this row alone: an invoice means it's past packing (Invoiced,
+      // which buildPipeline promotes to Approved via shippingStatus); otherwise
+      // On Hold blocks fulfillment; otherwise Open. Picked/Packed override via
+      // the fulfillment search when furtherStage picks the higher rank.
+      let stage = STAGE.OPEN
+      if (hasInvoice) stage = STAGE.INVOICED
+      else if (/hold/i.test(approvalStatus)) stage = STAGE.ON_HOLD
+
+      return {
+        source: 'WarehouseOrderPipeline',
+        stage,
+        soNumber: refNumber(r['Document Number']),
+        customer: r['Maximum of Name'] || r['Maximum of Company Name'] || '',
+        location: r['Maximum of Location'] || '',
+        poNumber: r['Maximum of PO/Check Number'] || '',
+        soStatus: r['Maximum of Status'] || '',
+        approvalStatus,
+        isAts: /yes/i.test(r['Maximum of Is ATS Order'] || ''),
+        startDate: toDate(r['Maximum of Start Date']),
+        endDate: toDate(r['Maximum of End Date']),
+        qtyOrdered: num(r['Sum of Quantity']),
+        qtyAllocated: num(r['Sum of Quantity Committed'] || r['Sum of Allocated Supply']),
+        qtyFulfilled: num(r['Sum of Quantity Fulfilled/Received']),
+        // invoice side (present only once an invoice exists)
+        invoice,
+        invoiceStatus,
+        shippingStatus,
+        amountRemaining: num(r['Invoice Amount Remaining'] || r['Maximum of Amount Remaining']),
+        shipDate: toDate(r['Maximum of Ship Date']),
+        cancelDate: toDate(r['Maximum of Order Cancel Date'] || r['Maximum of Cancel Date']),
+      }
+    })
 }
 
-// ── 2) Item Fulfilment unpacked.csv — IFs picked but not yet packed ─────────
+// ── 1b) Warehouse Fulfillment Pipeline (IF-based) — Picked/Packed fulfillments
+// Replaces the old "Item Fulfilment unpacked" + "Pending Orders" searches with
+// one IF-based export. Needed because a Sales-Order search can't see Picked or
+// Packed IFs (NetSuite only links a fulfillment to the SO line once it SHIPS).
+// Merges into orders by SO# (Created From). Transfer Orders are dropped here.
+export function fromFulfillmentPipeline(rows) {
+  const stageFor = (s) =>
+    /packed/i.test(s) ? STAGE.PACKED : /shipped/i.test(s) ? STAGE.SHIPPED : STAGE.PICKED
+  return rows
+    .filter(
+      (r) => r['Document Number'] && !/transfer order/i.test(r['Maximum of Created From'] || r['Created From'] || ''),
+    )
+    .map((r) => {
+      const ifStatus = r['Maximum of Status'] || r['Status'] || ''
+      return {
+        source: 'FulfillmentPipeline',
+        stage: stageFor(ifStatus),
+        soNumber: refNumber(r['Maximum of Created From'] || r['Created From'] || ''),
+        ifNumber: refNumber(r['Document Number']),
+        customer: cleanName(r['Maximum of Name'] || r['Name'] || ''),
+        location: r['Maximum of Location'] || '',
+        ifStatus, // Picked / Packed / Shipped
+        date: toDate(r['Maximum of Date'] || r['Date']),
+      }
+    })
+}
+
+// ── 2) Item Fulfilment unpacked.csv — IFs picked, or shipped ────────────────
+// Widened live 2026-07-08: this search's Status filter now includes Shipped
+// alongside Picked (Packed stays owned by the Pending Orders search below),
+// so we branch per row instead of assuming the whole file is one stage.
 export function fromUnpackedFulfillments(rows) {
   return rows
-    .filter((r) => r['Document Number'])
-    .map((r) => ({
-      source: 'ItemFulfilmentUnpacked',
-      stage: STAGE.PICKED,
-      soNumber: refNumber(r['Created From']),
-      ifNumber: refNumber(r['Document Number']),
-      customer: cleanName(r['Name']),
-      ifStatus: r['Status'] || '', // "Picked"
-      date: toDate(r['Date']),
-    }))
+    // Transfer Orders aren't tracked (this app's spine is Sales Orders) — drop
+    // them here, at the source, so downstream code never sees a TO-linked
+    // record at all (buildPipeline also skips them, but loadFulfillments/
+    // loadInvoices read the raw record list directly, bypassing that skip).
+    .filter((r) => r['Document Number'] && !/transfer order/i.test(r['Created From'] || ''))
+    .map((r) => {
+      const ifStatus = r['Status'] || ''
+      const shipped = /shipped/i.test(ifStatus)
+      return {
+        source: 'ItemFulfilmentUnpacked',
+        stage: shipped ? STAGE.SHIPPED : STAGE.PICKED,
+        soNumber: refNumber(r['Created From']),
+        ifNumber: refNumber(r['Document Number']),
+        customer: cleanName(r['Name']),
+        ifStatus, // "Picked" or "Shipped"
+        date: toDate(r['Date']),
+        actualShipDate: shipped ? toDate(r['Date']) : null,
+      }
+    })
 }
 
 // ── 3) Pending Orders.csv — IFs packed, waiting on invoice/payment/ship ─────
 export function fromPendingOrders(rows) {
   return rows
-    .filter((r) => r['Document Number'])
+    .filter((r) => r['Document Number'] && !/transfer order/i.test(r['Created From'] || ''))
     .map((r) => ({
       source: 'PendingOrders',
       stage: STAGE.PACKED,
@@ -100,6 +176,7 @@ export function fromInvoicedPending(rows) {
       customer: r['Name'] || '',
       invoice: r['Inv'] || '',
       soStatus: r['Status'] || '', // Open / Paid In Full
+      invoiceStatus: r['Status'] || '', // same source; loadInvoices reads invoiceStatus
       shippingStatus: r['Shipping Status'] || '', // Pending Payment / FOB Pending Approval / Approved For Shipping
       amountPaid: num(r['Amount Paid']),
       shipDate: toDate(r['Ship Date']),

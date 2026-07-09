@@ -9,6 +9,7 @@
 CREATE TABLE IF NOT EXISTS orders (
   so_number        TEXT PRIMARY KEY,           -- 'SO12043'
   customer         TEXT,
+  location         TEXT,                        -- NetSuite Location, e.g. 'Warehouse Bulk : Nordstrom'
   po_number        TEXT,                        -- customer PO/check number on the order
   is_ats           BOOLEAN,                     -- true = ships from stock; false = presold from a PO
   source           TEXT,                        -- 'edi' | 'dtc' | 'manual'
@@ -23,11 +24,19 @@ CREATE TABLE IF NOT EXISTS orders (
   ship_date        DATE,
   cancel_date      DATE,
   notes            TEXT,
+  approval_status  TEXT,                        -- 'Approved' | 'On Hold' — gates whether an IF may be created
+  billing_status   TEXT,                        -- e.g. 'Fully Billed'
   first_seen       TIMESTAMPTZ DEFAULT now(),   -- first import we saw this order
   last_seen        TIMESTAMPTZ DEFAULT now(),   -- most recent import
   last_movement    TIMESTAMPTZ DEFAULT now(),   -- last time stage changed → stall detection
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
+
+-- CREATE TABLE IF NOT EXISTS is a no-op once the table already exists in Neon,
+-- so new columns need an explicit, idempotent ALTER to actually apply on re-run.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS location TEXT; -- NetSuite Location, e.g. 'Warehouse Bulk : Nordstrom'
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS approval_status TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS billing_status TEXT;
 
 -- ── Item Fulfillments linked to an order ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS fulfillments (
@@ -38,8 +47,11 @@ CREATE TABLE IF NOT EXISTS fulfillments (
   days_pending     INTEGER,
   invoice_number   TEXT,
   if_date          DATE,
+  actual_ship_date DATE,                        -- the day this IF actually shipped (distinct from orders.ship_date, a target)
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS actual_ship_date DATE;
 
 -- ── Invoices linked to an order ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS invoices (

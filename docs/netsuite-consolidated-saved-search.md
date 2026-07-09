@@ -295,23 +295,54 @@ they filtered to the Warehouse location. The consolidated search fixes this by
 - Channel derived from Location (ecom / boutique / EDI / wholesale) — see
   the location→channel map in memory.
 
-Verified SuiteQL core (extend with the IF/Invoice joins from the tested query above):
+## ✅ VERIFIED live 2026-07-08 — field internal IDs confirmed
+
+Queried NetSuite's custom-field catalog directly and validated every field
+below against live data (not just the metadata schema):
+
+| Label | Internal ID | Lives on | Notes |
+|---|---|---|---|
+| Is ATS Order | `custbody_ats_order` | Sales Order (body) | List/Record → decode with `BUILTIN.DF()`. Live: 5,277 No / 468 Yes / 32 blank. |
+| Final Naghedi Destination | `custbody_acs_final_destination` | **Purchase Order only** — always `NULL` on Sales Orders | ⚠️ Correction to the v1 draft above: this field does **not** exist on the SO side, so drop it from Search 1's columns. It belongs in Search 2 (PO-centric) only. Live PO values: Shopbop, Nordstrom, Bloomingdale's, Warehouse, Virtual Warehouse, China. |
+| PO/Check Number | `otherRefNum` (standard field) | Sales Order (body) | Manually entered customer PO#, e.g. EDI buyer POs like `50073688`. |
+| Location (demand side) | `tl.location` (line-level) | Sales Order line | Decode with `BUILTIN.DF()`. This is the field the OC↔PO matcher should join on for the demand side. |
+
+**Also checked and ruled out as the OC↔PO link:** `custbody_hb_edi_assoc_pos`
+("EDI Associated POs") exists on the Sales Order but is populated on **0 of
+5,777** live SOs — confirmed dead/unused. This closes the CLAUDE.md open
+question: **there is no existing NetSuite field holding a manual OC↔PO
+link.** The app owning that mapping (`oc_po_links`) is confirmed correct,
+not just an assumption.
+
+**Still unverified:** the `IF-Packed-Status` custom field referenced in
+`src/ingest/savedSearches.js` — it's likely a field on the Item Fulfillment
+record type, not Sales Order, so it didn't surface in this pass. Verify
+separately when building the IF join.
+
+Verified SuiteQL core, tested live and returns real rows (extend with the
+IF/Invoice joins from the tested query above):
 ```sql
-SELECT t.tranid AS so, BUILTIN.DF(t.entity) AS customer,
-       BUILTIN.DF(tl.location) AS location, t.status,
-       ABS(SUM(tl.quantity)) AS qty_ordered,
-       SUM(NVL(tl.quantitycommitted,0)) AS allocated,
-       SUM(NVL(tl.quantityshiprecv,0)) AS fulfilled
+SELECT
+  t.tranid AS so,
+  BUILTIN.DF(t.entity) AS customer,
+  BUILTIN.DF(tl.location) AS location,
+  BUILTIN.DF(t.custbody_ats_order) AS is_ats,
+  t.otherrefnum AS po_check_number,
+  t.startdate AS start_date,
+  t.enddate AS end_date,
+  t.status,
+  ROUND(SYSDATE - t.trandate) AS days_open,
+  ABS(SUM(tl.quantity)) AS qty_ordered,
+  SUM(NVL(tl.quantitycommitted,0)) AS allocated,
+  SUM(NVL(tl.quantityshiprecv,0)) AS fulfilled
 FROM transaction t
 JOIN transactionline tl ON tl.transaction = t.id
 WHERE t.type='SalesOrd' AND t.status IN ('B','D','E','F')
   AND tl.mainline='F' AND tl.itemtype='InvtPart'
-GROUP BY t.tranid, BUILTIN.DF(t.entity), BUILTIN.DF(tl.location), t.status
+GROUP BY t.tranid, BUILTIN.DF(t.entity), BUILTIN.DF(tl.location),
+         BUILTIN.DF(t.custbody_ats_order), t.otherrefnum, t.startdate, t.enddate, t.status, t.trandate
+ORDER BY days_open DESC
 ```
-Notes: `location` lives on the transaction **line** (`tl.location`), not the
-header. `Is ATS Order` and `Final Naghedi Destination` are custom fields — add
-them in the saved-search UI by label; their SuiteQL ids aren't exposed by the
-metadata catalog (confirm later).
 
 ### Search 2 — "Open POs / Receiving" (PO-centric) — for the non-ATS-OC↔PO pain
 Different record type, so it stays separate (net consolidation: **4 → 2**).
@@ -327,4 +358,147 @@ Different record type, so it stays separate (net consolidation: **4 → 2**).
 4 rigid, location-limited searches → **2 data-first searches** covering every
 location. EDI 856/810 status can be a later third feed (or come from Orderful
 directly). The app supplies all visual structure, so these stay lean.
+
+---
+
+## ✅ VERIFIED live 2026-07-09 — ONE search IS enough for the outbound pipeline
+
+**The key question: can a single Sales-Order search carry IF + Invoice status
+so we don't juggle four exports? Answer: YES.**
+
+Tested live via `PreviousTransactionLink` (the `createdfrom` column errors on
+this connection, but the link table is queryable). For all **76 open Sales
+Orders**:
+
+| | Item Fulfillments per SO | Invoices per SO |
+|---|---|---|
+| Maximum | **1** | **1** |
+| SOs with more than one | **0** | **0** |
+
+Because every open SO has **at most one IF and at most one Invoice**, a single
+**grouped** Sales-Order saved search can pull all the IF and invoice fields via
+joins using **Maximum** aggregation — with no row multiplication and no hidden
+records. (An earlier count showing "18 multi-invoice" was a link-table artifact:
+the same invoice is listed once per line, e.g. INV11314 appeared twice for
+SO12043. Deduping with `COUNT(DISTINCT)` confirmed 1:1.)
+
+### The consolidated "Warehouse Order Pipeline" search — full column list
+
+Keep the current grouped SO search (grouped by Document Number) and **add these
+join columns**. In the saved-search UI these live under the **Fulfilling
+Transaction …** field group (the Item Fulfillment) and the **Applying
+Transaction …** / billing field group (the Invoice). Use **Maximum** for each
+(safe, since 1:1).
+
+**Already have (keep):** Document Number · Company Name · Location · Is ATS Order
+· PO/Check Number · Start Date · End Date · Status · Approval Status ·
+Sum Quantity / Quantity Committed / Quantity Fulfilled.
+
+**Add — Item Fulfillment (via Fulfilling Transaction join, Maximum):**
+- IF Document Number  → the IF# (drives Picked/Packed/Shipped bins)
+- IF Status           → Picked / Packed / Shipped
+- IF-Packed-Status (the custom field: Approved to Ship / FOB… / Pending Invoice / Waiting On Payment)
+- IF Date             → the day it entered that status (when it was printed/picked)
+
+**Add — Invoice (via the billing/Applying Transaction join, Maximum):**
+- Invoice Number      → the INV# to print for the shipment
+- Invoice Status      → Open / Paid In Full
+- Invoice Shipping Status → Pending Payment / FOB Pending Approval / Approved For Shipping
+- Amount Paid / Amount Remaining
+
+That single export replaces all four current files and carries everything the
+app needs to place an order in its bin and show the right next action + related
+document. **This is the target.**
+
+### Honest caveats before flipping the switch
+1. **Field-label discovery is the only unknown.** The 1:1 data relationship is
+   proven; what still needs confirming when building it is the exact UI labels
+   for the Fulfilling-Transaction and Invoice join field groups (the
+   `createdfrom`-based SuiteQL is too unstable on this connection to prototype
+   the join, but the saved-search UI exposes these joins directly). Same
+   validate-the-export loop we've used all along: Nima builds it, exports a test
+   CSV, we confirm the columns carry correctly, then I add the single-file
+   mapper and retire the other three.
+2. **1:1 holds for OPEN orders today; multi-document is an accepted edge case.**
+   Partial shipments (one SO → multiple IFs or invoices) can happen even though
+   none exist among open orders right now. **Decision (Nima, 2026-07-09): do NOT
+   engineer full multi-document tracking.** The grouped "Maximum" row shows the
+   furthest IF/invoice, and those rare cases are reviewed **manually in-app +
+   NetSuite** (where detail not present in any saved search is available anyway).
+   The ONE requirement so this stays safe: the app must **flag** multi-document
+   orders rather than silently hide them. Mechanism: add **Count of Item
+   Fulfillments** and **Count of Invoices** columns to the consolidated search
+   (standard summary type); the app raises a `MULTI_DOC` flag ("multiple
+   documents — review in NetSuite") whenever either count > 1. Watch for the
+   per-line link fan-out we already saw (an invoice counted once per line) — the
+   count must be DISTINCT; validate it on the test export.
+3. Until the consolidated search is built and validated, the **four current
+   searches remain the source of truth** — see the freshness list below.
+
+### Required exports the app currently expects (until consolidation lands)
+The app now tracks each of these independently and flags which one is stale:
+
+| Source (detected by columns, not filename) | Feeds | Stage(s) it drives |
+|---|---|---|
+| Warehouse Order Pipeline (SO-centric) | demand, qty, ATS, approval, location | On Hold · Open |
+| Item Fulfilment (Picked/Shipped) | IF#, IF status, IF date | Picked · Shipped |
+| Pending Orders (Packed) | IF-Packed-Status, days pending, invoice-for-IF | Packed |
+| Invoiced Order Pending Status | INV#, shipping status, amount paid | Invoiced · Approved |
+
+When the consolidated search lands, this list collapses to a single row.
+
+---
+
+## ✅ Join proven end-to-end 2026-07-09 — build checklist
+
+The SO→IF and SO→Invoice joins were run live and return correct, current data
+(via `PreviousTransactionLink`; sample below). Notably **Eleanor SO12117 → IF7280,
+Picked, 7/8** — exactly the case the stale 4-search setup was getting wrong — so
+the consolidated search fixes those on day one.
+
+Sample (real):
+```
+SO12043 → IF7228 Packed 6/19   | INV11314 Open
+SO12074 → IF7214 Shipped 6/11  | INV11277 Paid In Full
+SO12117 → IF7280 Picked 7/8    | (no invoice yet)
+SO12179 → IF7190 Packed 6/4    | INV11237 Paid In Full
+```
+
+### What's MISSING from today's export (the 12 columns you have now)
+Everything below needs adding. Grouped by the join it comes through:
+
+**A. Item Fulfillment** — add via the **Fulfilling Transaction** field group, each as *Maximum*:
+- Fulfilling Transaction: **Document Number** → IF#
+- Fulfilling Transaction: **Status** → Picked / Packed / Shipped  *(standard status — verified live)*
+- Fulfilling Transaction: **Date** → the day it entered that status
+- Fulfilling Transaction: **IF-Packed-Status** → the workflow field you already
+  show in "Pending Orders" (Approved to Ship / FOB… / Pending Invoice / Waiting On
+  Payment). Add it by that same label. *(Not `custbody_operational_status` — that
+  field reads NULL live; pick the same one your Pending Orders search uses.)*
+
+**B. Invoice** — add via the **Applying Transaction** / billing field group, each as *Maximum*:
+- Invoice: **Number** → INV# (the number to print for the shipment)
+- Invoice: **Status** → Open / Paid In Full  *(standard status — verified live)*
+- Invoice: **Shipping Status** → Pending Payment / FOB Pending Approval / Approved
+  For Shipping. Add by the same label your "Invoiced Order Pending Status" search uses.
+- Invoice: **Amount Remaining** (or Amount Paid) → for the payment check
+
+**C. Two SO-level date columns** the current export drops but the calendar/overdue
+logic needs:
+- **Ship Date** (target ship date)
+- **Cancel Date** (ship-by-or-lose-it; critical for EDI chargebacks)
+
+### Standard vs. custom
+The IF **Status** and Invoice **Status** are *standard* NetSuite fields (proven
+live). The two workflow fields (**IF-Packed-Status**, **Invoice Shipping Status**)
+are the custom fields you already surface in the current searches — add them to
+the consolidated search by the identical label. Their exact internal IDs aren't
+needed to add columns in the UI, and I'll confirm they carry correctly the moment
+you export a test CSV.
+
+### Then (app side)
+Once the test export exists, I add a single tolerant mapper for it (keyed by
+column name, like every other mapper), point ingest at just that one file, and
+retire `unpackedFulfillments` / `pendingOrders` / `invoicedPending` from
+`REQUIRED_SOURCES` — the freshness panel then shows one source.
 
