@@ -181,3 +181,19 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .calEvt { font-size: 11px; background: var(--panel2); border-radius: 5px; padding: 2px 6px; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .calEvt .so { font-weight: 700; font-variant-numeric: tabular-nums; }
 .calEvtMore { font-size: 10px; color: var(--muted); }
+
+/* OC↔PO allocation review */
+.allocWrap section { margin-bottom: 28px; }
+.allocStats { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.hint { color: var(--muted); font-size: 12px; margin: -6px 0 12px; }
+.allocCard { margin-bottom: 12px; }
+.allocPos { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.allocTwoCol { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.allocTwoCol h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; }
+.qtyInput { width: 70px; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.btn { background: var(--accent); color: #1a1206; border: none; padding: 5px 12px; border-radius: 7px; font-weight: 600; font-size: 12px; cursor: pointer; }
+.btn:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btnGhost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 5px 12px; border-radius: 7px; font-size: 12px; cursor: pointer; margin-left: 6px; }
+.btnGhost:hover { color: var(--text); background: var(--panel2); }
+.btnGhost:disabled { opacity: 0.5; cursor: default; }

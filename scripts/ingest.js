@@ -10,10 +10,16 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import { parseCsv } from '../src/ingest/csv.js'
-import { fromOpenSalesOrders, fromFulfillmentPipeline } from '../src/ingest/savedSearches.js'
+import { fromOpenSalesOrders, fromFulfillmentPipeline, fromPoReceiving, fromOcPipeline } from '../src/ingest/savedSearches.js'
 import { buildPipeline } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
-import { loadOrders, loadFulfillments, loadInvoices, recordSnapshot, pruneOrders } from '../src/ingest/loadToDb.js'
+import {
+  loadOrders, loadFulfillments, loadInvoices, recordSnapshot, pruneOrders,
+  loadPurchaseOrders, prunePurchaseOrders,
+  loadOrderConfirmations, pruneOrderConfirmations,
+  fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
+} from '../src/ingest/loadToDb.js'
+import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { pool, withTransaction } from '../src/db.js'
 
 const DATA_DIR =
@@ -59,17 +65,56 @@ for (const o of orders) o.source = deriveSource(o.customer, o.location)
 // it was actually part of this run (skip if it was missing/skipped above).
 const hasMaster = snapshots.some(([key]) => key === 'openSalesOrders')
 
+// Purchase Orders and Order Confirmations are keyed by (PO#/OC#, item), not
+// SO#, so they don't flow through buildPipeline — read + map them separately.
+function readLineLevelSource(file, key, mapper) {
+  const path = join(DATA_DIR, file)
+  if (!existsSync(path)) {
+    console.log(`  ⚠ skipped ${file} — not found (rename or export it, then re-run)`)
+    return []
+  }
+  const mtime = statSync(path).mtime
+  const rows = mapper(read(file))
+  snapshots.push([key, rows.length, mtime])
+  const exported = mtime.toISOString().slice(0, 16).replace('T', ' ')
+  console.log(`  read ${String(rows.length).padStart(3)} rows from ${file}  (exported ${exported})`)
+  return rows
+}
+
+const poRows = readLineLevelSource('WarehousePOReceivingPipeline.csv', 'poReceiving', fromPoReceiving)
+const ocRows = readLineLevelSource('WarehouseOCPipeline.csv', 'ocPipeline', fromOcPipeline)
+
 // All writes in ONE transaction — a crash partway (e.g. a bad row) rolls the
 // whole import back rather than stranding orders at a half-updated stage.
-const { nOrders, nFul, nInv, nPruned } = await withTransaction(async (db) => {
+const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedMatches, candidates } = await withTransaction(async (db) => {
   for (const [key, count, mtime] of snapshots) await recordSnapshot(key, count, mtime, db)
   const nOrders = await loadOrders(orders, db)
   const nFul = await loadFulfillments(records, db)
   const nInv = await loadInvoices(records, db)
   const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
-  return { nOrders, nFul, nInv, nPruned }
+  const nPo = await loadPurchaseOrders(poRows, db)
+  const nPoPruned = poRows.length ? await prunePurchaseOrders(poRows, db) : 0
+  const nOc = await loadOrderConfirmations(ocRows, db)
+  const nOcPruned = ocRows.length ? await pruneOrderConfirmations(ocRows, db) : 0
+
+  // OC↔PO allocation matching: kept ENTIRELY MANUAL (Nima, 2026-07-09) — this
+  // only computes and reports suggestions; nothing writes to oc_po_links here.
+  // Use `npm run match:review` to see them and `scripts/commit-oc-po.js` to
+  // commit a specific one once you've confirmed it.
+  const ocs = await fetchOrderConfirmations(db)
+  const openPos = await fetchPurchaseOrders(db)
+  const links = await fetchOcPoLinks(db)
+  const { suggestedMatches, candidates } = computeOcPoMatches({ ocs, pos: openPos, links })
+
+  return { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedMatches, candidates }
 })
 
-console.log(`\n✅ Ingested: ${nOrders} orders · ${nFul} fulfillments · ${nInv} invoices`)
+console.log(`\n✅ Ingested: ${nOrders} orders · ${nFul} fulfillments · ${nInv} invoices · ${nPo} PO lines · ${nOc} OC lines`)
 if (nPruned) console.log(`   pruned ${nPruned} order(s) no longer in the open pipeline`)
+if (nPoPruned) console.log(`   pruned ${nPoPruned} PO line(s) no longer in the open PO receiving export`)
+if (nOcPruned) console.log(`   pruned ${nOcPruned} OC line(s) no longer in the open OC export`)
+if (suggestedMatches.length || candidates.length) {
+  console.log(`   OC↔PO matching (not written — review manually): ${suggestedMatches.length} unambiguous suggestion(s), ${candidates.length} group(s) need a decision (contention/shortage)`)
+  console.log('   run `npm run match:review` to see them')
+}
 await pool.end()

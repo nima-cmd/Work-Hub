@@ -6,10 +6,12 @@ import assert from 'node:assert/strict'
 import { parseCsv } from '../src/ingest/csv.js'
 import {
   refNumber, cleanName, num, fromOpenSalesOrders, fromUnpackedFulfillments, fromFulfillmentPipeline,
+  fromPoReceiving, fromOcPipeline,
 } from '../src/ingest/savedSearches.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
+import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -148,6 +150,130 @@ test('fromFulfillmentPipeline maps Picked/Packed and drops Transfer Orders', () 
   assert.equal(rows.find((r) => r.ifNumber === 'IF1').stage, STAGE.PICKED)
   assert.equal(rows.find((r) => r.ifNumber === 'IF1').soNumber, 'SO1')
   assert.equal(rows.find((r) => r.ifNumber === 'IF2').stage, STAGE.PACKED)
+})
+
+test('fromPoReceiving maps line-level PO rows and drops header/total rows with no Item', () => {
+  const rows = fromPoReceiving([
+    {
+      'Internal ID': '677045', 'Document Number': 'PO1310', Name: 'Guangzhou Fantasy Leather Factory (Chelly)',
+      'Ship To': '166 Shop Bop LLC : ShopBop', 'Final Naghedi Destination': 'Warehouse Bulk : Shopbop',
+      Status: 'Partially Received', Item: 'SN04023LD-CASHMERE', Quantity: '90',
+      'Quantity Fulfilled/Received': '76', 'Quantity Remaining': '14', 'Due Date/Receive By': '9/14/2024',
+    },
+    // header/total row for a PO — no Item, must be dropped (nothing to match on)
+    {
+      'Internal ID': '1152067', 'Document Number': 'PO1397', Name: 'Guangzhou Fantasy Leather Factory (Chelly)',
+      'Ship To': '323 Yagi Tsusho LTD.  DEPT-ST', 'Final Naghedi Destination': '',
+      Status: 'Partially Received', Item: '', Quantity: '', 'Quantity Fulfilled/Received': '',
+      'Quantity Remaining': '0', 'Due Date/Receive By': '2/15/2025',
+    },
+  ])
+  assert.equal(rows.length, 1)
+  const r = rows[0]
+  assert.equal(r.poNumber, 'PO1310')
+  assert.equal(r.item, 'SN04023LD-CASHMERE')
+  assert.equal(r.vendor, 'Guangzhou Fantasy Leather Factory (Chelly)')
+  assert.equal(r.shipTo, 'Shop Bop LLC : ShopBop') // entity-id prefix stripped like other Name fields
+  assert.equal(r.destination, 'Warehouse Bulk : Shopbop')
+  assert.equal(r.qtyOrdered, 90)
+  assert.equal(r.qtyReceived, 76)
+  assert.equal(r.qtyRemaining, 14)
+})
+
+test('computeOcPoMatches surfaces an unambiguous 1:1 fully-covered match as a suggestion (not committed)', () => {
+  const { suggestedMatches, candidates } = computeOcPoMatches({
+    ocs: [{ ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse Bulk : Nordstrom', qty: 10, status: 'Open', dismissed: false }],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse Bulk : Nordstrom', qtyRemaining: 15, dismissed: false }],
+    links: [],
+  })
+  assert.equal(candidates.length, 0)
+  assert.equal(suggestedMatches.length, 1)
+  assert.deepEqual(suggestedMatches[0], { ocNumber: 'OC1', poNumber: 'PO1', item: 'SKU1', allocatedQty: 10, reason: 'UNAMBIGUOUS_1TO1' })
+})
+
+test('computeOcPoMatches flags contention instead of guessing which OC wins', () => {
+  const { suggestedMatches, candidates } = computeOcPoMatches({
+    ocs: [
+      { ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 10, status: 'Open', dismissed: false },
+      { ocNumber: 'OC2', item: 'SKU1', location: 'Warehouse', qty: 5, status: 'Open', dismissed: false },
+    ],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 20, dismissed: false }],
+    links: [],
+  })
+  assert.equal(suggestedMatches.length, 0)
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0].reason, 'CONTENTION')
+  assert.equal(candidates[0].ocs.length, 2)
+})
+
+test('computeOcPoMatches flags a shortage instead of partially matching', () => {
+  const { suggestedMatches, candidates } = computeOcPoMatches({
+    ocs: [{ ocNumber: 'OC1', item: 'SKU1', location: 'China', qty: 10, status: 'Open', dismissed: false }],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'China', qtyRemaining: 4, dismissed: false }],
+    links: [],
+  })
+  assert.equal(suggestedMatches.length, 0)
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0].reason, 'SHORTAGE')
+})
+
+test('computeOcPoMatches nets out existing links and skips Expired/dismissed rows', () => {
+  const { suggestedMatches, candidates } = computeOcPoMatches({
+    ocs: [
+      { ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 10, status: 'Open', dismissed: false },
+      { ocNumber: 'OC2', item: 'SKU1', location: 'Warehouse', qty: 99, status: 'Expired', dismissed: false },
+      { ocNumber: 'OC3', item: 'SKU1', location: 'Warehouse', qty: 99, status: 'Open', dismissed: true },
+    ],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 10, dismissed: false }],
+    links: [{ ocNumber: 'OC1', poNumber: 'PO1', item: 'SKU1', allocatedQty: 6 }], // 4 remaining on both sides
+  })
+  assert.equal(candidates.length, 0)
+  assert.equal(suggestedMatches.length, 1)
+  assert.equal(suggestedMatches[0].allocatedQty, 4)
+})
+
+test('computeOcPoMatches surfaces demand/supply with no counterpart as unmatched, not silently dropped', () => {
+  const { suggestedMatches, candidates, unmatchedOcs, unmatchedPos } = computeOcPoMatches({
+    ocs: [{ ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 10, status: 'Open', dismissed: false }],
+    pos: [{ poNumber: 'PO1', item: 'SKU2', destination: 'Warehouse', qtyRemaining: 10, dismissed: false }],
+    links: [],
+  })
+  assert.equal(suggestedMatches.length, 0)
+  assert.equal(candidates.length, 0)
+  assert.equal(unmatchedOcs.length, 1)
+  assert.equal(unmatchedOcs[0].ocNumber, 'OC1')
+  assert.equal(unmatchedPos.length, 1)
+  assert.equal(unmatchedPos[0].poNumber, 'PO1')
+})
+
+test('fromOcPipeline drops Memorized template rows and rows with no Item', () => {
+  const rows = fromOcPipeline([
+    // Memorized: a recurring-transaction template, not a real dated OC
+    {
+      'Document Number': 'Memorized', Name: "258 Macy's Inc.", 'Ship To': '', Location: '',
+      Status: '', Item: 'NS09100GC-MYKONOS-365', Quantity: '1',
+      'PO/Check Number': 'BLOOM SUMMER SHOE 2025', 'Order Start Date': '3/19/2025',
+    },
+    {
+      'Document Number': 'OC1174', Name: "258 Macy's Inc.", 'Ship To': '',
+      Location: "Warehouse Bulk : Bloomingdale's", Status: 'Expired',
+      Item: 'NS03090FH-TORTOISESHELL-360', Quantity: '1',
+      'PO/Check Number': 'Bloom Fall Shoe 2025', 'Order Start Date': '6/24/2025',
+    },
+    // no Item — nothing to match on
+    {
+      'Document Number': 'OC1200', Name: 'Someone', Location: 'Warehouse', Status: 'Open',
+      Item: '', Quantity: '',
+    },
+  ])
+  assert.equal(rows.length, 1)
+  const r = rows[0]
+  assert.equal(r.ocNumber, 'OC1174')
+  assert.equal(r.item, 'NS03090FH-TORTOISESHELL-360')
+  assert.equal(r.location, "Warehouse Bulk : Bloomingdale's")
+  assert.equal(r.status, 'Expired')
+  assert.equal(r.qty, 1)
+  assert.equal(r.poCheckNumber, 'Bloom Fall Shoe 2025')
 })
 
 test('fromUnpackedFulfillments branches Picked vs Shipped per row', () => {

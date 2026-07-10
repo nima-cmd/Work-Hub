@@ -6,6 +6,11 @@ import { pool } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES } from '../src/ingest/detect.js'
+import {
+  fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
+  upsertOcPoLink, deleteOcPoLink, dismissOrderConfirmation, dismissPurchaseOrder,
+} from '../src/ingest/loadToDb.js'
+import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 
 export async function getOrders() {
   // Subqueries (not joins+GROUP BY) for fulfillments and invoices: both are
@@ -115,4 +120,35 @@ export async function getFreshness() {
   const maxAgeHours = ages.length ? Math.max(...ages) : null
 
   return { status, maxAgeHours, warnHours: WARN_HOURS, staleHours: STALE_HOURS, sources }
+}
+
+// ── OC↔PO allocation review — the "open task" queue ──────────────────────────
+// Kept entirely manual (Nima, 2026-07-09): this reads current state and runs
+// the matcher, but nothing here writes anything. Every OC/PO line that isn't
+// yet committed to a link AND isn't dismissed shows up somewhere in this
+// response — suggestedMatches, candidates, or unmatchedOcs/unmatchedPos — so
+// the queue can't silently lose track of an order the way loose spreadsheets do.
+export async function getOcPoReview() {
+  const [ocs, pos, links] = await Promise.all([
+    fetchOrderConfirmations(),
+    fetchPurchaseOrders(),
+    fetchOcPoLinks(),
+  ])
+  const { suggestedMatches, candidates, unmatchedOcs, unmatchedPos } = computeOcPoMatches({ ocs, pos, links })
+  return { suggestedMatches, candidates, unmatchedOcs, unmatchedPos, links }
+}
+
+export async function commitOcPoLink(payload) {
+  return upsertOcPoLink(payload)
+}
+
+export async function undoOcPoLink(id) {
+  return deleteOcPoLink(id)
+}
+
+// type: 'oc' | 'po'. dismissed=false lets a mistaken close be reversed.
+export async function dismissOcPoLine({ type, ocNumber, poNumber, item, note, dismissed }) {
+  if (type === 'oc') return dismissOrderConfirmation({ ocNumber, item, note, dismissed })
+  if (type === 'po') return dismissPurchaseOrder({ poNumber, item, note, dismissed })
+  throw new Error(`unknown dismiss type: ${type}`)
 }

@@ -5,6 +5,7 @@ import Dashboard from './views/Dashboard.jsx'
 import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
+import Allocations from './views/Allocations.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -52,6 +53,7 @@ const VIEWS = [
   { key: 'kanban', label: 'Kanban', C: Kanban },
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
+  { key: 'allocations', label: 'OC↔PO', C: Allocations },
 ]
 
 export default function App() {

@@ -9,6 +9,7 @@
     "analyze": "node scripts/analyze.js",
     "migrate": "node --env-file=.env.local scripts/migrate.js",
     "ingest": "node --env-file=.env.local scripts/ingest.js",
+    "match:review": "node --env-file=.env.local scripts/match-review.js",
     "server": "node --env-file=.env.local server/index.js",
     "client:build": "npm --prefix client install && npm --prefix client run build",
     "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\""

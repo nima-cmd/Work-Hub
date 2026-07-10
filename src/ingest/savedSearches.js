@@ -164,6 +164,63 @@ export function fromPendingOrders(rows) {
     }))
 }
 
+// ── Warehouse PO Receiving Pipeline.csv — inbound supply (Purchase Orders) ──
+// Line-level export (one row per PO/Item), NOT grouped — unlike the SO search,
+// we need per-item quantities to match against short demand. Rows with no
+// Item are PO header/total rows with nothing to match on; drop them here so
+// the loader never sees a null half of its (po_number, item) primary key.
+//
+// "Ship To" is a channel proxy Nima added: "000 NAGHEDI" = ecomm/boutique
+// in-house receiving; any named customer (Nordstrom, Yagi, Mitchells, Saint
+// Bernard, etc.) means the container was produced FOR that account directly.
+// "Final Naghedi Destination" is the actual OC↔PO match key (see naghedi-
+// locations memory) — Ship To is a secondary signal, not a replacement.
+export function fromPoReceiving(rows) {
+  return rows
+    .filter((r) => r['Document Number'] && r['Item'])
+    .map((r) => ({
+      source: 'PoReceiving',
+      poNumber: refNumber(r['Document Number']),
+      item: r['Item'].trim(),
+      vendor: cleanName(r['Name'] || ''),
+      shipTo: cleanName(r['Ship To'] || ''),
+      destination: r['Final Naghedi Destination'] || '',
+      status: r['Status'] || '', // Pending Receipt / Partially Received / Pending Billing/Partially Received
+      qtyOrdered: num(r['Quantity']),
+      qtyReceived: num(r['Quantity Fulfilled/Received']),
+      qtyRemaining: num(r['Quantity Remaining']),
+      expectedReceipt: toDate(r['Due Date/Receive By']),
+    }))
+}
+
+// ── Warehouse OC Pipeline.csv — pre-SO demand (Order Confirmations) ────────
+// NetSuite record type: Estimate, filtered to "no Sales Order created from it
+// yet" so this never double-counts against fromOpenSalesOrders. Two kinds of
+// noise to drop at the source:
+//   - "Memorized" rows: recurring-transaction TEMPLATES, not real dated OCs —
+//     no Status/Location, just a placeholder for future auto-generation.
+//   - rows with no Item: nothing to match on.
+// "PO/Check Number" here is a free-text production-run/collection label
+// (e.g. "Bloom Fall Shoe 2025", "NordFebStore26") confirmed on real data —
+// NOT the numeric internal PO# from fromPoReceiving, so it is NOT the OC<->PO
+// join key. Item + Location (vs purchase_orders.destination) is.
+export function fromOcPipeline(rows) {
+  return rows
+    .filter((r) => r['Document Number'] && r['Document Number'] !== 'Memorized' && r['Item'])
+    .map((r) => ({
+      source: 'OcPipeline',
+      ocNumber: refNumber(r['Document Number']),
+      item: r['Item'].trim(),
+      customer: cleanName(r['Name'] || ''),
+      shipTo: cleanName(r['Ship To'] || ''),
+      location: r['Location'] || '',
+      status: r['Status'] || '', // Open / Expired
+      qty: num(r['Quantity']),
+      poCheckNumber: r['PO/Check Number'] || '',
+      orderStartDate: toDate(r['Order Start Date']),
+    }))
+}
+
 // ── 4) invoiced order pending status.csv — invoiced SOs, checking payment ───
 export function fromInvoicedPending(rows) {
   return rows
