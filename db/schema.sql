@@ -139,7 +139,10 @@ ALTER TABLE oc_po_links ADD COLUMN IF NOT EXISTS item TEXT;
 ALTER TABLE oc_po_links ADD COLUMN IF NOT EXISTS allocated_qty NUMERIC;
 -- widen uniqueness to per-item allocations (one OC/PO pair can share several items)
 ALTER TABLE oc_po_links DROP CONSTRAINT IF EXISTS oc_po_links_oc_number_po_number_key;
-ALTER TABLE oc_po_links ADD CONSTRAINT oc_po_links_oc_po_item_key UNIQUE (oc_number, po_number, item);
+DO $$ BEGIN
+  ALTER TABLE oc_po_links ADD CONSTRAINT oc_po_links_oc_po_item_key UNIQUE (oc_number, po_number, item);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
 
 -- ── Activity log per order — follow-ups, handoffs, inquiries ──────────────────
 -- Drives the "lost visibility" fix (explicit warehouse handoff + acknowledgment)
@@ -162,6 +165,90 @@ CREATE TABLE IF NOT EXISTS import_snapshots (
 );
 -- Modified time of the underlying export file, so we can warn when data is stale.
 ALTER TABLE import_snapshots ADD COLUMN IF NOT EXISTS file_modified TIMESTAMPTZ;
+
+-- ── EDI transactions (Orderful) — 850/856/810/860 pipeline per business number ──
+-- Pulled straight from Orderful's API (GET /v3/transactions), not via Airtable/CSV.
+-- id is Orderful's own transaction id, so re-syncs upsert cleanly.
+CREATE TABLE IF NOT EXISTS edi_transactions (
+  id                     TEXT PRIMARY KEY,       -- Orderful transaction id
+  type                   TEXT,                   -- '850_PURCHASE_ORDER' | '856_SHIP_NOTICE' | '810_INVOICE' | '860_PURCHASE_ORDER_CHANGE' | …
+  direction              TEXT,                   -- 'IN' (Naghedi is receiver) | 'OUT' (Naghedi is sender)
+  business_number        TEXT,                   -- the PO — joins 850↔856↔810 for one order
+  trading_partner        TEXT,                   -- the non-Naghedi party's name, e.g. 'Bloomingdale''s'
+  stream                 TEXT,                   -- 'LIVE' | 'TEST'
+  validation_status      TEXT,                   -- PROCESSING | VALID | INVALID
+  delivery_status        TEXT,                   -- PENDING | SENT | DELIVERED | FAILED
+  acknowledgment_status  TEXT,                   -- NOT_ACKNOWLEDGED | ACCEPTED | REJECTED | OVERDUE | ACCEPTED_WITH_ERRORS
+  created_at             TIMESTAMPTZ,            -- Orderful's own createdAt (when the transaction happened)
+  last_updated_at        TIMESTAMPTZ,
+  -- 850s only: pulled from the DTM segment inside the per-transaction /message
+  -- body (NOT exposed on the list endpoint) — see src/ingest/orderful.js.
+  -- DTM 064 = "Do Not Deliver Before", DTM 001 = "Cancel After" (confirmed
+  -- against real X12 850 content 2026-07-10). Replaces Nima's manual lookup.
+  ship_not_before        DATE,
+  cancel_after           DATE,
+  -- 856/810 only: businessNumber is NOT the PO# for these (confirmed on real
+  -- data — an 810's businessNumber is its own invoice number; some 856s use a
+  -- carrier tracking number). The real PO# lives inside the message body:
+  -- 810 → beginningSegmentForInvoice.purchaseOrderNumber (one);
+  -- 856 → HL_loop[].purchaseOrderReference (one per order-level HL entry, can
+  -- be several — see edi_document_po_refs below). This flag just means "we
+  -- already checked", so re-syncs don't refetch a message with genuinely no PO ref.
+  po_refs_checked        BOOLEAN DEFAULT false,
+  synced_at              TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS ship_not_before DATE;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS cancel_after DATE;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_refs_checked BOOLEAN DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_edi_business_number ON edi_transactions(business_number);
+CREATE INDEX IF NOT EXISTS idx_edi_partner         ON edi_transactions(trading_partner);
+
+-- One row per (856 or 810 transaction, PO it actually references) — an 856
+-- covering a consolidated shipment can reference several POs, mirroring the
+-- BOL fan-out in edi_fulfillments.
+CREATE TABLE IF NOT EXISTS edi_document_po_refs (
+  transaction_id TEXT NOT NULL,
+  po_number      TEXT NOT NULL,
+  PRIMARY KEY (transaction_id, po_number)
+);
+CREATE INDEX IF NOT EXISTS idx_edi_po_refs_po ON edi_document_po_refs(po_number);
+
+-- ── EDI manual links — the human override when an 856/810 can't auto-link to
+-- its 850 (Nima, 2026-07-10). The 850 is the master document everything else
+-- joins against; when businessNumber/BOL matching finds no 850 for a stray
+-- 856 or 810, this is where a person says "this one actually belongs to PO X"
+-- — always visibly flagged as a manual override, never silently treated the
+-- same as an automated match (see src/model/ediPipeline.js).
+CREATE TABLE IF NOT EXISTS edi_manual_links (
+  transaction_id   TEXT PRIMARY KEY,
+  business_number  TEXT NOT NULL,
+  note             TEXT,
+  created_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- ── NetSuite Fulfillments (856 ASN search) — the BOL join key ────────────────
+-- One row per PO DC Identifier, from the NetSuite saved search Nima already
+-- exports for Airtable's "NetSuite Fulfillments" table. BOL is what actually
+-- links an Orderful 856 to its originating 850 — NOT business_number, which
+-- for some partners (e.g. Shopbop) holds a carrier tracking number on the 856
+-- side instead of the PO number. po_number here is the 850's business_number.
+CREATE TABLE IF NOT EXISTS edi_fulfillments (
+  po_dc_identifier TEXT PRIMARY KEY,
+  po_number        TEXT,
+  dc               TEXT,
+  bol              TEXT,
+  scac             TEXT,
+  pro_number       TEXT,
+  dc_city          TEXT,
+  ship_date        DATE,
+  edi_synced       BOOLEAN,
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_edi_fulfillments_po  ON edi_fulfillments(po_number);
+CREATE INDEX IF NOT EXISTS idx_edi_fulfillments_bol ON edi_fulfillments(bol);
 
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);

@@ -289,3 +289,60 @@ export async function recordSnapshot(source, rowCount, fileModified = null, db =
     [source, rowCount, fileModified],
   )
 }
+
+// ── 856 ASN / BOL search — feeds the Orderful 850↔856 join (see src/model/ediPipeline.js) ──
+export async function loadEdiFulfillments(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    await db.query(
+      `INSERT INTO edi_fulfillments (po_dc_identifier, po_number, dc, bol, scac, pro_number, dc_city, ship_date, edi_synced, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       ON CONFLICT (po_dc_identifier) DO UPDATE SET
+         po_number  = EXCLUDED.po_number,
+         dc         = EXCLUDED.dc,
+         bol        = EXCLUDED.bol,
+         scac       = EXCLUDED.scac,
+         pro_number = EXCLUDED.pro_number,
+         dc_city    = EXCLUDED.dc_city,
+         ship_date  = EXCLUDED.ship_date,
+         edi_synced = EXCLUDED.edi_synced,
+         updated_at = now()`,
+      [r.poDcIdentifier, r.poNumber, r.dc, r.bol, r.scac, r.proNumber, r.dcCity, r.shipDate, r.ediSynced],
+    )
+    n++
+  }
+  return n
+}
+
+export async function fetchEdiFulfillments(db = pool) {
+  const { rows } = await db.query(
+    `SELECT po_dc_identifier AS "poDcIdentifier", po_number AS "poNumber", dc, bol,
+            scac, pro_number AS "proNumber", dc_city AS "dcCity", ship_date AS "shipDate", edi_synced AS "ediSynced"
+     FROM edi_fulfillments`,
+  )
+  return rows
+}
+
+// ── EDI manual links — human override for an 856/810 that can't auto-link to
+// its 850 (see db/schema.sql). One row per transaction; re-linking overwrites.
+export async function fetchEdiManualLinks(db = pool) {
+  const { rows } = await db.query(
+    `SELECT transaction_id AS "transactionId", business_number AS "businessNumber", note, created_at AS "createdAt"
+     FROM edi_manual_links`,
+  )
+  return rows
+}
+
+export async function upsertEdiManualLink({ transactionId, businessNumber, note }, db = pool) {
+  await db.query(
+    `INSERT INTO edi_manual_links (transaction_id, business_number, note)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (transaction_id) DO UPDATE SET business_number = EXCLUDED.business_number, note = EXCLUDED.note`,
+    [transactionId, businessNumber, note || null],
+  )
+}
+
+export async function deleteEdiManualLink(transactionId, db = pool) {
+  const { rowCount } = await db.query('DELETE FROM edi_manual_links WHERE transaction_id = $1', [transactionId])
+  return rowCount
+}

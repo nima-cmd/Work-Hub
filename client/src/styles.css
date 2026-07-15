@@ -197,3 +197,15 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .btnGhost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 5px 12px; border-radius: 7px; font-size: 12px; cursor: pointer; margin-left: 6px; }
 .btnGhost:hover { color: var(--text); background: var(--panel2); }
 .btnGhost:disabled { opacity: 0.5; cursor: default; }
+
+/* OC↔PO location hub + PO containers */
+.locHub { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.locTile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; }
+.locTile:hover { border-color: var(--accent); }
+.locTile.active { border-color: var(--accent); background: var(--panel2); }
+.locTile h3 { margin: 0 0 8px; font-size: 14px; }
+.locStat { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.container { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+.containerHead { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 12px; }
+.fillBar { height: 8px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin: 8px 0 4px; }
+.fillBar > div { height: 100%; background: var(--accent); }

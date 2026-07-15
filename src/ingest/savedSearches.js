@@ -47,14 +47,23 @@ export function toDate(s) {
 //   - INV#            = "Invoice Number" | "Maximum of Document Number"
 //   - Open/Paid       = "Invoice Status"  | "Maximum of Status (2)" (2nd "Status")
 //   - shipping status = "Invoice Shipping Status" | "Maximum of Invoice Status"
+// Rows can come from the CSV export (aggregated "Maximum of X" / "Sum of X"
+// column names) or a live pull of the same saved search via the NetSuite
+// connection (plain column names, duplicate columns suffixed "_1" instead of
+// aggregated) — see [[orderful-api-confirmed-shape]]-style memory note on
+// NetSuite live-pull field names. Confirmed against real invoiced rows
+// 2026-07-13: live "Invoice Status" holds SHIPPING status semantics (Shipped/
+// Pending Payment/Approved For Shipping), and live "Status_1" holds the
+// Open/Paid In Full invoice status — the field names alone are misleading,
+// this was checked against actual data, not assumed.
 export function fromOpenSalesOrders(rows) {
   return rows
     .filter((r) => r['Document Number'] && r['Document Number'] !== 'Total')
     .map((r) => {
-      const approvalStatus = r['Maximum of Approval Status'] || ''
-      const invoice = refNumber(r['Invoice Number'] || r['Maximum of Document Number'] || '')
-      const invoiceStatus = r['Invoice Status'] || r['Maximum of Status (2)'] || '' // Open / Paid In Full
-      const shippingStatus = r['Invoice Shipping Status'] || r['Maximum of Invoice Status'] || ''
+      const approvalStatus = r['Maximum of Approval Status'] || r['Approval Status'] || ''
+      const invoice = refNumber(r['Invoice Number'] || r['Maximum of Document Number'] || r['Document Number_1'] || '')
+      const invoiceStatus = r['Maximum of Status (2)'] || r['Status_1'] || (r['Document Number_1'] ? r['Invoice Status'] : '') || '' // Open / Paid In Full
+      const shippingStatus = r['Invoice Shipping Status'] || r['Maximum of Invoice Status'] || (r['Document Number_1'] ? '' : r['Invoice Status']) || ''
       const hasInvoice = !!invoice
 
       // Stage from this row alone: an invoice means it's past packing (Invoiced,
@@ -69,24 +78,24 @@ export function fromOpenSalesOrders(rows) {
         source: 'WarehouseOrderPipeline',
         stage,
         soNumber: refNumber(r['Document Number']),
-        customer: r['Maximum of Name'] || r['Maximum of Company Name'] || '',
-        location: r['Maximum of Location'] || '',
-        poNumber: r['Maximum of PO/Check Number'] || '',
-        soStatus: r['Maximum of Status'] || '',
+        customer: r['Maximum of Name'] || r['Maximum of Company Name'] || r['Company Name'] || '',
+        location: r['Maximum of Location'] || r['Location'] || '',
+        poNumber: r['Maximum of PO/Check Number'] || r['PO/Check Number'] || '',
+        soStatus: r['Maximum of Status'] || r['Status'] || '',
         approvalStatus,
-        isAts: /yes/i.test(r['Maximum of Is ATS Order'] || ''),
-        startDate: toDate(r['Maximum of Start Date']),
-        endDate: toDate(r['Maximum of End Date']),
-        qtyOrdered: num(r['Sum of Quantity']),
-        qtyAllocated: num(r['Sum of Quantity Committed'] || r['Sum of Allocated Supply']),
-        qtyFulfilled: num(r['Sum of Quantity Fulfilled/Received']),
+        isAts: /yes/i.test(r['Maximum of Is ATS Order'] || r['Is ATS Order'] || ''),
+        startDate: toDate(r['Maximum of Start Date'] || r['Start Date']),
+        endDate: toDate(r['Maximum of End Date'] || r['End Date']),
+        qtyOrdered: num(r['Sum of Quantity'] || r['Quantity']),
+        qtyAllocated: num(r['Sum of Quantity Committed'] || r['Sum of Allocated Supply'] || r['Quantity Committed']),
+        qtyFulfilled: num(r['Sum of Quantity Fulfilled/Received'] || r['Quantity Fulfilled/Received']),
         // invoice side (present only once an invoice exists)
         invoice,
         invoiceStatus,
         shippingStatus,
-        amountRemaining: num(r['Invoice Amount Remaining'] || r['Maximum of Amount Remaining']),
-        shipDate: toDate(r['Maximum of Ship Date']),
-        cancelDate: toDate(r['Maximum of Order Cancel Date'] || r['Maximum of Cancel Date']),
+        amountRemaining: num(r['Invoice Amount Remaining'] || r['Maximum of Amount Remaining'] || r['Amount Remaining']),
+        shipDate: toDate(r['Maximum of Ship Date'] || r['Ship Date']),
+        cancelDate: toDate(r['Maximum of Order Cancel Date'] || r['Maximum of Cancel Date'] || r['Order Cancel Date']),
       }
     })
 }
@@ -190,6 +199,29 @@ export function fromPoReceiving(rows) {
       qtyReceived: num(r['Quantity Fulfilled/Received']),
       qtyRemaining: num(r['Quantity Remaining']),
       expectedReceipt: toDate(r['Due Date/Receive By']),
+    }))
+}
+
+// ── 856 ASN / BOL search — the Orderful 856↔850 join key ───────────────────
+// Nima's existing export for Airtable's "NetSuite Fulfillments" table. BOL is
+// what an Orderful 856 transaction's businessNumber actually matches for some
+// partners (e.g. a Shopbop 856's businessNumber is a UPS tracking number, not
+// the PO#) — so this is what re-links a fragmented ASN back to its PO. The
+// trailing rows with no PO DC Identifier ("-") are garbage from the search
+// itself, dropped here.
+export function fromEdiFulfillments(rows) {
+  return rows
+    .filter((r) => r['PO DC Identifier'] && r['PO DC Identifier'] !== '-')
+    .map((r) => ({
+      poDcIdentifier: r['PO DC Identifier'],
+      poNumber: r['Maximum of PO Number'] || '',
+      dc: r['Maximum of DC'] || '',
+      bol: r['Maximum of BOL'] || '',
+      scac: r['Maximum of SCAC'] || '',
+      proNumber: r['Maximum of Pro Number'] || '',
+      dcCity: r['Maximum of DC City'] || '',
+      shipDate: toDate(r['Maximum of Ship Date']),
+      ediSynced: (r['EDI Synced'] || '').trim().toLowerCase() === 'yes',
     }))
 }
 

@@ -23,12 +23,18 @@ export function detectSource(headers) {
   if (H.has('Sum of Quantity') || H.has('Maximum of Company Name')) return 'openSalesOrders'
 
   if (has('SO', 'Inv')) return 'invoicedPending'
+
+  // The 856 ASN search (Nima's "NetSuite Fulfillments" export for Airtable) —
+  // BOL is the join key from an Orderful 856 back to its originating PO.
+  if (has('PO DC Identifier', 'Maximum of BOL')) return 'ediFulfillments'
+
   return null // unrecognized — the UI will report this back
 }
 
 export const SOURCE_LABELS = {
   openSalesOrders: 'Warehouse Order Pipeline',
   fulfillmentPipeline: 'Warehouse Fulfillment Pipeline',
+  ediFulfillments: 'EDI 856 ASN / BOL search',
   // legacy (no longer required, still recognized on upload)
   unpackedFulfillments: 'Item Fulfilment (legacy)',
   pendingOrders: 'Pending Orders (legacy)',

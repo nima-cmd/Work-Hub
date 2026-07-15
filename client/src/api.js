@@ -57,3 +57,34 @@ export async function dismissOcPo({ type, ocNumber, poNumber, item, note, dismis
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
 }
+
+// EDI (Orderful) — read-only mirror of the 850/856/810 pipeline. /sync pulls
+// fresh transactions from Orderful into Neon before /review is re-read.
+export async function fetchEdiReview() {
+  const res = await fetch('/api/edi/review')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function syncEdi() {
+  const res = await fetch('/api/edi/sync', { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Manual override when an 856/810 can't auto-link to its 850.
+export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
+  const res = await fetch('/api/edi/link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transactionId, businessNumber, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function unlinkEdiTransaction(transactionId) {
+  const res = await fetch(`/api/edi/link/${transactionId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

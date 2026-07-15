@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs'
 import {
   getOrders, getFreshness,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
+  getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 
@@ -92,6 +93,50 @@ app.post('/api/oc-po/dismiss', async (req, res) => {
     }
     await dismissOcPoLine({ type, ocNumber, poNumber, item, note, dismissed })
     res.json(await getOcPoReview())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// EDI (Orderful) — 850/856/810/860 pipeline per business number. Reads from
+// Neon; /sync pulls fresh data from Orderful's API into Neon first.
+app.get('/api/edi/review', async (_req, res) => {
+  try {
+    res.json(await getEdiReview())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/edi/sync', async (_req, res) => {
+  try {
+    res.json(await syncEdi())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Manual override when an 856/810 can't auto-link to its 850 (always visibly
+// flagged in the UI as manual, never treated the same as an automated match).
+app.post('/api/edi/link', async (req, res) => {
+  try {
+    const { transactionId, businessNumber, note } = req.body || {}
+    if (!transactionId || !businessNumber) {
+      return res.status(400).json({ error: 'transactionId and businessNumber are required' })
+    }
+    res.json(await linkEdiTransaction({ transactionId, businessNumber, note }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.delete('/api/edi/link/:transactionId', async (req, res) => {
+  try {
+    res.json(await unlinkEdiTransaction(req.params.transactionId))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

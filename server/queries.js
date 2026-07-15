@@ -11,6 +11,12 @@ import {
   upsertOcPoLink, deleteOcPoLink, dismissOrderConfirmation, dismissPurchaseOrder,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
+import { computeContainerView } from '../src/model/ocPoContainers.js'
+import { computeEdiPipeline } from '../src/model/ediPipeline.js'
+import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
+import {
+  fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
+} from '../src/ingest/loadToDb.js'
 
 export async function getOrders() {
   // Subqueries (not joins+GROUP BY) for fulfillments and invoices: both are
@@ -135,7 +141,58 @@ export async function getOcPoReview() {
     fetchOcPoLinks(),
   ])
   const { suggestedMatches, candidates, unmatchedOcs, unmatchedPos } = computeOcPoMatches({ ocs, pos, links })
-  return { suggestedMatches, candidates, unmatchedOcs, unmatchedPos, links }
+  const { locations, containers, unassignedOcs } = computeContainerView({ ocs, pos, links })
+  return { suggestedMatches, candidates, unmatchedOcs, unmatchedPos, links, locations, containers, unassignedOcs }
+}
+
+// ── EDI (Orderful) review — mirrors Airtable's 850 Tracker/856, pulled live
+// from Orderful's API into Neon instead of via CSV → Airtable. ──────────────
+// EDI-sourced orders only: their po_number reliably matches an Orderful
+// business number, unlike boutique orders' free-text PO/check numbers.
+async function fetchEdiSourcedOrders() {
+  const { rows } = await pool.query(
+    `SELECT o.po_number AS "poNumber", o.so_number AS "soNumber", o.stage,
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'ifNumber', f.if_number, 'status', f.status,
+          'actualShipDate', f.actual_ship_date, 'invoiceNumber', f.invoice_number
+        ))
+        FROM fulfillments f WHERE f.so_number = o.so_number
+      ), '[]'::json) AS "itemFulfillments",
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'invNumber', i.inv_number, 'status', i.status, 'amountRemaining', i.amount_remaining
+        ))
+        FROM invoices i WHERE i.so_number = o.so_number
+      ), '[]'::json) AS "invoices"
+     FROM orders o WHERE o.source = 'edi' AND o.po_number IS NOT NULL`,
+  )
+  // Same stage/next-action language the rest of the app uses (Dashboard,
+  // Kanban) — Nima asked for "needs printed/packed/shipped/invoiced" per PO,
+  // which IS this shared model, not something EDI-specific to invent.
+  return rows.map((r) => ({ ...r, stageLabel: STAGE_LABEL[r.stage] || r.stage, nextAction: NEXT_ACTION[r.stage] || '—' }))
+}
+
+export async function getEdiReview() {
+  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs] = await Promise.all([
+    fetchEdiTransactions(), fetchEdiFulfillments(), fetchEdiSourcedOrders(), fetchEdiManualLinks(), fetchEdiDocumentPoRefs(),
+  ])
+  return computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs)
+}
+
+export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
+  await upsertEdiManualLink({ transactionId, businessNumber, note })
+  return getEdiReview()
+}
+
+export async function unlinkEdiTransaction(transactionId) {
+  await deleteEdiManualLink(transactionId)
+  return getEdiReview()
+}
+
+export async function syncEdi() {
+  if (!process.env.ORDERFUL_API_KEY) throw new Error('ORDERFUL_API_KEY is not set in .env.local')
+  return syncOrderful(process.env.ORDERFUL_API_KEY)
 }
 
 export async function commitOcPoLink(payload) {

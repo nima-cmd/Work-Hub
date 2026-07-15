@@ -13,10 +13,11 @@ import {
   fromUnpackedFulfillments,
   fromPendingOrders,
   fromInvoicedPending,
+  fromEdiFulfillments,
 } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
 import { deriveSource } from '../model/source.js'
-import { loadOrders, loadFulfillments, loadInvoices, recordSnapshot } from './loadToDb.js'
+import { loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments } from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
 // The two current searches, plus the three legacy shapes (still accepted on
@@ -29,10 +30,17 @@ const MAPPERS = {
   invoicedPending: fromInvoicedPending,
 }
 
+// Line-level sources that don't flow through buildPipeline (keyed on their own
+// natural key, not SO#) — handled separately from MAPPERS/records below.
+const LINE_LEVEL_MAPPERS = {
+  ediFulfillments: { map: fromEdiFulfillments, load: loadEdiFulfillments },
+}
+
 // files: [{ name, text, lastModified }]
 export async function importBatch(files) {
   const records = []
   const perFile = []
+  const lineLevel = [] // [{ key, rows }] for sources in LINE_LEVEL_MAPPERS
 
   const snapshots = []
   for (const f of files) {
@@ -41,6 +49,13 @@ export async function importBatch(files) {
     const key = detectSource(headers)
     if (!key) {
       perFile.push({ name: f.name, recognized: false, rows: rows.length })
+      continue
+    }
+    if (LINE_LEVEL_MAPPERS[key]) {
+      const mapped = LINE_LEVEL_MAPPERS[key].map(rows)
+      lineLevel.push({ key, rows: mapped })
+      snapshots.push([key, mapped.length, f.lastModified ? new Date(f.lastModified) : null])
+      perFile.push({ name: f.name, recognized: true, type: key, rows: mapped.length })
       continue
     }
     const mapped = MAPPERS[key](rows)
@@ -57,6 +72,7 @@ export async function importBatch(files) {
   // instead of leaving orders half-updated.
   const { nOrders, nFul, nInv } = await withTransaction(async (db) => {
     for (const [name, count, mtime] of snapshots) await recordSnapshot(name, count, mtime, db)
+    for (const { key, rows } of lineLevel) await LINE_LEVEL_MAPPERS[key].load(rows, db)
     return {
       nOrders: await loadOrders(orders, db),
       nFul: await loadFulfillments(records, db),
