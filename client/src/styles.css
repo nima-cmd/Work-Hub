@@ -138,6 +138,7 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 /* EDI badge */
 .badge { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }
 .badge.edi { background: rgba(217,164,65,0.18); color: var(--accent); border: 1px solid rgba(217,164,65,0.5); }
+.badge.transmission { background: rgba(59,130,246,0.18); color: var(--lo); border: 1px solid rgba(59,130,246,0.5); }
 .krow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 
 /* calendar (agenda) */
@@ -209,3 +210,104 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .containerHead { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 12px; }
 .fillBar { height: 8px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin: 8px 0 4px; }
 .fillBar > div { height: 100%; background: var(--accent); }
+
+/* Transmissions — Gmail-to-quest hologram cards */
+@keyframes holoFlicker {
+  0%, 91%, 100% { opacity: 1; }
+  92% { opacity: 0.86; }
+  93% { opacity: 1; }
+  96% { opacity: 0.92; }
+  97% { opacity: 1; }
+}
+.holoList { display: flex; flex-direction: column; gap: 10px; }
+.hologram {
+  position: relative; background: var(--panel); border: 1px solid rgba(59,130,246,0.35);
+  border-radius: 10px; padding: 14px; overflow: hidden; animation: holoFlicker 6s infinite;
+}
+.hologram::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(59,130,246,0.05) 0px, rgba(59,130,246,0.05) 1px, transparent 1px, transparent 3px);
+}
+.hologram.unread { border-color: rgba(59,130,246,0.7); box-shadow: 0 0 0 1px rgba(59,130,246,0.15); }
+
+/* Card layout: square portrait on the left (2x the ~32px height of a
+   .btn/.qtyInput action-row control = 64px), everything else in a column to
+   its right (Nima, 2026-07-15). */
+.holoCardBody { display: flex; align-items: flex-start; gap: 12px; }
+.holoContent { flex: 1; min-width: 0; }
+.holoHead { display: flex; justify-content: space-between; align-items: center; cursor: pointer; gap: 12px; }
+
+/* Character portrait as a projected hologram (Nima, 2026-07-15): the photo
+   itself stays true to its real colors — no tint, no desaturation. The only
+   effect is a thin horizontal band that sweeps upward and locally WARPS the
+   image (a duplicate copy of the same image, clipped to a thin sliver and
+   nudged sideways a few px) as it passes — the image underneath is never
+   touched/darkened, just briefly displaced where the band currently is. */
+@keyframes holoImageReveal {
+  0% { clip-path: inset(100% 0 0 0); opacity: 0; }
+  35% { opacity: 0.7; }
+  55% { clip-path: inset(30% 0 0 0); opacity: 0.9; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+@keyframes holoScanSweep {
+  0% { top: -15%; opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 110%; opacity: 0; }
+}
+/* A ~12%-tall band sweeps from the bottom of the image to the top, jittering
+   a few px left/right as it goes — the warp is confined to that band, not
+   the whole image. Resets (bottom) at the end of each loop, like a CRT
+   vertical retrace, rather than smoothly reversing. */
+@keyframes holoWarpBand {
+  0%   { clip-path: inset(88% 0 0% 0);  transform: translateX(2px); }
+  20%  { clip-path: inset(66% 0 22% 0); transform: translateX(-3px); }
+  40%  { clip-path: inset(44% 0 44% 0); transform: translateX(2px); }
+  60%  { clip-path: inset(22% 0 66% 0); transform: translateX(-2px); }
+  80%  { clip-path: inset(4% 0 88% 0);  transform: translateX(3px); }
+  100% { clip-path: inset(0% 0 92% 0);  transform: translateX(-2px); }
+}
+.holoImgWrap {
+  position: relative; width: 96px; height: 96px; border-radius: 8px; overflow: hidden; flex: none;
+  border: 1px solid rgba(59,130,246,0.5);
+}
+.holoImg {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  animation: holoImageReveal 900ms ease-out;
+}
+/* Exact duplicate of .holoImg, clipped down to the moving warp band by
+   holoWarpBand — same source image, same object-fit/position, so outside
+   the clipped sliver it's pixel-identical to the layer underneath and
+   invisible; only the sliver's sideways offset reads as a warp. */
+.holoImgWarp {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none;
+  animation: holoWarpBand 2.5s linear infinite;
+}
+.holoImgWrap::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 3px; top: -15%; pointer-events: none;
+  background: rgba(190,220,255,0.9); box-shadow: 0 0 8px 2px rgba(120,170,255,0.7);
+  animation: holoScanSweep 900ms ease-out;
+}
+.holoPlaceholder {
+  width: 96px; height: 96px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: none;
+  background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.5); color: var(--lo); font-weight: 700; font-size: 28px;
+  animation: holoImageReveal 700ms ease-out;
+}
+/* Compact variant for dense single-line contexts (the activity journal) */
+.holoImgWrap.sm, .holoPlaceholder.sm { width: 28px; height: 28px; border-radius: 6px; font-size: 12px; }
+.holoImgWrap.sm .holoImgWarp { display: none; } /* too small for the warp band to read cleanly */
+.holoName { font-weight: 700; }
+.holoUniverse { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.holoMeta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.holoSubject { margin-top: 10px; font-weight: 600; }
+.holoBody { margin-top: 8px; }
+.holoSnippet { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+.holoActions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+
+/* Tasks — a promoted transmission; dimmed once done rather than removed, so
+   completing one doesn't feel like data loss the way dismiss does. */
+.taskCard.done { opacity: 0.55; }
+.taskCard.done .holoSubject { text-decoration: line-through; }
+
+/* Prior messages in a thread, shown on demand when a transmission expands */
+.holoThread { border-left: 2px solid rgba(59,130,246,0.3); padding-left: 10px; margin: 10px 0; }
+.holoThreadMsg { margin-bottom: 10px; }

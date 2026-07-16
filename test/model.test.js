@@ -12,6 +12,8 @@ import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
+import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.js'
+import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -304,4 +306,26 @@ test('computeFlags suppresses shortage noise while On Hold', () => {
     new Date('2026-07-08'),
   )
   assert.ok(!flags.some((f) => f.key === 'STOCK_SHORT'))
+})
+
+test('resolveCharacterForSender reuses a remembered preference for that sender', () => {
+  const id = resolveCharacterForSender('vendor@example.com', { 'vendor@example.com': 'yoda' })
+  assert.equal(id, 'yoda')
+})
+
+test('resolveCharacterForSender ignores a stale/unknown preference id and falls back to random', () => {
+  const id = resolveCharacterForSender('vendor@example.com', { 'vendor@example.com': 'not-a-real-character' }, () => 0)
+  assert.equal(id, CHARACTERS[0].id)
+})
+
+test('resolveCharacterForSender picks randomly (via injected rng) for a sender with no preference', () => {
+  assert.equal(resolveCharacterForSender('new@example.com', {}, () => 0), CHARACTERS[0].id)
+  assert.equal(resolveCharacterForSender('new@example.com', {}, () => 0.999999), CHARACTERS[CHARACTERS.length - 1].id)
+})
+
+test('normalizeDocNumber prepends the prefix only when missing', () => {
+  assert.equal(normalizeDocNumber('SO', '1213'), 'SO1213')
+  assert.equal(normalizeDocNumber('SO', 'SO1213'), 'SO1213')
+  assert.equal(normalizeDocNumber('SO', 'so1213'), 'SO1213') // case-insensitive match on the prefix too
+  assert.equal(normalizeDocNumber('PO', ''), '')
 })

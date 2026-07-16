@@ -6,12 +6,14 @@ const DAY = 86400000
 // Agenda of upcoming deadlines (Ship dates and Cancel dates — cancel dates
 // are "ship by or lose it", doubly important for EDI chargebacks), plus a
 // month/week grid of orders that have actually shipped (a real IF-shipped
-// event date, distinct from the target ship date the agenda watches).
-export default function Calendar({ orders }) {
+// event date, distinct from the target ship date the agenda watches) — and
+// the quest-task activity journal (Nima, 2026-07-15: "we would also like
+// these to show up in our calendar as well"), plotted on the day they happened.
+export default function Calendar({ orders, activity = [] }) {
   return (
     <div className="calendar">
       <Agenda orders={orders} />
-      <ShipGrid orders={orders} />
+      <ShipGrid orders={orders} activity={activity} />
     </div>
   )
 }
@@ -64,8 +66,9 @@ function Agenda({ orders }) {
 }
 
 // Month/week grid of actual shipped-on dates, pulled from each order's
-// fulfillments (only Shipped IFs carry an actualShipDate).
-function ShipGrid({ orders }) {
+// fulfillments (only Shipped IFs carry an actualShipDate) — plus the
+// quest-task activity journal, plotted on the day each entry happened.
+function ShipGrid({ orders, activity = [] }) {
   const [mode, setMode] = useState('month') // 'month' | 'week'
   const [cursor, setCursor] = useState(() => startOfDay(Date.now()))
   const today = startOfDay(Date.now())
@@ -78,6 +81,13 @@ function ShipGrid({ orders }) {
       if (!shipped.has(day)) shipped.set(day, [])
       shipped.get(day).push({ o, f })
     }
+  }
+
+  const activityByDay = new Map() // day (ms) -> [activity entry]
+  for (const a of activity) {
+    const day = startOfDay(a.createdAt)
+    if (!activityByDay.has(day)) activityByDay.set(day, [])
+    activityByDay.get(day).push(a)
   }
 
   const gridStart =
@@ -115,6 +125,7 @@ function ShipGrid({ orders }) {
         ))}
         {days.map((day) => {
           const evts = shipped.get(day) || []
+          const acts = activityByDay.get(day) || []
           const inMonth = mode === 'week' || new Date(day).getMonth() === curMonth
           return (
             <div
@@ -133,6 +144,12 @@ function ShipGrid({ orders }) {
                 </div>
               ))}
               {evts.length > 3 && <div className="calEvtMore">+{evts.length - 3} more</div>}
+              {acts.slice(0, 3).map((a) => (
+                <div key={a.id} className="calEvt">
+                  <span className="badge transmission">{a.kind.replace('_', ' ')}</span> {a.subject}
+                </div>
+              ))}
+              {acts.length > 3 && <div className="calEvtMore">+{acts.length - 3} more</div>}
             </div>
           )
         })}

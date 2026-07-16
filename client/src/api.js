@@ -12,6 +12,12 @@ export async function fetchFreshness() {
   return res.json()
 }
 
+export async function fetchShipDepartures() {
+  const res = await fetch('/api/ship-departures')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // files: [{ name, text, lastModified }]
 export async function importCsv(files) {
   const res = await fetch('/api/import', {
@@ -85,6 +91,143 @@ export async function linkEdiTransaction({ transactionId, businessNumber, note }
 
 export async function unlinkEdiTransaction(transactionId) {
   const res = await fetch(`/api/edi/link/${transactionId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Quest emails (Gmail-to-quest hologram transmissions). /sync pulls fresh
+// messages from Gmail; read/character/label actions write back to the real
+// inbox, so — like EDI/Allocations — every call returns the full refreshed
+// list rather than needing a separate refetch.
+export async function fetchQuestEmails() {
+  const res = await fetch('/api/quest-emails')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function syncQuestEmails() {
+  const res = await fetch('/api/quest-emails/sync', { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function markQuestEmailRead(id) {
+  const res = await fetch(`/api/quest-emails/${id}/read`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function assignQuestEmailCharacter({ id, characterId, fromAddress }) {
+  const res = await fetch(`/api/quest-emails/${id}/character`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characterId, fromAddress }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function applyQuestEmailLabel({ id, label }) {
+  const res = await fetch(`/api/quest-emails/${id}/label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function dismissQuestEmail(id, dismissed = true) {
+  const res = await fetch(`/api/quest-emails/${id}/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dismissed }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Quest tasks — a transmission promoted to something durable. Creating one
+// dismisses the source transmission (see createTaskFromQuestEmail), so its
+// response includes the refreshed emails list alongside the new tasks list.
+export async function fetchQuestTasks() {
+  const res = await fetch('/api/quest-tasks')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function createQuestTask(emailId) {
+  const res = await fetch(`/api/quest-emails/${emailId}/create-task`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function completeQuestTask(id, done = true) {
+  const res = await fetch(`/api/quest-tasks/${id}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ done }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function setTaskNeeds({ id, needsType, needsNote, netsuiteDocType, netsuiteDocNumber }) {
+  const res = await fetch(`/api/quest-tasks/${id}/needs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ needsType, needsNote, netsuiteDocType, netsuiteDocNumber }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function setTaskUrgency(id, urgency) {
+  const res = await fetch(`/api/quest-tasks/${id}/urgency`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urgency }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function setTaskCharacter(id, characterId) {
+  const res = await fetch(`/api/quest-tasks/${id}/character`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characterId }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function setTaskChecklistItem(id, itemKey, done) {
+  const res = await fetch(`/api/quest-tasks/${id}/checklist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemKey, done }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// On-demand thread context — fetched only when a transmission is expanded.
+export async function fetchQuestEmailThread(id) {
+  const res = await fetch(`/api/quest-emails/${id}/thread`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function searchQuestArchive(q) {
+  const res = await fetch(`/api/quest-search?q=${encodeURIComponent(q)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// date: 'YYYY-MM-DD', omit for a general recent feed.
+export async function fetchQuestActivity(date) {
+  const res = await fetch(`/api/quest-activity${date ? `?date=${date}` : ''}`)
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }

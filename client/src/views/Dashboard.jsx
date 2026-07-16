@@ -1,10 +1,13 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard } from '../lib.jsx'
 
 // Attention-first: what needs action now, up top; pipeline overview above it.
-export default function Dashboard({ orders }) {
-  const attention = orders
-    .filter((o) => o.severity > 0)
-    .sort((a, b) => b.severity - a.severity || (b.daysPending || 0) - (a.daysPending || 0))
+// `tasks` (open quest_tasks from Gmail/Slack transmissions) are merged into
+// the same attention grid as NetSuite orders — one unified "needs action" list.
+export default function Dashboard({ orders, tasks = [] }) {
+  const attention = [
+    ...orders.filter((o) => o.severity > 0),
+    ...tasks.filter((t) => t.status === 'open').map(taskToCard),
+  ].sort((a, b) => b.severity - a.severity || (b.daysPending || 0) - (a.daysPending || 0))
 
   const counts = STAGE_ORDER.map((s) => ({
     s,
@@ -30,7 +33,7 @@ export default function Dashboard({ orders }) {
         {attention.map((o) => (
           <div key={o.soNumber} className={'card ' + sevClass(o.severity)}>
             <div className="cardTop">
-              <span className="so">{o.soNumber} <SourceBadge source={o.source} /></span>
+              <span className="so">{o.soNumber} <SourceBadge source={o.source} character={o.character} /></span>
               <span className="cust">{o.customer}</span>
             </div>
             <div className="next">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity } from './api.js'
 import { fmtAge } from './lib.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import Kanban from './views/Kanban.jsx'
@@ -7,6 +7,8 @@ import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
 import Allocations from './views/Allocations.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
+import Transmissions from './views/Transmissions.jsx'
+import ShipDepartures from './views/ShipDepartures.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -56,10 +58,14 @@ const VIEWS = [
   { key: 'calendar', label: 'Calendar', C: Calendar },
   { key: 'allocations', label: 'OC↔PO', C: Allocations },
   { key: 'edi', label: 'EDI', C: EdiOrders },
+  { key: 'transmissions', label: 'Transmissions', C: Transmissions },
+  { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
 ]
 
 export default function App() {
   const [orders, setOrders] = useState(null)
+  const [tasks, setTasks] = useState([])
+  const [activity, setActivity] = useState([])
   const [err, setErr] = useState(null)
   const [view, setView] = useState('dashboard')
   const [fresh, setFresh] = useState(null)
@@ -70,6 +76,11 @@ export default function App() {
   function refresh() {
     fetchOrders().then(setOrders).catch((e) => setErr(e.message))
     fetchFreshness().then(setFresh).catch(() => {})
+    // Open quest_tasks merge into Dashboard/Kanban's attention view, and the
+    // activity journal folds into Calendar (Nima, 2026-07-15) — both
+    // best-effort: the app still works if either fails to load.
+    fetchQuestTasks().then(setTasks).catch(() => {})
+    fetchQuestActivity().then(setActivity).catch(() => {})
   }
   useEffect(refresh, [])
 
@@ -100,7 +111,8 @@ export default function App() {
   }
 
   const Active = VIEWS.find((v) => v.key === view).C
-  const attention = orders ? orders.filter((o) => o.severity > 0).length : 0
+  const openTaskCount = tasks.filter((t) => t.status === 'open').length
+  const attention = (orders ? orders.filter((o) => o.severity > 0).length : 0) + openTaskCount
 
   return (
     <div className="app">
@@ -139,7 +151,7 @@ export default function App() {
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} />}
+        {orders && <Active orders={orders} tasks={tasks} activity={activity} />}
       </main>
     </div>
   )

@@ -17,6 +17,15 @@ import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../s
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
 } from '../src/ingest/loadToDb.js'
+import {
+  fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail,
+  fetchQuestEmailById, createQuestTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
+  updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
+  fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
+} from '../src/ingest/loadToDb.js'
+import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile } from '../src/ingest/gmail.js'
+import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
+import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
 export async function getOrders() {
   // Subqueries (not joins+GROUP BY) for fulfillments and invoices: both are
@@ -86,6 +95,24 @@ export async function getOrders() {
 }
 
 const num = (v) => (v == null ? null : Number(v))
+
+// ── Ship departures (Nima, 2026-07-16) — every packed IF, grouped by its
+// IF-Packed-Status: "Approved to Ship" can leave today; "FOB Order Awaiting
+// Shipment" is mid-process; "Waiting On Payment" is stuck at the dock for a
+// credit transfer; "Pending Invoice" is its own real status seen in the data
+// too. Only rows with a packed_status at all are shown — everything else has
+// already moved past this part of the pipeline.
+export async function getShipDepartures() {
+  const { rows } = await pool.query(`
+    SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.packed_status AS "packedStatus",
+           f.days_pending AS "daysPending", f.invoice_number AS "invoiceNumber", f.if_date AS "ifDate",
+           o.customer, o.source, o.po_number AS "poNumber"
+    FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+    WHERE f.packed_status IS NOT NULL
+    ORDER BY f.days_pending DESC NULLS LAST
+  `)
+  return rows
+}
 
 // Data-freshness: how old is the underlying export data? Uses the most recent
 // snapshot per source and reports the STALEST one. Thresholds are the initial
@@ -209,3 +236,224 @@ export async function dismissOcPoLine({ type, ocNumber, poNumber, item, note, di
   if (type === 'po') return dismissPurchaseOrder({ poNumber, item, note, dismissed })
   throw new Error(`unknown dismiss type: ${type}`)
 }
+
+// ── Quest emails (Gmail-to-quest hologram transmissions) ────────────────────
+// Read-only from Neon; /sync pulls fresh messages from Gmail first. Every
+// mutation performs its write (Gmail API + local DB where applicable) then
+// returns the refreshed view, same shape as the EDI/OC↔PO routes above.
+// `characters` rides along so the client's reassign dropdown always reflects
+// the server's roster (src/model/characters.js) instead of a duplicated copy.
+export async function getQuestEmails() {
+  const emails = await fetchQuestEmails()
+  return { emails: emails.map((e) => ({ ...e, character: getCharacterById(e.characterId) })), characters: CHARACTERS }
+}
+
+export async function syncQuestEmails() {
+  const messages = await fetchInboxMessages()
+  const upserted = await loadQuestEmails(messages)
+  const reconciled = await reconcileReadStatus(messages.map((m) => m.id))
+  const autoClosed = await checkRepliedTasks()
+  const review = await getQuestEmails()
+  return { fetched: messages.length, upserted, reconciled, autoClosed, ...review }
+}
+
+// "Reply needed" tasks close themselves once we've actually sent a reply
+// (Nima, 2026-07-15: "have the app acknowledge it to close and mark the task
+// as done") — scans each open reply-needed task's Gmail thread for a message
+// FROM this account dated after the task was created. Runs every sync
+// (manual + the 5-min auto-poll in Transmissions.jsx), not on a separate timer.
+export async function checkRepliedTasks() {
+  const openReplyTasks = await fetchOpenReplyTasks()
+  if (!openReplyTasks.length) return 0
+  const myAddress = (await getProfile()).toLowerCase()
+  let closed = 0
+  for (const t of openReplyTasks) {
+    const thread = await fetchThread(t.threadId)
+    const replied = thread.some(
+      (m) => m.fromAddress?.toLowerCase() === myAddress && new Date(m.receivedAt) > new Date(t.createdAt),
+    )
+    if (!replied) continue
+    await completeQuestTask(t.id, true)
+    await logTaskActivity({ taskId: t.id, kind: 'reply_detected', note: 'Reply detected in thread — auto-closed' })
+    closed++
+  }
+  return closed
+}
+
+export async function markQuestEmailRead(id) {
+  await markMessageRead(id) // Gmail write first — if it throws, local state stays untouched
+  await markQuestEmailReadLocal(id)
+  return getQuestEmails()
+}
+
+export async function assignQuestEmail({ id, characterId, fromAddress }) {
+  if (!getCharacterById(characterId)) throw new Error(`unknown characterId: ${characterId}`)
+  await assignQuestEmailCharacter({ id, characterId, fromAddress })
+  return getQuestEmails()
+}
+
+export async function applyQuestEmailLabel({ id, label }) {
+  await applyLabel(id, label) // Gmail write — label_ids refresh on next sync
+  return getQuestEmails()
+}
+
+export async function dismissQuestEmailLine(id, dismissed = true) {
+  await dismissQuestEmail(id, dismissed)
+  return getQuestEmails()
+}
+
+// On-demand thread context (not stored — see src/ingest/gmail.js). Excludes
+// the message being viewed since the client already has its full body.
+export async function getQuestEmailThread(id) {
+  const email = await fetchQuestEmailById(id)
+  if (!email?.threadId) return []
+  const messages = await fetchThread(email.threadId)
+  return messages.filter((m) => m.id !== id).sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt))
+}
+
+// Archive search — deliberately reads past dismissed/done state (unlike
+// every other quest-emails/quest-tasks read above), since the whole point is
+// finding something that already cycled out of the active views.
+export async function searchQuestArchive(q) {
+  const [emails, tasks] = await Promise.all([searchQuestEmails(q), searchQuestTasks(q)])
+  return {
+    emails: emails.map((e) => ({ ...e, character: getCharacterById(e.characterId) })),
+    tasks: tasks.map((t) => ({ ...t, character: getCharacterById(t.characterId) })),
+  }
+}
+
+// ── Quest tasks — a transmission promoted to something durable ──────────────
+// Copies the email's subject/snippet/character over so the task keeps the
+// same "who delivered this" identity even after the source transmission
+// itself cycles out of the unread-only list. Dismissing the source email
+// here is deliberate: once claimed as a task, it's done being a transmission.
+// Every read runs ensureRecurringTasks first — the "catch up whenever the
+// app is opened" mechanism (Nima, 2026-07-16), no separate scheduler needed
+// until this is deployed somewhere always-on.
+export async function getQuestTasks() {
+  await ensureRecurringTasks()
+  const tasks = await fetchQuestTasks()
+  return tasks.map((t) => ({ ...t, character: getCharacterById(t.characterId) }))
+}
+
+export async function createTaskFromQuestEmail(emailId) {
+  const email = await fetchQuestEmailById(emailId)
+  if (!email) throw new Error(`no quest email found for id ${emailId}`)
+  const taskId = await createQuestTask({
+    emailId: email.id, threadId: email.threadId, characterId: email.characterId, fromAddress: email.fromAddress,
+    fromName: email.fromName, subject: email.subject, snippet: email.snippet,
+  })
+  await dismissQuestEmail(emailId, true)
+  await logTaskActivity({ taskId, kind: 'created', note: `Claimed as a task: "${email.subject}"` })
+  return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
+}
+
+// ── Recurring tasks ──────────────────────────────────────────────────────────
+// Verifiers a 'verified'-mode task can reference by key. Add more here as new
+// recurring tasks need real (code-checkable) completion gates.
+const VERIFIERS = {
+  csv_freshness_workhub: async () => {
+    const fresh = await getFreshness()
+    const bad = fresh.sources.filter((s) => s.status === 'stale' || s.status === 'missing')
+    return { ok: bad.length === 0, detail: bad.length ? `Work-Hub source(s) still need re-upload: ${bad.map((s) => s.label).join(', ')}` : 'ok' }
+  },
+}
+
+async function runVerification(task) {
+  const checklist = task.checklist || []
+  const unchecked = checklist.filter((c) => !c.done)
+  const verifier = task.verifyKey && VERIFIERS[task.verifyKey]
+  const verifierResult = verifier ? await verifier() : { ok: true, detail: 'ok' }
+  const problems = [
+    ...(verifierResult.ok ? [] : [verifierResult.detail]),
+    ...unchecked.map((c) => `Not checked: ${c.label}`),
+  ]
+  return { ok: problems.length === 0, detail: problems.join(' · ') }
+}
+
+export async function completeTask(id, done = true) {
+  if (done) {
+    const task = await fetchQuestTaskById(id)
+    if (task?.completionMode === 'verified') {
+      const result = await runVerification(task)
+      if (!result.ok) throw new Error(result.detail)
+    }
+  }
+  await completeQuestTask(id, done)
+  await logTaskActivity({ taskId: id, kind: done ? 'done' : 'reopened', note: done ? 'Marked done' : 'Reopened' })
+  return getQuestTasks()
+}
+
+export async function setTaskChecklistItem(id, itemKey, done) {
+  const checklist = await updateTaskChecklistItem(id, itemKey, done)
+  const item = checklist.find((c) => c.key === itemKey)
+  await logTaskActivity({ taskId: id, kind: 'checklist_set', note: `${item?.label || itemKey}: ${done ? 'checked' : 'unchecked'}` })
+  return getQuestTasks()
+}
+
+// 'daily_times' (e.g. 9am/2pm) spawns one instance per listed time, only
+// once that time has actually passed today; 'daily' spawns once per day,
+// whenever this next runs after midnight. instance_key's UNIQUE index is
+// the actual dedupe — this function is safe to call as often as you like.
+export async function ensureRecurringTasks() {
+  const templates = await fetchActiveRecurringTemplates()
+  const now = new Date()
+  const dateStr = now.toISOString().slice(0, 10)
+  let created = 0
+  for (const t of templates) {
+    const slots = t.scheduleType === 'daily_times' ? (t.scheduleTimes || []) : ['']
+    for (const slot of slots) {
+      if (t.scheduleType === 'daily_times') {
+        const [hh, mm] = slot.split(':').map(Number)
+        const slotTime = new Date(now)
+        slotTime.setHours(hh, mm, 0, 0)
+        if (now < slotTime) continue // this slot hasn't happened yet today
+      }
+      const instanceKey = `${t.key}:${dateStr}${slot ? ':' + slot : ''}`
+      const characterId = t.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
+      const taskId = await createRecurringTaskInstance({
+        recurringKey: t.key, instanceKey, characterId, subject: t.title, snippet: t.description,
+        completionMode: t.completionMode, verifyKey: t.verifyKey, urgency: t.urgency, checklist: t.checklistItems,
+      })
+      if (!taskId) continue // already existed
+      await logTaskActivity({ taskId, kind: 'created', note: `Recurring: ${t.title}` })
+      created++
+    }
+  }
+  return created
+}
+
+// needsType 'netsuite_doc' normalizes the number against its doc type's
+// prefix (e.g. typing "1213" under Sales Order saves as "SO1213") — the one
+// piece of this that isn't just a straight column write.
+export async function setTaskNeeds({ id, needsType, needsNote, netsuiteDocType, netsuiteDocNumber }) {
+  const normalizedNumber = needsType === 'netsuite_doc' ? normalizeDocNumber(netsuiteDocType, netsuiteDocNumber) : null
+  await updateTaskNeeds({ id, needsType, needsNote, netsuiteDocType: needsType === 'netsuite_doc' ? netsuiteDocType : null, netsuiteDocNumber: normalizedNumber })
+  const NEEDS_NOTE = {
+    none: 'Marked as nothing needed', reply: 'Marked as reply needed', acknowledgment: 'Acknowledged',
+    file: `File reference set${needsNote ? `: ${needsNote}` : ''}`,
+    netsuite_doc: `NetSuite ${netsuiteDocType} reference set${normalizedNumber ? `: ${normalizedNumber}` : ''}`,
+  }
+  await logTaskActivity({ taskId: id, kind: 'needs_set', note: NEEDS_NOTE[needsType] || 'Needs updated' })
+  return getQuestTasks()
+}
+
+export async function setTaskUrgency(id, urgency) {
+  await updateTaskUrgency(id, urgency)
+  await logTaskActivity({ taskId: id, kind: 'urgency_set', note: urgency ? `Urgency set to ${urgency}` : 'Urgency cleared' })
+  return getQuestTasks()
+}
+
+export async function setTaskCharacter(id, characterId) {
+  const character = getCharacterById(characterId)
+  if (!character) throw new Error(`unknown characterId: ${characterId}`)
+  await updateTaskCharacter(id, characterId)
+  await logTaskActivity({ taskId: id, kind: 'character_set', note: `Reassigned to ${character.name}` })
+  return getQuestTasks()
+}
+
+export async function getTaskActivity(date) {
+  return fetchTaskActivity(date ? { date } : {})
+}
+
+export { NETSUITE_DOC_TYPES }

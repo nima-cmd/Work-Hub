@@ -83,10 +83,49 @@ function fmtShortDate(s) {
   return isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 }
 
-// EDI channel badge (ShopBop / Nordstrom / Bloomingdale's).
-export function SourceBadge({ source }) {
+// EDI channel badge (ShopBop / Nordstrom / Bloomingdale's), or the character
+// who delivered a transmission-derived task.
+export function SourceBadge({ source, character }) {
   if (source === 'edi') return <span className="badge edi">EDI</span>
+  if (source === 'transmission') return <span className="badge transmission">{character?.name || 'Task'}</span>
   return null
+}
+
+// Quest tasks (Gmail/Slack transmissions promoted to durable tasks) merged
+// into the same "needs attention" surface as NetSuite orders (Nima,
+// 2026-07-15: "the transmission should live along all other tasks we have").
+// No NetSuite stage applies, so severity comes from urgency instead — an
+// open task with no urgency set still defaults to "lo" so it isn't invisible.
+const URGENCY_SEVERITY = { hi: 3, mid: 2, lo: 1 }
+export const taskSeverity = (t) => URGENCY_SEVERITY[t.urgency] || 1
+export const taskDaysPending = (t) => Math.floor((Date.now() - new Date(t.createdAt).getTime()) / 86_400_000)
+
+const NEEDS_LABEL = {
+  none: 'Review', reply: 'Reply needed', acknowledgment: 'Acknowledge',
+  file: 'File needed', netsuite_doc: 'NetSuite doc needed',
+}
+export const taskNextAction = (t) => {
+  if (t.needsType === 'netsuite_doc' && t.netsuiteDocNumber) return `NetSuite doc needed: ${t.netsuiteDocNumber}`
+  const base = NEEDS_LABEL[t.needsType] || 'Review'
+  return t.needsNote ? `${base}: ${t.needsNote}` : base
+}
+
+// Normalizes an open quest_task into the same shape Dashboard/Kanban cards
+// expect from an order, so both can render through one code path.
+export function taskToCard(t) {
+  return {
+    soNumber: `TASK-${t.id}`,
+    customer: t.fromName || t.fromAddress || 'Unknown sender',
+    source: 'transmission',
+    character: t.character,
+    stage: null,
+    severity: taskSeverity(t),
+    daysPending: taskDaysPending(t),
+    nextAction: taskNextAction(t),
+    flags: [],
+    fulfillments: [],
+    invoices: [],
+  }
 }
 
 // Human-friendly age from hours.

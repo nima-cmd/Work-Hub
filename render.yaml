@@ -1,0 +1,63 @@
+# Render Blueprint (render.yaml) — https://render.com/docs/blueprint-spec
+#
+# Two services sharing the same Neon Postgres and Gmail/Orderful credentials:
+#   1. A web service — the same Express app + built React client you run
+#      locally with `npm run dev`/`npm run server`, just always-on instead of
+#      only-while-your-laptop's-open.
+#   2. A cron job — runs scripts/recurring-check.js on a schedule, so the
+#      9am/2pm Airtable reminder and the daily CSV-freshness check actually
+#      fire on time even if nobody opens the app that day. Without this,
+#      those only "catch up" the next time someone visits.
+#
+# Manual steps this file can't do for you (deliberately — see chat):
+#   1. Create a free Render account, connect this repo's GitHub remote.
+#   2. New → Blueprint → point at this repo. Render reads this file and
+#      provisions both services below automatically.
+#   3. In each service's Environment tab, paste in the REAL values for every
+#      env var listed with `sync: false` — nothing secret lives in this file
+#      or in git. You already have all of these in your local .env.local.
+#   4. Check Render's current free-tier limits for Cron Jobs when you sign up
+#      (pricing/limits change over time — not something to hardcode here).
+
+services:
+  - type: web
+    name: work-hub
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run client:build
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: ORDERFUL_API_KEY
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+
+  - type: cron
+    name: work-hub-recurring-check
+    runtime: node
+    plan: free
+    # Every 30 minutes — frequent enough that the 9am/2pm reminders show up
+    # within half an hour of their slot, cheap enough to stay well within any
+    # free-tier run-count/minutes limit. Adjust freely once you see real usage.
+    schedule: "*/30 * * * *"
+    buildCommand: npm install
+    startCommand: npm run recurring-check
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: ORDERFUL_API_KEY
+        sync: false

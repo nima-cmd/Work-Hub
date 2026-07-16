@@ -1,9 +1,10 @@
 // scripts/connect-gmail.js — one-time (or re-run-as-needed) OAuth consent flow
-// for read-only Gmail access. Prints a URL to open in your browser; once you
-// click Allow, this catches Google's redirect locally, exchanges the code for
-// tokens, and saves the refresh token to .env.local. No dependency needed —
-// just Node's built-in http server + fetch, same dependency-light style as
-// the rest of this repo's ingest scripts.
+// for read/write Gmail access (gmail.modify — read, mark read/unread, and
+// create/apply labels; stops short of permanent delete). Prints a URL to open
+// in your browser; once you click Allow, this catches Google's redirect
+// locally, exchanges the code for tokens, and saves the refresh token to
+// .env.local. No dependency needed — just Node's built-in http server +
+// fetch, same dependency-light style as the rest of this repo's ingest scripts.
 //
 // Run: node --env-file=.env.local scripts/connect-gmail.js
 
@@ -24,7 +25,7 @@ const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
 authUrl.searchParams.set('client_id', CLIENT_ID)
 authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
 authUrl.searchParams.set('response_type', 'code')
-authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.readonly')
+authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.modify')
 authUrl.searchParams.set('access_type', 'offline') // required to get a refresh token
 authUrl.searchParams.set('prompt', 'consent') // forces a refresh token even on repeat runs
 

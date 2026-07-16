@@ -250,6 +250,158 @@ CREATE TABLE IF NOT EXISTS edi_fulfillments (
 CREATE INDEX IF NOT EXISTS idx_edi_fulfillments_po  ON edi_fulfillments(po_number);
 CREATE INDEX IF NOT EXISTS idx_edi_fulfillments_bol ON edi_fulfillments(bol);
 
+-- ── Quest emails (Gmail-to-quest hologram transmissions) ─────────────────────
+-- Inbound Gmail messages, surfaced in the app as a "hologram" delivered by a
+-- character from src/model/characters.js. id is Gmail's own message id, so
+-- re-syncs upsert cleanly (same convention as edi_transactions.id).
+-- character_id and dismissed are app-owned — deliberately excluded from the
+-- sync upsert (see loadQuestEmails in src/ingest/loadToDb.js) so a re-sync
+-- never clobbers a manual character reassignment or a dismissal, same
+-- reasoning as order_confirmations.dismissed above.
+CREATE TABLE IF NOT EXISTS quest_emails (
+  id             TEXT PRIMARY KEY,        -- Gmail message id
+  thread_id      TEXT,
+  from_address   TEXT,
+  from_name      TEXT,
+  subject        TEXT,
+  snippet        TEXT,
+  body           TEXT,                    -- full decoded plain-text body (fixes forwarded content, which snippet alone never showed)
+  received_at    TIMESTAMPTZ,
+  is_unread      BOOLEAN DEFAULT true,    -- refreshed from Gmail's own UNREAD label every sync
+  label_ids      TEXT[],
+  character_id   TEXT,                    -- src/model/characters.js id; null until first sync assigns one
+  dismissed      BOOLEAN DEFAULT false,   -- app-only hide; never touches Gmail
+  synced_at      TIMESTAMPTZ DEFAULT now()
+);
+ALTER TABLE quest_emails ADD COLUMN IF NOT EXISTS body TEXT;
+CREATE INDEX IF NOT EXISTS idx_quest_emails_received ON quest_emails(received_at);
+
+-- Remembers which character was manually assigned for a given sender, so
+-- future emails from the same address inherit it instead of a fresh random
+-- pick (Nima, 2026-07-15: "select a different messenger for that type of
+-- message" — sender is the simplest definition of "type" available before
+-- any Gmail label taxonomy exists).
+CREATE TABLE IF NOT EXISTS email_character_prefs (
+  from_address   TEXT PRIMARY KEY,
+  character_id   TEXT NOT NULL,
+  updated_at     TIMESTAMPTZ DEFAULT now()
+);
+
+-- Promoting a transmission to a durable task (Nima, 2026-07-15): once an
+-- email matters enough to act on, it shouldn't just cycle out of the unread-
+-- only transmissions list — it becomes its own row here, carrying its
+-- character/subject/snippet along so the task keeps the same "who delivered
+-- this" identity. email_id is a loose reference (no FK) — quest_emails rows
+-- aren't guaranteed to stick around, but a task must survive regardless.
+-- needs_type (Nima, 2026-07-15): 'none' | 'reply' | 'acknowledgment' | 'file' | 'netsuite_doc'
+--   reply          — we owe a reply; closes itself once one is sent (see
+--                    checkRepliedTasks in server/queries.js scanning the
+--                    Gmail thread for an outbound message after created_at)
+--   acknowledgment — no action beyond recording "seen and understood"
+--   file           — a non-NetSuite file/document is needed; needs_note holds
+--                    a REFERENCE (a link or where-to-find-it note), never the
+--                    file itself — the app doesn't store attachments
+--   netsuite_doc   — a NetSuite transaction is needed; netsuite_doc_type +
+--                    netsuite_doc_number hold the normalized reference
+--                    (typing "1213" under Sales Order saves as "SO1213")
+CREATE TABLE IF NOT EXISTS quest_tasks (
+  id                  SERIAL PRIMARY KEY,
+  email_id            TEXT,
+  thread_id           TEXT,                -- copied from the source email; used to auto-detect a reply
+  character_id        TEXT,
+  from_address        TEXT,
+  from_name           TEXT,
+  subject             TEXT,
+  snippet             TEXT,
+  status              TEXT DEFAULT 'open', -- 'open' | 'done'
+  needs_type          TEXT DEFAULT 'none',
+  needs_note          TEXT,
+  netsuite_doc_type   TEXT,                -- 'PO'|'SO'|'IF'|'IR'|'IT'|'TO' — only when needs_type='netsuite_doc'
+  netsuite_doc_number TEXT,                -- normalized, e.g. 'SO1213'
+  urgency             TEXT,                -- 'hi' | 'mid' | 'lo' | null — reuses the app's existing sev-hi/mid/lo tiers
+  created_at          TIMESTAMPTZ DEFAULT now(),
+  completed_at        TIMESTAMPTZ
+);
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS needs_type TEXT DEFAULT 'none';
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS needs_note TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS urgency TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS thread_id TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS netsuite_doc_type TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS netsuite_doc_number TEXT;
+CREATE INDEX IF NOT EXISTS idx_quest_tasks_status ON quest_tasks(status);
+
+-- Recurring tasks (Nima, 2026-07-16) — a quest_task can be spawned by a
+-- recurring_task_templates row instead of an email. Reuses the same table
+-- (and therefore the same Dashboard/Kanban/Tasks UI, activity log, etc.)
+-- rather than a parallel model — a recurring instance IS a task.
+--   completion_mode: 'standard' (today's manual mark-done/needs-type flow,
+--     the default for transmission-derived tasks) | 'checkbox' (no needs-
+--     type/urgency UI, just a plain done toggle) | 'verified' (Mark done is
+--     REJECTED server-side unless verify_key's check passes AND every
+--     checklist item is checked — see runVerification in server/queries.js)
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS recurring_key TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS instance_key TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS completion_mode TEXT DEFAULT 'standard';
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS verify_key TEXT;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS checklist JSONB;
+-- Plain (non-partial) unique index — NULLs never conflict with each other in
+-- Postgres uniqueness checks, so this is already safe for transmission-
+-- derived tasks (instance_key NULL) while still deduping recurring instances,
+-- AND (unlike a partial index) it works directly as an ON CONFLICT target.
+-- Dropped and recreated because an earlier version of this migration created
+-- it as a partial index (WHERE instance_key IS NOT NULL) under the same
+-- name — IF NOT EXISTS alone won't redefine an index that already exists.
+DROP INDEX IF EXISTS idx_quest_tasks_instance_key;
+CREATE UNIQUE INDEX idx_quest_tasks_instance_key ON quest_tasks(instance_key);
+
+-- The template a recurring task is generated from. schedule_times is only
+-- meaningful for schedule_type='daily_times' (e.g. '{09:00,14:00}' — one
+-- instance per listed time per day); 'daily' just means once per day,
+-- whenever the app is next opened/synced after midnight.
+CREATE TABLE IF NOT EXISTS recurring_task_templates (
+  key             TEXT PRIMARY KEY,
+  title           TEXT NOT NULL,
+  description     TEXT,
+  character_id    TEXT,                          -- fixed messenger; null = random each occurrence
+  schedule_type   TEXT NOT NULL,                  -- 'daily' | 'daily_times'
+  schedule_times  TEXT[],
+  completion_mode TEXT NOT NULL DEFAULT 'checkbox',
+  verify_key      TEXT,
+  checklist_items JSONB,
+  urgency         TEXT,
+  active          BOOLEAN DEFAULT true,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- Seed templates — ON CONFLICT DO NOTHING so re-running migrate never resets
+-- an active/inactive toggle or edits made after creation.
+INSERT INTO recurring_task_templates
+  (key, title, description, character_id, schedule_type, schedule_times, completion_mode, verify_key, checklist_items, urgency)
+VALUES
+  ('csv-freshness-monitor', 'Upload the latest CSVs',
+   'Work-Hub''s own saved-search exports are checked automatically. The Naghedi-Warehouse imports below can''t be checked remotely (two of them only ever live in that app''s local browser storage) — check each off once you''ve actually run it.',
+   'bugs', 'daily', NULL, 'verified', 'csv_freshness_workhub',
+   '[{"key":"nw-catalog","label":"Naghedi-Warehouse: SKU/Quantities Catalog CSV","done":false},
+     {"key":"nw-items","label":"Naghedi-Warehouse: NetSuite Items CSV","done":false},
+     {"key":"nw-po","label":"Naghedi-Warehouse: PO Warehouse View CSV","done":false}]'::jsonb,
+   'hi'),
+  ('airtable-daily-reminder', 'Airtable upload reminder', 'We need an Airtable upload.',
+   NULL, 'daily_times', ARRAY['09:00','14:00'], 'checkbox', NULL, NULL, NULL)
+ON CONFLICT (key) DO NOTHING;
+
+-- Journal (Nima, 2026-07-15): "track what was done within the day and go
+-- back and review quickly" — one row per meaningful quest_task state change,
+-- also folded into the Calendar view (see client/src/views/Calendar.jsx).
+CREATE TABLE IF NOT EXISTS quest_task_activity (
+  id         SERIAL PRIMARY KEY,
+  task_id    INTEGER REFERENCES quest_tasks(id) ON DELETE CASCADE,
+  kind       TEXT,   -- 'created' | 'needs_set' | 'urgency_set' | 'done' | 'reopened' | 'reply_detected'
+  note       TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quest_task_activity_task    ON quest_task_activity(task_id);
+CREATE INDEX IF NOT EXISTS idx_quest_task_activity_created ON quest_task_activity(created_at);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);

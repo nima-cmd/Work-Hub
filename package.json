@@ -11,6 +11,8 @@
     "ingest": "node --env-file=.env.local scripts/ingest.js",
     "match:review": "node --env-file=.env.local scripts/match-review.js",
     "server": "node --env-file=.env.local server/index.js",
+    "start": "node server/index.js",
+    "recurring-check": "node scripts/recurring-check.js",
     "client:build": "npm --prefix client install && npm --prefix client run build",
     "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\""
   },

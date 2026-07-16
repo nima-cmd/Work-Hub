@@ -4,6 +4,7 @@
 // of duplicating them — that's what lets us snapshot over time and detect stalls.
 
 import { pool } from '../db.js'
+import { resolveCharacterForSender } from '../model/characters.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
 // so we can later flag "stuck N days in the same stage".
@@ -345,4 +346,255 @@ export async function upsertEdiManualLink({ transactionId, businessNumber, note 
 export async function deleteEdiManualLink(transactionId, db = pool) {
   const { rowCount } = await db.query('DELETE FROM edi_manual_links WHERE transaction_id = $1', [transactionId])
   return rowCount
+}
+
+// ── Quest emails (Gmail-to-quest hologram transmissions) ────────────────────
+export async function fetchEmailCharacterPrefs(db = pool) {
+  const { rows } = await db.query(
+    `SELECT from_address AS "fromAddress", character_id AS "characterId" FROM email_character_prefs`,
+  )
+  return Object.fromEntries(rows.map((r) => [r.fromAddress, r.characterId]))
+}
+
+// character_id is deliberately absent from the ON CONFLICT UPDATE below (same
+// reasoning as dismissed elsewhere): it's only ever set on first INSERT, via
+// resolveCharacterForSender — a re-sync must never re-randomize an email that
+// already has a messenger assigned.
+export async function loadQuestEmails(messages, db = pool) {
+  const prefs = await fetchEmailCharacterPrefs(db)
+  let n = 0
+  for (const m of messages) {
+    if (!m.id) continue
+    const characterId = resolveCharacterForSender(m.fromAddress, prefs)
+    await db.query(
+      `INSERT INTO quest_emails
+         (id, thread_id, from_address, from_name, subject, snippet, body, received_at, is_unread, label_ids, character_id, synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+       ON CONFLICT (id) DO UPDATE SET
+         thread_id    = EXCLUDED.thread_id,
+         from_address = EXCLUDED.from_address,
+         from_name    = EXCLUDED.from_name,
+         subject      = EXCLUDED.subject,
+         snippet      = EXCLUDED.snippet,
+         body         = EXCLUDED.body,
+         received_at  = EXCLUDED.received_at,
+         is_unread    = EXCLUDED.is_unread,
+         label_ids    = EXCLUDED.label_ids,
+         synced_at    = now()`,
+      [
+        m.id, m.threadId || null, m.fromAddress || null, m.fromName || null, m.subject || null,
+        m.snippet || null, m.body || null, m.receivedAt || null, m.isUnread ?? true, m.labelIds || [], characterId,
+      ],
+    )
+    n++
+  }
+  return n
+}
+
+// fetchInboxMessages only ever returns currently-unread mail, so anything we
+// previously stored as unread but that ISN'T in this sync's fetch must have
+// been read since (either through this app's own markMessageRead, or
+// directly in Gmail) — flip it locally so it drops out of the transmissions
+// list without a per-message API call.
+export async function reconcileReadStatus(currentUnreadIds, db = pool) {
+  const { rowCount } = await db.query(
+    `UPDATE quest_emails SET is_unread = false WHERE is_unread = true AND NOT (id = ANY($1::text[]))`,
+    [currentUnreadIds],
+  )
+  return rowCount
+}
+
+export async function fetchQuestEmails(db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, thread_id AS "threadId", from_address AS "fromAddress", from_name AS "fromName",
+            subject, snippet, body, received_at AS "receivedAt", is_unread AS "isUnread",
+            label_ids AS "labelIds", character_id AS "characterId"
+     FROM quest_emails WHERE dismissed = false AND is_unread = true
+     ORDER BY received_at DESC`,
+  )
+  return rows
+}
+
+// Looked up regardless of unread/dismissed state — creating a task from a
+// transmission has to work even the instant after it's already been read.
+export async function fetchQuestEmailById(id, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, thread_id AS "threadId", from_address AS "fromAddress", from_name AS "fromName",
+            subject, snippet, body, received_at AS "receivedAt", is_unread AS "isUnread",
+            label_ids AS "labelIds", character_id AS "characterId"
+     FROM quest_emails WHERE id = $1`,
+    [id],
+  )
+  return rows[0] || null
+}
+
+// Every quest_emails row regardless of dismissed/unread state, for search.
+export async function searchQuestEmails(q, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet,
+            received_at AS "receivedAt", is_unread AS "isUnread", dismissed, character_id AS "characterId"
+     FROM quest_emails
+     WHERE subject ILIKE $1 OR snippet ILIKE $1 OR body ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
+     ORDER BY received_at DESC LIMIT 100`,
+    [`%${q}%`],
+  )
+  return rows
+}
+
+// Reassigning a character remembers it for the sender (see resolveCharacterForSender)
+// so future emails from the same address inherit the same messenger.
+export async function assignQuestEmailCharacter({ id, characterId, fromAddress }, db = pool) {
+  await db.query('UPDATE quest_emails SET character_id = $2 WHERE id = $1', [id, characterId])
+  if (fromAddress) {
+    await db.query(
+      `INSERT INTO email_character_prefs (from_address, character_id, updated_at)
+       VALUES ($1,$2, now())
+       ON CONFLICT (from_address) DO UPDATE SET character_id = EXCLUDED.character_id, updated_at = now()`,
+      [fromAddress, characterId],
+    )
+  }
+}
+
+// Called after a successful Gmail-side markMessageRead so local state mirrors it.
+export async function markQuestEmailReadLocal(id, db = pool) {
+  await db.query('UPDATE quest_emails SET is_unread = false WHERE id = $1', [id])
+}
+
+// App-only hide — never touches Gmail. Mirrors dismissOrderConfirmation/dismissPurchaseOrder.
+export async function dismissQuestEmail(id, dismissed = true, db = pool) {
+  await db.query('UPDATE quest_emails SET dismissed = $2 WHERE id = $1', [id, dismissed])
+}
+
+// ── Quest tasks (a transmission promoted to something durable) ──────────────
+export async function createQuestTask({ emailId, threadId, characterId, fromAddress, fromName, subject, snippet }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO quest_tasks (email_id, thread_id, character_id, from_address, from_name, subject, snippet)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [emailId, threadId || null, characterId, fromAddress || null, fromName || null, subject || null, snippet || null],
+  )
+  return rows[0].id
+}
+
+const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", character_id AS "characterId",
+  from_address AS "fromAddress", from_name AS "fromName", subject, snippet, status,
+  needs_type AS "needsType", needs_note AS "needsNote",
+  netsuite_doc_type AS "netsuiteDocType", netsuite_doc_number AS "netsuiteDocNumber",
+  urgency, recurring_key AS "recurringKey", completion_mode AS "completionMode",
+  verify_key AS "verifyKey", checklist, created_at AS "createdAt", completed_at AS "completedAt"`
+
+export async function fetchQuestTasks(db = pool) {
+  const { rows } = await db.query(
+    `SELECT ${TASK_FIELDS} FROM quest_tasks ORDER BY (status = 'open') DESC, created_at DESC`,
+  )
+  return rows
+}
+
+export async function fetchQuestTaskById(id, db = pool) {
+  const { rows } = await db.query(`SELECT ${TASK_FIELDS} FROM quest_tasks WHERE id = $1`, [id])
+  return rows[0] || null
+}
+
+// Open reply-needed tasks with a thread to check — see checkRepliedTasks in
+// server/queries.js, which scans each thread for an outbound reply.
+export async function fetchOpenReplyTasks(db = pool) {
+  const { rows } = await db.query(
+    `SELECT ${TASK_FIELDS} FROM quest_tasks WHERE status = 'open' AND needs_type = 'reply' AND thread_id IS NOT NULL`,
+  )
+  return rows
+}
+
+// ── Recurring tasks ──────────────────────────────────────────────────────────
+export async function fetchActiveRecurringTemplates(db = pool) {
+  const { rows } = await db.query(
+    `SELECT key, title, description, character_id AS "characterId", schedule_type AS "scheduleType",
+            schedule_times AS "scheduleTimes", completion_mode AS "completionMode",
+            verify_key AS "verifyKey", checklist_items AS "checklistItems", urgency
+     FROM recurring_task_templates WHERE active = true`,
+  )
+  return rows
+}
+
+// ON CONFLICT DO NOTHING on instance_key is the whole dedupe mechanism — safe
+// to call this for an instance that already exists; returns null (not created).
+export async function createRecurringTaskInstance(
+  { recurringKey, instanceKey, characterId, subject, snippet, completionMode, verifyKey, urgency, checklist },
+  db = pool,
+) {
+  const { rows } = await db.query(
+    `INSERT INTO quest_tasks
+       (recurring_key, instance_key, character_id, subject, snippet, completion_mode, verify_key, urgency, checklist, needs_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'none')
+     ON CONFLICT (instance_key) DO NOTHING
+     RETURNING id`,
+    [recurringKey, instanceKey, characterId, subject, snippet || null, completionMode, verifyKey || null, urgency || null, checklist ? JSON.stringify(checklist) : null],
+  )
+  return rows[0]?.id || null
+}
+
+export async function updateTaskChecklistItem(id, itemKey, done, db = pool) {
+  const { rows } = await db.query('SELECT checklist FROM quest_tasks WHERE id = $1', [id])
+  const checklist = (rows[0]?.checklist || []).map((c) => (c.key === itemKey ? { ...c, done } : c))
+  await db.query('UPDATE quest_tasks SET checklist = $2 WHERE id = $1', [id, JSON.stringify(checklist)])
+  return checklist
+}
+
+export async function completeQuestTask(id, done = true, db = pool) {
+  await db.query(
+    `UPDATE quest_tasks SET status = $2, completed_at = CASE WHEN $2 = 'done' THEN now() ELSE NULL END WHERE id = $1`,
+    [id, done ? 'done' : 'open'],
+  )
+}
+
+// Reassigning a task's messenger doesn't touch email_character_prefs — that
+// table is keyed off sender address for future TRANSMISSIONS, and a task's
+// character is a one-off override on an already-claimed item.
+export async function updateTaskCharacter(id, characterId, db = pool) {
+  await db.query('UPDATE quest_tasks SET character_id = $2 WHERE id = $1', [id, characterId])
+}
+
+// needsType: 'none' | 'reply' | 'acknowledgment' | 'file' | 'netsuite_doc'
+// netsuite_doc_type/number only meaningful when needsType is 'netsuite_doc'
+// (normalization — e.g. prepending 'SO' — happens in queries.js, not here).
+export async function updateTaskNeeds({ id, needsType, needsNote, netsuiteDocType, netsuiteDocNumber }, db = pool) {
+  await db.query(
+    `UPDATE quest_tasks SET needs_type = $2, needs_note = $3, netsuite_doc_type = $4, netsuite_doc_number = $5 WHERE id = $1`,
+    [id, needsType, needsNote || null, netsuiteDocType || null, netsuiteDocNumber || null],
+  )
+}
+
+// urgency: 'hi' | 'mid' | 'lo' | null
+export async function updateTaskUrgency(id, urgency, db = pool) {
+  await db.query('UPDATE quest_tasks SET urgency = $2 WHERE id = $1', [id, urgency || null])
+}
+
+// Every quest_tasks row regardless of status, for search.
+export async function searchQuestTasks(q, db = pool) {
+  const { rows } = await db.query(
+    `SELECT ${TASK_FIELDS} FROM quest_tasks
+     WHERE subject ILIKE $1 OR snippet ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
+     ORDER BY created_at DESC LIMIT 100`,
+    [`%${q}%`],
+  )
+  return rows
+}
+
+// ── Journal — "track what was done within the day" (Nima, 2026-07-15) ───────
+export async function logTaskActivity({ taskId, kind, note }, db = pool) {
+  await db.query('INSERT INTO quest_task_activity (task_id, kind, note) VALUES ($1,$2,$3)', [taskId, kind, note || null])
+}
+
+// date: 'YYYY-MM-DD' to scope to one day (the Journal section / Calendar
+// view); omitted for a general recent feed.
+export async function fetchTaskActivity({ date } = {}, db = pool) {
+  const where = date ? 'WHERE a.created_at::date = $1::date' : ''
+  const { rows } = await db.query(
+    `SELECT a.id, a.task_id AS "taskId", a.kind, a.note, a.created_at AS "createdAt",
+            t.subject, t.character_id AS "characterId"
+     FROM quest_task_activity a JOIN quest_tasks t ON t.id = a.task_id
+     ${where}
+     ORDER BY a.created_at DESC
+     LIMIT 200`,
+    date ? [date] : [],
+  )
+  return rows
 }
