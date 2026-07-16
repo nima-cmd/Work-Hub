@@ -1,14 +1,14 @@
-// scripts/recurring-check.js — meant for a scheduled job (a Render Cron Job
-// or similar), not interactive use. Runs the same catch-up logic that today
-// only fires when someone opens the app: pulls fresh Gmail messages, checks
+// scripts/recurring-check.js — for local/manual testing of the same logic
+// the deployed app runs on a schedule via POST /api/internal/recurring-check
+// (triggered by .github/workflows/recurring-check.yml, not a Render Cron Job
+// — Render's Cron Jobs have no free tier). Pulls fresh Gmail messages, checks
 // reply-needed tasks for a sent reply, and creates any due recurring task
 // instances (the 9am/2pm Airtable reminder, the daily CSV-freshness check).
 //
 // Safe to run as often as you like — everything it touches is idempotent
 // (natural-key upserts / ON CONFLICT DO NOTHING on instance_key).
 //
-// Local test: node --env-file=.env.local scripts/recurring-check.js
-// On Render: no --env-file needed — the platform injects real env vars.
+// Run: node --env-file=.env.local scripts/recurring-check.js
 
 import { syncQuestEmails, ensureRecurringTasks } from '../server/queries.js'
 

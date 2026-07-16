@@ -1,0 +1,29 @@
+name: Recurring task check
+
+# Hits the deployed app's internal recurring-check endpoint every 10 minutes —
+# well under Render free web services' 15-min spin-down window, so this both
+# keeps the app warm AND fires the 9am/2pm Airtable reminder + daily
+# CSV-freshness check on schedule. See render.yaml for the full rationale.
+#
+# Note: GitHub Actions scheduled workflows are best-effort, not to-the-minute
+# — GitHub can delay a scheduled run (sometimes by many minutes) during high
+# platform load. Fine for a personal reminder; not a hard real-time guarantee.
+#
+# Setup (one-time, in this repo's GitHub settings — Settings → Secrets and
+# variables → Actions):
+#   RENDER_URL   e.g. https://work-hub.onrender.com (no trailing slash)
+#   CRON_SECRET  the exact same value you set on the Render service
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {} # lets you manually trigger a run from the Actions tab, for testing
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger recurring-check endpoint
+        run: |
+          curl -sf -X POST "${{ secrets.RENDER_URL }}/api/internal/recurring-check" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}"

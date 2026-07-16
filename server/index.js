@@ -14,6 +14,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
   getQuestTasks, createTaskFromQuestEmail, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
+  ensureRecurringTasks,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 
@@ -325,6 +326,35 @@ app.get('/api/quest-search', async (req, res) => {
     const q = (req.query.q || '').trim()
     if (!q) return res.json({ emails: [], tasks: [] })
     res.json(await searchQuestArchive(q))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Scheduled trigger for the recurring-task engine (Gmail sync + the 9am/2pm
+// reminder + the daily CSV-freshness check) — meant to be called by an
+// external scheduler, not a browser. Render's own Cron Jobs have no free
+// tier, so this is hit by a GitHub Actions workflow instead (see
+// .github/workflows/recurring-check.yml) — which, as a side benefit, also
+// keeps a free Render web service from spinning down after 15 min idle.
+// Gated on a shared secret (CRON_SECRET) since it's unauthenticated otherwise
+// — set the SAME value in both Render's env vars and the GitHub Actions
+// repo secret.
+app.post('/api/internal/recurring-check', async (req, res) => {
+  if (!process.env.CRON_SECRET || req.get('x-cron-secret') !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+  try {
+    let email = null
+    try {
+      const r = await syncQuestEmails()
+      email = { fetched: r.fetched, upserted: r.upserted, autoClosed: r.autoClosed }
+    } catch (e) {
+      console.error('Gmail sync failed (recurring tasks still checked):', e.message)
+    }
+    const recurringCreated = await ensureRecurringTasks()
+    res.json({ ok: true, email, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
