@@ -540,6 +540,34 @@ export async function createManualTask({ subject, snippet, characterId, urgency,
   return rows[0].id
 }
 
+// Open instances of one recurring template, oldest first — used to keep a
+// 'daily' task single (one open at a time) and escalate it instead of spawning
+// duplicates (Nima, 2026-07-17).
+export async function fetchOpenRecurringInstances(recurringKey, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, created_at AS "createdAt", urgency, character_id AS "characterId"
+     FROM quest_tasks WHERE recurring_key = $1 AND status = 'open' ORDER BY created_at ASC`,
+    [recurringKey],
+  )
+  return rows
+}
+
+export async function escalateRecurringTask(id, { urgency, snippet }, db = pool) {
+  await db.query(
+    `UPDATE quest_tasks SET urgency = COALESCE($2, urgency), snippet = COALESCE($3, snippet) WHERE id = $1`,
+    [id, urgency || null, snippet || null],
+  )
+}
+
+// Hard-remove a task + its activity (used to collapse duplicate recurring
+// spawns — they're redundant, not completed work, so they must NOT count as
+// done/affection). Deliberately deletes activity too so no orphan rows linger.
+export async function deleteQuestTask(id, db = pool) {
+  await db.query('DELETE FROM quest_task_activity WHERE task_id = $1', [id])
+  const { rowCount } = await db.query('DELETE FROM quest_tasks WHERE id = $1', [id])
+  return rowCount
+}
+
 const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", character_id AS "characterId",
   from_address AS "fromAddress", from_name AS "fromName", subject, snippet, status,
   needs_type AS "needsType", needs_note AS "needsNote",

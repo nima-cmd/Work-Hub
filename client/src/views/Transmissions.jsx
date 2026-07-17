@@ -681,6 +681,7 @@ export default function Transmissions() {
                           </button>
                         </div>
                       )}
+                      {importing && thanks?.taskId !== t.id && <div className="progressBar" style={{ width: '100%' }}><div /></div>}
                       {thanks?.taskId === t.id && (
                         <div className="scanResult good" style={{ marginTop: 6, width: '100%' }}>{thanks.msg}</div>
                       )}

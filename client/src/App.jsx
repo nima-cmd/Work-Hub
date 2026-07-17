@@ -178,6 +178,12 @@ export default function App() {
       </header>
 
       <main>
+        {importing && (
+          <div className="banner">
+            Importing CSV(s)…
+            <div className="progressBar"><div /></div>
+          </div>
+        )}
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}

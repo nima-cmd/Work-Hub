@@ -25,6 +25,7 @@ import {
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
+  fetchOpenRecurringInstances, escalateRecurringTask, deleteQuestTask,
 } from '../src/ingest/loadToDb.js'
 import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile } from '../src/ingest/gmail.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
@@ -627,27 +628,67 @@ export async function setTaskChecklistItem(id, itemKey, done) {
 // once that time has actually passed today; 'daily' spawns once per day,
 // whenever this next runs after midnight. instance_key's UNIQUE index is
 // the actual dedupe — this function is safe to call as often as you like.
+const URGENCY_UP = { lo: 'mid', mid: 'hi', hi: 'hi' }
+
+// An in-character nag when a 'daily' task is overdue (Nima, 2026-07-17: "if it
+// hasn't been completed in time, increase the urgency and update with a new
+// message in character asking what's going on"). Bugs (the CSV monitor) gets
+// her own voice; others get a firm generic line.
+function overdueNag(template, characterId, daysOverdue) {
+  const d = `${daysOverdue} day${daysOverdue === 1 ? '' : 's'} overdue`
+  if (characterId === 'bugs' || template.verifyKey === 'csv_freshness_workhub') {
+    return `Ehhh — what's up, Doc? These CSVs STILL aren't uploaded and we're ${d}. I can't see a thing in here without 'em — let's get 'em in. 🥕`
+  }
+  return `⚠ Still not done — ${d}. Bumping this up; it needs handling now. ${template.description || ''}`.trim()
+}
+
 export async function ensureRecurringTasks() {
   const templates = await fetchActiveRecurringTemplates()
   const now = new Date()
   const dateStr = now.toISOString().slice(0, 10)
   let created = 0
   for (const t of templates) {
-    const slots = t.scheduleType === 'daily_times' ? (t.scheduleTimes || []) : ['']
-    for (const slot of slots) {
-      if (t.scheduleType === 'daily_times') {
-        const [hh, mm] = slot.split(':').map(Number)
-        const slotTime = new Date(now)
-        slotTime.setHours(hh, mm, 0, 0)
-        if (now < slotTime) continue // this slot hasn't happened yet today
+    // 'daily' tasks stay SINGLE: one open instance at a time. Collapse any
+    // duplicate spawns, and escalate (not re-create) if the open one has
+    // rolled past its day without being completed.
+    if (t.scheduleType !== 'daily_times') {
+      const open = await fetchOpenRecurringInstances(t.key)
+      if (open.length) {
+        const [keep, ...extras] = open
+        for (const e of extras) await deleteQuestTask(e.id) // redundant dupes — remove, don't complete
+        const keptDay = new Date(keep.createdAt).toISOString().slice(0, 10)
+        if (keptDay < dateStr) {
+          const daysOverdue = Math.round((new Date(dateStr) - new Date(keptDay)) / 86_400_000)
+          await escalateRecurringTask(keep.id, {
+            urgency: URGENCY_UP[keep.urgency] || 'hi',
+            snippet: overdueNag(t, keep.characterId, daysOverdue),
+          })
+          await logTaskActivity({ taskId: keep.id, kind: 'escalated', note: `Overdue ${daysOverdue}d — urgency raised, message updated` })
+        }
+        continue // never spawn a second one
       }
-      const instanceKey = `${t.key}:${dateStr}${slot ? ':' + slot : ''}`
       const characterId = t.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
       const taskId = await createRecurringTaskInstance({
-        recurringKey: t.key, instanceKey, characterId, subject: t.title, snippet: t.description,
+        recurringKey: t.key, instanceKey: `${t.key}:${dateStr}`, characterId, subject: t.title, snippet: t.description,
         completionMode: t.completionMode, verifyKey: t.verifyKey, urgency: t.urgency, checklist: t.checklistItems,
       })
-      if (!taskId) continue // already existed
+      if (taskId) { await logTaskActivity({ taskId, kind: 'created', note: `Recurring: ${t.title}` }); created++ }
+      continue
+    }
+
+    // 'daily_times' (e.g. 9am/2pm reminders) — one instance per elapsed slot,
+    // as before; these are transient nudges, not a single standing task.
+    for (const slot of t.scheduleTimes || []) {
+      const [hh, mm] = slot.split(':').map(Number)
+      const slotTime = new Date(now)
+      slotTime.setHours(hh, mm, 0, 0)
+      if (now < slotTime) continue
+      const characterId = t.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
+      const taskId = await createRecurringTaskInstance({
+        recurringKey: t.key, instanceKey: `${t.key}:${dateStr}:${slot}`, characterId, subject: t.title, snippet: t.description,
+        completionMode: t.completionMode, verifyKey: t.verifyKey, urgency: t.urgency, checklist: t.checklistItems,
+      })
+      if (!taskId) continue
       await logTaskActivity({ taskId, kind: 'created', note: `Recurring: ${t.title}` })
       created++
     }
