@@ -84,6 +84,33 @@ export async function loadFulfillments(records, db = pool) {
   return n
 }
 
+// Stamp the FIRST time an IF is observed cleared for shipping ("Approved to
+// Ship") into the ledger — this is the "launch day" the Launch Bay measures
+// its delay warning from. The recurring pain (Nima, 2026-07-17): we physically
+// ship but forget to mark the Item Fulfillment shipped that day, so the record
+// is lost. An approved ship still sitting here a day after its launch day is
+// exactly that miss. Idempotent: one REACHED_APPROVED per IF, ever — so the
+// launch day is pinned to first observation and never drifts on re-imports.
+export async function stampApprovedForShipping(records, db = pool) {
+  let n = 0
+  for (const r of records) {
+    if (!r.ifNumber) continue
+    if (!/approved to ship/i.test(r.packedStatus || '')) continue
+    const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    const { rowCount } = await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, source)
+       SELECT 'REACHED_APPROVED', 'IF', $1, $2, 'derived'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM order_events
+         WHERE event_type = 'REACHED_APPROVED' AND doc_type = 'IF' AND doc_number = $1
+       )`,
+      [r.ifNumber, so],
+    )
+    n += rowCount
+  }
+  return n
+}
+
 // Invoices — from records carrying an INV number tied to an SO.
 export async function loadInvoices(records, db = pool) {
   let n = 0
@@ -348,6 +375,30 @@ export async function deleteEdiManualLink(transactionId, db = pool) {
   return rowCount
 }
 
+// ── EDI manual orders — hand-entered gap-fillers (kept apart from the pipeline)
+export async function createEdiManualOrder({ businessNumber, tradingPartner, note }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO edi_manual_orders (business_number, trading_partner, note)
+     VALUES ($1,$2,$3) RETURNING id`,
+    [businessNumber, tradingPartner || null, note || null],
+  )
+  return rows[0].id
+}
+
+export async function fetchEdiManualOrders(db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, business_number AS "businessNumber", trading_partner AS "tradingPartner",
+            note, created_at AS "createdAt"
+     FROM edi_manual_orders ORDER BY created_at DESC`,
+  )
+  return rows
+}
+
+export async function deleteEdiManualOrder(id, db = pool) {
+  const { rowCount } = await db.query('DELETE FROM edi_manual_orders WHERE id = $1', [id])
+  return rowCount
+}
+
 // ── Quest emails (Gmail-to-quest hologram transmissions) ────────────────────
 export async function fetchEmailCharacterPrefs(db = pool) {
   const { rows } = await db.query(
@@ -471,6 +522,20 @@ export async function createQuestTask({ emailId, threadId, characterId, fromAddr
     `INSERT INTO quest_tasks (email_id, thread_id, character_id, from_address, from_name, subject, snippet)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
     [emailId, threadId || null, characterId, fromAddress || null, fromName || null, subject || null, snippet || null],
+  )
+  return rows[0].id
+}
+
+// A task Nima writes himself (Nima, 2026-07-17) — no source email, so email_id
+// stays NULL. Otherwise identical to an email-derived task, so it flows through
+// the same Dashboard/Kanban/Tasks surfaces. from_name is a human label for who
+// it's "from" (defaults to a self tag) so the card has something to show.
+export async function createManualTask({ subject, snippet, characterId, urgency, needsType, needsNote, fromName }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO quest_tasks (email_id, character_id, from_name, subject, snippet, urgency, needs_type, needs_note)
+     VALUES (NULL,$1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [characterId || null, fromName || 'Manual entry', subject || null, snippet || null,
+     urgency || null, needsType || 'none', needsNote || null],
   )
   return rows[0].id
 }

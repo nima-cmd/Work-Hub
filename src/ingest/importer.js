@@ -22,7 +22,7 @@ import { deriveSource } from '../model/source.js'
 import {
   loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
-  pruneOrders,
+  pruneOrders, stampApprovedForShipping,
 } from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
@@ -98,6 +98,7 @@ export async function importBatch(files) {
     const nOrders = await loadOrders(orders, db)
     const nFul = await loadFulfillments(records, db)
     const nInv = await loadInvoices(records, db)
+    await stampApprovedForShipping(records, db) // launch-day ledger for the Launch Bay delay warning
     const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
     return { nOrders, nFul, nInv, nPruned }
   })

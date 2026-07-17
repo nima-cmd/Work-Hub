@@ -355,94 +355,97 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .scanLog { min-width: 0; }
 @media (max-width: 900px) { .scanbay { grid-template-columns: 1fr; } }
 
-/* ── Docking Bay — 2.5D isometric landing pads (Nima, 2026-07-17, Phase B) ─── */
-.dockingBay { max-width: 1200px; }
-.bayHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+/* ── Launch Bay — 2D departure bay (Nima, 2026-07-17, Phase B) ─────────────── */
+.launchBay { max-width: 1200px; }
+.bayHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .bayHeader h2 { margin: 0; }
 .baySummary { display: flex; gap: 8px; }
-.baySection { margin-bottom: 30px; }
-.bayGrid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 18px;
-}
 
-/* Each pad is an isometric "landing circle" — a squashed ellipse (perspective
-   floor) with a faint radial grid, holding one ship. Grounded pads read as
-   caution/danger via the same sev-* accent already used everywhere else;
-   ready pads shift to a cool cleared-for-launch glow. */
-.pad {
-  position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-  padding: 14px 10px 12px; display: flex; flex-direction: column; align-items: center; text-align: center;
-  overflow: hidden;
+/* one ship card — used both floating (sky) and grounded (ground) */
+.ship {
+  position: relative; width: 150px; flex: none; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px 10px 10px; text-align: center; display: flex; flex-direction: column; align-items: center;
 }
-.padSlot { align-self: flex-start; font-size: 10px; color: var(--muted); letter-spacing: 0.05em; margin-bottom: 6px; }
-.padDeck {
-  position: relative; width: 100%; height: 92px; margin-bottom: 8px;
-  display: flex; align-items: flex-end; justify-content: center;
-}
-/* the foreshortened landing-pad floor, drawn as a squashed ellipse under the ship */
-.padDeck::before {
-  content: ''; position: absolute; left: 50%; bottom: 4px; width: 88%; height: 34px; transform: translateX(-50%);
-  border-radius: 50%; background: radial-gradient(ellipse at center, rgba(255,255,255,0.06), transparent 70%);
-  border: 1px solid var(--line);
-}
-.pad.grounded.sev-hi .padDeck::before { border-color: rgba(248,81,73,0.45); }
-.pad.grounded.sev-mid .padDeck::before { border-color: rgba(217,130,43,0.45); }
-.pad.grounded.sev-lo .padDeck::before { border-color: rgba(59,130,246,0.4); }
-.pad.ready .padDeck::before { border-color: rgba(126,231,135,0.5); }
-
+.shipBody { position: relative; width: 100%; height: 56px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 6px; }
 .shipHull {
-  position: relative; width: 34px; height: 46px; margin-bottom: 14px; z-index: 1;
+  position: relative; width: 30px; height: 42px; z-index: 1;
   background: linear-gradient(180deg, #cfd8e3, #8b98a8);
   clip-path: polygon(50% 0%, 90% 40%, 78% 100%, 22% 100%, 10% 40%);
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
 }
-.shipCockpit {
-  position: absolute; top: 30%; left: 50%; width: 8px; height: 8px; border-radius: 50%;
-  transform: translateX(-50%); background: var(--lo); box-shadow: 0 0 5px 1px rgba(59,130,246,0.7);
-}
-.pad.ready .shipHull { background: linear-gradient(180deg, #e4ecf7, #a9c8d9); }
-.pad.grounded.sev-hi .shipCockpit { background: var(--hi); box-shadow: 0 0 5px 1px rgba(248,81,73,0.7); }
-.pad.grounded.sev-mid .shipCockpit { background: var(--mid); box-shadow: 0 0 5px 1px rgba(217,130,43,0.7); }
+.shipCockpit { position: absolute; top: 28%; left: 50%; width: 7px; height: 7px; border-radius: 50%; transform: translateX(-50%); }
 
-/* clamps: metal brackets pinning the hull to the pad, only while grounded */
-.clamp {
-  position: absolute; bottom: 10px; width: 8px; height: 22px; z-index: 2;
-  background: linear-gradient(180deg, #4a5568, #2a323d); border: 1px solid var(--line); border-radius: 2px;
-}
-.clampL { left: calc(50% - 24px); transform: rotate(12deg); }
-.clampR { right: calc(50% - 24px); transform: rotate(-12deg); }
-@keyframes warnBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-.warnLight {
-  position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 7px; height: 7px; border-radius: 50%;
-  background: var(--muted); animation: warnBlink 1.4s ease-in-out infinite; z-index: 2;
-}
-.pad.grounded.sev-hi .warnLight { background: var(--hi); box-shadow: 0 0 6px 2px rgba(248,81,73,0.6); animation-duration: 0.7s; }
-.pad.grounded.sev-mid .warnLight { background: var(--mid); box-shadow: 0 0 6px 2px rgba(217,130,43,0.5); animation-duration: 1.1s; }
-.pad.grounded.sev-lo .warnLight { background: var(--lo); box-shadow: 0 0 6px 2px rgba(59,130,246,0.5); }
-/* a struggling-against-the-clamps shudder for the most urgent holds */
-@keyframes hullShudder { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-1px); } 75% { transform: translateX(1px); } }
-.pad.grounded.sev-hi .shipHull { animation: hullShudder 0.35s ease-in-out infinite; }
+/* grounded ships: colour the hull + cockpit by why they're held */
+.ship-payment .shipHull { background: linear-gradient(180deg, #ff9d97, #f85149); }
+.ship-invoice .shipHull { background: linear-gradient(180deg, #ffe08a, #d9a441); }
+.ship-fob     .shipHull { background: linear-gradient(180deg, #ffc38a, #d9822b); }
+.ship-payment .shipCockpit { background: #ffd7d4; box-shadow: 0 0 5px 1px rgba(248,81,73,0.8); }
+.ship-invoice .shipCockpit { background: #fff2cf; box-shadow: 0 0 5px 1px rgba(217,164,65,0.8); }
+.ship-fob     .shipCockpit { background: #ffe6cc; box-shadow: 0 0 5px 1px rgba(217,130,43,0.8); }
+.ship-other   .shipCockpit { background: var(--lo); box-shadow: 0 0 5px 1px rgba(59,130,246,0.7); }
 
-/* ready-to-depart: engine glow + gentle anti-grav bob + a launch-streak
-   flare that sweeps upward and loops, signaling "about to go" */
-@keyframes shipBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-.pad.ready .shipHull { animation: shipBob 2.6s ease-in-out infinite; }
-.thrusterGlow {
-  position: absolute; bottom: 6px; left: 50%; width: 20px; height: 14px; transform: translateX(-50%);
-  background: radial-gradient(ellipse at center, rgba(126,231,135,0.65), transparent 70%);
-  filter: blur(2px); animation: warnBlink 1s ease-in-out infinite; z-index: 0;
+/* clamps pin grounded ships to the pad */
+.clamp { position: absolute; bottom: 6px; width: 7px; height: 20px; z-index: 2;
+  background: linear-gradient(180deg, #4a5568, #2a323d); border: 1px solid var(--line); border-radius: 2px; }
+.clampL { left: calc(50% - 22px); transform: rotate(12deg); }
+.clampR { right: calc(50% - 22px); transform: rotate(-12deg); }
+
+.shipLabel { font-weight: 700; font-variant-numeric: tabular-nums; }
+.shipCust { color: var(--muted); font-size: 11px; margin: 2px 0 6px; line-height: 1.3; }
+.shipStatus { font-size: 10px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); margin-bottom: 6px; }
+.st-payment { color: #ffb3ad; border-color: rgba(248,81,73,0.5); }
+.st-invoice { color: #ffca8a; border-color: rgba(217,164,65,0.5); }
+.st-fob { color: #ffca8a; border-color: rgba(217,130,43,0.5); }
+.st-approved { color: #7ee787; border-color: rgba(126,231,135,0.4); }
+.st-other { color: var(--muted); }
+.st-delayed { color: #ffb3ad; border-color: rgba(248,81,73,0.6); }
+
+/* ── the sky: approved ships float above the warehouse ─────────────────────── */
+.baySky {
+  position: relative; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 22px;
+  background: linear-gradient(180deg, #0b1020 0%, #10151f 70%, #141a24 100%); overflow: hidden;
 }
-@keyframes launchStreak { 0% { bottom: 10px; opacity: 0; } 15% { opacity: 0.9; } 100% { bottom: 90px; opacity: 0; } }
-.pad.ready .padDeck::after {
-  content: ''; position: absolute; left: 50%; width: 2px; height: 26px; transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(126,231,135,0.9), transparent); animation: launchStreak 1.8s ease-out infinite;
+.skyShips { display: flex; flex-wrap: wrap; gap: 16px; padding: 20px 16px 30px; justify-content: center; }
+.ship.floating { background: rgba(20,26,36,0.6); border-color: rgba(126,231,135,0.35); animation: shipBob 3s ease-in-out infinite; }
+.ship.floating .shipHull { background: linear-gradient(180deg, #e4ecf7, #a9c8d9); }
+.ship.floating .shipThrust {
+  position: absolute; bottom: 2px; left: 50%; width: 16px; height: 12px; transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, rgba(126,231,135,0.7), transparent 70%); filter: blur(1px);
+  animation: thrustFlicker 1s ease-in-out infinite;
+}
+@keyframes shipBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes thrustFlicker { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+/* delayed float — should have launched already; pulse red + alarm badge */
+.ship.delayed { border-color: var(--hi); box-shadow: 0 0 0 1px rgba(248,81,73,0.3); animation: delayPulse 1s ease-in-out infinite; }
+.ship.delayed .shipHull { background: linear-gradient(180deg, #ff9d97, #f85149); }
+.ship.delayed .shipThrust { background: radial-gradient(ellipse at center, rgba(248,81,73,0.8), transparent 70%); }
+@keyframes delayPulse { 0%, 100% { box-shadow: 0 0 0 1px rgba(248,81,73,0.3); } 50% { box-shadow: 0 0 14px 2px rgba(248,81,73,0.55); } }
+.shipAlarm {
+  position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; border-radius: 50%; z-index: 3;
+  background: var(--hi); color: #1a0605; font-weight: 900; font-size: 15px; line-height: 22px;
+  box-shadow: 0 0 8px 2px rgba(248,81,73,0.6); animation: warnBlink 0.8s ease-in-out infinite;
+}
+@keyframes warnBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.warehouseRoof {
+  position: relative; height: 40px; background: linear-gradient(180deg, #262d38, #1a1f28);
+  border-top: 2px solid var(--line);
+  clip-path: polygon(0 100%, 0 45%, 8% 45%, 10% 15%, 16% 45%, 100% 45%, 100% 100%);
+}
+.whLabel {
+  position: absolute; right: 16px; bottom: 8px; font-size: 10px; letter-spacing: 0.15em;
+  color: var(--muted); font-weight: 700;
 }
 
-.padLabel { font-weight: 700; font-variant-numeric: tabular-nums; }
-.padCust { color: var(--muted); font-size: 11px; margin: 2px 0 6px; }
-.padStatus { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); }
-.padStatus.ok { color: #7ee787; border-color: rgba(126,231,135,0.4); }
-.padStatus.sev-hi { color: #ffb3ad; border-color: rgba(248,81,73,0.5); }
-.padStatus.sev-mid { color: #ffca8a; border-color: rgba(217,130,43,0.5); }
-.padStatus.sev-lo { color: #a9c8ff; border-color: rgba(59,130,246,0.5); }
-.padStatus.sev-none { color: var(--muted); }
+/* ── the ground: held ships in status groups ───────────────────────────────── */
+.bayGround { display: flex; flex-direction: column; gap: 18px; }
+.groundGroup .colHead { margin-bottom: 8px; }
+.groundRow { display: flex; flex-wrap: wrap; gap: 14px; }
+.ship.grounded { position: relative; }
+.ship.grounded::after {
+  content: ''; position: absolute; left: 50%; bottom: 6px; width: 80%; height: 14px; transform: translateX(-50%);
+  border-radius: 50%; background: radial-gradient(ellipse at center, rgba(255,255,255,0.05), transparent 70%);
+  border: 1px solid var(--line); z-index: 0;
+}
+.tagBtns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }

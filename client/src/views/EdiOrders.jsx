@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction } from '../api.js'
+import { fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder } from '../api.js'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 function isIssueValue(v) {
@@ -33,6 +33,8 @@ export default function EdiOrders() {
   const [expanded, setExpanded] = useState(() => new Set())
   const [linkDrafts, setLinkDrafts] = useState({})
   const [linkBusy, setLinkBusy] = useState(null)
+  const [manualDraft, setManualDraft] = useState(null) // null = form closed
+  const [manualBusy, setManualBusy] = useState(false)
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
@@ -95,10 +97,34 @@ export default function EdiOrders() {
     }
   }
 
+  async function onAddManual(e) {
+    e.preventDefault()
+    if (!manualDraft?.businessNumber?.trim()) return
+    setManualBusy(true)
+    setErr(null)
+    try {
+      setReview(await addEdiManualOrder(manualDraft))
+      setManualDraft(null)
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setManualBusy(false)
+    }
+  }
+
+  async function onRemoveManual(id) {
+    if (!window.confirm('Remove this manually-entered EDI order?')) return
+    try {
+      setReview(await removeEdiManualOrder(id))
+    } catch (e2) {
+      setErr(e2.message)
+    }
+  }
+
   if (err && !review) return <div className="banner error">⚠ Couldn’t load EDI review: {err}</div>
   if (!review) return <div className="banner">Loading EDI review…</div>
 
-  const { partners, orders } = review
+  const { partners, orders, manualOrders = [] } = review
   const totalOrders = orders.length
   const totalIssues = orders.filter((o) => o.hasIssue).length
   const partnerOrders = selectedPartner ? orders.filter((o) => (o.tradingPartner || '(unknown partner)') === selectedPartner) : []
@@ -285,6 +311,72 @@ export default function EdiOrders() {
           )}
         </section>
       )}
+
+      {/* Manually-entered EDI orders — the gap-filler for orders that shipped
+          and aged out of every search/Orderful pull. Kept in its own section,
+          every row flagged unconfirmed, never mixed with the automated pipeline. */}
+      <section style={{ marginTop: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>
+            Manual entries <span className="count">{manualOrders.length}</span>
+          </h2>
+          <button className="btn" onClick={() => setManualDraft(manualDraft ? null : { businessNumber: '', tradingPartner: '', note: '' })}>
+            {manualDraft ? '✕ Cancel' : '＋ Add manual order'}
+          </button>
+        </div>
+        <p className="hint">
+          For older EDI orders that already shipped and no longer appear in the searches or the Orderful pull. These are hand-entered
+          and <b>not confirmed through our process</b> — treat the details as a memory aid, not a verified record.
+        </p>
+
+        {manualDraft && (
+          <form className="allocCard container" onSubmit={onAddManual} style={{ marginBottom: 12 }}>
+            <div className="allocTwoCol" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <div>
+                <h3>PO / business number *</h3>
+                <input className="qtyInput" style={{ width: '100%' }} placeholder="e.g. 50125578" autoFocus
+                  value={manualDraft.businessNumber} onChange={(e) => setManualDraft({ ...manualDraft, businessNumber: e.target.value })} />
+              </div>
+              <div>
+                <h3>Trading partner</h3>
+                <input className="qtyInput" style={{ width: '100%' }} placeholder="Bloomingdale's / Nordstrom / ShopBop"
+                  value={manualDraft.tradingPartner} onChange={(e) => setManualDraft({ ...manualDraft, tradingPartner: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <h3 style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)', margin: '0 0 6px' }}>What's known (optional)</h3>
+              <textarea className="qtyInput" style={{ width: '100%', minHeight: 48, resize: 'vertical' }}
+                placeholder="Ship date, which documents you saw, where you found it…"
+                value={manualDraft.note} onChange={(e) => setManualDraft({ ...manualDraft, note: e.target.value })} />
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <button className="btn" disabled={manualBusy || !manualDraft.businessNumber.trim()}>
+                {manualBusy ? 'Saving…' : 'Save manual order'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!manualOrders.length && !manualDraft && <div className="empty">No manual entries.</div>}
+        {manualOrders.map((m) => (
+          <div key={m.id} className="allocCard container" style={{ borderColor: 'rgba(217,130,43,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div>
+                <div>
+                  <span className="mono" style={{ fontWeight: 700 }}>{m.businessNumber}</span>
+                  <span className="flag sev-mid" style={{ marginLeft: 8 }}>⚠ MANUAL — not confirmed by our process</span>
+                </div>
+                <div className="cust" style={{ marginTop: 4 }}>
+                  {m.tradingPartner || 'partner not set'}
+                  {m.createdAt ? ` · added ${new Date(m.createdAt).toLocaleDateString()}` : ''}
+                </div>
+                {m.note && <div style={{ marginTop: 6, fontSize: 13 }}>{m.note}</div>}
+              </div>
+              <button className="btnGhost" onClick={() => onRemoveManual(m.id)}>Remove</button>
+            </div>
+          </div>
+        ))}
+      </section>
     </div>
   )
 }

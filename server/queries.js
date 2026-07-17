@@ -16,11 +16,12 @@ import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
+  createEdiManualOrder, fetchEdiManualOrders, deleteEdiManualOrder,
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents } from '../src/ingest/loadToDb.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail,
-  fetchQuestEmailById, createQuestTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
+  fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
 } from '../src/ingest/loadToDb.js'
@@ -164,6 +165,60 @@ export async function getShipDepartures() {
   return rows
 }
 
+// ── Launch Bay (Nima, 2026-07-17) ────────────────────────────────────────────
+// The 2D launch-bay visual of pending departures. Ships are IFs that are
+// packed but not yet shipped (actual_ship_date null = still in the bay):
+//   - grounded, colored by why they can't launch: payment (red), invoice
+//     (yellow), FOB (amber);
+//   - approved-to-ship ships float above the warehouse, cleared for launch.
+// The DELAY WARNING is the point of the feature: an approved ship is "meant to
+// leave the day it's cleared". `approvedSince` (first REACHED_APPROVED ledger
+// stamp) pins that launch day; if it's still floating on a later calendar day
+// (never marked shipped), it's the record-loss miss Nima wants flagged.
+function launchState(packedStatus) {
+  const s = (packedStatus || '').toLowerCase()
+  if (s.includes('approved to ship')) return 'approved'
+  if (s.includes('waiting on payment')) return 'payment'
+  if (s.includes('pending invoice')) return 'invoice'
+  if (s.includes('fob')) return 'fob'
+  return 'other'
+}
+
+export async function getLaunchBay({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.packed_status AS "packedStatus",
+           f.days_pending AS "daysPending", f.invoice_number AS "invoiceNumber",
+           f.if_date AS "ifDate", f.actual_ship_date AS "actualShipDate",
+           o.customer, o.source, o.po_number AS "poNumber",
+           a.approved_since AS "approvedSince"
+    FROM fulfillments f
+    LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN (
+      SELECT doc_number, MIN(occurred_at) AS approved_since
+      FROM order_events
+      WHERE event_type = 'REACHED_APPROVED' AND doc_type = 'IF'
+      GROUP BY doc_number
+    ) a ON a.doc_number = f.if_number
+    WHERE f.packed_status IS NOT NULL AND f.actual_ship_date IS NULL
+    ORDER BY f.days_pending DESC NULLS LAST
+  `)
+
+  const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime() }
+  const todayStart = startOfDay(today)
+
+  return rows.map((r) => {
+    const state = launchState(r.packedStatus)
+    // whole calendar days the ship has been cleared-for-launch but still here
+    const floatingDays =
+      state === 'approved' && r.approvedSince
+        ? Math.round((todayStart - startOfDay(r.approvedSince)) / 86_400_000)
+        : 0
+    // delayed = approved on a previous day and still not marked shipped
+    const delayed = state === 'approved' && floatingDays >= 1
+    return { ...r, state, floating: state === 'approved', floatingDays, delayed }
+  })
+}
+
 // Data-freshness: how old is the underlying export data? Uses the most recent
 // snapshot per source and reports the STALEST one. Thresholds are the initial
 // guess (warn 24h, stale 48h) — tune later once the real refresh cadence is known.
@@ -303,10 +358,14 @@ async function fetchEdiSourcedOrders() {
 }
 
 export async function getEdiReview() {
-  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs] = await Promise.all([
+  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, manualOrders] = await Promise.all([
     fetchEdiTransactions(), fetchEdiFulfillments(), fetchEdiSourcedOrders(), fetchEdiManualLinks(), fetchEdiDocumentPoRefs(),
+    fetchEdiManualOrders(),
   ])
-  return computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs)
+  const pipeline = computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs)
+  // manualOrders are returned ALONGSIDE (never merged into) the automated
+  // pipeline — the EDI view renders them in their own clearly-flagged section.
+  return { ...pipeline, manualOrders }
 }
 
 export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
@@ -316,6 +375,17 @@ export async function linkEdiTransaction({ transactionId, businessNumber, note }
 
 export async function unlinkEdiTransaction(transactionId) {
   await deleteEdiManualLink(transactionId)
+  return getEdiReview()
+}
+
+export async function addEdiManualOrder({ businessNumber, tradingPartner, note }) {
+  if (!businessNumber?.trim()) throw new Error('A PO / business number is required')
+  await createEdiManualOrder({ businessNumber: businessNumber.trim(), tradingPartner, note })
+  return getEdiReview()
+}
+
+export async function removeEdiManualOrder(id) {
+  await deleteEdiManualOrder(Number(id))
   return getEdiReview()
 }
 
@@ -448,6 +518,17 @@ export async function createTaskFromQuestEmail(emailId) {
   await dismissQuestEmail(emailId, true)
   await logTaskActivity({ taskId, kind: 'created', note: `Claimed as a task: "${email.subject}"` })
   return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
+}
+
+// A task Nima writes himself — returns the refreshed task list.
+export async function addManualTask(fields) {
+  if (!fields?.subject?.trim()) throw new Error('A task needs at least a subject')
+  // "Messenger (random)" in the form sends no characterId — honour it by
+  // picking a random roster character so the card has a face like the rest.
+  const characterId = fields.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
+  const taskId = await createManualTask({ ...fields, characterId })
+  await logTaskActivity({ taskId, kind: 'created', note: `Created manually: "${fields.subject}"` })
+  return getQuestTasks()
 }
 
 // ── Recurring tasks ──────────────────────────────────────────────────────────

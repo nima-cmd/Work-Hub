@@ -4,7 +4,7 @@ import {
   assignQuestEmailCharacter, applyQuestEmailLabel, dismissQuestEmail,
   fetchQuestTasks, createQuestTask, completeQuestTask,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, fetchQuestEmailThread, searchQuestArchive, fetchQuestActivity,
-  fetchFreshness, fetchNwFreshness, importCsv,
+  fetchFreshness, fetchNwFreshness, importCsv, createManualTask,
 } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
 import { fmtAge } from '../lib.jsx'
@@ -92,6 +92,7 @@ export default function Transmissions() {
   const [nwFresh, setNwFresh] = useState(null) // Naghedi-Warehouse Supabase freshness
   const [thanks, setThanks] = useState(null) // { taskId, msg }
   const [importing, setImporting] = useState(false)
+  const [newTask, setNewTask] = useState(null) // null = form closed; object = open draft
   const importRef = useRef(null)
   const importTaskRef = useRef(null) // which task's import button opened the picker
 
@@ -280,6 +281,22 @@ export default function Transmissions() {
       refreshActivity()
     } catch (e) {
       setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function onSubmitManualTask(e) {
+    e.preventDefault()
+    if (!newTask?.subject?.trim()) return
+    setBusy('new-task')
+    setErr(null)
+    try {
+      setTasks(await createManualTask(newTask))
+      setNewTask(null)
+      refreshActivity()
+    } catch (e2) {
+      setErr(e2.message)
     } finally {
       setBusy(null)
     }
@@ -554,9 +571,52 @@ export default function Transmissions() {
       </div>
 
       <section style={{ marginTop: 28 }}>
-        <h2>Tasks {tasks && <span className="count">{tasks.filter((t) => t.status === 'open').length}</span>}</h2>
-        <p className="hint">Transmissions you've claimed as tasks — each keeps its messenger's image even after the original email is gone.</p>
-        {!tasks?.length && <div className="empty">No tasks yet — use "Create task" on a transmission to start one.</div>}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>Tasks {tasks && <span className="count">{tasks.filter((t) => t.status === 'open').length}</span>}</h2>
+          <button
+            className="btn"
+            onClick={() => setNewTask(newTask ? null : { subject: '', snippet: '', urgency: '', needsType: 'none', characterId: '' })}
+          >
+            {newTask ? '✕ Cancel' : '✎ New task'}
+          </button>
+        </div>
+        <p className="hint">Transmissions you've claimed as tasks — plus any you write yourself. Each keeps its messenger's image even after the original email is gone.</p>
+
+        {newTask && (
+          <form className="hologram" style={{ padding: 14, marginBottom: 12 }} onSubmit={onSubmitManualTask}>
+            <div className="holoName" style={{ marginBottom: 8 }}>New task</div>
+            <input
+              className="qtyInput" style={{ width: '100%', marginBottom: 8 }} autoFocus
+              placeholder="What needs doing? (subject)"
+              value={newTask.subject} onChange={(e) => setNewTask({ ...newTask, subject: e.target.value })}
+            />
+            <textarea
+              className="qtyInput" style={{ width: '100%', minHeight: 54, marginBottom: 8, resize: 'vertical' }}
+              placeholder="Details (optional)"
+              value={newTask.snippet} onChange={(e) => setNewTask({ ...newTask, snippet: e.target.value })}
+            />
+            <div className="holoActions" style={{ flexWrap: 'wrap' }}>
+              <select className="qtyInput" style={{ width: 140 }} value={newTask.urgency}
+                onChange={(e) => setNewTask({ ...newTask, urgency: e.target.value })}>
+                {URGENCY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <select className="qtyInput" style={{ width: 190 }} value={newTask.needsType}
+                onChange={(e) => setNewTask({ ...newTask, needsType: e.target.value })}>
+                {NEEDS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <select className="qtyInput" style={{ width: 190 }} value={newTask.characterId}
+                onChange={(e) => setNewTask({ ...newTask, characterId: e.target.value })}>
+                <option value="">Messenger (random)</option>
+                {review.characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button className="btn" disabled={busy === 'new-task' || !newTask.subject.trim()}>
+                {busy === 'new-task' ? 'Creating…' : 'Create task'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!tasks?.length && <div className="empty">No tasks yet — “New task” above, or “Create task” on a transmission.</div>}
         <div className="holoList">
           {tasks?.map((t) => (
             <div key={t.id} className={'hologram taskCard' + (t.status === 'done' ? ' done' : '')}>

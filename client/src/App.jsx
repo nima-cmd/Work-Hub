@@ -10,7 +10,7 @@ import EdiOrders from './views/EdiOrders.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
 import ScanBay from './views/ScanBay.jsx'
-import DockingBay from './views/DockingBay.jsx'
+import LaunchBay from './views/LaunchBay.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -64,9 +64,9 @@ const VIEWS = [
   { key: 'allocations', label: 'OC↔PO', C: Allocations },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
+  { key: 'launch', label: 'Launch Bay', C: LaunchBay },
   { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
   { key: 'scan', label: 'Scan Bay', C: ScanBay },
-  { key: 'dock', label: 'Docking Bay', C: DockingBay },
 ]
 
 export default function App() {

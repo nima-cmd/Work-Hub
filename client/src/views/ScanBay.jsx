@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
 import { recordCustodyScan, fetchOrderEvents } from '../api.js'
 import { printIfLabel } from '../lib/labels.js'
+import { PaperTagButton } from '../lib.jsx'
 
 // Scan Bay (Nima, 2026-07-17) — the custody checkpoint. Every IF's cargo tag
 // (see lib/labels.js) is scanned OUT when handed to the warehouse and IN when
@@ -174,8 +175,9 @@ export default function ScanBay() {
                       className="linkBtn"
                       onClick={() => printIfLabel({ ifNumber: result.docNumber, ...result.fulfillment })}
                     >
-                      🖨 print tag again
+                      🖨 4×6
                     </button>
+                    <PaperTagButton info={{ ifNumber: result.docNumber, ...result.fulfillment }} />
                   </div>
                 ) : (
                   <div className="scanMeta">

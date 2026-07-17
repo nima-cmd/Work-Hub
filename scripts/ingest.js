@@ -18,6 +18,7 @@ import {
   loadPurchaseOrders, prunePurchaseOrders,
   loadOrderConfirmations, pruneOrderConfirmations,
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
+  stampApprovedForShipping,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { pool, withTransaction } from '../src/db.js'
@@ -91,6 +92,7 @@ const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedM
   const nOrders = await loadOrders(orders, db)
   const nFul = await loadFulfillments(records, db)
   const nInv = await loadInvoices(records, db)
+  await stampApprovedForShipping(records, db) // launch-day ledger (Launch Bay delay warning)
   const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
   const nPo = await loadPurchaseOrders(poRows, db)
   const nPoPruned = poRows.length ? await prunePurchaseOrders(poRows, db) : 0

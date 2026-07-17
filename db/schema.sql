@@ -228,6 +228,22 @@ CREATE TABLE IF NOT EXISTS edi_manual_links (
   created_at       TIMESTAMPTZ DEFAULT now()
 );
 
+-- ── EDI manual orders — the gap-filler (Nima, 2026-07-17) ────────────────────
+-- Older EDI orders that already SHIPPED have aged out of every saved search and
+-- the Orderful pull, so they can't appear in the automated pipeline at all — yet
+-- Nima still needs to find them (this already helped locate two Bloomingdale's
+-- orders + a ShopBop one). This table is a deliberately-separate, hand-entered
+-- record: surfaced in its OWN section in the EDI view, every row stamped
+-- "MANUAL — not confirmed by our process", never merged into or counted with the
+-- automated orders. Purely additive; nothing else reads or trusts it.
+CREATE TABLE IF NOT EXISTS edi_manual_orders (
+  id               SERIAL PRIMARY KEY,
+  business_number  TEXT NOT NULL,       -- the PO number (same key the pipeline groups on)
+  trading_partner  TEXT,                -- Bloomingdale's / Nordstrom / ShopBop / …
+  note             TEXT,                -- whatever's known: ship date, docs seen, where it was found
+  created_at       TIMESTAMPTZ DEFAULT now()
+);
+
 -- ── NetSuite Fulfillments (856 ASN search) — the BOL join key ────────────────
 -- One row per PO DC Identifier, from the NetSuite saved search Nima already
 -- exports for Airtable's "NetSuite Fulfillments" table. BOL is what actually

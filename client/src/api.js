@@ -25,6 +25,32 @@ export async function fetchShipDepartures() {
   return res.json()
 }
 
+// Launch Bay — pending departures as ships (grounded by status colour;
+// approved-to-ship floats; a stale float is the "forgot to mark shipped" delay).
+export async function fetchLaunchBay() {
+  const res = await fetch('/api/launch-bay')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Paper cargo tag (2.25×1.25) — printed server-side via lp on the warehouse
+// iMac. availability is checked so the button can hide where there's no printer.
+export async function checkPaperLabelPrinter() {
+  const res = await fetch('/api/print-label/available')
+  if (!res.ok) return { available: false }
+  return res.json()
+}
+
+export async function printPaperLabel(info) {
+  const res = await fetch('/api/print-label', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(info),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // files: [{ name, text, lastModified }]
 export async function importCsv(files) {
   const res = await fetch('/api/import', {
@@ -102,6 +128,24 @@ export async function unlinkEdiTransaction(transactionId) {
   return res.json()
 }
 
+// Manually-entered EDI orders (shipped/aged out of the searches). Always shown
+// in their own section, flagged as unconfirmed.
+export async function addEdiManualOrder({ businessNumber, tradingPartner, note }) {
+  const res = await fetch('/api/edi/manual-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ businessNumber, tradingPartner, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function removeEdiManualOrder(id) {
+  const res = await fetch(`/api/edi/manual-order/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Quest emails (Gmail-to-quest hologram transmissions). /sync pulls fresh
 // messages from Gmail; read/character/label actions write back to the real
 // inbox, so — like EDI/Allocations — every call returns the full refreshed
@@ -165,6 +209,17 @@ export async function fetchQuestTasks() {
 
 export async function createQuestTask(emailId) {
   const res = await fetch(`/api/quest-emails/${emailId}/create-task`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// A task the user writes themselves (no source email).
+export async function createManualTask(fields) {
+  const res = await fetch('/api/quest-tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
 }

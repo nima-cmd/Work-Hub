@@ -8,15 +8,16 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  getOrders, getFreshness, getNwFreshness, getShipDepartures,
+  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
-  getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
+  getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
-  getQuestTasks, createTaskFromQuestEmail, completeTask, getQuestEmailThread,
+  getQuestTasks, createTaskFromQuestEmail, addManualTask, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
+import { printPaperLabel, printerAvailable } from './printLabel.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -62,7 +63,32 @@ app.get('/api/ship-departures', async (_req, res) => {
   }
 })
 
+app.get('/api/launch-bay', async (_req, res) => {
+  try {
+    res.json(await getLaunchBay())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Custody scan (QR labels): direction 'OUT' = handed to warehouse, 'IN' = back.
+// Paper cargo tag (2.25×1.25) — printed straight to the MUNBYN via lp. Only
+// works where the printer queue exists (the local warehouse iMac). GET reports
+// availability so the UI can hide/disable the button on the cloud deploy.
+app.get('/api/print-label/available', async (_req, res) => {
+  res.json({ available: await printerAvailable() })
+})
+
+app.post('/api/print-label', async (req, res) => {
+  try {
+    res.json(await printPaperLabel(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/api/custody/scan', async (req, res) => {
   try {
     res.json(await recordCustodyScan(req.body || {}))
@@ -188,6 +214,25 @@ app.delete('/api/edi/link/:transactionId', async (req, res) => {
   }
 })
 
+// Hand-entered EDI orders that aged out of the searches (own flagged section).
+app.post('/api/edi/manual-order', async (req, res) => {
+  try {
+    res.json(await addEdiManualOrder(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.delete('/api/edi/manual-order/:id', async (req, res) => {
+  try {
+    res.json(await removeEdiManualOrder(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Quest emails (Gmail-to-quest hologram transmissions). Reads from Neon;
 // /sync pulls fresh messages from Gmail into Neon first. Mark-read and label
 // routes write to the real inbox via src/ingest/gmail.js.
@@ -278,6 +323,16 @@ app.get('/api/quest-tasks', async (_req, res) => {
 app.post('/api/quest-emails/:id/create-task', async (req, res) => {
   try {
     res.json(await createTaskFromQuestEmail(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// A task Nima writes himself (no source email).
+app.post('/api/quest-tasks', async (req, res) => {
+  try {
+    res.json(await addManualTask(req.body || {}))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
