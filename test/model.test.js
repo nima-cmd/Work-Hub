@@ -14,6 +14,7 @@ import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeAffection } from '../src/model/affection.js'
+import { groupOrdersByPo } from '../src/model/poGroups.js'
 import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
@@ -466,4 +467,30 @@ test('computeAffection: affection + RPG stats per completed quest, ignores open'
   assert.equal(rey.points, 13)
   assert.equal(res[0].characterId, 'yoda') // sorted by points desc
   assert.ok(yoda.level.name)
+})
+
+// ── poGroups: collapse the buyer-PO fan-out ──────────────────────────────────
+test('groupOrdersByPo rolls same-PO SOs into one group, leaves blank-PO orders alone', () => {
+  const o = (so, po, cust, stage, sev, days) => ({
+    soNumber: so, poNumber: po, customer: cust, stage, stageRank: 0, severity: sev, daysPending: days,
+    nextAction: 'x', flags: [], fulfillments: [{ ifNumber: 'IF' + so }], invoices: [],
+  })
+  const orders = [
+    o('SO1', '7590875', "Bloomingdale's - 0001 NY", 'PICKED_NEEDS_PACK', 2, 5),
+    o('SO2', '7590875', "Bloomingdale's - 0002 Boca", 'APPROVED_FOR_SHIPPING', 3, 9),
+    o('SO3', '', 'Some Boutique', 'OPEN_NEEDS_FULFILLMENT', 1, 2),
+    o('SO4', '80126', 'Robertson Madison', 'OPEN_NEEDS_FULFILLMENT', 0, 1), // lone PO → stays single
+  ]
+  const rows = groupOrdersByPo(orders)
+  const grp = rows.find((r) => r.isGroup)
+  assert.ok(grp, 'a group is produced for the shared PO')
+  assert.equal(grp.poNumber, '7590875')
+  assert.equal(grp.memberCount, 2)
+  assert.equal(grp.customer, "Bloomingdale's") // common base before the store suffix
+  assert.equal(grp.severity, 3) // max of members
+  assert.equal(grp.daysPending, 9) // max of members
+  assert.equal(grp.fulfillments.length, 2) // both IFs kept (fan-out not hidden)
+  assert.equal(rows.filter((r) => r.isGroup).length, 1)
+  assert.ok(rows.some((r) => r.soNumber === 'SO3' && !r.isGroup)) // blank PO stays single
+  assert.ok(rows.some((r) => r.soNumber === 'SO4' && !r.isGroup)) // lone PO stays single
 })
