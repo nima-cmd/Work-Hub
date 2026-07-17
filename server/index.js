@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  getOrders, getFreshness, getShipDepartures,
+  getOrders, getFreshness, getNwFreshness, getShipDepartures,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
@@ -36,6 +36,17 @@ app.get('/api/orders', async (_req, res) => {
 app.get('/api/freshness', async (_req, res) => {
   try {
     res.json(await getFreshness())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Naghedi-Warehouse import freshness, read from that app's Supabase (read-only
+// — uploads stay in that app; this just says whether they're current).
+app.get('/api/nw-freshness', async (_req, res) => {
+  try {
+    res.json(await getNwFreshness())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

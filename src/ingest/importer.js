@@ -14,10 +14,16 @@ import {
   fromPendingOrders,
   fromInvoicedPending,
   fromEdiFulfillments,
+  fromPoReceiving,
+  fromOcPipeline,
 } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
 import { deriveSource } from '../model/source.js'
-import { loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments } from './loadToDb.js'
+import {
+  loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
+  loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
+  pruneOrders,
+} from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
 // The two current searches, plus the three legacy shapes (still accepted on
@@ -32,8 +38,14 @@ const MAPPERS = {
 
 // Line-level sources that don't flow through buildPipeline (keyed on their own
 // natural key, not SO#) — handled separately from MAPPERS/records below.
+// `prune` (where present) mirrors scripts/ingest.js: each export is the full
+// open set for its source, so rows that vanished from it were closed in
+// NetSuite and get deleted — but only when that file is actually part of the
+// upload (an orders-only upload never touches PO/OC data).
 const LINE_LEVEL_MAPPERS = {
   ediFulfillments: { map: fromEdiFulfillments, load: loadEdiFulfillments },
+  poReceiving: { map: fromPoReceiving, load: loadPurchaseOrders, prune: prunePurchaseOrders },
+  ocPipeline: { map: fromOcPipeline, load: loadOrderConfirmations, prune: pruneOrderConfirmations },
 }
 
 // files: [{ name, text, lastModified }]
@@ -68,17 +80,27 @@ export async function importBatch(files) {
   const orders = buildPipeline(records, { today: new Date() })
   for (const o of orders) o.source = deriveSource(o.customer, o.location)
 
+  // Same rule as scripts/ingest.js: the order-pipeline export is the master
+  // list of open orders, so when it's part of this upload, orders that no
+  // longer appear in it were closed/shipped in NetSuite and get pruned.
+  // Without this, in-app imports (now the primary path via Bugs' task) would
+  // let closed orders linger where the CLI ingest would have removed them.
+  const hasMaster = snapshots.some(([key]) => key === 'openSalesOrders')
+
   // One transaction for all writes: a bad row rolls back the whole upload
   // instead of leaving orders half-updated.
-  const { nOrders, nFul, nInv } = await withTransaction(async (db) => {
+  const { nOrders, nFul, nInv, nPruned } = await withTransaction(async (db) => {
     for (const [name, count, mtime] of snapshots) await recordSnapshot(name, count, mtime, db)
-    for (const { key, rows } of lineLevel) await LINE_LEVEL_MAPPERS[key].load(rows, db)
-    return {
-      nOrders: await loadOrders(orders, db),
-      nFul: await loadFulfillments(records, db),
-      nInv: await loadInvoices(records, db),
+    for (const { key, rows } of lineLevel) {
+      await LINE_LEVEL_MAPPERS[key].load(rows, db)
+      if (LINE_LEVEL_MAPPERS[key].prune && rows.length) await LINE_LEVEL_MAPPERS[key].prune(rows, db)
     }
+    const nOrders = await loadOrders(orders, db)
+    const nFul = await loadFulfillments(records, db)
+    const nInv = await loadInvoices(records, db)
+    const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
+    return { nOrders, nFul, nInv, nPruned }
   })
 
-  return { files: perFile, orders: nOrders, fulfillments: nFul, invoices: nInv }
+  return { files: perFile, orders: nOrders, fulfillments: nFul, invoices: nInv, pruned: nPruned }
 }

@@ -378,12 +378,14 @@ CREATE TABLE IF NOT EXISTS recurring_task_templates (
 INSERT INTO recurring_task_templates
   (key, title, description, character_id, schedule_type, schedule_times, completion_mode, verify_key, checklist_items, urgency)
 VALUES
+  -- Catalog + PO Warehouse View became auto-verified on 2026-07-17 (they land
+  -- in Naghedi-Warehouse's Supabase with timestamps — see getNwFreshness).
+  -- Only the NetSuite Items CSV stays manual: it lives solely in that app's
+  -- local browser storage, so nothing remote can confirm it ran.
   ('csv-freshness-monitor', 'Upload the latest CSVs',
-   'Work-Hub''s own saved-search exports are checked automatically. The Naghedi-Warehouse imports below can''t be checked remotely (two of them only ever live in that app''s local browser storage) — check each off once you''ve actually run it.',
+   'Work-Hub''s saved-search exports and the Naghedi-Warehouse Catalog/PO imports are checked automatically. The NetSuite Items CSV can''t be checked remotely — check it off once you''ve actually run it.',
    'bugs', 'daily', NULL, 'verified', 'csv_freshness_workhub',
-   '[{"key":"nw-catalog","label":"Naghedi-Warehouse: SKU/Quantities Catalog CSV","done":false},
-     {"key":"nw-items","label":"Naghedi-Warehouse: NetSuite Items CSV","done":false},
-     {"key":"nw-po","label":"Naghedi-Warehouse: PO Warehouse View CSV","done":false}]'::jsonb,
+   '[{"key":"nw-items","label":"Naghedi-Warehouse: NetSuite Items CSV","done":false}]'::jsonb,
    'hi'),
   ('airtable-daily-reminder', 'Airtable upload reminder', 'We need an Airtable upload.',
    NULL, 'daily_times', ARRAY['09:00','14:00'], 'checkbox', NULL, NULL, NULL)

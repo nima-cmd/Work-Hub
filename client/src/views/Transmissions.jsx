@@ -4,8 +4,10 @@ import {
   assignQuestEmailCharacter, applyQuestEmailLabel, dismissQuestEmail,
   fetchQuestTasks, createQuestTask, completeQuestTask,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, fetchQuestEmailThread, searchQuestArchive, fetchQuestActivity,
+  fetchFreshness, fetchNwFreshness, importCsv,
 } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
+import { fmtAge } from '../lib.jsx'
 
 function initials(name) {
   if (!name) return '?'
@@ -83,12 +85,69 @@ export default function Transmissions() {
   const [activity, setActivity] = useState(null)
   const syncingRef = useRef(false) // reentrancy guard for the poll timer below
 
+  // CSV-freshness state for Bugs' verified task: live per-source status +
+  // NetSuite links, an in-task import, and her thank-you once things update
+  // (Nima, 2026-07-17: "link and import live in the Bugs Task").
+  const [fresh, setFresh] = useState(null)
+  const [nwFresh, setNwFresh] = useState(null) // Naghedi-Warehouse Supabase freshness
+  const [thanks, setThanks] = useState(null) // { taskId, msg }
+  const [importing, setImporting] = useState(false)
+  const importRef = useRef(null)
+  const importTaskRef = useRef(null) // which task's import button opened the picker
+
   function load() {
     fetchQuestEmails().then(setReview).catch((e) => setErr(e.message))
     fetchQuestTasks().then(setTasks).catch((e) => setErr(e.message))
     fetchQuestActivity(todayStr()).then(setActivity).catch(() => {})
+    fetchFreshness().then(setFresh).catch(() => {})
+    fetchNwFreshness().then(setNwFresh).catch(() => {})
   }
   useEffect(load, [])
+
+  // Bugs' thank-you, in her voice: enthusiastic if the whole board went
+  // green, still appreciative (but pointing at what's left) if not.
+  function bugsThanks(task, freshNow) {
+    const still = (freshNow?.sources || []).filter((s) => s.status === 'stale' || s.status === 'missing')
+    const name = task.character?.name || 'Your messenger'
+    if (!still.length) {
+      return name === 'Bugs Bunny'
+        ? '“Eh, thanks Doc! All the manifests are current — that’s what I call a good haul. 🥕”'
+        : `${name} says: “Thank you! Every export is current — all clear.”`
+    }
+    const list = still.map((s) => s.label).join(', ')
+    return name === 'Bugs Bunny'
+      ? `“Thanks Doc — that one’s in! Still waitin’ on: ${list}. 🥕”`
+      : `${name} says: “Thanks — got it! Still waiting on: ${list}.”`
+  }
+
+  async function onTaskImportFiles(e) {
+    const files = [...e.target.files]
+    e.target.value = ''
+    const task = importTaskRef.current
+    if (!files.length || !task) return
+    setImporting(true)
+    setErr(null)
+    setThanks(null)
+    try {
+      const payload = await Promise.all(
+        files.map(async (f) => ({ name: f.name, text: await f.text(), lastModified: f.lastModified })),
+      )
+      const r = await importCsv(payload)
+      const unrec = r.files.filter((f) => !f.recognized)
+      const freshNow = await fetchFreshness()
+      setFresh(freshNow)
+      setThanks({
+        taskId: task.id,
+        msg:
+          bugsThanks(task, freshNow) +
+          (unrec.length ? ` (Not recognized: ${unrec.map((u) => u.name).join(', ')})` : ''),
+      })
+    } catch (e2) {
+      setErr('Import failed: ' + e2.message)
+    } finally {
+      setImporting(false)
+    }
+  }
 
   async function onSync() {
     if (syncingRef.current) return
@@ -336,6 +395,8 @@ export default function Transmissions() {
     <div className="allocWrap">
       {err && <div className="banner error">⚠ {err}</div>}
       {syncMsg && <div className="banner ok">{syncMsg}</div>}
+      {/* shared picker for the in-task CSV import (Bugs' freshness task) */}
+      <input ref={importRef} type="file" accept=".csv" multiple hidden onChange={onTaskImportFiles} />
 
       <div className="allocStats">
         <span className="pill">{review.emails.length} transmissions</span>
@@ -515,6 +576,71 @@ export default function Transmissions() {
                   </div>
                   <div className="holoSubject">{t.subject}</div>
                   <p className="holoSnippet">{t.snippet}</p>
+                  {/* Bugs' CSV-freshness task: live per-source status, each with its
+                      NetSuite saved-search link, plus an import right here so the
+                      whole loop (open search → export → import → verified) never
+                      leaves the task. Thank-you appears once an import lands. */}
+                  {t.verifyKey === 'csv_freshness_workhub' && fresh && (
+                    <div className="holoActions" style={{ flexWrap: 'wrap', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                      <p className="hint" style={{ margin: '0 0 2px' }}>Work-Hub exports (auto-verified — import below and these update):</p>
+                      {fresh.sources.map((s) => (
+                        <div key={s.key} className="freshRow" style={{ padding: '2px 0', width: '100%' }}>
+                          <span className={'dot ' + s.status} />
+                          <span className="fname">{s.label}</span>
+                          <span className={'fage ' + s.status}>
+                            {s.status === 'missing' ? 'not uploaded' : fmtAge(s.ageHours)}
+                          </span>
+                          {s.url && (
+                            <a href={s.url} target="_blank" rel="noreferrer" className="linkBtn" style={{ marginLeft: 4 }}>
+                              Open in NetSuite ↗
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                      {t.status === 'open' && (
+                        <div className="holoActions" style={{ marginTop: 4 }}>
+                          <button
+                            className="btn" disabled={importing}
+                            onClick={() => { importTaskRef.current = t; importRef.current?.click() }}
+                          >
+                            {importing ? 'Importing…' : '⤓ Import the CSVs here'}
+                          </button>
+                        </div>
+                      )}
+                      {thanks?.taskId === t.id && (
+                        <div className="scanResult good" style={{ marginTop: 6, width: '100%' }}>{thanks.msg}</div>
+                      )}
+
+                      {/* Naghedi-Warehouse imports, auto-checked via its Supabase.
+                          Uploads stay in THAT app (its import pipelines do the
+                          processing) — the link opens it; this just watches. */}
+                      {nwFresh?.configured && (
+                        <>
+                          <p className="hint" style={{ margin: '8px 0 2px' }}>
+                            Naghedi-Warehouse imports (auto-verified from its database — upload over there):
+                          </p>
+                          {nwFresh.sources.map((s) => (
+                            <div key={s.key} className="freshRow" style={{ padding: '2px 0', width: '100%' }}>
+                              <span className={'dot ' + s.status} />
+                              <span className="fname">{s.label}</span>
+                              <span className={'fage ' + s.status}>
+                                {s.status === 'unknown'
+                                  ? 'couldn’t check'
+                                  : s.status === 'missing'
+                                    ? 'never imported'
+                                    : fmtAge(s.ageHours)}
+                                {(s.status === 'stale' || s.status === 'missing') && ' · needs updating'}
+                              </span>
+                              <a href={s.url} target="_blank" rel="noreferrer" className="linkBtn" style={{ marginLeft: 4 }}>
+                                Upload in Naghedi-Warehouse ↗
+                              </a>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {t.completionMode === 'verified' && !!t.checklist?.length && (
                     <div className="holoActions" style={{ flexWrap: 'wrap', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
                       <p className="hint" style={{ margin: '0 0 2px' }}>Manual checklist (can't be auto-verified from here):</p>
@@ -525,6 +651,11 @@ export default function Transmissions() {
                             onChange={(ev) => onChecklistToggle(t, c.key, ev.target.checked)}
                           />
                           {c.label}
+                          {c.url && (
+                            <a href={c.url} target="_blank" rel="noreferrer" className="linkBtn" style={{ marginLeft: 0 }}>
+                              Open ↗
+                            </a>
+                          )}
                         </label>
                       ))}
                     </div>

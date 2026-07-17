@@ -5,7 +5,7 @@
 import { pool } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
-import { SOURCE_LABELS, REQUIRED_SOURCES } from '../src/ingest/detect.js'
+import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
   upsertOcPoLink, deleteOcPoLink, dismissOrderConfirmation, dismissPurchaseOrder,
@@ -187,11 +187,12 @@ export async function getFreshness() {
   const sources = REQUIRED_SOURCES.map((key) => {
     const snap = bySource.get(key)
     const label = SOURCE_LABELS[key] || key
-    if (!snap) return { key, label, status: 'missing', ageHours: null, fileModified: null, importedAt: null }
+    const url = SOURCE_LINKS[key] || null // NetSuite saved-search link, when configured
+    if (!snap) return { key, label, url, status: 'missing', ageHours: null, fileModified: null, importedAt: null }
     const ageHours = snap.file_modified ? (now - new Date(snap.file_modified).getTime()) / 3.6e6 : null
     const status =
       ageHours == null ? 'unknown' : ageHours > STALE_HOURS ? 'stale' : ageHours > WARN_HOURS ? 'warn' : 'fresh'
-    return { key, label, status, ageHours, fileModified: snap.file_modified, importedAt: snap.imported_at }
+    return { key, label, url, status, ageHours, fileModified: snap.file_modified, importedAt: snap.imported_at }
   })
 
   // Overall = the worst single source, so the header pill reflects the weakest link.
@@ -203,6 +204,57 @@ export async function getFreshness() {
   const maxAgeHours = ages.length ? Math.max(...ages) : null
 
   return { status, maxAgeHours, warnHours: WARN_HOURS, staleHours: STALE_HOURS, sources }
+}
+
+// ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────
+// Two of Bugs' three Naghedi-Warehouse checklist items actually land in that
+// app's Supabase with timestamps (sku_catalog.updated_at per row;
+// purchase_orders.updated_at) — so Work-Hub can check them remotely instead
+// of trusting a checkbox. The NetSuite Items CSV is localStorage-only over
+// there and stays a manual checklist item. IMPORTS STAY IN NAGHEDI-WAREHOUSE
+// (decided 2026-07-17): its import pipelines do app-specific processing
+// (full-replace semantics, style-color indexes), so Work-Hub only reads
+// freshness and links to that app — it never writes these tables.
+const NW_SUPABASE_URL = process.env.VITE_SUPABASE_URL
+const NW_SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY
+const NW_APP_URL = process.env.NAGHEDI_WAREHOUSE_URL || 'https://naghedi-warehouse.vercel.app'
+
+const NW_SOURCES = [
+  { key: 'nw-catalog', label: 'Naghedi-Warehouse: SKU/Quantities Catalog', table: 'sku_catalog' },
+  { key: 'nw-po', label: 'Naghedi-Warehouse: PO Warehouse View', table: 'purchase_orders' },
+]
+
+async function nwLatestUpdate(table) {
+  const res = await fetch(
+    `${NW_SUPABASE_URL}/rest/v1/${table}?select=updated_at&order=updated_at.desc&limit=1`,
+    { headers: { apikey: NW_SUPABASE_KEY, Authorization: `Bearer ${NW_SUPABASE_KEY}` } },
+  )
+  if (!res.ok) throw new Error(`Supabase ${res.status}`)
+  const rows = await res.json()
+  return rows[0]?.updated_at || null
+}
+
+export async function getNwFreshness() {
+  if (!NW_SUPABASE_URL || !NW_SUPABASE_KEY) {
+    return { configured: false, appUrl: NW_APP_URL, sources: [] }
+  }
+  const now = Date.now()
+  const sources = await Promise.all(
+    NW_SOURCES.map(async ({ key, label, table }) => {
+      try {
+        const ts = await nwLatestUpdate(table)
+        const ageHours = ts ? (now - new Date(ts).getTime()) / 3.6e6 : null
+        const status =
+          ts == null ? 'missing' : ageHours > STALE_HOURS ? 'stale' : ageHours > WARN_HOURS ? 'warn' : 'fresh'
+        return { key, label, status, ageHours, updatedAt: ts, url: NW_APP_URL }
+      } catch (e) {
+        // 'unknown' (not silently fresh): the verifier treats it as blocking so
+        // a broken key/URL can't quietly disable the check.
+        return { key, label, status: 'unknown', ageHours: null, error: e.message, url: NW_APP_URL }
+      }
+    }),
+  )
+  return { configured: true, appUrl: NW_APP_URL, sources }
 }
 
 // ── OC↔PO allocation review — the "open task" queue ──────────────────────────
@@ -404,8 +456,21 @@ export async function createTaskFromQuestEmail(emailId) {
 const VERIFIERS = {
   csv_freshness_workhub: async () => {
     const fresh = await getFreshness()
-    const bad = fresh.sources.filter((s) => s.status === 'stale' || s.status === 'missing')
-    return { ok: bad.length === 0, detail: bad.length ? `Work-Hub source(s) still need re-upload: ${bad.map((s) => s.label).join(', ')}` : 'ok' }
+    const problems = fresh.sources
+      .filter((s) => s.status === 'stale' || s.status === 'missing')
+      .map((s) => s.label)
+    // Naghedi-Warehouse Catalog + PO imports are auto-checked via its Supabase
+    // (2026-07-17 — they used to be manual checklist items). 'unknown' (fetch/
+    // auth failure) blocks too, so a broken key can't quietly pass the gate.
+    const nw = await getNwFreshness()
+    if (nw.configured) {
+      problems.push(
+        ...nw.sources
+          .filter((s) => s.status === 'stale' || s.status === 'missing' || s.status === 'unknown')
+          .map((s) => s.label + (s.status === 'unknown' ? ` (couldn’t check: ${s.error})` : '')),
+      )
+    }
+    return { ok: problems.length === 0, detail: problems.length ? `Still need updating: ${problems.join(', ')}` : 'ok' }
   },
 }
 

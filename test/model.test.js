@@ -8,6 +8,7 @@ import {
   refNumber, cleanName, num, fromOpenSalesOrders, fromUnpackedFulfillments, fromFulfillmentPipeline,
   fromPoReceiving, fromOcPipeline,
 } from '../src/ingest/savedSearches.js'
+import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
@@ -415,4 +416,30 @@ test('custody: no custody flags once the order is past PICKED', () => {
     new Date('2026-07-08'),
   )
   assert.ok(!flags.some((x) => ['WITH_WAREHOUSE', 'WAREHOUSE_HOLDS', 'BACK_NOT_PACKED', 'NEEDS_HANDOFF_SCAN'].includes(x.key)))
+})
+
+// ── detectSource: the in-app Import button's router ──────────────────────────
+// PO Receiving / OC Pipeline became importable in-app (2026-07-17, so they can
+// live in Bugs' CSV-freshness task). Each keys on a column unique to its
+// export; the order-pipeline search must NOT match either (it has plain
+// "Start Date", not "Order Start Date", and no "Final Naghedi Destination").
+test('detectSource routes PO Receiving and OC Pipeline exports without stealing the order pipeline', () => {
+  assert.equal(
+    detectSource(['Document Number', 'Name', 'Ship To', 'Final Naghedi Destination', 'Status', 'Item', 'Quantity', 'Quantity Fulfilled/Received', 'Quantity Remaining', 'Due Date/Receive By']),
+    'poReceiving',
+  )
+  assert.equal(
+    detectSource(['Document Number', 'Name', 'Ship To', 'Location', 'Status', 'Item', 'Quantity', 'PO/Check Number', 'Order Start Date']),
+    'ocPipeline',
+  )
+  // consolidated SO-based order pipeline still routes to openSalesOrders
+  assert.equal(
+    detectSource(['Document Number', 'Maximum of Name', 'Maximum of Location', 'Maximum of Status', 'Sum of Quantity', 'Maximum of Start Date']),
+    'openSalesOrders',
+  )
+  // consolidated IF-based fulfillment search unaffected
+  assert.equal(
+    detectSource(['Document Number', 'Maximum of Created From', 'Maximum of Status']),
+    'fulfillmentPipeline',
+  )
 })

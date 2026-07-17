@@ -10,6 +10,7 @@ import EdiOrders from './views/EdiOrders.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
 import ScanBay from './views/ScanBay.jsx'
+import DockingBay from './views/DockingBay.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -44,6 +45,9 @@ function FreshnessPanel({ fresh }) {
                 {s.status === 'missing' ? 'not uploaded' : fmtAge(s.ageHours)}
                 {(s.status === 'stale' || s.status === 'missing') && ' · re-upload'}
               </span>
+              {s.url && (
+                <a href={s.url} target="_blank" rel="noreferrer" className="linkBtn" style={{ marginLeft: 4 }}>↗</a>
+              )}
             </div>
           ))}
         </div>
@@ -62,6 +66,7 @@ const VIEWS = [
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
   { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
   { key: 'scan', label: 'Scan Bay', C: ScanBay },
+  { key: 'dock', label: 'Docking Bay', C: DockingBay },
 ]
 
 export default function App() {

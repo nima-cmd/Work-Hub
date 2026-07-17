@@ -12,6 +12,13 @@ export async function fetchFreshness() {
   return res.json()
 }
 
+// Naghedi-Warehouse import freshness (read from that app's Supabase).
+export async function fetchNwFreshness() {
+  const res = await fetch('/api/nw-freshness')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 export async function fetchShipDepartures() {
   const res = await fetch('/api/ship-departures')
   if (!res.ok) throw new Error(`API ${res.status}`)
