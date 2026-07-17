@@ -231,3 +231,23 @@ export async function fetchQuestActivity(date) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// ── Custody scans (QR labels) — direction 'OUT' | 'IN' ──────────────────────
+export async function recordCustodyScan({ docNumber, direction, note }) {
+  const res = await fetch('/api/custody/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docNumber, direction, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Order-events ledger feed. opts: { date, docNumber, soNumber } (all optional)
+export async function fetchOrderEvents(opts = {}) {
+  const params = new URLSearchParams(Object.entries(opts).filter(([, v]) => v))
+  const qs = params.toString()
+  const res = await fetch('/api/events' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

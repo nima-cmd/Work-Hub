@@ -389,6 +389,40 @@ VALUES
    NULL, 'daily_times', ARRAY['09:00','14:00'], 'checkbox', NULL, NULL, NULL)
 ON CONFLICT (key) DO NOTHING;
 
+-- ── Order events ledger (Nima, 2026-07-17) ───────────────────────────────────
+-- "A ledger, a repository we can go back and search through, and the basis for
+-- the calendar showing what occurred every day." One row per OBSERVED document
+-- transition. First writers are the QR custody scans (label printed per IF,
+-- scanned OUT when handed to the warehouse, IN when it comes back) — the two
+-- transitions NetSuite has no record of at all. Ingest-derived transitions
+-- (stage changes seen between imports) join later under the same table.
+-- Custody rows are append-only on purpose: re-handoffs happen (an IF can go
+-- back out after a fix), so state = the LATEST OUT vs latest IN, and the full
+-- history stays queryable.
+CREATE TABLE IF NOT EXISTS order_events (
+  id          SERIAL PRIMARY KEY,
+  event_type  TEXT NOT NULL,        -- 'CUSTODY_OUT' | 'CUSTODY_IN' | (later: 'STAGE_CHANGE' …)
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO'
+  doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
+  so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
+  note        TEXT,
+  source      TEXT DEFAULT 'scan',  -- 'scan' | 'manual' | 'derived'
+  occurred_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_doc      ON order_events(doc_type, doc_number);
+CREATE INDEX IF NOT EXISTS idx_order_events_so       ON order_events(so_number);
+CREATE INDEX IF NOT EXISTS idx_order_events_occurred ON order_events(occurred_at);
+
+-- Weaver → NetSuite update, twice daily (Nima, 2026-07-17) — same seed
+-- pattern as above: ON CONFLICT DO NOTHING so re-migrating never resets edits.
+INSERT INTO recurring_task_templates
+  (key, title, description, character_id, schedule_type, schedule_times, completion_mode, verify_key, checklist_items, urgency)
+VALUES
+  ('weaver-netsuite-update', 'Update Weaver → NetSuite',
+   'Push the latest Weaver production data into NetSuite so inventory and PO receipts stay current.',
+   NULL, 'daily_times', ARRAY['09:00','14:00'], 'checkbox', NULL, NULL, 'mid')
+ON CONFLICT (key) DO NOTHING;
+
 -- Journal (Nima, 2026-07-15): "track what was done within the day and go
 -- back and review quickly" — one row per meaningful quest_task state change,
 -- also folded into the Calendar view (see client/src/views/Calendar.jsx).

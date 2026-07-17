@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents } from './api.js'
 import { fmtAge } from './lib.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import Kanban from './views/Kanban.jsx'
@@ -9,6 +9,7 @@ import Allocations from './views/Allocations.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
+import ScanBay from './views/ScanBay.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -60,12 +61,14 @@ const VIEWS = [
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
   { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
+  { key: 'scan', label: 'Scan Bay', C: ScanBay },
 ]
 
 export default function App() {
   const [orders, setOrders] = useState(null)
   const [tasks, setTasks] = useState([])
   const [activity, setActivity] = useState([])
+  const [events, setEvents] = useState([])
   const [err, setErr] = useState(null)
   const [view, setView] = useState('dashboard')
   const [fresh, setFresh] = useState(null)
@@ -81,6 +84,8 @@ export default function App() {
     // best-effort: the app still works if either fails to load.
     fetchQuestTasks().then(setTasks).catch(() => {})
     fetchQuestActivity().then(setActivity).catch(() => {})
+    // Order-events ledger (custody scans) — folds into Calendar's day grid.
+    fetchOrderEvents().then(setEvents).catch(() => {})
   }
   useEffect(refresh, [])
 
@@ -151,7 +156,7 @@ export default function App() {
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} tasks={tasks} activity={activity} />}
+        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} />}
       </main>
     </div>
   )

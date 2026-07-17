@@ -578,6 +578,41 @@ export async function searchQuestTasks(q, db = pool) {
   return rows
 }
 
+// ── Order events ledger (Nima, 2026-07-17) — custody scans first ─────────────
+// Append-only: re-handoffs happen (an IF can go back out after a fix), so
+// custody STATE is derived from the latest OUT vs latest IN, never stored.
+export async function insertOrderEvent({ eventType, docType, docNumber, soNumber, note, source = 'scan' }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING id, occurred_at AS "occurredAt"`,
+    [eventType, docType, docNumber, soNumber || null, note || null, source],
+  )
+  return rows[0]
+}
+
+// Ledger feed — the Calendar's "what occurred every day" and the searchable
+// history. date scopes to one day (same convention as fetchTaskActivity).
+export async function fetchOrderEvents({ date, docNumber, soNumber } = {}, db = pool) {
+  const conds = []
+  const params = []
+  if (date) { params.push(date); conds.push(`e.occurred_at::date = $${params.length}::date`) }
+  if (docNumber) { params.push(docNumber); conds.push(`e.doc_number = $${params.length}`) }
+  if (soNumber) { params.push(soNumber); conds.push(`e.so_number = $${params.length}`) }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+  const { rows } = await db.query(
+    `SELECT e.id, e.event_type AS "eventType", e.doc_type AS "docType", e.doc_number AS "docNumber",
+            e.so_number AS "soNumber", e.note, e.source, e.occurred_at AS "occurredAt",
+            o.customer
+     FROM order_events e LEFT JOIN orders o ON o.so_number = e.so_number
+     ${where}
+     ORDER BY e.occurred_at DESC
+     LIMIT 500`,
+    params,
+  )
+  return rows
+}
+
 // ── Journal — "track what was done within the day" (Nima, 2026-07-15) ───────
 export async function logTaskActivity({ taskId, kind, note }, db = pool) {
   await db.query('INSERT INTO quest_task_activity (task_id, kind, note) VALUES ($1,$2,$3)', [taskId, kind, note || null])

@@ -8,12 +8,14 @@ const DAY = 86400000
 // month/week grid of orders that have actually shipped (a real IF-shipped
 // event date, distinct from the target ship date the agenda watches) — and
 // the quest-task activity journal (Nima, 2026-07-15: "we would also like
-// these to show up in our calendar as well"), plotted on the day they happened.
-export default function Calendar({ orders, activity = [] }) {
+// these to show up in our calendar as well"), plotted on the day they happened
+// — and the order-events ledger (custody OUT/IN scans, Nima 2026-07-17), the
+// "what occurred every day" record.
+export default function Calendar({ orders, activity = [], events = [] }) {
   return (
     <div className="calendar">
       <Agenda orders={orders} />
-      <ShipGrid orders={orders} activity={activity} />
+      <ShipGrid orders={orders} activity={activity} events={events} />
     </div>
   )
 }
@@ -68,7 +70,7 @@ function Agenda({ orders }) {
 // Month/week grid of actual shipped-on dates, pulled from each order's
 // fulfillments (only Shipped IFs carry an actualShipDate) — plus the
 // quest-task activity journal, plotted on the day each entry happened.
-function ShipGrid({ orders, activity = [] }) {
+function ShipGrid({ orders, activity = [], events = [] }) {
   const [mode, setMode] = useState('month') // 'month' | 'week'
   const [cursor, setCursor] = useState(() => startOfDay(Date.now()))
   const today = startOfDay(Date.now())
@@ -88,6 +90,13 @@ function ShipGrid({ orders, activity = [] }) {
     const day = startOfDay(a.createdAt)
     if (!activityByDay.has(day)) activityByDay.set(day, [])
     activityByDay.get(day).push(a)
+  }
+
+  const eventsByDay = new Map() // day (ms) -> [order event] — custody scans etc.
+  for (const e of events) {
+    const day = startOfDay(e.occurredAt)
+    if (!eventsByDay.has(day)) eventsByDay.set(day, [])
+    eventsByDay.get(day).push(e)
   }
 
   const gridStart =
@@ -126,6 +135,7 @@ function ShipGrid({ orders, activity = [] }) {
         {days.map((day) => {
           const evts = shipped.get(day) || []
           const acts = activityByDay.get(day) || []
+          const led = eventsByDay.get(day) || []
           const inMonth = mode === 'week' || new Date(day).getMonth() === curMonth
           return (
             <div
@@ -150,6 +160,15 @@ function ShipGrid({ orders, activity = [] }) {
                 </div>
               ))}
               {acts.length > 3 && <div className="calEvtMore">+{acts.length - 3} more</div>}
+              {led.slice(0, 3).map((e) => (
+                <div key={'ev' + e.id} className="calEvt">
+                  <span className="badge transmission">
+                    {e.eventType === 'CUSTODY_OUT' ? '⬆ out' : e.eventType === 'CUSTODY_IN' ? '⬇ in' : e.eventType.toLowerCase()}
+                  </span>{' '}
+                  <span className="so">{e.docNumber}</span> {e.customer || ''}
+                </div>
+              ))}
+              {led.length > 3 && <div className="calEvtMore">+{led.length - 3} more</div>}
             </div>
           )
         })}

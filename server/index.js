@@ -14,7 +14,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
   getQuestTasks, createTaskFromQuestEmail, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
-  ensureRecurringTasks,
+  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 
@@ -45,6 +45,27 @@ app.get('/api/freshness', async (_req, res) => {
 app.get('/api/ship-departures', async (_req, res) => {
   try {
     res.json(await getShipDepartures())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Custody scan (QR labels): direction 'OUT' = handed to warehouse, 'IN' = back.
+app.post('/api/custody/scan', async (req, res) => {
+  try {
+    res.json(await recordCustodyScan(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Order-events ledger feed (?date=YYYY-MM-DD, ?docNumber=IF123, ?soNumber=SO123)
+app.get('/api/events', async (req, res) => {
+  try {
+    const { date, docNumber, soNumber } = req.query
+    res.json(await getOrderEventsFeed({ date, docNumber, soNumber }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

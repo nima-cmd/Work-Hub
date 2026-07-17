@@ -329,3 +329,90 @@ test('normalizeDocNumber prepends the prefix only when missing', () => {
   assert.equal(normalizeDocNumber('SO', 'so1213'), 'SO1213') // case-insensitive match on the prefix too
   assert.equal(normalizeDocNumber('PO', ''), '')
 })
+
+// ── Custody flags (QR label scans — Nima, 2026-07-17) ───────────────────────
+// The IF-created → packed gap: OUT scan = handed to warehouse, IN scan = back.
+
+test('custody: IF scanned OUT recently shows an informational with-warehouse flag', () => {
+  const flags = computeFlags(
+    {
+      stage: STAGE.PICKED,
+      fulfillments: [{ ifNumber: 'IF1', custodyOut: '2026-07-07T10:00:00Z', custodyIn: null }],
+    },
+    new Date('2026-07-08'),
+  )
+  const f = flags.find((x) => x.key === 'WITH_WAREHOUSE')
+  assert.ok(f)
+  assert.equal(f.severity, 0)
+})
+
+test('custody: IF with warehouse 3+ days escalates to WAREHOUSE_HOLDS (act now)', () => {
+  const flags = computeFlags(
+    {
+      stage: STAGE.PICKED,
+      fulfillments: [{ ifNumber: 'IF1', custodyOut: '2026-07-01T10:00:00Z', custodyIn: null }],
+    },
+    new Date('2026-07-08'),
+  )
+  const f = flags.find((x) => x.key === 'WAREHOUSE_HOLDS')
+  assert.ok(f)
+  assert.equal(f.severity, 3)
+})
+
+test('custody: IN scan newer than OUT means back-but-not-packed — our move', () => {
+  const flags = computeFlags(
+    {
+      stage: STAGE.PICKED,
+      fulfillments: [
+        { ifNumber: 'IF1', custodyOut: '2026-07-05T10:00:00Z', custodyIn: '2026-07-07T15:00:00Z' },
+      ],
+    },
+    new Date('2026-07-08'),
+  )
+  assert.ok(flags.some((x) => x.key === 'BACK_NOT_PACKED'))
+  assert.ok(!flags.some((x) => x.key === 'WITH_WAREHOUSE' || x.key === 'WAREHOUSE_HOLDS'))
+})
+
+test('custody: re-handoff (OUT newer than IN) reads as with-warehouse again', () => {
+  const flags = computeFlags(
+    {
+      stage: STAGE.PICKED,
+      fulfillments: [
+        { ifNumber: 'IF1', custodyOut: '2026-07-07T10:00:00Z', custodyIn: '2026-07-06T15:00:00Z' },
+      ],
+    },
+    new Date('2026-07-08'),
+  )
+  assert.ok(flags.some((x) => x.key === 'WITH_WAREHOUSE'))
+  assert.ok(!flags.some((x) => x.key === 'BACK_NOT_PACKED'))
+})
+
+test('custody: unscanned IF a day+ old asks for a handoff scan', () => {
+  const flags = computeFlags(
+    { stage: STAGE.PICKED, fulfillments: [{ ifNumber: 'IF1', ifDate: '2026-07-05' }] },
+    new Date('2026-07-08'),
+  )
+  assert.ok(flags.some((x) => x.key === 'NEEDS_HANDOFF_SCAN'))
+})
+
+test('custody: scans suppress the generic PICK_STALLED guess', () => {
+  const base = { stage: STAGE.PICKED, daysPending: 5 }
+  const without = computeFlags({ ...base, fulfillments: [{ ifNumber: 'IF1' }] }, new Date('2026-07-08'))
+  assert.ok(without.some((x) => x.key === 'PICK_STALLED'))
+  const withScans = computeFlags(
+    { ...base, fulfillments: [{ ifNumber: 'IF1', custodyOut: '2026-07-06T10:00:00Z' }] },
+    new Date('2026-07-08'),
+  )
+  assert.ok(!withScans.some((x) => x.key === 'PICK_STALLED'))
+})
+
+test('custody: no custody flags once the order is past PICKED', () => {
+  const flags = computeFlags(
+    {
+      stage: STAGE.PACKED,
+      fulfillments: [{ ifNumber: 'IF1', custodyOut: '2026-07-01T10:00:00Z' }],
+    },
+    new Date('2026-07-08'),
+  )
+  assert.ok(!flags.some((x) => ['WITH_WAREHOUSE', 'WAREHOUSE_HOLDS', 'BACK_NOT_PACKED', 'NEEDS_HANDOFF_SCAN'].includes(x.key)))
+})

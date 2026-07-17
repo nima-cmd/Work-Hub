@@ -311,3 +311,46 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 /* Prior messages in a thread, shown on demand when a transmission expands */
 .holoThread { border-left: 2px solid rgba(59,130,246,0.3); padding-left: 10px; margin: 10px 0; }
 .holoThreadMsg { margin-bottom: 10px; }
+
+/* ── Scan Bay (custody QR checkpoint) ──────────────────────────────────────── */
+.scanbay { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
+.scanMain { display: flex; flex-direction: column; gap: 12px; }
+.scanModes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.scanMode {
+  background: var(--panel2); border: 2px solid var(--line); border-radius: 12px;
+  color: var(--muted); padding: 14px; font-size: 16px; font-weight: 800;
+  letter-spacing: 0.08em; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+}
+.scanMode .hintline { font-size: 11px; font-weight: 400; letter-spacing: 0.02em; }
+.scanMode.out.active { color: var(--mid); border-color: var(--mid); box-shadow: 0 0 18px rgba(217,130,43,0.25); }
+.scanMode.in.active { color: #7ee787; border-color: #7ee787; box-shadow: 0 0 18px rgba(126,231,135,0.22); }
+.scanViewport {
+  position: relative; background: #05070c; border: 1px solid var(--line); border-radius: 12px;
+  aspect-ratio: 16/9; overflow: hidden; display: flex; align-items: center; justify-content: center;
+}
+.scanViewport video { width: 100%; height: 100%; object-fit: cover; display: none; }
+.scanViewport.live video { display: block; }
+.scanIdle { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px; text-align: center; }
+.importBtn.big { font-size: 16px; padding: 12px 22px; }
+.scanFrame {
+  position: absolute; inset: 12%; border: 2px dashed rgba(255,255,255,0.35); border-radius: 14px;
+  pointer-events: none; animation: scanPulse 2.2s ease-in-out infinite;
+}
+.scanFrame.out { border-color: rgba(217,130,43,0.6); }
+.scanFrame.in { border-color: rgba(126,231,135,0.55); }
+@keyframes scanPulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+.scanManual { display: flex; gap: 8px; }
+.scanManual input {
+  flex: 1; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); padding: 9px 12px; font-size: 14px;
+}
+.scanResult { border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+.scanResult.good { border-left-color: #7ee787; background: rgba(126,231,135,0.06); }
+.scanResult.warn { border-left-color: var(--mid); background: rgba(217,130,43,0.07); }
+.scanResult.bad { border-left-color: var(--hi); background: rgba(248,81,73,0.07); }
+.scanResult .scanHead { font-size: 15px; }
+.scanResult .scanMeta { color: var(--muted); margin-top: 4px; font-size: 13px; }
+.linkBtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; margin-left: 8px; padding: 0; }
+.linkBtn:hover { text-decoration: underline; }
+.scanLog { min-width: 0; }
+@media (max-width: 900px) { .scanbay { grid-template-columns: 1fr; } }

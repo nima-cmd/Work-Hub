@@ -145,10 +145,58 @@ export function computeFlags(o, today) {
     flags.push({ key: 'AGING', label: `${o.daysPending}d pending`, severity: 1 })
   }
 
+  // ── Custody (QR label scans — Nima, 2026-07-17) ────────────────────────────
+  // The IF-created → packed gap NetSuite has no record of: each IF's label is
+  // scanned OUT when handed to the warehouse and IN when it comes back.
+  // State = latest OUT vs latest IN (re-handoffs happen). Only meaningful
+  // while the order is still PICKED — once packed, custody has resolved.
+  const hasCustodyScans = o.fulfillments.some((f) => f.custodyOut || f.custodyIn)
+  if (o.stage === STAGE.PICKED) {
+    for (const f of o.fulfillments) {
+      const out = f.custodyOut ? new Date(f.custodyOut) : null
+      const inn = f.custodyIn ? new Date(f.custodyIn) : null
+      if (out && (!inn || out > inn)) {
+        // Handed off, not back yet — the aging clock that PICK_STALLED could
+        // only guess at now starts from the actual handoff scan.
+        const daysOut = daysBetween(out, today)
+        if (daysOut >= 3) {
+          flags.push({
+            key: 'WAREHOUSE_HOLDS',
+            label: `${f.ifNumber} with warehouse ${daysOut}d — chase it`,
+            severity: 3,
+          })
+        } else {
+          flags.push({
+            key: 'WITH_WAREHOUSE',
+            label: `${f.ifNumber} with warehouse (scanned out ${daysOut}d ago)`,
+            severity: 0,
+          })
+        }
+      } else if (inn) {
+        // Back from the warehouse but the order still reads PICKED — our side
+        // of the work (mark packed in NetSuite) is the outstanding task.
+        flags.push({
+          key: 'BACK_NOT_PACKED',
+          label: `${f.ifNumber} returned from warehouse — mark it packed`,
+          severity: 2,
+        })
+      } else if (f.ifDate && daysBetween(f.ifDate, today) >= 1) {
+        // IF exists but was never scanned out — either the handoff never
+        // happened, or it happened unscanned. Print the label and scan it.
+        flags.push({
+          key: 'NEEDS_HANDOFF_SCAN',
+          label: `${f.ifNumber} has no handoff scan — print label & scan OUT`,
+          severity: 1,
+        })
+      }
+    }
+  }
+
   // Picked, not yet packed: the warehouse has the paper. Past ~3 days with no
   // movement, the paper may be lost or forgotten — flag it before STALE (14d)
-  // would otherwise catch it much later.
-  if (o.stage === STAGE.PICKED && o.daysPending != null && o.daysPending >= 3) {
+  // would otherwise catch it much later. Suppressed once custody scans exist
+  // for this order — the scan-derived flags above tell the precise story.
+  if (!hasCustodyScans && o.stage === STAGE.PICKED && o.daysPending != null && o.daysPending >= 3) {
     flags.push({
       key: 'PICK_STALLED',
       label: `Picked ${o.daysPending}d ago, not packed — confirm warehouse has it`,

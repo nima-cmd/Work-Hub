@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchShipDepartures } from '../api.js'
 import { SourceBadge } from '../lib.jsx'
+import { printIfLabel } from '../lib/labels.js'
 
 // Nima's framing (2026-07-16) for each IF-Packed-Status bucket, in priority
 // order — "Approved to Ship" can leave TODAY, so it goes first; anything not
@@ -49,6 +50,9 @@ export default function ShipDepartures() {
                 {r.soNumber}
                 {r.invoiceNumber && ` · ${r.invoiceNumber}`}
                 {r.daysPending != null && <span className="docdate"> · {r.daysPending}d pending</span>}
+                <button className="linkBtn" title="Print this IF’s cargo tag" onClick={() => printIfLabel(r)}>
+                  🖨 tag
+                </button>
               </div>
             </div>
           ))}

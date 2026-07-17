@@ -17,6 +17,7 @@ import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../s
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
 } from '../src/ingest/loadToDb.js'
+import { insertOrderEvent, fetchOrderEvents } from '../src/ingest/loadToDb.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail,
   fetchQuestEmailById, createQuestTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
@@ -39,7 +40,11 @@ export async function getOrders() {
             'ifNumber', f.if_number, 'status', f.status,
             'packedStatus', f.packed_status, 'daysPending', f.days_pending,
             'invoice', f.invoice_number, 'actualShipDate', f.actual_ship_date,
-            'ifDate', f.if_date
+            'ifDate', f.if_date,
+            'custodyOut', (SELECT MAX(e.occurred_at) FROM order_events e
+                           WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_OUT'),
+            'custodyIn',  (SELECT MAX(e.occurred_at) FROM order_events e
+                           WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_IN')
           ) ORDER BY f.if_number
         )
         FROM fulfillments f WHERE f.so_number = o.so_number
@@ -95,6 +100,51 @@ export async function getOrders() {
 }
 
 const num = (v) => (v == null ? null : Number(v))
+
+// ── Custody scans (QR labels — Nima, 2026-07-17) ─────────────────────────────
+// direction 'OUT' = handed to the warehouse; 'IN' = received back. The scan is
+// the source of truth for the physical handoff, so an event is recorded even
+// when the IF isn't (yet) in our data — `found:false` warns the scanner, and
+// the event backfills its meaning once the next CSV import brings the IF in.
+export async function recordCustodyScan({ docNumber, direction, note }) {
+  const dir = String(direction || '').toUpperCase()
+  if (dir !== 'OUT' && dir !== 'IN') throw new Error(`direction must be OUT or IN, got: ${direction}`)
+  const doc = normalizeDocNumber('IF', String(docNumber || '').trim())
+  if (!doc || doc === 'IF') throw new Error('no document number scanned')
+
+  const { rows } = await pool.query(
+    `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.status, f.packed_status AS "packedStatus",
+            o.customer, o.po_number AS "poNumber"
+     FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+     WHERE f.if_number = $1`,
+    [doc],
+  )
+  const fulfillment = rows[0] || null
+
+  const event = await insertOrderEvent({
+    eventType: dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN',
+    docType: 'IF',
+    docNumber: doc,
+    soNumber: fulfillment?.soNumber || null,
+    note,
+    source: 'scan',
+  })
+
+  return {
+    ok: true,
+    found: !!fulfillment,
+    direction: dir,
+    docNumber: doc,
+    occurredAt: event.occurredAt,
+    fulfillment,
+  }
+}
+
+// The ledger feed — custody scans (and future derived transitions), scoped to
+// a day for the Calendar or unscoped for a recent-history view.
+export async function getOrderEventsFeed({ date, docNumber, soNumber } = {}) {
+  return fetchOrderEvents({ date, docNumber, soNumber })
+}
 
 // ── Ship departures (Nima, 2026-07-16) — every packed IF, grouped by its
 // IF-Packed-Status: "Approved to Ship" can leave today; "FOB Order Awaiting
