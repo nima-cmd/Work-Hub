@@ -1,38 +1,49 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { checkPaperLabelPrinter, printPaperLabel } from './api.js'
+import { fetchLabelSizes, printCargoTag } from './api.js'
 
-// The 2.25×1.25 paper cargo tag button — prints server-side via lp (the
-// browser dialog rescaled and ruined the sizing, so we bypass it). Hidden
-// entirely where there's no MUNBYN queue (the cloud deploy). Availability is
-// checked once per session and shared across every button.
-let _printerAvail // Promise<boolean>, memoized
-export function PaperTagButton({ info }) {
-  const [avail, setAvail] = useState(false)
+// Cargo-tag print buttons — one per label size that can actually print from
+// this host, each going STRAIGHT to its printer via the server (no browser
+// dialog). '4x6' → Zebra thermal; '2.25x1.25' → MUNBYN. Availability is
+// fetched once per session and shared, so buttons whose printer isn't
+// reachable (e.g. the cloud deploy) simply don't render.
+const SIZE_LABEL = { '4x6': '4×6', '2.25x1.25': '2.25″' }
+let _labelSizes // Promise<{[size]: boolean}>, memoized
+
+function OneLabelButton({ info, size }) {
   const [state, setState] = useState(null) // null | 'printing' | 'ok' | 'err'
   const [msg, setMsg] = useState('')
-
-  useEffect(() => {
-    if (!_printerAvail) _printerAvail = checkPaperLabelPrinter().then((r) => r.available).catch(() => false)
-    _printerAvail.then(setAvail)
-  }, [])
-
-  if (!avail) return null
   async function onPrint() {
     setState('printing'); setMsg('')
     try {
-      await printPaperLabel(info)
-      setState('ok'); setMsg('sent to printer')
+      await printCargoTag(info, size)
+      setState('ok')
       setTimeout(() => setState(null), 2500)
     } catch (e) {
       setState('err'); setMsg(e.message)
     }
   }
   return (
-    <button className="linkBtn" title="Print the 2.25×1.25 paper cargo tag on the MUNBYN" disabled={state === 'printing'} onClick={onPrint}>
-      🖨 {state === 'printing' ? 'printing…' : state === 'ok' ? '✓ sent' : state === 'err' ? '⚠ failed' : 'paper'}
+    <button className="linkBtn" title={`Print the ${SIZE_LABEL[size]} cargo tag`} disabled={state === 'printing'} onClick={onPrint}>
+      🖨 {state === 'printing' ? `${SIZE_LABEL[size]}…` : state === 'ok' ? `✓ ${SIZE_LABEL[size]}` : state === 'err' ? `⚠ ${SIZE_LABEL[size]}` : SIZE_LABEL[size]}
       {state === 'err' && msg && <span style={{ color: 'var(--hi)' }}> — {msg}</span>}
     </button>
+  )
+}
+
+export function LabelButtons({ info }) {
+  const [sizes, setSizes] = useState({})
+  useEffect(() => {
+    if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
+    _labelSizes.then(setSizes)
+  }, [])
+  const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
+  if (!available.length) return null
+  if (!info?.ifNumber) return null
+  return (
+    <span className="tagBtns">
+      {available.map((s) => <OneLabelButton key={s} info={info} size={s} />)}
+    </span>
   )
 }
 

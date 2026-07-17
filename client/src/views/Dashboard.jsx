@@ -1,4 +1,4 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons } from '../lib.jsx'
 
 // Attention-first: what needs action now, up top; pipeline overview above it.
 // `tasks` (open quest_tasks from Gmail/Slack transmissions) are merged into
@@ -43,6 +43,9 @@ export default function Dashboard({ orders, tasks = [] }) {
               )}
             </div>
             <Flags flags={o.flags} />
+            {(o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
+              <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
+            ))}
           </div>
         ))}
         {!attention.length && <div className="empty">Nothing needs attention 🎉</div>}

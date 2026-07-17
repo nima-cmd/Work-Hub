@@ -1,4 +1,4 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons } from '../lib.jsx'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -38,6 +38,9 @@ export default function Kanban({ orders, tasks = [] }) {
                 </div>
               )}
               <Flags flags={o.flags} />
+              {(o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
+                <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
+              ))}
             </div>
           ))}
         </div>

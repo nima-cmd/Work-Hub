@@ -4,9 +4,10 @@ import {
   assignQuestEmailCharacter, applyQuestEmailLabel, dismissQuestEmail,
   fetchQuestTasks, createQuestTask, completeQuestTask,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, fetchQuestEmailThread, searchQuestArchive, fetchQuestActivity,
-  fetchFreshness, fetchNwFreshness, importCsv, createManualTask,
+  fetchFreshness, fetchNwFreshness, importCsv, createManualTask, fetchAffection,
 } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
+import TradingCard from '../lib/TradingCard.jsx'
 import { fmtAge } from '../lib.jsx'
 
 function initials(name) {
@@ -93,6 +94,7 @@ export default function Transmissions() {
   const [thanks, setThanks] = useState(null) // { taskId, msg }
   const [importing, setImporting] = useState(false)
   const [newTask, setNewTask] = useState(null) // null = form closed; object = open draft
+  const [affection, setAffection] = useState([])
   const importRef = useRef(null)
   const importTaskRef = useRef(null) // which task's import button opened the picker
 
@@ -102,6 +104,7 @@ export default function Transmissions() {
     fetchQuestActivity(todayStr()).then(setActivity).catch(() => {})
     fetchFreshness().then(setFresh).catch(() => {})
     fetchNwFreshness().then(setNwFresh).catch(() => {})
+    fetchAffection().then(setAffection).catch(() => {})
   }
   useEffect(load, [])
 
@@ -266,6 +269,7 @@ export default function Transmissions() {
 
   function refreshActivity() {
     fetchQuestActivity(todayStr()).then(setActivity).catch(() => {})
+    fetchAffection().then(setAffection).catch(() => {}) // completing a quest deepens the bond
   }
 
   // Promotes a transmission to a durable task — it keeps the character/
@@ -569,6 +573,16 @@ export default function Transmissions() {
           )
         })}
       </div>
+
+      {!!affection.length && (
+        <section style={{ marginTop: 28 }}>
+          <h2>Crew <span className="count">{affection.length}</span></h2>
+          <p className="hint">A collectible card per character. Finishing quests fast raises AGILITY, harder quests raise STRENGTH, and more missions together raise INTELLIGENCE. Tap a card to flip to their stats + mission log.</p>
+          <div className="tcGrid">
+            {affection.map((a) => <TradingCard key={a.characterId} card={a} />)}
+          </div>
+        </section>
+      )}
 
       <section style={{ marginTop: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>

@@ -1,14 +1,16 @@
-// server/printLabel.js — the 2.25×1.25 paper cargo tag, printed straight to the
-// MUNBYN via `lp` (NOT the browser print dialog, which rescales and destroys
-// the sizing — Nima's long-standing pain). The recipe here is the one proven
-// in the sibling munbyn-label-printer project:
-//   • page sized EXACTLY 2.25in × 1.25in (162 × 90pt), no orientation override;
-//   • background washed light gray (#F2F2F2) — a pure-white background makes the
-//     printer's optical gap sensor cut the job short mid-label;
-//   • real content inset ~10pt from the edges (the print head's unprintable margin);
-//   • submitted with `lp -o PageSize=2.25x1.25 -o print-scaling=none`.
-// Only works where the MUNBYN queue exists (the local iMac at the warehouse) —
-// the cloud deploy has no printer, so the route reports that cleanly.
+// server/printLabel.js — cargo tags printed STRAIGHT to their printer via `lp`,
+// no browser dialog (selecting printer + paper size is the thing that kept
+// breaking it). Two sizes, two printers:
+//   • '4x6'       → the warehouse Zebra ("Thermal Printer", ZebraZT411),
+//                   4×6 thermal stock, media w288h432 (its native default);
+//   • '2.25x1.25' → the MUNBYN (MUNBYN_RW401AP_2), 2.25×1.25 paper labels.
+// Both queues live on the warehouse iMac; the cloud deploy has neither, so the
+// availability check reports which sizes are printable and the UI hides the rest.
+//
+// MUNBYN quirk baked in (proven in the sibling munbyn-label-printer repo): a
+// pure-white background makes its gap sensor cut the job short, so the 2.25
+// label gets a faint gray wash + inset. The Zebra has no such issue, so 4×6
+// stays clean white.
 import PDFDocument from 'pdfkit'
 import qrcode from 'qrcode-generator'
 import { execFile } from 'node:child_process'
@@ -16,23 +18,32 @@ import { mkdtempSync, createWriteStream } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const PRINTER = process.env.MUNBYN_QUEUE || 'MUNBYN_RW401AP_2'
-const MEDIA = 'PageSize=2.25x1.25'
 const PT = 72
-const LABEL_W = 2.25 * PT
-const LABEL_H = 1.25 * PT
-const WASH = '#F2F2F2'
+export const LABELS = {
+  '4x6': {
+    queue: process.env.THERMAL_QUEUE || 'ZebraZT411',
+    media: process.env.THERMAL_MEDIA || 'PageSize=w288h432',
+    w: 4 * PT, h: 6 * PT, wash: null, layout: 'full',
+  },
+  '2.25x1.25': {
+    queue: process.env.MUNBYN_QUEUE || 'MUNBYN_RW401AP_2',
+    media: 'PageSize=2.25x1.25',
+    w: 2.25 * PT, h: 1.25 * PT, wash: '#F2F2F2', layout: 'compact',
+  },
+}
 const MARGIN = 10
 
-// Is the label printer actually reachable from this host? (lpstat -p <queue>)
-export function printerAvailable() {
-  return new Promise((resolve) => {
-    execFile('lpstat', ['-p', PRINTER], (err) => resolve(!err))
-  })
+function queueExists(queue) {
+  return new Promise((resolve) => execFile('lpstat', ['-p', queue], (err) => resolve(!err)))
 }
 
-// Draw the QR by filling one small black square per dark module — reuses the
-// same qrcode-generator dep the client label uses, so no image pipeline needed.
+// Which sizes can actually print from this host right now.
+export async function availableSizes() {
+  const out = {}
+  for (const [size, cfg] of Object.entries(LABELS)) out[size] = await queueExists(cfg.queue)
+  return out
+}
+
 function drawQr(doc, text, x, y, size) {
   const qr = qrcode(0, 'M')
   qr.addData(text)
@@ -47,42 +58,59 @@ function drawQr(doc, text, x, y, size) {
   }
 }
 
-function buildPdf(path, { ifNumber, soNumber, customer, poNumber }) {
+function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: [LABEL_W, LABEL_H], margin: 0 })
+    const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
     const out = createWriteStream(path)
     out.on('finish', resolve)
     out.on('error', reject)
     doc.pipe(out)
-
-    doc.rect(0, 0, LABEL_W, LABEL_H).fill(WASH)
-
-    // QR on the left, squared to the printable height; text column to its right.
-    const qrSize = LABEL_H - MARGIN * 2
-    drawQr(doc, String(ifNumber || ''), MARGIN, MARGIN, qrSize)
-
-    const textX = MARGIN + qrSize + 8
-    const textW = LABEL_W - textX - MARGIN
+    if (cfg.wash) doc.rect(0, 0, cfg.w, cfg.h).fill(cfg.wash)
     doc.fillColor('black')
-    doc.font('Helvetica-Bold').fontSize(7).text('◆ NAGHEDI', textX, MARGIN, { width: textW })
-    doc.font('Helvetica-Bold').fontSize(18).text(String(ifNumber || ''), textX, MARGIN + 10, { width: textW })
-    doc.font('Helvetica').fontSize(8)
-    const lines = [soNumber, customer, poNumber ? `PO ${poNumber}` : ''].filter(Boolean)
-    doc.text(lines.join('\n'), textX, MARGIN + 32, { width: textW, lineGap: 1 })
 
+    const IF = String(ifNumber || '')
+    if (cfg.layout === 'compact') {
+      // 2.25×1.25: QR left, text column right.
+      const qrSize = cfg.h - MARGIN * 2
+      drawQr(doc, IF, MARGIN, MARGIN, qrSize)
+      const tx = MARGIN + qrSize + 8
+      const tw = cfg.w - tx - MARGIN
+      doc.font('Helvetica-Bold').fontSize(7).text('◆ NAGHEDI', tx, MARGIN, { width: tw })
+      doc.font('Helvetica-Bold').fontSize(18).text(IF, tx, MARGIN + 10, { width: tw })
+      doc.font('Helvetica').fontSize(8)
+        .text([soNumber, customer, poNumber ? `PO ${poNumber}` : ''].filter(Boolean).join('\n'),
+          tx, MARGIN + 32, { width: tw, lineGap: 1 })
+    } else {
+      // 4×6: centred, big QR — the full cargo tag.
+      const cx = cfg.w / 2
+      doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 28, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica').fontSize(9).text('CARGO TAG · WAREHOUSE CUSTODY', 0, 52, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      const qrSize = 200
+      drawQr(doc, IF, cx - qrSize / 2, 78, qrSize)
+      doc.font('Helvetica-Bold').fontSize(34).text(IF, 0, 292, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica').fontSize(13)
+        .text([soNumber, customer, poNumber ? `PO ${poNumber}` : ''].filter(Boolean).join('\n'),
+          0, 336, { width: cfg.w, align: 'center', lineGap: 3 })
+      doc.moveTo(24, cfg.h - 34).lineTo(cfg.w - 24, cfg.h - 34).lineWidth(2).stroke()
+      doc.font('Helvetica').fontSize(8)
+        .text('SCAN OUT → WAREHOUSE', 24, cfg.h - 26, { width: cfg.w - 48, align: 'left', characterSpacing: 1, continued: false })
+      doc.text('SCAN IN → RETURNED', 24, cfg.h - 26, { width: cfg.w - 48, align: 'right', characterSpacing: 1 })
+    }
     doc.end()
   })
 }
 
-export async function printPaperLabel(info) {
+export async function printCargoTag(info, size = '2.25x1.25') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size: ${size}`)
   if (!info?.ifNumber) throw new Error('ifNumber required')
   const dir = mkdtempSync(join(tmpdir(), 'cargo-tag-'))
-  const path = join(dir, `${String(info.ifNumber).replace(/[^\w-]/g, '_')}.pdf`)
-  await buildPdf(path, info)
+  const path = join(dir, `${String(info.ifNumber).replace(/[^\w-]/g, '_')}-${size}.pdf`)
+  await buildPdf(path, cfg, info)
   return new Promise((resolve, reject) => {
-    execFile('lp', ['-d', PRINTER, '-o', MEDIA, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {
+    execFile('lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {
       if (error) return reject(new Error(stderr || error.message))
-      resolve({ ok: true, printer: PRINTER, detail: stdout.trim() })
+      resolve({ ok: true, size, printer: cfg.queue, detail: stdout.trim() })
     })
   })
 }

@@ -13,6 +13,7 @@ import {
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
+import { computeAffection } from '../src/model/affection.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -163,6 +164,41 @@ export async function getShipDepartures() {
     ORDER BY f.days_pending DESC NULLS LAST
   `)
   return rows
+}
+
+// ── Shipment credits (Nima, 2026-07-17) — the header counter ─────────────────
+// Two figures, shown as "galactic credits" but really plain dollars:
+//   • shippedThisMonth — sum of SHIPPED_VALUE ledger snapshots dated this month
+//     (pinned to actual ship date, immune to later payment zeroing the invoice);
+//   • waiting — live sum of amount_remaining across everything packed but not yet
+//     shipped (the ships sitting in the Launch Bay).
+export async function getCredits({ today = new Date() } = {}) {
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
+  const [shipped, waiting] = await Promise.all([
+    pool.query(
+      `SELECT COALESCE(SUM(NULLIF(note,'')::numeric), 0) AS total
+       FROM order_events
+       WHERE event_type = 'SHIPPED_VALUE' AND occurred_at >= $1`,
+      [monthStart],
+    ),
+    pool.query(
+      `SELECT COALESCE(SUM(i.amount_remaining), 0) AS total
+       FROM fulfillments f
+       JOIN invoices i ON i.inv_number = f.invoice_number
+       WHERE f.packed_status IS NOT NULL AND f.actual_ship_date IS NULL`,
+    ),
+  ])
+  return {
+    shippedThisMonth: Number(shipped.rows[0].total),
+    waiting: Number(waiting.rows[0].total),
+    month: monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
+  }
+}
+
+// ── Character affection (Nima, 2026-07-17) — relationship tracker ────────────
+export async function getAffection() {
+  const tasks = await fetchQuestTasks()
+  return computeAffection(tasks).map((a) => ({ ...a, character: getCharacterById(a.characterId) }))
 }
 
 // ── Launch Bay (Nima, 2026-07-17) ────────────────────────────────────────────

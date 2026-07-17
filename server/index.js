@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay,
+  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
@@ -17,7 +17,7 @@ import {
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
-import { printPaperLabel, printerAvailable } from './printLabel.js'
+import { printCargoTag, availableSizes } from './printLabel.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -72,17 +72,36 @@ app.get('/api/launch-bay', async (_req, res) => {
   }
 })
 
+app.get('/api/credits', async (_req, res) => {
+  try {
+    res.json(await getCredits())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/affection', async (_req, res) => {
+  try {
+    res.json(await getAffection())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Custody scan (QR labels): direction 'OUT' = handed to warehouse, 'IN' = back.
 // Paper cargo tag (2.25×1.25) — printed straight to the MUNBYN via lp. Only
 // works where the printer queue exists (the local warehouse iMac). GET reports
 // availability so the UI can hide/disable the button on the cloud deploy.
 app.get('/api/print-label/available', async (_req, res) => {
-  res.json({ available: await printerAvailable() })
+  res.json(await availableSizes())
 })
 
 app.post('/api/print-label', async (req, res) => {
   try {
-    res.json(await printPaperLabel(req.body || {}))
+    const { size, ...info } = req.body || {}
+    res.json(await printCargoTag(info, size))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

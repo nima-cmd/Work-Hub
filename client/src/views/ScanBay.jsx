@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
 import { recordCustodyScan, fetchOrderEvents } from '../api.js'
-import { printIfLabel } from '../lib/labels.js'
-import { PaperTagButton } from '../lib.jsx'
+import { LabelButtons } from '../lib.jsx'
 
 // Scan Bay (Nima, 2026-07-17) — the custody checkpoint. Every IF's cargo tag
-// (see lib/labels.js) is scanned OUT when handed to the warehouse and IN when
+// is scanned OUT when handed to the warehouse and IN when
 // it comes back: the two transitions NetSuite has no record of. Uses the
 // iMac's camera — BarcodeDetector where the browser has it, jsQR fallback
 // everywhere else — no dedicated scanner hardware needed.
@@ -171,13 +170,7 @@ export default function ScanBay() {
                   <div className="scanMeta">
                     {result.fulfillment.soNumber} · {result.fulfillment.customer || 'unknown customer'}
                     {result.fulfillment.packedStatus ? ` · ${result.fulfillment.packedStatus}` : ''}
-                    <button
-                      className="linkBtn"
-                      onClick={() => printIfLabel({ ifNumber: result.docNumber, ...result.fulfillment })}
-                    >
-                      🖨 4×6
-                    </button>
-                    <PaperTagButton info={{ ifNumber: result.docNumber, ...result.fulfillment }} />
+                    <LabelButtons info={{ ifNumber: result.docNumber, ...result.fulfillment }} />
                   </div>
                 ) : (
                   <div className="scanMeta">

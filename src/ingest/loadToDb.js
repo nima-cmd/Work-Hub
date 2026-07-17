@@ -646,14 +646,48 @@ export async function searchQuestTasks(q, db = pool) {
 // ── Order events ledger (Nima, 2026-07-17) — custody scans first ─────────────
 // Append-only: re-handoffs happen (an IF can go back out after a fix), so
 // custody STATE is derived from the latest OUT vs latest IN, never stored.
-export async function insertOrderEvent({ eventType, docType, docNumber, soNumber, note, source = 'scan' }, db = pool) {
+export async function insertOrderEvent({ eventType, docType, docNumber, soNumber, note, source = 'scan', occurredAt }, db = pool) {
   const { rows } = await db.query(
-    `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source)
-     VALUES ($1,$2,$3,$4,$5,$6)
+    `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+     VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7, now()))
      RETURNING id, occurred_at AS "occurredAt"`,
-    [eventType, docType, docNumber, soNumber || null, note || null, source],
+    [eventType, docType, docNumber, soNumber || null, note || null, source, occurredAt || null],
   )
   return rows[0]
+}
+
+// Snapshot a shipment's dollar value the first time we observe its IF shipped
+// (Nima, 2026-07-17) — feeds the "shipped this month" header credits. Snapshotting
+// at ship time means later payment (amount_remaining → 0) can't erase the value.
+// occurred_at is pinned to the ACTUAL ship date so month-bucketing is correct,
+// not to import time. Value = the IF's invoice amount_remaining at this moment
+// (Naghedi ships FOB/pre-payment, so that's ~the full value), else the order's.
+// Idempotent: one SHIPPED_VALUE per IF, ever.
+export async function stampShippedValue(records, db = pool) {
+  let n = 0
+  for (const r of records) {
+    if (!r.ifNumber || !r.actualShipDate) continue
+    const exists = await db.query(
+      `SELECT 1 FROM order_events WHERE event_type='SHIPPED_VALUE' AND doc_type='IF' AND doc_number=$1`,
+      [r.ifNumber],
+    )
+    if (exists.rowCount) continue
+    const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    const { rows: amt } = await db.query(
+      `SELECT COALESCE(
+         (SELECT amount_remaining FROM invoices WHERE inv_number = $1),
+         (SELECT amount_remaining FROM orders   WHERE so_number  = $2),
+         0) AS value`,
+      [r.invoice || null, so],
+    )
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+       VALUES ('SHIPPED_VALUE','IF',$1,$2,$3,'derived',$4)`,
+      [r.ifNumber, so, String(amt[0].value ?? 0), r.actualShipDate],
+    )
+    n++
+  }
+  return n
 }
 
 // Ledger feed — the Calendar's "what occurred every day" and the searchable

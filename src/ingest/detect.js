@@ -61,14 +61,13 @@ export const REQUIRED_SOURCES = ['openSalesOrders', 'fulfillmentPipeline', 'poRe
 // numeric ids 3944/3945/3946/3936 match our mappers' columns. A null just
 // hides the link, nothing breaks.
 //
-// ⚠ Order Pipeline: Nima's link was searchid=3942, but that's "Warehouse
-// Order Pipeline" WITHOUT the invoice/billing-join columns the mapper reads
-// (Document Number_1, Invoice Status, Ship Date, Order Cancel Date…).
-// "Warehouse Order Pipeline v2" has them, so we link v2 by script id —
-// swap in the numeric v2 URL if this form doesn't open for some role.
+// Order Pipeline points at v2 (searchid=3943, confirmed by Nima 2026-07-17) —
+// it has the invoice/billing-join columns the mapper reads (Document Number_1,
+// Invoice Status, Ship Date, Order Cancel Date, Amount Remaining). Export from
+// this one, NOT the older v1 (3942), which lacks those columns.
 const NS = 'https://8513640.app.netsuite.com/app/common/search/searchresults.nl?searchid='
 export const SOURCE_LINKS = {
-  openSalesOrders: NS + 'customsearch_warehouse_order_pipeline_2',
+  openSalesOrders: NS + '3943',
   fulfillmentPipeline: NS + '3944',
   poReceiving: NS + '3945',
   ocPipeline: NS + '3946',

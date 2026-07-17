@@ -33,21 +33,36 @@ export async function fetchLaunchBay() {
   return res.json()
 }
 
-// Paper cargo tag (2.25×1.25) — printed server-side via lp on the warehouse
-// iMac. availability is checked so the button can hide where there's no printer.
-export async function checkPaperLabelPrinter() {
+// Cargo tags printed server-side via lp on the warehouse iMac (no browser
+// dialog). Two sizes: '4x6' (Zebra thermal) and '2.25x1.25' (MUNBYN). The
+// availability map says which sizes can print from this host so the UI hides
+// buttons whose printer isn't reachable (e.g. the cloud deploy).
+export async function fetchLabelSizes() {
   const res = await fetch('/api/print-label/available')
-  if (!res.ok) return { available: false }
+  if (!res.ok) return {}
   return res.json()
 }
 
-export async function printPaperLabel(info) {
+export async function printCargoTag(info, size) {
   const res = await fetch('/api/print-label', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(info),
+    body: JSON.stringify({ ...info, size }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Shipment credits (header counter) and character affection (relationships).
+export async function fetchCredits() {
+  const res = await fetch('/api/credits')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAffection() {
+  const res = await fetch('/api/affection')
+  if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
 

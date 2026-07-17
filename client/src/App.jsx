@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits } from './api.js'
 import { fmtAge } from './lib.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import Kanban from './views/Kanban.jsx'
@@ -56,6 +56,23 @@ function FreshnessPanel({ fresh }) {
   )
 }
 
+// Shipment credits — "galactic credits", but the number is real dollars.
+// Shipped-this-month + still-waiting-to-leave, themed as a bay readout.
+const fmtCredits = (n) =>
+  Math.round(n).toLocaleString('en-US')
+function CreditsCounter({ credits }) {
+  return (
+    <span className="credits" title={`Shipped in ${credits.month} · still waiting to leave`}>
+      <span className="creditGlyph">◈</span>
+      <span className="creditShipped">{fmtCredits(credits.shippedThisMonth)}</span>
+      <span className="creditUnit">CR shipped</span>
+      <span className="creditSep">·</span>
+      <span className="creditWaiting">{fmtCredits(credits.waiting)}</span>
+      <span className="creditUnit">waiting</span>
+    </span>
+  )
+}
+
 const VIEWS = [
   { key: 'dashboard', label: 'Dashboard', C: Dashboard },
   { key: 'kanban', label: 'Kanban', C: Kanban },
@@ -77,6 +94,7 @@ export default function App() {
   const [err, setErr] = useState(null)
   const [view, setView] = useState('dashboard')
   const [fresh, setFresh] = useState(null)
+  const [credits, setCredits] = useState(null)
   const [importing, setImporting] = useState(false)
   const [notice, setNotice] = useState(null)
   const fileRef = useRef(null)
@@ -84,6 +102,7 @@ export default function App() {
   function refresh() {
     fetchOrders().then(setOrders).catch((e) => setErr(e.message))
     fetchFreshness().then(setFresh).catch(() => {})
+    fetchCredits().then(setCredits).catch(() => {})
     // Open quest_tasks merge into Dashboard/Kanban's attention view, and the
     // activity journal folds into Calendar (Nima, 2026-07-15) — both
     // best-effort: the app still works if either fails to load.
@@ -148,6 +167,7 @@ export default function App() {
           </button>
           <input ref={fileRef} type="file" accept=".csv" multiple hidden onChange={onFiles} />
           <FreshnessPanel fresh={fresh} />
+          {credits && <CreditsCounter credits={credits} />}
           {orders && (
             <>
               <span className="pill danger">{attention} need attention</span>

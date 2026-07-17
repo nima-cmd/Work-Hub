@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchLaunchBay } from '../api.js'
-import { printIfLabel } from '../lib/labels.js'
-import { PaperTagButton } from '../lib.jsx'
+import { LabelButtons } from '../lib.jsx'
 
 // Launch Bay (Nima, 2026-07-17, Phase B) — the 2D departure bay. Every packed-
 // but-not-yet-shipped IF is a ship:
@@ -42,10 +41,7 @@ function Ship({ s }) {
           ? `Should have launched ${s.floatingDays}d ago — mark it shipped`
           : STATE_LABEL[s.state]}
       </div>
-      <div className="tagBtns">
-        <button className="linkBtn" title="Print the 4×6 thermal cargo tag" onClick={() => printIfLabel(s)}>🖨 4×6</button>
-        <PaperTagButton info={s} />
-      </div>
+      <LabelButtons info={s} />
     </div>
   )
 }

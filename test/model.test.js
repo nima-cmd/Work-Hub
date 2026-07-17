@@ -13,6 +13,7 @@ import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
+import { computeAffection } from '../src/model/affection.js'
 import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
@@ -442,4 +443,27 @@ test('detectSource routes PO Receiving and OC Pipeline exports without stealing 
     detectSource(['Document Number', 'Maximum of Created From', 'Maximum of Status']),
     'fulfillmentPipeline',
   )
+})
+
+// ── affection (relationship tracker) ─────────────────────────────────────────
+test('computeAffection: affection + RPG stats per completed quest, ignores open', () => {
+  const mk = (id, char, status, createdAt, completedAt, urgency) => ({ id, characterId: char, status, createdAt, completedAt, urgency })
+  const tasks = [
+    mk(1, 'yoda', 'done', '2026-07-01T00:00:00Z', '2026-07-01T02:00:00Z', 'hi'), // <4h → affection 10+5, agi 5, str 5
+    mk(2, 'yoda', 'done', '2026-07-01T00:00:00Z', '2026-07-05T00:00:00Z', 'lo'), // 4d  → affection 10+1, agi 1, str 1
+    mk(3, 'yoda', 'open', '2026-07-01T00:00:00Z', null, 'hi'),                   // open → ignored
+    mk(4, 'rey', 'done', '2026-07-01T00:00:00Z', '2026-07-01T10:00:00Z', 'mid'), // <24h → affection 10+3
+  ]
+  const res = computeAffection(tasks)
+  const yoda = res.find((r) => r.characterId === 'yoda')
+  const rey = res.find((r) => r.characterId === 'rey')
+  assert.equal(yoda.points, 26) // (10+5) + (10+1)
+  assert.equal(yoda.questsDone, 2)
+  assert.equal(yoda.stats.agility, 6)      // 5 + 1
+  assert.equal(yoda.stats.strength, 6)     // hi(5) + lo(1)
+  assert.equal(yoda.stats.intelligence, 8) // 4 per mission × 2
+  assert.equal(yoda.missions.length, 2)
+  assert.equal(rey.points, 13)
+  assert.equal(res[0].characterId, 'yoda') // sorted by points desc
+  assert.ok(yoda.level.name)
 })
