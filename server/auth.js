@@ -79,6 +79,11 @@ export function checkPassword(candidate) {
 // Unauthenticated page loads get the standalone login terminal — never the
 // real app shell.
 export function authGate(req, res, next) {
+  // Machine-to-machine routes (the GitHub Actions warm-up cron) authenticate
+  // with their own shared secret header, not a browser session — exempt them
+  // here rather than require a login cookie no scheduler can hold. Their own
+  // handler still rejects a missing/wrong secret.
+  if (req.path.startsWith('/api/internal/')) return next()
   if (!enabled() || isAuthed(req)) return next()
   if (req.path.startsWith('/api/')) {
     return res.status(401).json({ error: 'Not authenticated' })
