@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits } from './api.js'
 import { fmtAge } from './lib.jsx'
-import Dashboard from './views/Dashboard.jsx'
+import CommandCenter from './views/CommandCenter.jsx'
 import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
 import Allocations from './views/Allocations.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Transmissions from './views/Transmissions.jsx'
+import Crew from './views/Crew.jsx'
+import Datapad from './views/Datapad.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
 import ScanBay from './views/ScanBay.jsx'
-import LaunchBay from './views/LaunchBay.jsx'
+import CustodyRegister from './views/CustodyRegister.jsx'
+import LaunchBay3D from './views/LaunchBay3D.jsx'
 
 const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
 
@@ -74,16 +77,21 @@ function CreditsCounter({ credits }) {
 }
 
 const VIEWS = [
-  { key: 'dashboard', label: 'Dashboard', C: Dashboard },
-  { key: 'kanban', label: 'Kanban', C: Kanban },
+  { key: 'command', label: 'Command', C: CommandCenter },
+  { key: 'kanban', label: 'Mission Quests', C: Kanban },
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
   { key: 'allocations', label: 'OC↔PO', C: Allocations },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
-  { key: 'launch', label: 'Launch Bay', C: LaunchBay },
+  { key: 'crew', label: 'Crew', C: Crew },
+  { key: 'datapad', label: 'Datapad', C: Datapad },
+  // The 3D holotable IS the Launch Bay now (Nima, 2026-07-18). The 2D view
+  // (views/LaunchBay.jsx) stays on disk if it's ever wanted back.
+  { key: 'launch', label: 'Launch Bay', C: LaunchBay3D },
   { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
   { key: 'scan', label: 'Scan Bay', C: ScanBay },
+  { key: 'custody', label: 'Custody', C: CustodyRegister },
 ]
 
 export default function App() {
@@ -92,7 +100,7 @@ export default function App() {
   const [activity, setActivity] = useState([])
   const [events, setEvents] = useState([])
   const [err, setErr] = useState(null)
-  const [view, setView] = useState('dashboard')
+  const [view, setView] = useState('command')
   const [fresh, setFresh] = useState(null)
   const [credits, setCredits] = useState(null)
   const [importing, setImporting] = useState(false)
@@ -187,7 +195,7 @@ export default function App() {
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} />}
+        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} onNavigate={setView} onRefresh={refresh} />}
       </main>
     </div>
   )
