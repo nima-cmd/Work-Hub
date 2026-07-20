@@ -167,6 +167,28 @@ export async function markMessageRead(id) {
   })
 }
 
+// The user's own Gmail labels (system labels filtered out) — powers the
+// label picker in Transmissions (Nima, 2026-07-20: "we don't have access to
+// the labels we have currently in gmail").
+export async function listUserLabels() {
+  const token = await getAccessToken()
+  const { labels } = await apiFetch(token, `${GMAIL_API}/labels`)
+  return (labels || [])
+    .filter((l) => l.type === 'user')
+    .map((l) => ({ id: l.id, name: l.name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// Real spam: Gmail's own SPAM label (trains its filter), pulled out of the
+// inbox in the same call so it's gone from both places at once.
+export async function markMessageSpam(id) {
+  const token = await getAccessToken()
+  await apiFetch(token, `${GMAIL_API}/messages/${id}/modify`, {
+    method: 'POST',
+    body: { addLabelIds: ['SPAM'], removeLabelIds: ['INBOX', 'UNREAD'] },
+  })
+}
+
 // Finds a label by name, creating it if it doesn't exist yet, then applies it
 // to the message. Returns the label so callers can surface its name/id.
 export async function applyLabel(id, labelName) {

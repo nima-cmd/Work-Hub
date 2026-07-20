@@ -2,13 +2,14 @@ import { useState, useEffect, useRef } from 'react'
 import {
   fetchQuestEmails, syncQuestEmails, markQuestEmailRead,
   assignQuestEmailCharacter, applyQuestEmailLabel, dismissQuestEmail,
-  fetchQuestTasks, createQuestTask, completeQuestTask,
+  fetchQuestTasks, createQuestTask, acknowledgeQuestEmail, saveQuestEmailNote, completeQuestTask, fetchGmailLabels, spamQuestEmail,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, fetchQuestEmailThread, searchQuestArchive, fetchQuestActivity,
   fetchFreshness, fetchNwFreshness, importCsv, createManualTask, fetchAffection,
 } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
+import { speakLine, taskContext } from '../../../src/model/dialogue.js'
 import TradingCard from '../lib/TradingCard.jsx'
-import { fmtAge } from '../lib.jsx'
+import { fmtAge, LinkedText } from '../lib.jsx'
 
 function initials(name) {
   if (!name) return '?'
@@ -16,6 +17,7 @@ function initials(name) {
 }
 
 const isUrl = (s) => /^https?:\/\//i.test((s || '').trim())
+const gmailLink = (threadId, id) => `https://mail.google.com/mail/u/0/#all/${threadId || id}`
 const todayStr = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in local time
 
 // Mirrors src/model/netsuiteDocs.js — PO/SO/IF/TO prefixes are confirmed
@@ -69,7 +71,7 @@ function HoloAvatar({ characterId, name, small }) {
 // roster character (src/model/characters.js) — Nima's "Help me Obi-Wan
 // Kenobi" framing (2026-07-15). Whole inbox is in scope; narrowing happens
 // later via dismiss/labels as it's used day to day, not a pre-built taxonomy.
-export default function Transmissions() {
+export default function Transmissions({ onNavigate } = {}) {
   const [review, setReview] = useState(null)
   const [tasks, setTasks] = useState(null)
   const [err, setErr] = useState(null)
@@ -94,6 +96,9 @@ export default function Transmissions() {
   const [thanks, setThanks] = useState(null) // { taskId, msg }
   const [importing, setImporting] = useState(false)
   const [newTask, setNewTask] = useState(null) // null = form closed; object = open draft
+  const [noteDraft, setNoteDraft] = useState(null) // { id, text } — the datapad entry being edited
+  const [gmailLabels, setGmailLabels] = useState([]) // the user's real Gmail labels, for the picker
+  const [inboxFilter, setInboxFilter] = useState('all') // 'all' (3-day window incl. read) | 'unread'
   const [affection, setAffection] = useState([])
   const importRef = useRef(null)
   const importTaskRef = useRef(null) // which task's import button opened the picker
@@ -105,6 +110,7 @@ export default function Transmissions() {
     fetchFreshness().then(setFresh).catch(() => {})
     fetchNwFreshness().then(setNwFresh).catch(() => {})
     fetchAffection().then(setAffection).catch(() => {})
+    fetchGmailLabels().then(setGmailLabels).catch(() => {}) // best-effort; picker hides if empty
   }
   useEffect(load, [])
 
@@ -240,13 +246,45 @@ export default function Transmissions() {
     }
   }
 
-  async function onLabel(email) {
-    const label = window.prompt('Gmail label to apply to this message:')
+  async function onLabel(email, picked) {
+    // picked comes from the label dropdown; '__new__' asks for a name and the
+    // server get-or-creates it in Gmail (so new labels are born here too).
+    const label = picked === '__new__' ? window.prompt('New Gmail label name:') : picked
     if (!label) return
     setBusy(email.id)
     setErr(null)
     try {
       setReview(await applyQuestEmailLabel({ id: email.id, label }))
+      fetchGmailLabels().then(setGmailLabels).catch(() => {})
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // One click, gone from both places: Gmail's own SPAM label + dismissed here.
+  async function onSpam(email) {
+    if (!window.confirm(`Mark as spam and clear? "${email.subject}"`)) return
+    setBusy(email.id)
+    setErr(null)
+    try {
+      const r = await spamQuestEmail(email.id)
+      setReview({ emails: r.emails, characters: r.characters })
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Explicit mark-read (writes Gmail + local) without opening the message.
+  async function onMarkRead(email) {
+    setBusy(email.id)
+    setErr(null)
+    try {
+      const r = await markQuestEmailRead(email.id)
+      setReview({ emails: r.emails, characters: r.characters })
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -283,6 +321,42 @@ export default function Transmissions() {
       setReview({ emails: r.emails, characters: r.characters })
       setTasks(r.tasks)
       refreshActivity()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // One-click "seen and understood" (Nima, 2026-07-18): records a task that is
+  // created AND completed in one motion, then dismisses the transmission — no
+  // create-task → open → mark-done round trip for emails that only need an ack.
+  async function onAcknowledge(email) {
+    setBusy(email.id)
+    setErr(null)
+    try {
+      const r = await acknowledgeQuestEmail(email.id)
+      setReview({ emails: r.emails, characters: r.characters })
+      setTasks(r.tasks)
+      refreshActivity()
+      fetchAffection().then(setAffection).catch(() => {})
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Note ledger (Nima, 2026-07-18): a personal summary/highlight per email,
+  // for quick reference later — searchable, survives re-syncs, empty clears.
+  async function onSaveNote() {
+    if (!noteDraft) return
+    setBusy(noteDraft.id)
+    setErr(null)
+    try {
+      const r = await saveQuestEmailNote(noteDraft.id, noteDraft.text)
+      setReview({ emails: r.emails, characters: r.characters })
+      setNoteDraft(null)
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -419,9 +493,29 @@ export default function Transmissions() {
       {/* shared picker for the in-task CSV import (Bugs' freshness task) */}
       <input ref={importRef} type="file" accept=".csv" multiple hidden onChange={onTaskImportFiles} />
 
+      {/* crew banner (Nima, 2026-07-20) — full cards live in their own Crew
+          tab now; this is just a quick-glance strip up top. */}
+      {!!affection.length && (
+        <div className="crewBanner crewScroll" onClick={() => onNavigate?.('crew')} title="Open the Crew tab">
+          {affection.map((a) => {
+            const img = imagesFor(a.characterId)[0]
+            return (
+              <span key={a.characterId} className="crewChip">
+                {img ? <img src={img} alt="" /> : <i>◈</i>}
+                <b>{a.character?.name?.split(' ')[0] || ''}</b>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
       <div className="allocStats">
-        <span className="pill">{review.emails.length} transmissions</span>
-        <span className="pill danger">{unreadCount} unread</span>
+        <button className={'pill' + (inboxFilter === 'all' ? ' fresh' : '')} onClick={() => setInboxFilter('all')}>
+          {review.emails.length} recent
+        </button>
+        <button className={'pill' + (inboxFilter === 'unread' ? ' fresh' : '') + (unreadCount ? ' danger' : '')} onClick={() => setInboxFilter('unread')}>
+          {unreadCount} unread
+        </button>
         <button className="btnGhost" disabled={syncing} onClick={onSync}>
           {syncing ? 'Scanning…' : '↻ Check for new transmissions'}
         </button>
@@ -493,7 +587,7 @@ export default function Transmissions() {
                           </div>
                         </div>
                         <div className="holoSubject">{t.subject}</div>
-                        <p className="holoSnippet">{t.snippet}</p>
+                        <p className="holoSnippet"><LinkedText text={t.snippet} /></p>
                         {t.status === 'done' && (
                           <div className="holoActions">
                             <button className="btnGhost" disabled={busy === `task-${t.id}`} onClick={() => onCompleteTask(t, false)}>Reopen</button>
@@ -514,10 +608,10 @@ export default function Transmissions() {
       )}
 
       <div className="holoList">
-        {review.emails.map((e) => {
+        {review.emails.filter((e) => inboxFilter === 'all' || e.isUnread).map((e) => {
           const isOpen = expanded.has(e.id)
           return (
-            <div key={e.id} className={'hologram' + (e.isUnread ? ' unread' : '')}>
+            <div key={e.id} className={'hologram' + (e.isUnread ? ' unread' : ' read')}>
               <div className="holoCardBody">
                 <HoloAvatar characterId={e.characterId} name={e.character?.name} />
                 <div className="holoContent">
@@ -532,7 +626,64 @@ export default function Transmissions() {
                       <span>{isOpen ? '▾' : '▸'}</span>
                     </div>
                   </div>
-                  <div className="holoSubject">{e.subject}</div>
+                  {/* Every control lives UP HERE next to the name (Nima,
+                      2026-07-18) — usable from the compressed view, no
+                      scrolling past a long thread to act on a transmission. */}
+                  <div className="holoActions holoActionsTop">
+                    <select
+                      className="qtyInput compactSel" value={e.characterId || ''} disabled={busy === e.id}
+                      title="Reassign messenger"
+                      onChange={(ev) => onReassign(e, ev.target.value)}
+                    >
+                      {review.characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <button className="btn" disabled={busy === e.id} title="Seen & understood — records a completed acknowledgment" onClick={() => onAcknowledge(e)}>✓ Acknowledge</button>
+                    <a className="btnGhost" href={gmailLink(e.threadId, e.id)} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>↗ Gmail</a>
+                    <button className="btnGhost" disabled={busy === e.id} onClick={() => onCreateTask(e)}>＋ Task</button>
+                    {e.isUnread && (
+                      <button className="btnGhost" disabled={busy === e.id} onClick={() => onMarkRead(e)}>Mark read</button>
+                    )}
+                    <select
+                      className="qtyInput compactSel" style={{ width: 110 }} value="" disabled={busy === e.id}
+                      title="Apply one of your Gmail labels"
+                      onChange={(ev) => { onLabel(e, ev.target.value); ev.target.value = '' }}
+                    >
+                      <option value="" disabled>Label…</option>
+                      {gmailLabels.map((l) => <option key={l.id} value={l.name}>{l.name}</option>)}
+                      <option value="__new__">＋ New label…</option>
+                    </select>
+                    <button className="btnGhost" disabled={busy === e.id}
+                            onClick={() => setNoteDraft(noteDraft?.id === e.id ? null : { id: e.id, text: e.note || '' })}>
+                      ✎ Datapad
+                    </button>
+                    <button className="btnGhost" disabled={busy === e.id} onClick={() => onSpam(e)}>Spam</button>
+                    <button className="btnGhost" disabled={busy === e.id} onClick={() => onDismiss(e)}>Dismiss</button>
+                  </div>
+                  {noteDraft?.id === e.id && (
+                    <div className="noteEditor">
+                      <textarea
+                        value={noteDraft.text} autoFocus
+                        onChange={(ev) => setNoteDraft({ id: e.id, text: ev.target.value })}
+                        placeholder="Highlight the important bits — PO numbers, what was agreed, what to remember…"
+                      />
+                      <div className="confirmActions">
+                        <button className="importBtn" disabled={busy === e.id} onClick={onSaveNote}>Save note</button>
+                        <button className="linkBtn" onClick={() => setNoteDraft(null)}>cancel</button>
+                        {e.note && <button className="linkBtn" disabled={busy === e.id} onClick={() => { setNoteDraft({ id: e.id, text: '' }); }}>clear text</button>}
+                      </div>
+                    </div>
+                  )}
+                  {/* The message itself as a Star Wars comms readout (Nima,
+                      2026-07-18) — avatar/name/cards stay untouched; only the
+                      MESSAGE gets the targeting-frame + relay meta line. */}
+                  <div className="commFrame">
+                    <div className="commMeta">
+                      <span>{e.isUnread ? '⦿ Incoming transmission' : 'Transmission log'}</span>
+                      <span>Relay: GMAIL</span>
+                      <span>From: {e.fromName || e.fromAddress || 'unknown'}</span>
+                    </div>
+                    <div className="holoSubject">{e.subject}</div>
+                    {e.note && <div className="ledgerNote">📌 {e.note}</div>}
                   {isOpen && (
                     <div className="holoBody">
                       <p className="holoSnippet" style={{ whiteSpace: 'pre-wrap' }}>{e.body || e.snippet}</p>
@@ -554,35 +705,15 @@ export default function Transmissions() {
                         </div>
                       )}
 
-                      <div className="holoActions">
-                        <select
-                          className="qtyInput" style={{ width: 190 }} value={e.characterId || ''} disabled={busy === e.id}
-                          onChange={(ev) => onReassign(e, ev.target.value)}
-                        >
-                          {review.characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                        <button className="btn" disabled={busy === e.id} onClick={() => onCreateTask(e)}>Create task</button>
-                        <button className="btnGhost" disabled={busy === e.id} onClick={() => onLabel(e)}>Apply label</button>
-                        <button className="btnGhost" disabled={busy === e.id} onClick={() => onDismiss(e)}>Dismiss</button>
-                      </div>
                     </div>
                   )}
+                  </div>
                 </div>
               </div>
             </div>
           )
         })}
       </div>
-
-      {!!affection.length && (
-        <section style={{ marginTop: 28 }}>
-          <h2>Crew <span className="count">{affection.length}</span></h2>
-          <p className="hint">A collectible card per character. Finishing quests fast raises AGILITY, harder quests raise STRENGTH, and more missions together raise INTELLIGENCE. Tap a card to flip to their stats + mission log.</p>
-          <div className="tcGrid">
-            {affection.map((a) => <TradingCard key={a.characterId} card={a} />)}
-          </div>
-        </section>
-      )}
 
       <section style={{ marginTop: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -645,11 +776,27 @@ export default function Transmissions() {
                     <div className="holoMeta">
                       {t.urgency && <span className={'flag ' + URGENCY_SEV[t.urgency]}>{t.urgency}</span>}
                       <span className={'flag ' + (t.status === 'done' ? 'sev-lo' : 'sev-mid')}>{t.status === 'done' ? 'done' : 'open'}</span>
+                      {t.threadId && (
+                        <a className="linkBtn" href={gmailLink(t.threadId)} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>↗ Gmail</a>
+                      )}
                       <span className="cust">{new Date(t.createdAt).toLocaleString()}</span>
                     </div>
                   </div>
-                  <div className="holoSubject">{t.subject}</div>
-                  <p className="holoSnippet">{t.snippet}</p>
+                  {/* In-character delivery line (Nima, 2026-07-17): the messenger
+                      SPEAKS the handoff. Deterministic per task, context-aware —
+                      urgent tasks get leaned on, recurring get the daily-ritual
+                      voice, done tasks get the send-off. */}
+                  <p className="holoSpeech">“{speakLine(t.characterId, taskContext(t), t.id)}”</p>
+                  {/* the directive itself, framed as a comms readout */}
+                  <div className="commFrame">
+                    <div className="commMeta">
+                      <span>{t.status === 'done' ? '✓ Directive complete' : '⦿ Active directive'}</span>
+                      <span>Origin: {t.recurringKey ? 'PROTOCOL' : t.emailId ? 'COMM RELAY' : 'MANUAL LOG'}</span>
+                      {t.urgency && <span>Priority: {t.urgency.toUpperCase()}</span>}
+                    </div>
+                    <div className="holoSubject">{t.subject}</div>
+                    <p className="holoSnippet"><LinkedText text={t.snippet} /></p>
+                  </div>
                   {/* Bugs' CSV-freshness task: live per-source status, each with its
                       NetSuite saved-search link, plus an import right here so the
                       whole loop (open search → export → import → verified) never

@@ -176,6 +176,29 @@ export function taskToCard(t) {
   }
 }
 
+// Renders `[label](url)` markdown-style links inside plain task/email text as
+// real clickable anchors (Nima, 2026-07-20: task messages should link straight
+// to the Airtable base / NetSuite export / import assistant they reference).
+// Everything else renders as plain text — no other markdown is supported.
+const LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g
+export function LinkedText({ text }) {
+  if (!text) return null
+  const parts = []
+  let last = 0, m
+  LINK_RE.lastIndex = 0
+  while ((m = LINK_RE.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    parts.push(
+      <a key={m.index} href={m[2]} target="_blank" rel="noreferrer" className="taskLink" onClick={(e) => e.stopPropagation()}>
+        {m[1]} ↗
+      </a>,
+    )
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return <>{parts}</>
+}
+
 // Human-friendly age from hours.
 export function fmtAge(hours) {
   if (hours == null) return 'unknown'
