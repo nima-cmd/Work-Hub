@@ -12,6 +12,7 @@ import {
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
+  setEdiSupply, clearEdiSupply,
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
@@ -333,6 +334,26 @@ app.post('/api/seasons', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Assign an EDI order's inbound production PO, or mark it from-stock.
+app.post('/api/edi/:businessNumber/supply', async (req, res) => {
+  try {
+    const { poNumber, fromStock, note } = req.body || {}
+    res.json(await setEdiSupply({ businessNumber: req.params.businessNumber, poNumber, fromStock, note }))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/edi/:businessNumber/supply', async (req, res) => {
+  try {
+    res.json(await clearEdiSupply(req.params.businessNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 

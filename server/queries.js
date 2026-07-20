@@ -22,6 +22,7 @@ import {
   fetchEdiPoResolutions, upsertEdiPoResolution, deleteEdiPoResolution,
   fetchEdiTransactionAcks, upsertEdiTransactionAck, deleteEdiTransactionAck,
   fetchSeasons, upsertSeason,
+  fetchEdiSupply, upsertEdiSupply, deleteEdiSupply,
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
@@ -556,7 +557,23 @@ export async function getEdiReview() {
   // "make task" button (Nima, 2026-07-20).
   const taskStates = await fetchEdiTaskStates()
   const ediTasks = Object.fromEntries(taskStates.map((s) => [s.instanceKey.slice(4), s.status]))
-  return { ...pipeline, manualOrders, resolutions, ediTasks }
+  // ediSupply (bn → {poNumber, fromStock, note}) — the inbound production PO
+  // each EDI order is fulfilled from, or a from-stock flag.
+  const supplyRows = await fetchEdiSupply()
+  const ediSupply = Object.fromEntries(supplyRows.map((r) => [r.businessNumber, r]))
+  return { ...pipeline, manualOrders, resolutions, ediTasks, ediSupply }
+}
+
+// Assign the inbound production PO an EDI order comes from (or mark from-stock).
+export async function setEdiSupply({ businessNumber, poNumber, fromStock, note }) {
+  if (!businessNumber) throw new Error('businessNumber is required')
+  await upsertEdiSupply({ businessNumber, poNumber, fromStock, note })
+  return getEdiReview()
+}
+
+export async function clearEdiSupply(businessNumber) {
+  await deleteEdiSupply(businessNumber)
+  return getEdiReview()
 }
 
 // Deterministic messenger per PO (stable across regenerations, like the ship /

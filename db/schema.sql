@@ -264,6 +264,22 @@ CREATE TABLE IF NOT EXISTS doc_seasons (
   PRIMARY KEY (doc_type, doc_number)
 );
 
+-- ── EDI supply link (Nima, 2026-07-20) ──────────────────────────────────────
+-- Which INBOUND production PO an EDI order's goods come from — the vendor/
+-- container PO (purchase_orders.po_number) that supplies it — OR a from_stock
+-- flag when it ships from existing inventory with no inbound PO. Distinct from
+-- edi_po_resolutions (the sales-side open/closed + NetSuite-ref override) and
+-- from the auto-matched NetSuite SO/IF/invoice: this is the supply side. One
+-- row per EDI order (business_number). po_number is free text — it may name a
+-- real purchase_orders row or a PO the searches don't carry yet.
+CREATE TABLE IF NOT EXISTS edi_supply (
+  business_number  TEXT PRIMARY KEY,
+  po_number        TEXT,                    -- inbound production/vendor PO
+  from_stock       BOOLEAN DEFAULT false,   -- fulfilled from inventory, no inbound PO
+  note             TEXT,
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+
 -- ── EDI manual orders — the gap-filler (Nima, 2026-07-17) ────────────────────
 -- Older EDI orders that already SHIPPED have aged out of every saved search and
 -- the Orderful pull, so they can't appear in the automated pipeline at all — yet

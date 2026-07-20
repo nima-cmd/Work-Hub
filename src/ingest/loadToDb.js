@@ -424,6 +424,29 @@ export async function deleteEdiTransactionAck(transactionId, db = pool) {
   await db.query('DELETE FROM edi_transaction_acks WHERE transaction_id = $1', [transactionId])
 }
 
+// ── EDI supply link — inbound production PO (or from-stock) per EDI order.
+export async function fetchEdiSupply(db = pool) {
+  const { rows } = await db.query(
+    `SELECT business_number AS "businessNumber", po_number AS "poNumber", from_stock AS "fromStock", note, updated_at AS "updatedAt"
+     FROM edi_supply`,
+  )
+  return rows
+}
+
+export async function upsertEdiSupply({ businessNumber, poNumber, fromStock = false, note }, db = pool) {
+  await db.query(
+    `INSERT INTO edi_supply (business_number, po_number, from_stock, note, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (business_number) DO UPDATE SET
+       po_number = EXCLUDED.po_number, from_stock = EXCLUDED.from_stock, note = EXCLUDED.note, updated_at = now()`,
+    [businessNumber, poNumber || null, !!fromStock, note || null],
+  )
+}
+
+export async function deleteEdiSupply(businessNumber, db = pool) {
+  await db.query('DELETE FROM edi_supply WHERE business_number = $1', [businessNumber])
+}
+
 // ── Doc seasons — free-text season tag on any OC/PO (see db/schema.sql).
 // Saving an empty season clears the tag (deletes the row) rather than storing
 // blanks, same convention as quest_emails.note.

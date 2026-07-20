@@ -200,6 +200,22 @@ export async function createEdiTask(businessNumber) {
   return res.json()
 }
 
+// Assign an EDI order's inbound production PO (or mark from-stock).
+export async function setEdiSupply({ businessNumber, poNumber, fromStock, note }) {
+  const res = await fetch(`/api/edi/${encodeURIComponent(businessNumber)}/supply`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ poNumber, fromStock, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function clearEdiSupply(businessNumber) {
+  const res = await fetch(`/api/edi/${encodeURIComponent(businessNumber)}/supply`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Manually-entered EDI orders (shipped/aged out of the searches). Always shown
 // in their own section, flagged as unconfirmed.
 export async function addEdiManualOrder({ businessNumber, tradingPartner, note }) {

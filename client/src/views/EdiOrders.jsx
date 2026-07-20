@@ -3,6 +3,7 @@ import {
   fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
+  setEdiSupply, clearEdiSupply,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { NoteWidget, SeasonBadge } from '../lib.jsx'
@@ -111,6 +112,8 @@ export default function EdiOrders({ onNavigate } = {}) {
   const [ackBusy, setAckBusy] = useState(null)
   const [seasons, setSeasons] = useState({})
   const [taskBusy, setTaskBusy] = useState(null)
+  const [supplyDrafts, setSupplyDrafts] = useState({}) // bn -> {poNumber, note}
+  const [supplyBusy, setSupplyBusy] = useState(null)
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
@@ -178,6 +181,27 @@ export default function EdiOrders({ onNavigate } = {}) {
   async function makeTask(bn) {
     setTaskBusy(bn); setErr(null)
     try { setReview(await createEdiTask(bn)) } catch (e) { setErr(e.message) } finally { setTaskBusy(null) }
+  }
+
+  const setSDraft = (bn, patch) => setSupplyDrafts((s) => ({ ...s, [bn]: { ...s[bn], ...patch } }))
+  // Inbound production PO the EDI order's goods come from, or from-stock.
+  async function saveSupply(bn, { fromStock } = {}) {
+    const d = supplyDrafts[bn] || {}
+    const existing = review.ediSupply?.[bn]
+    setSupplyBusy(bn); setErr(null)
+    try {
+      setReview(await setEdiSupply({
+        businessNumber: bn,
+        poNumber: fromStock ? '' : (d.poNumber ?? existing?.poNumber ?? ''),
+        fromStock: fromStock ?? existing?.fromStock ?? false,
+        note: d.note ?? existing?.note ?? '',
+      }))
+      setSupplyDrafts((s) => { const n = { ...s }; delete n[bn]; return n })
+    } catch (e) { setErr(e.message) } finally { setSupplyBusy(null) }
+  }
+  async function removeSupply(bn) {
+    setSupplyBusy(bn)
+    try { setReview(await clearEdiSupply(bn)) } catch (e) { setErr(e.message) } finally { setSupplyBusy(null) }
   }
 
   // Manual resolution: save a NetSuite connection (stays open), close the PO,
@@ -358,6 +382,8 @@ export default function EdiOrders({ onNavigate } = {}) {
                   {w.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {w.cancelDays}d</span>}
                   {w.cancelState === 'soon' && <span className="flag sev-mid">cancel in {w.cancelDays}d</span>}
                   {w.resolution && <span className="flag sev-mid">manual: {w.resolution.netsuiteRef || 'note'}</span>}
+                  {review.ediSupply?.[o.businessNumber]?.fromStock && <span className="flag sev-lo">📦 from stock</span>}
+                  {review.ediSupply?.[o.businessNumber]?.poNumber && <span className="flag sev-lo">📦 PO {review.ediSupply[o.businessNumber].poNumber}</span>}
                   <span className="poDates">
                     {fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}
                   </span>
@@ -403,6 +429,27 @@ export default function EdiOrders({ onNavigate } = {}) {
                       {w.resolution && (
                         <button className="linkBtn" disabled={resolveBusy === o.businessNumber}
                                 onClick={() => removeResolution(o.businessNumber)}>remove manual</button>
+                      )}
+                    </div>
+
+                    {/* supply side: which inbound production PO this comes from,
+                        or from-stock (Nima, 2026-07-20) */}
+                    <div className="resolveRow">
+                      <span className="hint" style={{ margin: 0 }}>Supply:</span>
+                      <input className="qtyInput" style={{ width: 170 }} placeholder="Inbound production PO #"
+                             disabled={review.ediSupply?.[o.businessNumber]?.fromStock}
+                             value={supplyDrafts[o.businessNumber]?.poNumber ?? review.ediSupply?.[o.businessNumber]?.poNumber ?? ''}
+                             onChange={(e) => setSDraft(o.businessNumber, { poNumber: e.target.value })} />
+                      <button className="btn" disabled={supplyBusy === o.businessNumber}
+                              onClick={() => saveSupply(o.businessNumber, { fromStock: false })}>Save PO</button>
+                      <button className={'btnGhost' + (review.ediSupply?.[o.businessNumber]?.fromStock ? ' active' : '')}
+                              disabled={supplyBusy === o.businessNumber}
+                              onClick={() => saveSupply(o.businessNumber, { fromStock: !review.ediSupply?.[o.businessNumber]?.fromStock })}>
+                        {review.ediSupply?.[o.businessNumber]?.fromStock ? '✓ From stock' : 'From stock'}
+                      </button>
+                      {review.ediSupply?.[o.businessNumber] && (
+                        <button className="linkBtn" disabled={supplyBusy === o.businessNumber}
+                                onClick={() => removeSupply(o.businessNumber)}>clear</button>
                       )}
                     </div>
 
