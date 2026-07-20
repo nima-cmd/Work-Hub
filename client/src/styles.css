@@ -9,6 +9,9 @@
   --hi: #f85149;
   --mid: #d9822b;
   --lo: #3b82f6;
+  /* sci-fi display face for headers/chrome — falls back to mono if Orbitron
+     (loaded in index.html) isn't available */
+  --display: 'Orbitron', ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -595,9 +598,13 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 
 /* ═══ COMMAND CENTER re-skin (Nima, 2026-07-17) — the hub as a console ═══════ */
 
-/* subtle deep-space starfield behind everything — pure CSS, no image assets */
+/* deep-space scene behind everything — a nebula wash + static near-stars,
+   pure CSS, no image assets. A drifting parallax star layer rides on top via
+   body::before; the whole thing sits behind #root. */
 body {
   background:
+    radial-gradient(1200px 700px at 82% -8%, rgba(79,120,220,0.10) 0%, transparent 60%),
+    radial-gradient(1000px 800px at 6% 108%, rgba(150,90,220,0.09) 0%, transparent 60%),
     radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,0.18) 50%, transparent 51%),
     radial-gradient(1px 1px at 78% 9%,  rgba(255,255,255,0.12) 50%, transparent 51%),
     radial-gradient(1.5px 1.5px at 55% 32%, rgba(217,164,65,0.16) 50%, transparent 51%),
@@ -605,9 +612,40 @@ body {
     radial-gradient(1px 1px at 89% 58%, rgba(255,255,255,0.14) 50%, transparent 51%),
     radial-gradient(1.5px 1.5px at 8% 89%,  rgba(139,148,158,0.14) 50%, transparent 51%),
     radial-gradient(1px 1px at 67% 84%, rgba(255,255,255,0.10) 50%, transparent 51%),
-    linear-gradient(180deg, #0a0d13 0%, var(--bg) 40%);
+    linear-gradient(180deg, #06080d 0%, var(--bg) 45%);
   background-attachment: fixed;
 }
+/* slow-drifting far-star layer for parallax depth — fixed, behind content */
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden;
+  background-repeat: repeat;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.5) 50%, transparent 51%),
+    radial-gradient(1px 1px at 70% 60%, rgba(200,220,255,0.45) 50%, transparent 51%),
+    radial-gradient(1px 1px at 45% 80%, rgba(255,255,255,0.4) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 85% 20%, rgba(255,255,255,0.5) 50%, transparent 51%);
+  background-size: 480px 480px;
+  animation: spaceFieldDrift 140s linear infinite;
+  opacity: 0.5;
+}
+/* drift via background-position so the fixed layer never widens the page */
+@keyframes spaceFieldDrift { from { background-position: 0 0; } to { background-position: -480px -240px; } }
+
+/* ── Star Wars display type (Nima, 2026-07-20 "fuller re-skin") ──────────────
+   Orbitron on headers/nav/brand/big readouts + sector titles; body copy stays
+   the readable sans. Letterspacing gives the cockpit-console cadence. */
+.brand, .tabs .tab, h1, h2, h3,
+.sectorTitle, .colHead, .scanTitle, .coreLabel, .coreCount, .coreTime,
+.ptName, .holotableBar .sectorTitle, .questComposer, .datapadSectionTitle {
+  font-family: var(--display);
+}
+.brand { letter-spacing: 0.16em; }
+.brand .sub { font-family: var(--display); letter-spacing: 0.22em; font-size: 10px; }
+.tabs { flex-wrap: wrap; }
+.tabs .tab { letter-spacing: 0.04em; text-transform: uppercase; font-size: 10.5px; padding: 6px 9px; }
+h2, h3 { letter-spacing: 0.08em; }
+.sectorTitle, .colHead { letter-spacing: 0.12em; }
+.coreCount { letter-spacing: 0.04em; }
 /* topbar: a console header with an amber energy line under it */
 .topbar { position: sticky; box-shadow: 0 1px 0 rgba(217,164,65,0.35), 0 6px 18px rgba(0,0,0,0.35); }
 
