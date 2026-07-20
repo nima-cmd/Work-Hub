@@ -13,6 +13,7 @@ import {
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
+  getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail,
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
@@ -412,6 +413,38 @@ app.post('/api/quest-emails/:id/create-task', async (req, res) => {
 app.get('/api/ledger-notes', async (_req, res) => {
   try {
     res.json(await getLedgerNotes())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Universal notes (Nima, 2026-07-20) — the generic Datapad-on-anything API.
+// GET with no query = every note (Datapad); GET ?docType&docNumber = the
+// inline widget on a specific card.
+app.get('/api/notes', async (req, res) => {
+  try {
+    const { docType, docNumber } = req.query
+    res.json(docType && docNumber ? await getNotesFor(docType, docNumber) : await getAllNotes())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/notes', async (req, res) => {
+  try {
+    res.json(await addNote(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/notes/:id', async (req, res) => {
+  try {
+    await deleteNote(req.params.id)
+    res.json({ ok: true })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

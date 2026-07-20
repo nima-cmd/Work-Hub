@@ -736,6 +736,55 @@ export async function createTaskFromQuestEmail(emailId) {
   return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
 }
 
+// ── Universal notes (Nima, 2026-07-20) — the Datapad, generalized off the
+// email-only quest_emails.note. doc_type/doc_number is a plain natural key
+// ('EMAIL'/email id, 'EDI_PO'/business_number, 'SO'/so_number, etc.) — no FK,
+// so a note can attach to anything the app knows a doc-number for.
+export async function getNotesFor(docType, docNumber) {
+  const { rows } = await pool.query(
+    `SELECT id, doc_type AS "docType", doc_number AS "docNumber", note,
+            linked_doc_type AS "linkedDocType", linked_doc_number AS "linkedDocNumber",
+            created_at AS "createdAt"
+     FROM notes WHERE doc_type = $1 AND doc_number = $2 ORDER BY created_at DESC`,
+    [docType, docNumber],
+  )
+  return rows
+}
+
+export async function addNote({ docType, docNumber, note, linkedDocType, linkedDocNumber }) {
+  if (!docType || !docNumber || !note?.trim()) throw new Error('A note needs a docType, docNumber, and text')
+  await pool.query(
+    `INSERT INTO notes (doc_type, doc_number, note, linked_doc_type, linked_doc_number)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [docType, docNumber, note.trim(), linkedDocType || null, linkedDocNumber || null],
+  )
+  return getNotesFor(docType, docNumber)
+}
+
+export async function deleteNote(id) {
+  await pool.query('DELETE FROM notes WHERE id = $1', [id])
+}
+
+// Datapad rebuild source (Nima, 2026-07-20): the new notes table UNIONed with
+// the legacy quest_emails.note column — simpler than migrating that data over,
+// and nothing existing has to move. doc_type is synthesized 'EMAIL' for the
+// legacy rows so both sources render through the same sectioned UI.
+export async function getAllNotes() {
+  const { rows } = await pool.query(`
+    SELECT id::text AS id, doc_type AS "docType", doc_number AS "docNumber", note,
+           linked_doc_type AS "linkedDocType", linked_doc_number AS "linkedDocNumber",
+           created_at AS "createdAt"
+    FROM notes
+    UNION ALL
+    SELECT ('email-' || e.id) AS id, 'EMAIL' AS "docType", e.id AS "docNumber", e.note,
+           NULL AS "linkedDocType", NULL AS "linkedDocNumber", e.received_at AS "createdAt"
+    FROM quest_emails e
+    WHERE e.note IS NOT NULL AND e.note <> ''
+    ORDER BY "createdAt" DESC
+  `)
+  return rows
+}
+
 // The note ledger, standalone (Nima, 2026-07-20): every email carrying a
 // Datapad note, oldest first isn't useful — newest first, with the source
 // email's Gmail link and (if promoted) its task's subject/status alongside.

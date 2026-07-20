@@ -399,3 +399,31 @@ export async function fetchOrderEvents(opts = {}) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Universal notes — the note-on-anything system (Nima, 2026-07-20).
+export async function fetchNotesFor(docType, docNumber) {
+  const res = await fetch(`/api/notes?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function fetchAllNotes() {
+  const res = await fetch('/api/notes')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function addNote({ docType, docNumber, note, linkedDocType, linkedDocNumber }) {
+  const res = await fetch('/api/notes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docType, docNumber, note, linkedDocType, linkedDocNumber }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function deleteNote(id) {
+  const res = await fetch(`/api/notes/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

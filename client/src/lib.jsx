@@ -1,6 +1,62 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag } from './api.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote } from './api.js'
+
+// The universal note-on-anything widget (Nima, 2026-07-20) — a small
+// textarea + save + list, meant to drop onto any card that has a doc type
+// and number (EDI PO, SO row, fulfillment, task). Keeps its own notes loaded
+// so callers don't need to thread note state through.
+export function NoteWidget({ docType, docNumber }) {
+  const [notes, setNotes] = useState([])
+  const [draft, setDraft] = useState('')
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open || !docType || !docNumber) return
+    fetchNotesFor(docType, docNumber).then(setNotes).catch(() => {})
+  }, [open, docType, docNumber])
+
+  async function save(e) {
+    e.preventDefault()
+    if (!draft.trim()) return
+    setBusy(true)
+    try {
+      setNotes(await addNote({ docType, docNumber, note: draft.trim() }))
+      setDraft('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id) {
+    await deleteNote(id)
+    setNotes((prev) => prev.filter((n) => n.id !== id))
+  }
+
+  if (!docType || !docNumber) return null
+  return (
+    <div className="noteWidget">
+      <button type="button" className="linkBtn" onClick={() => setOpen((o) => !o)}>
+        ✎ Notes{notes.length ? ` (${notes.length})` : ''}
+      </button>
+      {open && (
+        <div className="noteWidgetBody">
+          {notes.map((n) => (
+            <div key={n.id} className="noteWidgetEntry">
+              <span>{n.note}</span>
+              <button type="button" className="linkBtn" onClick={() => remove(n.id)}>✕</button>
+            </div>
+          ))}
+          <form onSubmit={save} className="noteWidgetForm">
+            <textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" rows={2} />
+            <button type="submit" className="btn" disabled={busy || !draft.trim()}>Save</button>
+          </form>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // Cargo-tag print buttons — one per label size that can actually print from
 // this host, each going STRAIGHT to its printer via the server (no browser

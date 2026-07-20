@@ -500,6 +500,25 @@ CREATE TABLE IF NOT EXISTS quest_task_activity (
 CREATE INDEX IF NOT EXISTS idx_quest_task_activity_task    ON quest_task_activity(task_id);
 CREATE INDEX IF NOT EXISTS idx_quest_task_activity_created ON quest_task_activity(created_at);
 
+-- ── Notes (Nima, 2026-07-20) — the universal Datapad, generalized off the
+-- email-only quest_emails.note. One row per note-on-anything: doc_type +
+-- doc_number is the natural key it's attached to (email id / task id /
+-- business_number / so_number / if_number / inv_number). linked_doc_* is an
+-- optional second attachment — "attach a sales order/fulfillment to it as we
+-- go" — nullable, no FK (the referenced doc may not exist in any table here,
+-- e.g. an SO#/IF# typed by hand). quest_emails.note is left in place and
+-- UNIONed at query time rather than migrated, so nothing existing moves.
+CREATE TABLE IF NOT EXISTS notes (
+  id                SERIAL PRIMARY KEY,
+  doc_type          TEXT NOT NULL,   -- 'EMAIL' | 'TASK' | 'EDI_PO' | 'SO' | 'IF' | 'INV'
+  doc_number        TEXT NOT NULL,
+  note              TEXT NOT NULL,
+  linked_doc_type   TEXT,
+  linked_doc_number TEXT,
+  created_at        TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notes_doc ON notes(doc_type, doc_number);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);

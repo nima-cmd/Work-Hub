@@ -4,6 +4,7 @@ import {
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
+import { NoteWidget } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 const isIssueValue = (v) => ISSUE_STATUSES.has(v)
@@ -356,6 +357,8 @@ export default function EdiOrders() {
                                 onClick={() => removeResolution(o.businessNumber)}>remove manual</button>
                       )}
                     </div>
+
+                    <NoteWidget docType="EDI_PO" docNumber={o.businessNumber} />
 
                     {!!o.linkGaps.length && (
                       <div className="allocPos">{o.linkGaps.map((g, i) => <div key={i} className="sev-hi">⚠ {g}</div>)}</div>

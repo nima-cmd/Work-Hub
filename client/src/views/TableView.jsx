@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
@@ -53,6 +53,7 @@ export default function TableView({ orders }) {
                 <LabelButtons info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
               </div>
             ))}
+            {!o.isGroup && <NoteWidget docType="SO" docNumber={o.soNumber} />}
           </td>
           <td className="num">{o.daysPending ?? ''}</td>
           <td>{o.nextAction}</td>
@@ -72,6 +73,7 @@ export default function TableView({ orders }) {
               {(m.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                 <div key={f.ifNumber}><LabelButtons info={{ ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber }} /></div>
               ))}
+              <NoteWidget docType="SO" docNumber={m.soNumber} />
             </td>
             <td className="num">{m.daysPending ?? ''}</td>
             <td>{m.nextAction}</td>
