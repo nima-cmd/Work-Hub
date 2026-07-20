@@ -2,6 +2,33 @@
 import { useEffect, useState } from 'react'
 import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote } from './api.js'
 import { NETSUITE_DOC_TYPES } from '../../src/model/netsuiteDocs.js'
+import { channelMeta } from '../../src/model/channels.js'
+
+// Channel tag + colored customer name (Nima, 2026-07-20) — one consistent
+// color per account across every view, so Nordstrom/Bloomingdale's/Shopbop/
+// boutique/e-com stand out at a glance. channelMeta derives from location
+// (authoritative) with a customer-name fallback.
+export function ChannelTag({ order, className }) {
+  const m = channelMeta(order)
+  return (
+    <span className={'channelTag' + (className ? ' ' + className : '')}
+          style={{ color: m.color, borderColor: m.color, background: m.color + '22' }}>
+      {m.label}
+    </span>
+  )
+}
+
+// The customer name, colored by channel. Falls back to nothing if no name.
+export function CustomerName({ order, className }) {
+  if (!order?.customer) return null
+  return (
+    <span className={className} style={{ color: channelMeta(order).color, fontWeight: 600 }}>
+      {order.customer}
+    </span>
+  )
+}
+
+export { channelMeta }
 
 // Task-composer option lists — shared so any view that creates tasks offers the
 // same "what's required to complete this" (needs) and urgency choices as the

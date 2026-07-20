@@ -3,7 +3,7 @@ import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fet
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
 import { spaceBackdrop } from '../data/spaceBackdrop.js'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, taskToCard, docRef, docDate, SourceBadge, Flags, LinkedText } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, taskToCard, docRef, docDate, SourceBadge, Flags, LinkedText, ChannelTag, channelMeta } from '../lib.jsx'
 import { speakLine, taskContext } from '../../../src/model/dialogue.js'
 import { imagesFor } from '../data/characterImages.js'
 
@@ -222,7 +222,8 @@ function MiniOrder({ o }) {
   return (
     <div className={'miniRow ' + sevClass(o.severity)}>
       <span className="miniSo">{o.soNumber}</span>
-      <span className="miniCust">{o.customer}</span>
+      <ChannelTag order={o} />
+      <span className="miniCust" style={{ color: channelMeta(o).color }}>{o.customer}</span>
       <span className="miniAge">{dayAge(o)}</span>
     </div>
   )
@@ -373,8 +374,8 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
             <div key={o.soNumber} className={'miniCard ' + sevClass(o.severity)}>
               <div className="miniCardTop">
                 <span className="miniSo">{o.soNumber}</span>
-                <SourceBadge source={o.source} character={o.character} />
-                <span className="miniCust">{o.customer}</span>
+                <ChannelTag order={o} />
+                <span className="miniCust" style={{ color: channelMeta(o).color }}>{o.customer}</span>
               </div>
               <div className="miniNext">→ {o.nextAction}{docRef(o) && <span className="ifs"> · {docRef(o)}{docDate(o) && ` · ${docDate(o)}`}</span>}</div>
               <Flags flags={o.flags} />

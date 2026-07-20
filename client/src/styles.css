@@ -1271,6 +1271,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .datapadSection { margin-bottom: 22px; }
 .datapadSectionTitle { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
 
+/* Channel tag — colored account pill, one hue per channel (Nima, 2026-07-20) */
+.channelTag {
+  display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap;
+}
+
 /* Season badge — free-text season tag on OC/PO cards (Nima, 2026-07-20) */
 .seasonBadge {
   display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; cursor: pointer;

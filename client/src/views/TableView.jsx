@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
@@ -41,8 +41,8 @@ export default function TableView({ orders }) {
               ? <>{isOpen ? '▾' : '▸'} PO {o.poNumber} <span className="badge edi" style={{ marginLeft: 4 }}>{o.memberCount} SOs</span></>
               : <>{o.soNumber} <SourceBadge source={o.source} /></>}
           </td>
-          <td>{o.customer}{o.isGroup && o.customer === 'Multiple customers' ? '' : ''}</td>
-          <td>{o.location}</td>
+          <td><CustomerName order={o} /></td>
+          <td><ChannelTag order={o} /></td>
           <td className="mono">{o.poNumber}</td>
           <td>{STAGE_SHORT[o.stage] || o.stage}</td>
           <td className="mono">
@@ -64,8 +64,8 @@ export default function TableView({ orders }) {
         {isOpen && o.members.map((m) => (
           <tr key={m.soNumber} className="groupMember">
             <td className="mono" style={{ paddingLeft: 24 }}>↳ {m.soNumber} <SourceBadge source={m.source} /></td>
-            <td>{m.customer}</td>
-            <td>{m.location}</td>
+            <td><CustomerName order={m} /></td>
+            <td><ChannelTag order={m} /></td>
             <td className="mono">{m.poNumber}</td>
             <td>{STAGE_SHORT[m.stage] || m.stage}</td>
             <td className="mono">
@@ -103,7 +103,7 @@ export default function TableView({ orders }) {
             <tr>
               <Th k="soNumber">SO / PO</Th>
               <Th k="customer">Customer</Th>
-              <Th k="location">Location</Th>
+              <Th k="location">Channel</Th>
               <Th k="poNumber">PO#</Th>
               <Th k="stageRank">Stage</Th>
               <th>IF / Invoice #</th>

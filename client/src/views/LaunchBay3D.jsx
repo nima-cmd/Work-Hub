@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
 import { fetchLaunchBay } from '../api.js'
+import { channelMeta } from '../../../src/model/channels.js'
 
 // Holotable (Nima, 2026-07-17) — the 3D hologram twin of the 2D Launch Bay,
 // built from the OBJ models in the Drive "Holograms" folder (decimated to web
@@ -178,8 +179,9 @@ export default function LaunchBay3D() {
           // floating HTML tag
           const el = document.createElement('div')
           el.className = 'holoTag' + (s.delayed ? ' delayed' : '')
+          const ch = channelMeta(s)
           el.innerHTML =
-            `<b>${key}</b><span>${s.customer || 'Unknown consignee'}</span>` +
+            `<b>${key}</b><span style="color:${ch.color}">${s.customer || 'Unknown consignee'}</span>` +
             `<em style="color:#${color.toString(16).padStart(6, '0')}">${s.delayed ? `Overdue ${s.floatingDays}d — mark shipped` : STATE_LABEL[s.state] || 'Holding'}</em>`
           const tag = new CSS2DObject(el)
           tag.position.set(0, 1.15, 0)
