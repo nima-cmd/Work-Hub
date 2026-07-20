@@ -5,6 +5,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
 import { fetchLaunchBay } from '../api.js'
 import { channelMeta } from '../../../src/model/channels.js'
+import { NoteWidget, ChannelTag, CustomerName } from '../lib.jsx'
 
 // Holotable (Nima, 2026-07-17) — the 3D hologram twin of the 2D Launch Bay,
 // built from the OBJ models in the Drive "Holograms" folder (decimated to web
@@ -67,6 +68,7 @@ export default function LaunchBay3D() {
   const [ships, setShips] = useState(null)
   const [err, setErr] = useState(null)
   const [loadNote, setLoadNote] = useState('Projecting holotable…')
+  const [selected, setSelected] = useState(null) // ship whose datapad panel is open
 
   useEffect(() => {
     fetchLaunchBay().then(setShips).catch((e) => setErr(e.message))
@@ -182,7 +184,13 @@ export default function LaunchBay3D() {
           const ch = channelMeta(s)
           el.innerHTML =
             `<b>${key}</b><span style="color:${ch.color}">${s.customer || 'Unknown consignee'}</span>` +
-            `<em style="color:#${color.toString(16).padStart(6, '0')}">${s.delayed ? `Overdue ${s.floatingDays}d — mark shipped` : STATE_LABEL[s.state] || 'Holding'}</em>`
+            `<em style="color:#${color.toString(16).padStart(6, '0')}">${s.delayed ? `Overdue ${s.floatingDays}d — mark shipped` : STATE_LABEL[s.state] || 'Holding'}</em>` +
+            `<u class="holoTagNote">✎ datapad</u>`
+          // Click a tag to open its datapad panel (a React sibling of the mount,
+          // never a child — see the note by the mount div). setSelected is
+          // stable, so referencing it from this imperative handler is safe.
+          el.style.cursor = 'pointer'
+          el.onclick = () => setSelected(s)
           const tag = new CSS2DObject(el)
           tag.position.set(0, 1.15, 0)
           ship.add(tag)
@@ -271,6 +279,28 @@ export default function LaunchBay3D() {
       <div className="holoStage">
         <div ref={mountRef} className="holoMount" />
         {loadNote && <div className="holoLoadNote">{loadNote}</div>}
+        {selected && (
+          <div className="holoDatapad">
+            <div className="holoDatapadHead">
+              <div>
+                <div className="mono" style={{ fontWeight: 700 }}>{selected.ifNumber || selected.soNumber}</div>
+                <div><ChannelTag order={selected} /> <CustomerName order={selected} /></div>
+              </div>
+              <button className="linkBtn" onClick={() => setSelected(null)}>✕</button>
+            </div>
+            <div className="holoDatapadMeta">
+              {selected.soNumber && <span>SO {selected.soNumber}</span>}
+              {selected.poNumber && <span>PO {selected.poNumber}</span>}
+              {selected.delayed
+                ? <span className="sev-hi">Overdue {selected.floatingDays}d</span>
+                : <span>{STATE_LABEL[selected.state] || 'Holding'}</span>}
+            </div>
+            <p className="hint" style={{ margin: '2px 0 6px' }}>Why is it delayed? Note it here — and link the email/transmission that explains it.</p>
+            <NoteWidget key={selected.ifNumber || selected.soNumber}
+                        docType={selected.ifNumber ? 'IF' : 'SO'}
+                        docNumber={selected.ifNumber || selected.soNumber} compact />
+          </div>
+        )}
       </div>
     </div>
   )

@@ -93,14 +93,31 @@ export function SeasonBadge({ season, onSave, highlightCore }) {
   )
 }
 
+// Doc types a note can cross-link TO (Nima, 2026-07-20: "cross linking between
+// an email/transmission and these documents"). Free-text ref per type — for an
+// email it's the Gmail id/subject, for a NetSuite doc its number.
+export const LINK_DOC_TYPES = [
+  { value: 'EMAIL', label: 'Email / transmission' },
+  { value: 'SO', label: 'Sales Order' },
+  { value: 'IF', label: 'Fulfillment' },
+  { value: 'INV', label: 'Invoice' },
+  { value: 'EDI_PO', label: 'EDI PO' },
+  { value: 'PO', label: 'Purchase Order' },
+  { value: 'OC', label: 'Order Confirmation' },
+]
+
 // The universal note-on-anything widget (Nima, 2026-07-20) — a small
 // textarea + save + list, meant to drop onto any card that has a doc type
-// and number (EDI PO, SO row, fulfillment, task). Keeps its own notes loaded
-// so callers don't need to thread note state through.
-export function NoteWidget({ docType, docNumber }) {
+// and number (EDI PO, SO row, fulfillment, task, a delayed Launch Bay order).
+// A note can optionally CROSS-LINK to another doc (e.g. the email that
+// explains a delay). `defaultOpen` starts it expanded (side panels), `compact`
+// drops the toggle button and always shows the body.
+export function NoteWidget({ docType, docNumber, defaultOpen = false, compact = false }) {
   const [notes, setNotes] = useState([])
   const [draft, setDraft] = useState('')
-  const [open, setOpen] = useState(false)
+  const [linkType, setLinkType] = useState('')
+  const [linkNum, setLinkNum] = useState('')
+  const [open, setOpen] = useState(defaultOpen || compact)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -113,8 +130,12 @@ export function NoteWidget({ docType, docNumber }) {
     if (!draft.trim()) return
     setBusy(true)
     try {
-      setNotes(await addNote({ docType, docNumber, note: draft.trim() }))
-      setDraft('')
+      setNotes(await addNote({
+        docType, docNumber, note: draft.trim(),
+        linkedDocType: linkType || null,
+        linkedDocNumber: linkType && linkNum.trim() ? linkNum.trim() : null,
+      }))
+      setDraft(''); setLinkType(''); setLinkNum('')
     } finally {
       setBusy(false)
     }
@@ -126,25 +147,41 @@ export function NoteWidget({ docType, docNumber }) {
   }
 
   if (!docType || !docNumber) return null
+  const body = (
+    <div className="noteWidgetBody">
+      {notes.map((n) => (
+        <div key={n.id} className="noteWidgetEntry">
+          <span>
+            {n.note}
+            {n.linkedDocNumber && <span className="noteLink"> · ↳ {n.linkedDocType} {n.linkedDocNumber}</span>}
+          </span>
+          <button type="button" className="linkBtn" onClick={() => remove(n.id)}>✕</button>
+        </div>
+      ))}
+      <form onSubmit={save} className="noteWidgetForm">
+        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note (e.g. why it's delayed)…" rows={2} />
+        <div className="noteLinkRow">
+          <select className="qtyInput" value={linkType} onChange={(e) => setLinkType(e.target.value)}>
+            <option value="">Link a doc… (optional)</option>
+            {LINK_DOC_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          {linkType && (
+            <input className="qtyInput" style={{ width: 130 }} value={linkNum}
+                   placeholder={linkType === 'EMAIL' ? 'email id / subject' : 'e.g. SO1213'}
+                   onChange={(e) => setLinkNum(e.target.value)} />
+          )}
+          <button type="submit" className="btn" disabled={busy || !draft.trim()}>Save</button>
+        </div>
+      </form>
+    </div>
+  )
+  if (compact) return <div className="noteWidget">{body}</div>
   return (
     <div className="noteWidget">
       <button type="button" className="linkBtn" onClick={() => setOpen((o) => !o)}>
         ✎ Notes{notes.length ? ` (${notes.length})` : ''}
       </button>
-      {open && (
-        <div className="noteWidgetBody">
-          {notes.map((n) => (
-            <div key={n.id} className="noteWidgetEntry">
-              <span>{n.note}</span>
-              <button type="button" className="linkBtn" onClick={() => remove(n.id)}>✕</button>
-            </div>
-          ))}
-          <form onSubmit={save} className="noteWidgetForm">
-            <textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" rows={2} />
-            <button type="submit" className="btn" disabled={busy || !draft.trim()}>Save</button>
-          </form>
-        </div>
-      )}
+      {open && body}
     </div>
   )
 }
