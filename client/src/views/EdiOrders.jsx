@@ -2,9 +2,10 @@ import { Fragment, useEffect, useState } from 'react'
 import {
   fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
+  ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
-import { NoteWidget } from '../lib.jsx'
+import { NoteWidget, SeasonBadge } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 const isIssueValue = (v) => ISSUE_STATUSES.has(v)
@@ -106,11 +107,23 @@ export default function EdiOrders() {
   const [resolveDrafts, setResolveDrafts] = useState({}) // bn -> {netsuiteRef, note, open}
   const [resolveBusy, setResolveBusy] = useState(null)
   const [ediTab, setEdiTab] = useState('open') // open | orphans | cancelled | closed — per-partner tabs under the calendar
+  const [ackDrafts, setAckDrafts] = useState({}) // txnId -> linkedTransactionId
+  const [ackBusy, setAckBusy] = useState(null)
+  const [seasons, setSeasons] = useState({})
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
+    fetchSeasons().then((rows) => setSeasons(Object.fromEntries(rows.map((s) => [`${s.docType}|${s.docNumber}`, s.season])))).catch(() => {})
   }
   useEffect(load, [])
+
+  async function onSaveSeason(businessNumber, season) {
+    // 'EDI_PO' — the customer's own PO number on the sales side, a different
+    // numbering domain from purchase_orders.po_number (inbound vendor supply,
+    // tagged 'PO' in Allocations.jsx) — see db/schema.sql doc_seasons.
+    const rows = await saveSeason({ docType: 'EDI_PO', docNumber: businessNumber, season })
+    setSeasons(Object.fromEntries(rows.map((s) => [`${s.docType}|${s.docNumber}`, s.season])))
+  }
 
   async function onSync() {
     setSyncing(true); setSyncMsg(null); setErr(null)
@@ -139,6 +152,23 @@ export default function EdiOrders() {
     if (!window.confirm('Remove this manual link? The document will go back to being unlinked.')) return
     setLinkBusy(txnId)
     try { setReview(await unlinkEdiTransaction(txnId)) } catch (e) { setErr(e.message) } finally { setLinkBusy(null) }
+  }
+
+  // Per-document acknowledgment (Nima, 2026-07-20): a Bloomingdale's 856 that
+  // Orderful flagged INVALID but was actually resent and accepted — link it to
+  // that valid replacement, or (if there really is nothing to link) confirm
+  // that. Either way it stops blocking the PO from reading as clean.
+  async function submitAck(txnId, linkedTransactionId, note) {
+    setAckBusy(txnId); setErr(null)
+    try {
+      setReview(await ackEdiTransaction({ transactionId: txnId, linkedTransactionId, note }))
+      setAckDrafts((s) => { const n = { ...s }; delete n[txnId]; return n })
+    } catch (e) { setErr(e.message) } finally { setAckBusy(null) }
+  }
+
+  async function undoAck(txnId) {
+    setAckBusy(txnId)
+    try { setReview(await unackEdiTransaction(txnId)) } catch (e) { setErr(e.message) } finally { setAckBusy(null) }
   }
 
   // Manual resolution: save a NetSuite connection (stays open), close the PO,
@@ -312,6 +342,7 @@ export default function EdiOrders() {
                    className={'poCard' + (w.cancelState === 'passed' || w.missed850 ? ' po-danger' : w.cancelState === 'soon' ? ' po-warn' : '')}>
                 <div className="poHead" onClick={() => toggle(o.businessNumber)}>
                   <span className="miniSo">{o.businessNumber}</span>
+                  <SeasonBadge season={seasons[`EDI_PO|${o.businessNumber}`]} onSave={(s) => onSaveSeason(o.businessNumber, s)} highlightCore />
                   {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
                   <span className={'flag ' + (o.hasIssue ? 'sev-hi' : 'sev-lo')}>{o.stage}</span>
                   {w.missed850 && <span className="flag sev-hi">MISSED? {w.age850}d old</span>}
@@ -398,13 +429,23 @@ export default function EdiOrders() {
                         {o.transactions.map((t) => {
                           const issue = [t.validationStatus, t.deliveryStatus, t.acknowledgmentStatus].find(isIssueValue)
                           const draft = linkDrafts[t.id] || {}
+                          // Candidates to link an invalid/failed document to: another
+                          // transaction of the SAME document type in this order that
+                          // doesn't itself have an issue (e.g. a resent, valid 856).
+                          const ackCandidates = issue && !t.ack
+                            ? o.transactions.filter((t2) => t2.id !== t.id && t2.type === t.type &&
+                                !ISSUE_STATUSES.has(t2.validationStatus) && !ISSUE_STATUSES.has(t2.deliveryStatus) &&
+                                !ISSUE_STATUSES.has(t2.acknowledgmentStatus))
+                            : []
                           return (
                             <Fragment key={t.id}>
                               <tr>
                                 <td className="mono">{t.type}</td>
                                 <td className="mono cust" title="The document's own business number — its trackable reference">{t.businessNumber || '—'}</td>
                                 <td>{t.direction}</td>
-                                <td className={issue ? 'sev-hi' : ''}>{issue || t.deliveryStatus}</td>
+                                <td className={issue && !t.ack ? 'sev-hi' : t.ack ? 'sev-lo' : ''}>
+                                  {t.ack ? `✓ resolved${t.ack.linkedTransactionId ? ' (linked)' : ' (nothing to link)'}` : issue || t.deliveryStatus}
+                                </td>
                                 <td className="cust">{t.createdAt ? new Date(t.createdAt).toLocaleString() : '—'}</td>
                                 <td>
                                   {t.manualLinkNote !== undefined && (
@@ -412,8 +453,39 @@ export default function EdiOrders() {
                                       Undo link{t.manualLinkNote ? ` (${t.manualLinkNote})` : ''}
                                     </button>
                                   )}
+                                  {t.ack && (
+                                    <button className="btnGhost" disabled={ackBusy === t.id} onClick={() => undoAck(t.id)}>
+                                      Undo ack{t.ack.note ? ` (${t.ack.note})` : ''}
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
+                              {issue && !t.ack && (
+                                <tr>
+                                  <td colSpan={6}>
+                                    {!!ackCandidates.length && (
+                                      <>
+                                        <select className="qtyInput" style={{ width: 260 }}
+                                                value={ackDrafts[t.id] ?? ''}
+                                                onChange={(e) => setAckDrafts((s) => ({ ...s, [t.id]: e.target.value }))}>
+                                          <option value="">Link to the valid resend…</option>
+                                          {ackCandidates.map((c) => (
+                                            <option key={c.id} value={c.id}>{c.type} · {c.createdAt ? new Date(c.createdAt).toLocaleDateString() : c.id}</option>
+                                          ))}
+                                        </select>
+                                        <button className="btn" style={{ marginLeft: 6 }} disabled={ackBusy === t.id || !ackDrafts[t.id]}
+                                                onClick={() => submitAck(t.id, ackDrafts[t.id], 'linked to valid resend')}>
+                                          {ackBusy === t.id ? '…' : 'Link'}
+                                        </button>
+                                      </>
+                                    )}
+                                    <button className="btnGhost" style={{ marginLeft: 6 }} disabled={ackBusy === t.id}
+                                            onClick={() => submitAck(t.id, null, 'confirmed nothing to link')}>
+                                      Confirm: nothing to link
+                                    </button>
+                                  </td>
+                                </tr>
+                              )}
                               {o.bucket === 'NO_850_FOUND' && (
                                 <tr>
                                   <td colSpan={6}>

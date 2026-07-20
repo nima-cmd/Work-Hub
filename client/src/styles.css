@@ -1257,6 +1257,17 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .datapadSection { margin-bottom: 22px; }
 .datapadSectionTitle { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
 
+/* Season badge — free-text season tag on OC/PO cards (Nima, 2026-07-20) */
+.seasonBadge {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; cursor: pointer;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+}
+.seasonBadge:hover { border-color: var(--holo); color: #e2f2ff; }
+.seasonBadge.unset { opacity: 0.55; border-style: dashed; }
+.seasonBadge.core { border-color: var(--accent); color: var(--accent); background: rgba(210,153,34,0.12); }
+.seasonBadge.editing { display: inline-flex; gap: 4px; align-items: center; margin-left: 8px; }
+
 /* Universal NoteWidget — the note-on-anything drop-in (Nima, 2026-07-20) */
 .noteWidget { margin-top: 6px; font-size: 12px; }
 .noteWidgetBody { margin-top: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }

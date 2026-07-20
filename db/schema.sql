@@ -228,6 +228,42 @@ CREATE TABLE IF NOT EXISTS edi_manual_links (
   created_at       TIMESTAMPTZ DEFAULT now()
 );
 
+-- ── EDI transaction acknowledgments (Nima, 2026-07-20) ───────────────────────
+-- "We did have them validly sent, we have a valid version in the history" —
+-- Bloomingdale's 856s that Orderful flagged INVALID but were actually
+-- resent and accepted. hasIssue (src/model/ediPipeline.js) checks EVERY
+-- transaction in a PO's group, so one bad historical 856 blocks the PO from
+-- ever auto-closing even after a valid resend. This is the per-DOCUMENT
+-- acknowledgment (deliberately separate from edi_po_resolutions, which closes
+-- the whole PO's WORK) — linked_transaction_id records which later document
+-- actually superseded it, if any; null + a note covers "confirmed nothing to
+-- link, this one really has no valid replacement."
+CREATE TABLE IF NOT EXISTS edi_transaction_acks (
+  transaction_id        TEXT PRIMARY KEY,
+  linked_transaction_id TEXT,
+  note                  TEXT,
+  created_at            TIMESTAMPTZ DEFAULT now()
+);
+
+-- ── Doc seasons (Nima, 2026-07-20) ───────────────────────────────────────────
+-- NetSuite tracks season (not year) on orders already, but there's no export
+-- for it yet — lives app-only for now, same "do our work here" reasoning as
+-- edi_po_resolutions. Free text so it covers both a dated season ("Summer
+-- 2026") and 'Core' (year-round, not tied to a season) — useful across OC↔PO
+-- matching AND EDI (surfacing a Bloomingdale's PO that's Core when everything
+-- else on the board is a dated season, or vice versa). doc_type/doc_number is
+-- the same natural-key pattern as `notes`. doc_type keeps 'PO' (inbound vendor
+-- supply, purchase_orders.po_number) and 'EDI_PO' (the customer's own PO
+-- number on the sales side, edi_transactions.business_number) SEPARATE —
+-- they're different numbering domains and could collide on the same digits.
+CREATE TABLE IF NOT EXISTS doc_seasons (
+  doc_type    TEXT NOT NULL,     -- 'OC' | 'PO' | 'EDI_PO'
+  doc_number  TEXT NOT NULL,
+  season      TEXT NOT NULL,
+  updated_at  TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (doc_type, doc_number)
+);
+
 -- ── EDI manual orders — the gap-filler (Nima, 2026-07-17) ────────────────────
 -- Older EDI orders that already SHIPPED have aged out of every saved search and
 -- the Orderful pull, so they can't appear in the automated pipeline at all — yet

@@ -11,6 +11,7 @@ import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
+  ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason,
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
@@ -291,6 +292,47 @@ app.delete('/api/edi/link/:transactionId', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Per-document acknowledgment (Nima, 2026-07-20) — clears ONE invalid/failed
+// document (resent-and-accepted, or confirmed nothing to link) without
+// touching the rest of the PO's open work; see /api/edi/resolution for that.
+app.post('/api/edi/transactions/:transactionId/ack', async (req, res) => {
+  try {
+    const { linkedTransactionId, note } = req.body || {}
+    res.json(await ackEdiTransaction({ transactionId: req.params.transactionId, linkedTransactionId, note }))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/edi/transactions/:transactionId/ack', async (req, res) => {
+  try {
+    res.json(await unackEdiTransaction(req.params.transactionId))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Doc seasons — free-text season tag on any OC/PO/EDI PO (Nima, 2026-07-20).
+app.get('/api/seasons', async (_req, res) => {
+  try {
+    res.json(await getSeasons())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/seasons', async (req, res) => {
+  try {
+    res.json(await setSeason(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 

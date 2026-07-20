@@ -53,7 +53,13 @@ function hasIssue(t) {
 //     no matching NetSuite fulfillment/invoice.
 //   - NO_850_FOUND: an 856 or 810 exists with no 850 anywhere — the master
 //     document is missing; needs a manual link (see `manualLinks`).
-export function computeEdiPipeline(transactions = [], fulfillments = [], netsuiteOrders = [], manualLinks = [], documentPoRefs = []) {
+export function computeEdiPipeline(transactions = [], fulfillments = [], netsuiteOrders = [], manualLinks = [], documentPoRefs = [], acks = []) {
+  // Acknowledged documents (Nima, 2026-07-20): an invalid/failed/rejected
+  // document a human has confirmed is either superseded by a later valid one
+  // (linkedTransactionId set) or genuinely has nothing to link — either way
+  // it should stop blocking the PO from reading as clean. Always tagged
+  // `acked` on the transaction so the UI can show it as resolved, not hidden.
+  const ackByTxnId = new Map(acks.map((a) => [a.transactionId, a]))
   const bolToPoNumbers = new Map() // bol -> Set<po_number>
   const fulfillmentsByPoNumber = new Map() // po_number -> fulfillment[]
   for (const f of fulfillments) {
@@ -106,9 +112,9 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
   const orders = [...byBusinessNumber.entries()].map(([businessNumber, txns]) => {
     // A shared BOL can duplicate the same ASN into several PO groups above —
     // dedupe by transaction id so one order doesn't show it twice.
-    const sorted = [...new Map(txns.map((t) => [t.id, t])).values()].sort(
-      (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
-    )
+    const sorted = [...new Map(txns.map((t) => [t.id, t])).values()]
+      .map((t) => ({ ...t, ack: ackByTxnId.get(t.id) || null }))
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     const stageRank = sorted.reduce((max, t) => Math.max(max, STAGE_RANK[t.type] || 0), 0)
     const tradingPartner = sorted.find((t) => t.tradingPartner)?.tradingPartner || null
     const netsuiteOrder = netsuiteByPoNumber.get(businessNumber) || null
@@ -141,7 +147,7 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
       tradingPartner,
       stage: STAGE_LABEL[stageRank] || 'Unrecognized document',
       stageRank,
-      hasIssue: sorted.some(hasIssue),
+      hasIssue: sorted.some((t) => hasIssue(t) && !t.ack),
       hasManualLinks,
       lastUpdatedAt: sorted.reduce((max, t) => (t.lastUpdatedAt > max ? t.lastUpdatedAt : max), sorted[0]?.lastUpdatedAt || null),
       shipNotBefore: po850?.shipNotBefore || null,

@@ -159,6 +159,40 @@ export async function unlinkEdiTransaction(transactionId) {
   return res.json()
 }
 
+// Per-document acknowledgment — clears one invalid/failed document (linked to
+// its valid replacement, or confirmed nothing to link) without closing the PO.
+export async function ackEdiTransaction({ transactionId, linkedTransactionId, note }) {
+  const res = await fetch(`/api/edi/transactions/${transactionId}/ack`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ linkedTransactionId, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function unackEdiTransaction(transactionId) {
+  const res = await fetch(`/api/edi/transactions/${transactionId}/ack`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Doc seasons — free-text season tag on any OC/PO/EDI PO (doc_type keeps
+// them separate — see db/schema.sql doc_seasons).
+export async function fetchSeasons() {
+  const res = await fetch('/api/seasons')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function saveSeason({ docType, docNumber, season }) {
+  const res = await fetch('/api/seasons', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docType, docNumber, season }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // Manually-entered EDI orders (shipped/aged out of the searches). Always shown
 // in their own section, flagged as unconfirmed.
 export async function addEdiManualOrder({ businessNumber, tradingPartner, note }) {

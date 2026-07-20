@@ -2,6 +2,51 @@
 import { useEffect, useState } from 'react'
 import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote } from './api.js'
 
+// Season badge (Nima, 2026-07-20) — free-text season tag ('Summer 2026',
+// 'Core', …) on any OC/PO. Presentational + self-editing; the parent view
+// owns the seasons lookup (one bulk fetch, see fetchSeasons in api.js) and
+// passes the current value + a save callback so many badges on one page
+// don't each fire their own request just to render.
+export function SeasonBadge({ season, onSave, highlightCore }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(season || '')
+  const [busy, setBusy] = useState(false)
+
+  function startEdit(e) {
+    e.stopPropagation()
+    setDraft(season || '')
+    setEditing(true)
+  }
+
+  async function save(e) {
+    e.preventDefault()
+    setBusy(true)
+    try {
+      await onSave(draft.trim())
+      setEditing(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <form className="seasonBadge editing" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <input className="qtyInput" style={{ width: 110 }} value={draft} autoFocus placeholder="e.g. Summer 2026"
+               onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setEditing(false)} />
+        <button type="submit" className="linkBtn" disabled={busy}>save</button>
+        <button type="button" className="linkBtn" onClick={() => setEditing(false)}>✕</button>
+      </form>
+    )
+  }
+  return (
+    <span className={'seasonBadge' + (highlightCore && season === 'Core' ? ' core' : '') + (season ? '' : ' unset')}
+          onClick={startEdit} title="Click to set the season">
+      {season || '+ season'}
+    </span>
+  )
+}
+
 // The universal note-on-anything widget (Nima, 2026-07-20) — a small
 // textarea + save + list, meant to drop onto any card that has a doc type
 // and number (EDI PO, SO row, fulfillment, task). Keeps its own notes loaded

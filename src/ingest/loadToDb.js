@@ -401,6 +401,52 @@ export async function deleteEdiManualLink(transactionId, db = pool) {
   return rowCount
 }
 
+// ── EDI transaction acknowledgments — per-document, distinct from the
+// per-PO edi_po_resolutions above (see db/schema.sql).
+export async function fetchEdiTransactionAcks(db = pool) {
+  const { rows } = await db.query(
+    `SELECT transaction_id AS "transactionId", linked_transaction_id AS "linkedTransactionId", note, created_at AS "createdAt"
+     FROM edi_transaction_acks`,
+  )
+  return rows
+}
+
+export async function upsertEdiTransactionAck({ transactionId, linkedTransactionId, note }, db = pool) {
+  await db.query(
+    `INSERT INTO edi_transaction_acks (transaction_id, linked_transaction_id, note)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (transaction_id) DO UPDATE SET linked_transaction_id = EXCLUDED.linked_transaction_id, note = EXCLUDED.note`,
+    [transactionId, linkedTransactionId || null, note || null],
+  )
+}
+
+export async function deleteEdiTransactionAck(transactionId, db = pool) {
+  await db.query('DELETE FROM edi_transaction_acks WHERE transaction_id = $1', [transactionId])
+}
+
+// ── Doc seasons — free-text season tag on any OC/PO (see db/schema.sql).
+// Saving an empty season clears the tag (deletes the row) rather than storing
+// blanks, same convention as quest_emails.note.
+export async function fetchSeasons(db = pool) {
+  const { rows } = await db.query(
+    `SELECT doc_type AS "docType", doc_number AS "docNumber", season, updated_at AS "updatedAt" FROM doc_seasons`,
+  )
+  return rows
+}
+
+export async function upsertSeason({ docType, docNumber, season }, db = pool) {
+  if (!season?.trim()) {
+    await db.query('DELETE FROM doc_seasons WHERE doc_type = $1 AND doc_number = $2', [docType, docNumber])
+    return
+  }
+  await db.query(
+    `INSERT INTO doc_seasons (doc_type, doc_number, season, updated_at)
+     VALUES ($1,$2,$3, now())
+     ON CONFLICT (doc_type, doc_number) DO UPDATE SET season = EXCLUDED.season, updated_at = now()`,
+    [docType, docNumber, season.trim()],
+  )
+}
+
 // ── EDI manual orders — hand-entered gap-fillers (kept apart from the pipeline)
 export async function createEdiManualOrder({ businessNumber, tradingPartner, note }, db = pool) {
   const { rows } = await db.query(

@@ -67,8 +67,8 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     needed = 'Orphan document — find and link its 850 (no PO on file)'
   } else if (order.hasIssue) {
     const bad = order.transactions.find(
-      (t) => t.validationStatus === 'INVALID' || t.deliveryStatus === 'FAILED' ||
-             t.acknowledgmentStatus === 'REJECTED' || t.acknowledgmentStatus === 'OVERDUE',
+      (t) => !t.ack && (t.validationStatus === 'INVALID' || t.deliveryStatus === 'FAILED' ||
+             t.acknowledgmentStatus === 'REJECTED' || t.acknowledgmentStatus === 'OVERDUE'),
     )
     const what = bad
       ? `${bad.type.split('_')[0]} ${bad.validationStatus === 'INVALID' ? 'invalid' : bad.deliveryStatus === 'FAILED' ? 'failed to deliver' : 'acknowledgment ' + String(bad.acknowledgmentStatus).toLowerCase()}`

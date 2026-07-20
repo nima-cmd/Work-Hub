@@ -19,6 +19,8 @@ import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
   createEdiManualOrder, fetchEdiManualOrders, deleteEdiManualOrder,
   fetchEdiPoResolutions, upsertEdiPoResolution, deleteEdiPoResolution,
+  fetchEdiTransactionAcks, upsertEdiTransactionAck, deleteEdiTransactionAck,
+  fetchSeasons, upsertSeason,
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
@@ -540,15 +542,42 @@ async function fetchEdiSourcedOrders() {
 }
 
 export async function getEdiReview() {
-  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, manualOrders, resolutions] = await Promise.all([
+  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, manualOrders, resolutions, acks] = await Promise.all([
     fetchEdiTransactions(), fetchEdiFulfillments(), fetchEdiSourcedOrders(), fetchEdiManualLinks(), fetchEdiDocumentPoRefs(),
-    fetchEdiManualOrders(), fetchEdiPoResolutions(),
+    fetchEdiManualOrders(), fetchEdiPoResolutions(), fetchEdiTransactionAcks(),
   ])
-  const pipeline = computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs)
+  const pipeline = computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, acks)
   // manualOrders are returned ALONGSIDE (never merged into) the automated
   // pipeline — the EDI view renders them in their own clearly-flagged section.
   // resolutions ride along for the client-side work layer (src/model/ediWork.js).
   return { ...pipeline, manualOrders, resolutions }
+}
+
+// Per-document acknowledgment (Nima, 2026-07-20) — distinct from resolveEdiPo:
+// this clears ONE invalid/failed document (a Bloomingdale's 856 that was
+// resent and accepted, or one confirmed to have nothing to link) without
+// touching the rest of the PO's open work.
+export async function ackEdiTransaction({ transactionId, linkedTransactionId, note }) {
+  if (!transactionId) throw new Error('transactionId is required')
+  await upsertEdiTransactionAck({ transactionId, linkedTransactionId, note })
+  return getEdiReview()
+}
+
+export async function unackEdiTransaction(transactionId) {
+  await deleteEdiTransactionAck(transactionId)
+  return getEdiReview()
+}
+
+// Doc seasons (Nima, 2026-07-20) — free-text season tag on any OC/PO/EDI PO
+// (see db/schema.sql doc_seasons).
+export async function getSeasons() {
+  return fetchSeasons()
+}
+
+export async function setSeason({ docType, docNumber, season }) {
+  if (!docType || !docNumber) throw new Error('docType and docNumber are required')
+  await upsertSeason({ docType, docNumber, season })
+  return getSeasons()
 }
 
 // Manual PO resolution (Nima, 2026-07-18): connect a PO to its NetSuite ref

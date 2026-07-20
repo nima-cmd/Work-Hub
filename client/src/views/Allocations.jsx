@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchOcPoReview, commitOcPo, undoOcPoLink, dismissOcPo } from '../api.js'
+import { fetchOcPoReview, commitOcPo, undoOcPoLink, dismissOcPo, fetchSeasons, saveSeason } from '../api.js'
+import { SeasonBadge } from '../lib.jsx'
 
 const keyOf = (...parts) => parts.join('|')
 
@@ -46,11 +47,18 @@ export default function Allocations() {
   const [selectedLocation, setSelectedLocation] = useState(null)
   const [expanded, setExpanded] = useState(() => new Set())
   const [draftQty, setDraftQty] = useState({})
+  const [seasons, setSeasons] = useState({})
 
   function load() {
     fetchOcPoReview().then(setReview).catch((e) => setErr(e.message))
+    fetchSeasons().then((rows) => setSeasons(Object.fromEntries(rows.map((s) => [keyOf(s.docType, s.docNumber), s.season])))).catch(() => {})
   }
   useEffect(load, [])
+
+  async function onSaveSeason(docType, docNumber, season) {
+    const rows = await saveSeason({ docType, docNumber, season })
+    setSeasons(Object.fromEntries(rows.map((s) => [keyOf(s.docType, s.docNumber), s.season])))
+  }
 
   async function run(rowKey, fn) {
     setBusy(rowKey)
@@ -161,6 +169,7 @@ export default function Allocations() {
                     <b>{c.poNumber}</b>{' '}
                     <span className="cust">{c.vendor}</span>
                     {c.shortItemCount > 0 && <span className="flag sev-hi" style={{ marginLeft: 8 }}>{c.shortItemCount} short</span>}
+                    <SeasonBadge season={seasons[keyOf('PO', c.poNumber)]} onSave={(s) => onSaveSeason('PO', c.poNumber, s)} highlightCore />
                   </div>
                   <span className="cust">{c.totalAllocated} / {c.totalCapacity} units &middot; {c.fillPct}% full</span>
                 </div>
@@ -240,7 +249,10 @@ export default function Allocations() {
               <h2>Open demand, no PO yet <span className="count">{locationUnassignedOcs.length}</span></h2>
               {locationUnassignedOcs.map((o) => (
                 <div className="kcard" key={keyOf(o.ocNumber, o.item)}>
-                  <div className="so">{o.ocNumber} <span className="cust">{o.customer}</span></div>
+                  <div className="so">
+                    {o.ocNumber} <span className="cust">{o.customer}</span>
+                    <SeasonBadge season={seasons[keyOf('OC', o.ocNumber)]} onSave={(s) => onSaveSeason('OC', o.ocNumber, s)} />
+                  </div>
                   <div>{o.item} &middot; qty {o.remaining}</div>
                   <button className="btnGhost" disabled={busy === keyOf('closeoc', o.ocNumber, o.item)} onClick={() => closeOc(o)}>
                     Mark to close
