@@ -1,6 +1,25 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
 import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote } from './api.js'
+import { NETSUITE_DOC_TYPES } from '../../src/model/netsuiteDocs.js'
+
+// Task-composer option lists — shared so any view that creates tasks offers the
+// same "what's required to complete this" (needs) and urgency choices as the
+// Transmissions new-task form. NETSUITE_DOC_TYPES comes from the model.
+export { NETSUITE_DOC_TYPES }
+export const NEEDS_OPTIONS = [
+  { value: 'none', label: 'Nothing needed yet' },
+  { value: 'reply', label: 'Reply needed' },
+  { value: 'acknowledgment', label: 'Acknowledgment needed' },
+  { value: 'file', label: 'File needed' },
+  { value: 'netsuite_doc', label: 'NetSuite document needed' },
+]
+export const URGENCY_OPTIONS = [
+  { value: '', label: 'No urgency set' },
+  { value: 'lo', label: 'Low' },
+  { value: 'mid', label: 'Medium' },
+  { value: 'hi', label: 'High' },
+]
 
 // Season badge (Nima, 2026-07-20) — free-text season tag ('Summer 2026',
 // 'Core', …) on any OC/PO. Presentational + self-editing; the parent view

@@ -937,15 +937,41 @@ export async function acknowledgeQuestEmail(emailId) {
   return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
 }
 
+// One hand-written task. "Messenger (random)" (no characterId) → a random
+// roster face, so the card looks like the rest. A netsuite_doc requirement has
+// its number normalized to the type's prefix (e.g. "1213" under SO → "SO1213"),
+// the same rule the per-task needs editor uses — this is how you record the doc
+// that closes it out. Returns the new task id (shared by single + bulk create).
+async function createOneManualTask(fields) {
+  if (!fields?.subject?.trim()) throw new Error('A task needs at least a subject')
+  const characterId = fields.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
+  const isDoc = fields.needsType === 'netsuite_doc'
+  const netsuiteDocType = isDoc ? (fields.netsuiteDocType || 'SO') : null
+  const netsuiteDocNumber = isDoc && fields.netsuiteDocNumber
+    ? normalizeDocNumber(netsuiteDocType, fields.netsuiteDocNumber) : null
+  const taskId = await createManualTask({ ...fields, characterId, netsuiteDocType, netsuiteDocNumber })
+  await logTaskActivity({ taskId, kind: 'created', note: `Created manually: "${fields.subject}"` })
+  return taskId
+}
+
 // A task Nima writes himself — returns the refreshed task list.
 export async function addManualTask(fields) {
-  if (!fields?.subject?.trim()) throw new Error('A task needs at least a subject')
-  // "Messenger (random)" in the form sends no characterId — honour it by
-  // picking a random roster character so the card has a face like the rest.
-  const characterId = fields.characterId || CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)].id
-  const taskId = await createManualTask({ ...fields, characterId })
-  await logTaskActivity({ taskId, kind: 'created', note: `Created manually: "${fields.subject}"` })
+  await createOneManualTask(fields)
   return getQuestTasks()
+}
+
+// Bulk create (Nima, 2026-07-20) — turn many selected orders/PO groups into
+// tasks at once (the Mission Quests "create tasks" flow). Each gets its own
+// random messenger; a shared needsType/urgency applies to all, and a doc
+// number (single-selection only) closes-out reference rides along.
+export async function addTasksBulk(tasks = []) {
+  if (!Array.isArray(tasks) || !tasks.length) throw new Error('No tasks to create')
+  let created = 0
+  for (const t of tasks) {
+    await createOneManualTask(t)
+    created++
+  }
+  return { created, tasks: await getQuestTasks() }
 }
 
 // ── Recurring tasks ──────────────────────────────────────────────────────────

@@ -333,6 +333,17 @@ export async function createManualTask(fields) {
   return res.json()
 }
 
+// Bulk-create tasks from selected orders / PO groups (Mission Quests).
+export async function createTasksBulk(tasks) {
+  const res = await fetch('/api/quest-tasks/bulk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tasks }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 export async function completeQuestTask(id, done = true) {
   const res = await fetch(`/api/quest-tasks/${id}/complete`, {
     method: 'POST',

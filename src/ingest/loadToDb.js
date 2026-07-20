@@ -611,12 +611,15 @@ export async function createQuestTask({ emailId, threadId, characterId, fromAddr
 // stays NULL. Otherwise identical to an email-derived task, so it flows through
 // the same Dashboard/Kanban/Tasks surfaces. from_name is a human label for who
 // it's "from" (defaults to a self tag) so the card has something to show.
-export async function createManualTask({ subject, snippet, characterId, urgency, needsType, needsNote, fromName }, db = pool) {
+export async function createManualTask(
+  { subject, snippet, characterId, urgency, needsType, needsNote, fromName, netsuiteDocType, netsuiteDocNumber },
+  db = pool,
+) {
   const { rows } = await db.query(
-    `INSERT INTO quest_tasks (email_id, character_id, from_name, subject, snippet, urgency, needs_type, needs_note)
-     VALUES (NULL,$1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    `INSERT INTO quest_tasks (email_id, character_id, from_name, subject, snippet, urgency, needs_type, needs_note, netsuite_doc_type, netsuite_doc_number)
+     VALUES (NULL,$1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [characterId || null, fromName || 'Manual entry', subject || null, snippet || null,
-     urgency || null, needsType || 'none', needsNote || null],
+     urgency || null, needsType || 'none', needsNote || null, netsuiteDocType || null, netsuiteDocNumber || null],
   )
   return rows[0].id
 }

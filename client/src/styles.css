@@ -119,6 +119,20 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .kcard { background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
 .kcard .so { font-weight: 700; font-variant-numeric: tabular-nums; }
 .kcard .cust { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.kcard.selected { border-color: var(--holo); box-shadow: 0 0 0 1px var(--holo), 0 0 12px rgba(79,209,255,0.25); }
+.kcard .krow { display: flex; align-items: center; gap: 6px; }
+.cardPick { display: inline-flex; align-items: center; cursor: pointer; }
+.cardPick input { cursor: pointer; accent-color: var(--holo); }
+
+/* Mission Quests — selection + task-composer bar */
+.questBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.questMsg { color: var(--holo); font-size: 12px; }
+.questComposer {
+  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 14px;
+}
+.composerField { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.composerActions { display: flex; gap: 8px; margin-left: auto; }
 
 /* table */
 .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }

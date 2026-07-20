@@ -16,7 +16,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail,
-  getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, completeTask, getQuestEmailThread,
+  getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
   recordFulfillmentBox, getCustodyRegister,
@@ -551,6 +551,16 @@ app.post('/api/quest-tasks', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Bulk task creation from selected orders / PO groups (Mission Quests).
+app.post('/api/quest-tasks/bulk', async (req, res) => {
+  try {
+    res.json(await addTasksBulk(req.body?.tasks || []))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 
