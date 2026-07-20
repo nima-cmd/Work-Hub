@@ -2,7 +2,8 @@
 
 Drop image files here named `<character-id>-<n>.<ext>` (`.png`, `.jpg`,
 `.jpeg`, `.webp`, or `.svg`) — e.g. `rey-1.png`, `rey-2.jpg`. `<character-id>`
-must match an `id` in `src/model/characters.js`.
+must match an `id` in `src/model/characters.js` (case-insensitive — `Boba-Fett.jpg`
+resolves to `boba-fett`, and the `-<n>` suffix is optional).
 
 That's the entire integration step — `client/src/data/characterImages.js`
 auto-discovers every file here via `import.meta.glob` and groups them by

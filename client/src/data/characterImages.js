@@ -7,7 +7,9 @@ const modules = import.meta.glob('../assets/characters/*.{png,jpg,jpeg,webp,svg}
 const byCharacter = {}
 for (const [path, url] of Object.entries(modules)) {
   const filename = path.split('/').pop()
-  const id = filename.replace(/-\d+\.\w+$/, '').replace(/\.\w+$/, '')
+  // lower-cased so filename capitalisation never matters (e.g. Boba-Fett.jpg
+  // still maps to the id 'boba-fett') — character ids are always lower-kebab.
+  const id = filename.replace(/-\d+\.\w+$/, '').replace(/\.\w+$/, '').toLowerCase()
   ;(byCharacter[id] ||= []).push(url)
 }
 
