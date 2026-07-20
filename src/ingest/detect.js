@@ -45,15 +45,22 @@ export const SOURCE_LABELS = {
   poReceiving: 'Warehouse PO Receiving Pipeline',
   ocPipeline: 'Warehouse OC Pipeline',
   ediFulfillments: 'EDI 856 ASN / BOL search',
+  // The "Waiting to Ship" search — the ONLY source of IF-Packed-Status
+  // (Approved to Ship / FOB / Waiting On Payment / Pending Invoice), which the
+  // Launch Bay + Ship Departures depend on. Formerly treated as legacy; promoted
+  // back to required 2026-07-17 after a stale export left the Launch Bay showing
+  // only 1 of ~10 packed IFs with no freshness warning.
+  pendingOrders: 'Waiting to Ship (packed status)',
   // legacy (no longer required, still recognized on upload)
   unpackedFulfillments: 'Item Fulfilment (legacy)',
-  pendingOrders: 'Pending Orders (legacy)',
   invoicedPending: 'Invoiced Order Pending Status (legacy)',
 }
 
 // The exports the app now expects (source-type keys, matching detectSource).
 // Freshness tracking checks each independently so a stale/missing one is obvious.
-export const REQUIRED_SOURCES = ['openSalesOrders', 'fulfillmentPipeline', 'poReceiving', 'ocPipeline']
+// pendingOrders is here because the Launch Bay's packed-status data comes from
+// nowhere else — if it's not re-exported, the bay silently goes stale.
+export const REQUIRED_SOURCES = ['openSalesOrders', 'fulfillmentPipeline', 'poReceiving', 'ocPipeline', 'pendingOrders']
 
 // Direct links to each saved search in NetSuite, so the freshness panel and
 // Bugs' CSV-freshness task can jump straight to the export page (same pattern
@@ -72,4 +79,10 @@ export const SOURCE_LINKS = {
   poReceiving: NS + '3945',
   ocPipeline: NS + '3946',
   ediFulfillments: NS + '3936',
+  // "Waiting to Ship" — the packed-status feed for the Launch Bay (Nima,
+  // 2026-07-17). NOTE: its PO#, Invoice-for-IF and IF-Packed-Status columns are
+  // MANUALLY maintained in NetSuite, so this data is only as good as the last
+  // hand-update — the long-term goal is to derive launch-readiness from reliable
+  // signals (invoice/payment status, custody scans, ship dates) instead.
+  pendingOrders: NS + '3085',
 }
