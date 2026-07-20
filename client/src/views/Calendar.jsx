@@ -1,225 +1,183 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { SourceBadge } from '../lib.jsx'
+import { imagesFor } from '../data/characterImages.js'
 
 const DAY = 86400000
 
-// Agenda of upcoming deadlines (Ship dates and Cancel dates — cancel dates
-// are "ship by or lose it", doubly important for EDI chargebacks), plus a
-// month/week grid of orders that have actually shipped (a real IF-shipped
-// event date, distinct from the target ship date the agenda watches) — and
-// the quest-task activity journal (Nima, 2026-07-15: "we would also like
-// these to show up in our calendar as well"), plotted on the day they happened
-// — and the order-events ledger (custody OUT/IN scans, Nima 2026-07-17), the
-// "what occurred every day" record.
-export default function Calendar({ orders, activity = [], events = [] }) {
+// Calendar (rebuilt 2026-07-18 to Nima's spec): three zones —
+//   [ open tasks | month grid | selected day's events ]
+// The calendar sits to the RIGHT of the tasks; clicking a day opens everything
+// that happened/is due that day in the right-hand panel: ship/cancel deadlines,
+// actual departures, custody scans + ledger events, and the task journal.
+export default function Calendar({ orders, tasks = [], activity = [], events = [] }) {
+  const today = startOfDay(Date.now())
+  const [selected, setSelected] = useState(today)
+  const [cursor, setCursor] = useState(today)
+
+  // ── every dated thing, indexed by day ─────────────────────────────────────
+  const byDay = useMemo(() => {
+    const m = new Map()
+    const push = (day, item) => { if (!m.has(day)) m.set(day, []); m.get(day).push(item) }
+    for (const o of orders) {
+      if (o.shipDate) push(startOfDay(new Date(o.shipDate).getTime()), { cat: 'deadline', kind: 'Ship due', o })
+      if (o.cancelDate) push(startOfDay(new Date(o.cancelDate).getTime()), { cat: 'deadline', kind: 'Cancel by', o })
+      for (const f of o.fulfillments || []) {
+        if (f.actualShipDate) push(startOfDay(new Date(f.actualShipDate).getTime()), { cat: 'shipped', kind: 'Departed', o, f })
+      }
+    }
+    for (const a of activity) push(startOfDay(new Date(a.createdAt).getTime()), { cat: 'journal', kind: a.kind?.replace('_', ' ') || 'note', a })
+    for (const e of events) push(startOfDay(new Date(e.occurredAt).getTime()), { cat: 'ledger', kind: ledgerKind(e), e })
+    return m
+  }, [orders, activity, events])
+
+  const openTasks = tasks.filter((t) => t.status === 'open')
+  const overdue = []
+  for (const o of orders) {
+    if (o.shipDate && startOfDay(new Date(o.shipDate).getTime()) < today && o.stage !== 'SHIPPED')
+      overdue.push(o)
+  }
+
+  const gridStart = startOfWeek(startOfMonth(cursor))
+  const days = Array.from({ length: 42 }, (_, i) => gridStart + i * DAY)
+  const curMonth = new Date(cursor).getMonth()
+  const dayItems = byDay.get(selected) || []
+
   return (
-    <div className="calendar">
-      <Agenda orders={orders} />
-      <ShipGrid orders={orders} activity={activity} events={events} />
+    <div className="calendar3">
+      {/* ── zone 1: duties ── */}
+      <aside className="calTasks">
+        <div className="sectorHead"><span className="sectorTitle">◤ DUTIES</span><span className="sectorCount">{openTasks.length}</span></div>
+        {overdue.length > 0 && (
+          <div className="calOverdueNote">⚠ {overdue.length} order{overdue.length > 1 ? 's' : ''} past ship date</div>
+        )}
+        {openTasks.map((t) => {
+          const img = imagesFor(t.characterId)[0]
+          return (
+            <div key={t.id} className={'calTask ' + (t.urgency === 'hi' ? 'sev-hi' : t.urgency === 'mid' ? 'sev-mid' : 'sev-lo')}>
+              <span className="calTaskAvatar">{img ? <img src={img} alt="" /> : '◈'}</span>
+              <span className="calTaskBody">
+                <b>{t.character?.name || 'Messenger'}</b>
+                <span>{t.subject}</span>
+              </span>
+            </div>
+          )
+        })}
+        {!openTasks.length && <div className="empty">No open tasks.</div>}
+      </aside>
+
+      {/* ── zone 2: the month grid ── */}
+      <section className="calMain">
+        <div className="calNav">
+          <button className="calNavBtn" onClick={() => setCursor(addMonths(cursor, -1).getTime())}>‹</button>
+          <h3 className="calTitle">{new Date(cursor).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h3>
+          <button className="calNavBtn" onClick={() => setCursor(addMonths(cursor, 1).getTime())}>›</button>
+          <button className="calToday" onClick={() => { setCursor(today); setSelected(today) }}>Today</button>
+        </div>
+        <div className="calGrid">
+          {WEEKDAYS.map((w) => <div key={w} className="calWeekday">{w}</div>)}
+          {days.map((day) => {
+            const items = byDay.get(day) || []
+            const cats = new Set(items.map((i) => i.cat))
+            const inMonth = new Date(day).getMonth() === curMonth
+            return (
+              <button
+                key={day}
+                onClick={() => setSelected(day)}
+                className={'calCell calCellBtn' + (inMonth ? '' : ' calCell-dim') +
+                  (day === today ? ' calCell-today' : '') + (day === selected ? ' calCell-sel' : '')}
+              >
+                <div className="calDayNum">{new Date(day).getDate()}</div>
+                <div className="calDots">
+                  {cats.has('deadline') && <i className="calDot d-deadline" title="deadline" />}
+                  {cats.has('shipped') && <i className="calDot d-shipped" title="departure" />}
+                  {cats.has('ledger') && <i className="calDot d-ledger" title="custody / ledger" />}
+                  {cats.has('journal') && <i className="calDot d-journal" title="journal" />}
+                </div>
+                {items.length > 0 && <div className="calCount">{items.length}</div>}
+              </button>
+            )
+          })}
+        </div>
+        <div className="calKey">
+          <i className="calDot d-deadline" /> deadline &nbsp; <i className="calDot d-shipped" /> departed &nbsp;
+          <i className="calDot d-ledger" /> custody/ledger &nbsp; <i className="calDot d-journal" /> journal
+        </div>
+      </section>
+
+      {/* ── zone 3: everything on the selected day ── */}
+      <aside className="calDay">
+        <div className="sectorHead">
+          <span className="sectorTitle">◤ {fmtLong(selected)}</span>
+          <span className="sectorCount">{dayItems.length}</span>
+        </div>
+        {CAT_ORDER.map((cat) => {
+          const list = dayItems.filter((i) => i.cat === cat)
+          if (!list.length) return null
+          return (
+            <div key={cat} className="calDayGroup">
+              <div className="taskGroupHead">{CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span></div>
+              {list.map((it, i) => <DayItem key={i} it={it} />)}
+            </div>
+          )
+        })}
+        {!dayItems.length && <div className="empty">Nothing recorded on this day.</div>}
+      </aside>
     </div>
   )
 }
 
-function Agenda({ orders }) {
-  const today = startOfDay(Date.now())
-  const weekEnd = today + 7 * DAY
+const CAT_ORDER = ['deadline', 'shipped', 'ledger', 'journal']
+const CAT_LABEL = {
+  deadline: 'Deadlines', shipped: 'Departures', ledger: 'Custody & ledger', journal: 'Journal',
+}
 
-  const events = []
-  for (const o of orders) {
-    if (o.shipDate) events.push(evt(o, o.shipDate, 'Ship'))
-    if (o.cancelDate) events.push(evt(o, o.cancelDate, 'Cancel'))
+function DayItem({ it }) {
+  if (it.cat === 'deadline' || it.cat === 'shipped') {
+    return (
+      <div className={'calRow ' + (it.kind === 'Cancel by' ? 'cancel' : '')}>
+        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : it.cat === 'shipped' ? 'sev-lo' : 'sev-mid')}>{it.kind}</span>
+        <span className="so">{it.f?.ifNumber || it.o.soNumber}</span>
+        <span className="cust">{it.o.customer}</span>
+        <SourceBadge source={it.o.source} />
+      </div>
+    )
   }
-  events.sort((a, b) => a.t - b.t)
-
-  const groups = { Overdue: [], Today: [], 'Next 7 days': [], Later: [] }
-  for (const e of events) {
-    if (e.day < today) groups.Overdue.push(e)
-    else if (e.day === today) groups.Today.push(e)
-    else if (e.day <= weekEnd) groups['Next 7 days'].push(e)
-    else groups.Later.push(e)
+  if (it.cat === 'ledger') {
+    const e = it.e
+    return (
+      <div className="calRow">
+        <span className="caltag sev-lo">{it.kind}</span>
+        <span className="so">{e.docNumber}</span>
+        <span className="cust">{e.customer || e.soNumber || ''}</span>
+        {e.note && <span className="calNote">“{e.note}”</span>}
+        <span className="caldate">{fmtTime(e.occurredAt)}</span>
+      </div>
+    )
   }
-
-  const headClass = { Overdue: 'sev-hi', Today: 'sev-mid' }
-
   return (
-    <>
-      {Object.entries(groups).map(([label, list]) =>
-        list.length ? (
-          <section key={label} className="calGroup">
-            <h3 className={'calHead ' + (headClass[label] || '')}>
-              {label} <span className="count">{list.length}</span>
-            </h3>
-            {list.map((e, i) => (
-              <div key={i} className={'calRow ' + (e.kind === 'Cancel' ? 'cancel' : '')}>
-                <span className="caldate">{fmt(e.t)}</span>
-                <span className={'caltag ' + (e.kind === 'Cancel' ? 'sev-hi' : 'sev-lo')}>
-                  {e.kind}
-                </span>
-                <span className="so">{e.o.soNumber}</span>
-                <span className="cust">{e.o.customer}</span>
-                <SourceBadge source={e.o.source} />
-              </div>
-            ))}
-          </section>
-        ) : null,
-      )}
-    </>
+    <div className="calRow">
+      <span className="caltag sev-lo">{it.kind}</span>
+      <span className="cust">{it.a.subject || it.a.note || ''}</span>
+      <span className="caldate">{fmtTime(it.a.createdAt)}</span>
+    </div>
   )
 }
 
-// Month/week grid of actual shipped-on dates, pulled from each order's
-// fulfillments (only Shipped IFs carry an actualShipDate) — plus the
-// quest-task activity journal, plotted on the day each entry happened.
-function ShipGrid({ orders, activity = [], events = [] }) {
-  const [mode, setMode] = useState('month') // 'month' | 'week'
-  const [cursor, setCursor] = useState(() => startOfDay(Date.now()))
-  const today = startOfDay(Date.now())
-
-  const shipped = new Map() // day (ms) -> [{o, f}]
-  for (const o of orders) {
-    for (const f of o.fulfillments || []) {
-      if (!f.actualShipDate) continue
-      const day = startOfDay(f.actualShipDate)
-      if (!shipped.has(day)) shipped.set(day, [])
-      shipped.get(day).push({ o, f })
-    }
+function ledgerKind(e) {
+  switch (e.eventType) {
+    case 'CUSTODY_OUT': return '⬆ out to warehouse'
+    case 'CUSTODY_IN': return '⬇ back in hands'
+    case 'CUSTODY_CLEARED': return 'custody closed'
+    case 'REACHED_APPROVED': return 'cleared to ship'
+    case 'SHIPPED_VALUE': return 'value logged'
+    default: return e.eventType.toLowerCase().replace(/_/g, ' ')
   }
-
-  const activityByDay = new Map() // day (ms) -> [activity entry]
-  for (const a of activity) {
-    const day = startOfDay(a.createdAt)
-    if (!activityByDay.has(day)) activityByDay.set(day, [])
-    activityByDay.get(day).push(a)
-  }
-
-  const eventsByDay = new Map() // day (ms) -> [order event] — custody scans etc.
-  for (const e of events) {
-    const day = startOfDay(e.occurredAt)
-    if (!eventsByDay.has(day)) eventsByDay.set(day, [])
-    eventsByDay.get(day).push(e)
-  }
-
-  const gridStart =
-    mode === 'week' ? startOfWeek(cursor) : startOfWeek(startOfMonth(cursor))
-  const cellCount = mode === 'week' ? 7 : 42
-  const days = Array.from({ length: cellCount }, (_, i) => gridStart + i * DAY)
-  const curMonth = new Date(cursor).getMonth()
-
-  const step = mode === 'week' ? 7 : null
-  function go(dir) {
-    setCursor((c) =>
-      mode === 'week' ? c + dir * step * DAY : addMonths(c, dir).getTime(),
-    )
-  }
-
-  return (
-    <section className="shipCal">
-      <div className="calNav">
-        <button className="calNavBtn" onClick={() => go(-1)}>‹</button>
-        <h3 className="calTitle">{label(mode, cursor)}</h3>
-        <button className="calNavBtn" onClick={() => go(1)}>›</button>
-        <button className="calToday" onClick={() => setCursor(today)}>Today</button>
-        <div className="calModeToggle">
-          <button className={mode === 'month' ? 'active' : ''} onClick={() => setMode('month')}>
-            Month
-          </button>
-          <button className={mode === 'week' ? 'active' : ''} onClick={() => setMode('week')}>
-            Week
-          </button>
-        </div>
-      </div>
-      <div className={'calGrid ' + (mode === 'week' ? 'calGridWeek' : '')}>
-        {WEEKDAYS.map((w) => (
-          <div key={w} className="calWeekday">{w}</div>
-        ))}
-        {days.map((day) => {
-          const evts = shipped.get(day) || []
-          const acts = activityByDay.get(day) || []
-          const led = eventsByDay.get(day) || []
-          const inMonth = mode === 'week' || new Date(day).getMonth() === curMonth
-          return (
-            <div
-              key={day}
-              className={
-                'calCell' +
-                (inMonth ? '' : ' calCell-dim') +
-                (day === today ? ' calCell-today' : '')
-              }
-            >
-              <div className="calDayNum">{new Date(day).getDate()}</div>
-              {evts.slice(0, 3).map(({ o, f }, i) => (
-                <div key={i} className="calEvt">
-                  <span className="so">{o.soNumber}</span> {o.customer}
-                  <SourceBadge source={o.source} />
-                </div>
-              ))}
-              {evts.length > 3 && <div className="calEvtMore">+{evts.length - 3} more</div>}
-              {acts.slice(0, 3).map((a) => (
-                <div key={a.id} className="calEvt">
-                  <span className="badge transmission">{a.kind.replace('_', ' ')}</span> {a.subject}
-                </div>
-              ))}
-              {acts.length > 3 && <div className="calEvtMore">+{acts.length - 3} more</div>}
-              {led.slice(0, 3).map((e) => (
-                <div key={'ev' + e.id} className="calEvt">
-                  <span className="badge transmission">
-                    {e.eventType === 'CUSTODY_OUT' ? '⬆ out' : e.eventType === 'CUSTODY_IN' ? '⬇ in' : e.eventType.toLowerCase()}
-                  </span>{' '}
-                  <span className="so">{e.docNumber}</span> {e.customer || ''}
-                </div>
-              ))}
-              {led.length > 3 && <div className="calEvtMore">+{led.length - 3} more</div>}
-            </div>
-          )
-        })}
-      </div>
-    </section>
-  )
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-function label(mode, cursor) {
-  if (mode === 'week') {
-    const start = startOfWeek(cursor)
-    const end = start + 6 * DAY
-    const sameMonth = new Date(start).getMonth() === new Date(end).getMonth()
-    const fmtOpts = { month: 'short', day: 'numeric' }
-    const startStr = new Date(start).toLocaleDateString(undefined, fmtOpts)
-    const endStr = new Date(end).toLocaleDateString(
-      undefined,
-      sameMonth ? { day: 'numeric' } : fmtOpts,
-    )
-    return `${startStr} – ${endStr}, ${new Date(end).getFullYear()}`
-  }
-  return new Date(cursor).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
-}
-
-function evt(o, dateStr, kind) {
-  const t = new Date(dateStr).getTime()
-  return { o, kind, t, day: startOfDay(t) }
-}
-function startOfDay(ms) {
-  const d = new Date(ms)
-  d.setHours(0, 0, 0, 0)
-  return d.getTime()
-}
-function startOfWeek(ms) {
-  const d = startOfDay(ms)
-  return d - new Date(d).getDay() * DAY
-}
-function startOfMonth(ms) {
-  const d = new Date(ms)
-  return new Date(d.getFullYear(), d.getMonth(), 1).getTime()
-}
-function addMonths(ms, n) {
-  const d = new Date(ms)
-  return new Date(d.getFullYear(), d.getMonth() + n, 1)
-}
-function fmt(ms) {
-  return new Date(ms).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  })
-}
+function startOfDay(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime() }
+function startOfWeek(ms) { const d = startOfDay(ms); return d - new Date(d).getDay() * DAY }
+function startOfMonth(ms) { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), 1).getTime() }
+function addMonths(ms, n) { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth() + n, 1) }
+function fmtLong(ms) { return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
+function fmtTime(x) { return new Date(x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
