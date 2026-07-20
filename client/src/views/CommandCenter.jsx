@@ -56,7 +56,13 @@ function Canopy() {
   return (
     <div className={'canopy' + (spaceBackdrop ? ' hasSpace' : '')}
          style={spaceBackdrop ? { backgroundImage: `url("${spaceBackdrop}")` } : undefined}>
-      {!spaceBackdrop && <><div className="starLayer sl1" /><div className="starLayer sl2" /><div className="starLayer sl3" /></>}
+      {!spaceBackdrop && <>
+        <div className="canopyPlanet" />
+        <div className="starLayer sl1" /><div className="starLayer sl2" /><div className="starLayer sl3" />
+        <div className="shootingStar ss1" /><div className="shootingStar ss2" />
+      </>}
+      <div className="canopyVignette" />
+      <div className="canopyGlass" />
       <div className="canopyStruts" />
       <span className="canopyLabel">FORWARD VIEWPORT · NAGHEDI COMMAND</span>
     </div>
