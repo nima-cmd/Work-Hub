@@ -353,6 +353,32 @@ export async function fetchEdiFulfillments(db = pool) {
 
 // ── EDI manual links — human override for an 856/810 that can't auto-link to
 // its 850 (see db/schema.sql). One row per transaction; re-linking overwrites.
+// EDI PO resolutions (Nima, 2026-07-18) — the human open/closed override per
+// EDI PO. Upsert semantics: saving again just updates the same row.
+export async function fetchEdiPoResolutions(db = pool) {
+  const { rows } = await db.query(
+    `SELECT business_number AS "businessNumber", closed, cancelled, netsuite_ref AS "netsuiteRef", note,
+            updated_at AS "updatedAt"
+     FROM edi_po_resolutions`,
+  )
+  return rows
+}
+
+export async function upsertEdiPoResolution({ businessNumber, closed = false, cancelled = false, netsuiteRef, note }, db = pool) {
+  await db.query(
+    `INSERT INTO edi_po_resolutions (business_number, closed, cancelled, netsuite_ref, note, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (business_number) DO UPDATE SET
+       closed = EXCLUDED.closed, cancelled = EXCLUDED.cancelled, netsuite_ref = EXCLUDED.netsuite_ref,
+       note = EXCLUDED.note, updated_at = now()`,
+    [businessNumber, !!closed, !!cancelled, netsuiteRef || null, note || null],
+  )
+}
+
+export async function deleteEdiPoResolution(businessNumber, db = pool) {
+  await db.query('DELETE FROM edi_po_resolutions WHERE business_number = $1', [businessNumber])
+}
+
 export async function fetchEdiManualLinks(db = pool) {
   const { rows } = await db.query(
     `SELECT transaction_id AS "transactionId", business_number AS "businessNumber", note, created_at AS "createdAt"
@@ -458,9 +484,11 @@ export async function reconcileReadStatus(currentUnreadIds, db = pool) {
 export async function fetchQuestEmails(db = pool) {
   const { rows } = await db.query(
     `SELECT id, thread_id AS "threadId", from_address AS "fromAddress", from_name AS "fromName",
-            subject, snippet, body, received_at AS "receivedAt", is_unread AS "isUnread",
+            subject, snippet, body, note, received_at AS "receivedAt", is_unread AS "isUnread",
             label_ids AS "labelIds", character_id AS "characterId"
-     FROM quest_emails WHERE dismissed = false AND is_unread = true
+     FROM quest_emails
+     WHERE dismissed = false
+       AND (is_unread = true OR received_at > now() - interval '3 days')
      ORDER BY received_at DESC`,
   )
   return rows
@@ -471,7 +499,7 @@ export async function fetchQuestEmails(db = pool) {
 export async function fetchQuestEmailById(id, db = pool) {
   const { rows } = await db.query(
     `SELECT id, thread_id AS "threadId", from_address AS "fromAddress", from_name AS "fromName",
-            subject, snippet, body, received_at AS "receivedAt", is_unread AS "isUnread",
+            subject, snippet, body, note, received_at AS "receivedAt", is_unread AS "isUnread",
             label_ids AS "labelIds", character_id AS "characterId"
      FROM quest_emails WHERE id = $1`,
     [id],
@@ -482,14 +510,21 @@ export async function fetchQuestEmailById(id, db = pool) {
 // Every quest_emails row regardless of dismissed/unread state, for search.
 export async function searchQuestEmails(q, db = pool) {
   const { rows } = await db.query(
-    `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet,
+    `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet, note,
             received_at AS "receivedAt", is_unread AS "isUnread", dismissed, character_id AS "characterId"
      FROM quest_emails
-     WHERE subject ILIKE $1 OR snippet ILIKE $1 OR body ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
+     WHERE subject ILIKE $1 OR snippet ILIKE $1 OR body ILIKE $1 OR note ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
      ORDER BY received_at DESC LIMIT 100`,
     [`%${q}%`],
   )
   return rows
+}
+
+// The note ledger (Nima, 2026-07-18): a personal summary/highlight per email,
+// kept for later reference. App-owned — the sync upsert never writes note, so
+// re-syncs can't clobber it. Empty string clears it back to NULL.
+export async function setQuestEmailNote(id, note, db = pool) {
+  await db.query('UPDATE quest_emails SET note = NULLIF($2, \'\') WHERE id = $1', [id, String(note ?? '').trim()])
 }
 
 // Reassigning a character remembers it for the sender (see resolveCharacterForSender)
@@ -552,10 +587,13 @@ export async function fetchOpenRecurringInstances(recurringKey, db = pool) {
   return rows
 }
 
-export async function escalateRecurringTask(id, { urgency, snippet }, db = pool) {
+// characterId is optional (Nima, 2026-07-20): a repeat-asked task can hand off
+// to a different messenger, not just get louder in the same voice.
+export async function escalateRecurringTask(id, { urgency, snippet, characterId }, db = pool) {
   await db.query(
-    `UPDATE quest_tasks SET urgency = COALESCE($2, urgency), snippet = COALESCE($3, snippet) WHERE id = $1`,
-    [id, urgency || null, snippet || null],
+    `UPDATE quest_tasks SET urgency = COALESCE($2, urgency), snippet = COALESCE($3, snippet),
+                            character_id = COALESCE($4, character_id) WHERE id = $1`,
+    [id, urgency || null, snippet || null, characterId || null],
   )
 }
 
@@ -713,6 +751,81 @@ export async function stampShippedValue(records, db = pool) {
        VALUES ('SHIPPED_VALUE','IF',$1,$2,$3,'derived',$4)`,
       [r.ifNumber, so, String(amt[0].value ?? 0), r.actualShipDate],
     )
+    n++
+  }
+  return n
+}
+
+// ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ──────────
+// A carton's weight + L×W×H, captured (optionally) when an IF is scanned back
+// IN. One row per carton. Nulls are fine — a scanner in a hurry can capture
+// weight only, or dimensions only, or skip the whole thing.
+export async function insertFulfillmentBox(
+  { ifNumber, weightLb, lengthIn, widthIn, heightIn, note }, db = pool,
+) {
+  const { rows } = await db.query(
+    `INSERT INTO fulfillment_boxes (if_number, weight_lb, length_in, width_in, height_in, note)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING id, if_number AS "ifNumber", weight_lb AS "weightLb",
+               length_in AS "lengthIn", width_in AS "widthIn", height_in AS "heightIn",
+               note, captured_at AS "capturedAt"`,
+    [ifNumber, weightLb ?? null, lengthIn ?? null, widthIn ?? null, heightIn ?? null, note || null],
+  )
+  return rows[0]
+}
+
+// All boxes for one IF (newest first), or every un-departed box when ifNumber
+// is omitted — the custody register batches this to avoid an N+1.
+export async function fetchFulfillmentBoxes(ifNumber = null, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, if_number AS "ifNumber", weight_lb AS "weightLb",
+            length_in AS "lengthIn", width_in AS "widthIn", height_in AS "heightIn",
+            note, captured_at AS "capturedAt"
+     FROM fulfillment_boxes
+     ${ifNumber ? 'WHERE if_number = $1' : ''}
+     ORDER BY captured_at DESC`,
+    ifNumber ? [ifNumber] : [],
+  )
+  return rows
+}
+
+// Departure cleanup (Nima, 2026-07-17) — when an IF actually ships, the custody
+// chapter closes: the working box rows are pruned so the register only ever
+// shows things still in the bay, and ONE CUSTODY_CLEARED ledger event preserves
+// the summary (how many boxes, total weight) permanently. Runs at ingest time
+// alongside stampShippedValue; idempotent via the CUSTODY_CLEARED marker, and
+// only touches IFs that were actually in custody (had a scan) so it stays quiet
+// for the overwhelming majority of IFs that never went through the bay.
+export async function clearDepartedCustody(records, db = pool) {
+  let n = 0
+  for (const r of records) {
+    if (!r.ifNumber || !r.actualShipDate) continue
+    const already = await db.query(
+      `SELECT 1 FROM order_events WHERE event_type='CUSTODY_CLEARED' AND doc_type='IF' AND doc_number=$1`,
+      [r.ifNumber],
+    )
+    if (already.rowCount) continue
+    const scanned = await db.query(
+      `SELECT 1 FROM order_events
+       WHERE doc_type='IF' AND doc_number=$1 AND event_type IN ('CUSTODY_OUT','CUSTODY_IN') LIMIT 1`,
+      [r.ifNumber],
+    )
+    if (!scanned.rowCount) continue
+    const { rows: box } = await db.query(
+      `SELECT COUNT(*)::int AS boxes, COALESCE(SUM(weight_lb),0) AS weight
+       FROM fulfillment_boxes WHERE if_number=$1`,
+      [r.ifNumber],
+    )
+    const summary = box[0].boxes
+      ? `departed — ${box[0].boxes} box${box[0].boxes === 1 ? '' : 'es'}, ${Number(box[0].weight)} lb`
+      : 'departed — no box captured'
+    const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+       VALUES ('CUSTODY_CLEARED','IF',$1,$2,$3,'derived',$4)`,
+      [r.ifNumber, so, summary, r.actualShipDate],
+    )
+    await db.query(`DELETE FROM fulfillment_boxes WHERE if_number=$1`, [r.ifNumber])
     n++
   }
   return n

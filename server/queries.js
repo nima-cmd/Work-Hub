@@ -18,16 +18,17 @@ import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../s
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
   createEdiManualOrder, fetchEdiManualOrders, deleteEdiManualOrder,
+  fetchEdiPoResolutions, upsertEdiPoResolution, deleteEdiPoResolution,
 } from '../src/ingest/loadToDb.js'
-import { insertOrderEvent, fetchOrderEvents } from '../src/ingest/loadToDb.js'
+import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
-  fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail,
+  fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
   fetchOpenRecurringInstances, escalateRecurringTask, deleteQuestTask,
 } from '../src/ingest/loadToDb.js'
-import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile } from '../src/ingest/gmail.js'
+import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile, listUserLabels, markMessageSpam } from '../src/ingest/gmail.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
@@ -109,11 +110,12 @@ const num = (v) => (v == null ? null : Number(v))
 // the source of truth for the physical handoff, so an event is recorded even
 // when the IF isn't (yet) in our data — `found:false` warns the scanner, and
 // the event backfills its meaning once the next CSV import brings the IF in.
-export async function recordCustodyScan({ docNumber, direction, note }) {
+export async function recordCustodyScan({ docNumber, direction, note, confirm = false }) {
   const dir = String(direction || '').toUpperCase()
   if (dir !== 'OUT' && dir !== 'IN') throw new Error(`direction must be OUT or IN, got: ${direction}`)
   const doc = normalizeDocNumber('IF', String(docNumber || '').trim())
   if (!doc || doc === 'IF') throw new Error('no document number scanned')
+  const eventType = dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN'
 
   const { rows } = await pool.query(
     `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.status, f.packed_status AS "packedStatus",
@@ -124,8 +126,31 @@ export async function recordCustodyScan({ docNumber, direction, note }) {
   )
   const fulfillment = rows[0] || null
 
+  // Guard against duplicate logs (Nima, 2026-07-17): an IF should go OUT once
+  // and IN once. If it's already been scanned this same direction, don't
+  // silently pile on another log — hand back a needsConfirm so the Scan Bay can
+  // ask "log it again?" and let a real re-handoff carry a note ("gave it back
+  // for a fix"). `confirm:true` is the user saying yes; only then do we insert.
+  const { rows: prior } = await pool.query(
+    `SELECT count(*)::int AS n, MAX(occurred_at) AS last
+     FROM order_events WHERE doc_type='IF' AND doc_number=$1 AND event_type=$2`,
+    [doc, eventType],
+  )
+  const priorSameDir = prior[0].n
+  if (priorSameDir > 0 && !confirm) {
+    return {
+      needsConfirm: true,
+      direction: dir,
+      docNumber: doc,
+      priorSameDir,
+      lastSameDirAt: prior[0].last,
+      found: !!fulfillment,
+      fulfillment,
+    }
+  }
+
   const event = await insertOrderEvent({
-    eventType: dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN',
+    eventType,
     docType: 'IF',
     docNumber: doc,
     soNumber: fulfillment?.soNumber || null,
@@ -139,6 +164,7 @@ export async function recordCustodyScan({ docNumber, direction, note }) {
     direction: dir,
     docNumber: doc,
     occurredAt: event.occurredAt,
+    repeat: priorSameDir > 0, // a confirmed re-scan (dupe or re-handoff)
     fulfillment,
   }
 }
@@ -147,6 +173,91 @@ export async function recordCustodyScan({ docNumber, direction, note }) {
 // a day for the Calendar or unscoped for a recent-history view.
 export async function getOrderEventsFeed({ date, docNumber, soNumber } = {}) {
   return fetchOrderEvents({ date, docNumber, soNumber })
+}
+
+// ── Box capture (Nima, 2026-07-17) — the IN-scan carton measurement ──────────
+// Called from the Scan Bay right after an IN scan (skippable). Everything but
+// the IF is optional; a box with no measurements at all is rejected so a stray
+// empty submit doesn't create noise.
+const numOrNull = (v) => (v == null || v === '' ? null : Number(v))
+export async function recordFulfillmentBox({ ifNumber, weightLb, lengthIn, widthIn, heightIn, note }) {
+  const doc = normalizeDocNumber('IF', String(ifNumber || '').trim())
+  if (!doc || doc === 'IF') throw new Error('no IF number for the box')
+  const dims = { weightLb: numOrNull(weightLb), lengthIn: numOrNull(lengthIn), widthIn: numOrNull(widthIn), heightIn: numOrNull(heightIn) }
+  const hasAny = Object.values(dims).some((v) => v != null) || (note && note.trim())
+  if (!hasAny) throw new Error('nothing to record — enter a weight or a dimension')
+  const box = await insertFulfillmentBox({ ifNumber: doc, ...dims, note })
+  return { ok: true, box }
+}
+
+// ── Custody register (Nima, 2026-07-17) ──────────────────────────────────────
+// Every IF that entered the custody gap (has at least one OUT/IN scan) and
+// hasn't departed yet — the "nothing sits ignored" list for physical cargo.
+// State comes from latest OUT vs latest IN: 'with_warehouse' (out for
+// pick/pack, or re-handed out after a fix) vs 'returned' (back in our hands,
+// boxed, waiting to leave). Departed IFs are cleaned out by clearDepartedCustody
+// at ingest, and the actual_ship_date guard here is the belt-and-suspenders.
+export async function getCustodyRegister({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT c.if_number AS "ifNumber",
+           c.custody_out AS "custodyOut", c.custody_in AS "custodyIn", c.first_scan AS "firstScan",
+           f.so_number AS "soNumber", f.packed_status AS "packedStatus", f.status,
+           o.customer, o.source, o.po_number AS "poNumber",
+           COALESCE(b.boxes, 0) AS boxes, COALESCE(b.weight, 0) AS "boxWeight",
+           COALESCE(bl.list, '[]'::json) AS "boxList"
+    FROM (
+      SELECT doc_number AS if_number,
+             MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_OUT') AS custody_out,
+             MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_IN')  AS custody_in,
+             MIN(occurred_at) AS first_scan,
+             -- CUSTODY_CLEARED (written at departure) is pinned to the ship DATE
+             -- (midnight), not a real clock time, so it can't be compared against
+             -- scan timestamps — its mere presence means "this IF has departed".
+             bool_or(event_type='CUSTODY_CLEARED') AS cleared
+      FROM order_events
+      WHERE doc_type='IF' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED')
+      GROUP BY doc_number
+      HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN'))  -- had at least one scan
+    ) c
+    LEFT JOIN fulfillments f ON f.if_number = c.if_number
+    LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN (
+      SELECT if_number, COUNT(*)::int AS boxes, COALESCE(SUM(weight_lb),0) AS weight
+      FROM fulfillment_boxes GROUP BY if_number
+    ) b ON b.if_number = c.if_number
+    LEFT JOIN (
+      SELECT if_number, json_agg(json_build_object(
+               'id', id, 'weightLb', weight_lb, 'lengthIn', length_in,
+               'widthIn', width_in, 'heightIn', height_in, 'note', note
+             ) ORDER BY captured_at) AS list
+      FROM fulfillment_boxes GROUP BY if_number
+    ) bl ON bl.if_number = c.if_number
+    WHERE NOT c.cleared                -- custody closed at departure → off the register
+      AND f.actual_ship_date IS NULL   -- belt-and-suspenders for IFs already marked shipped
+    ORDER BY c.first_scan ASC
+  `)
+
+  const now = today.getTime()
+  return rows.map((r) => {
+    const lastScan = new Date(Math.max(
+      r.custodyOut ? new Date(r.custodyOut).getTime() : 0,
+      r.custodyIn ? new Date(r.custodyIn).getTime() : 0,
+    ))
+    const outT = r.custodyOut ? new Date(r.custodyOut).getTime() : 0
+    const inT = r.custodyIn ? new Date(r.custodyIn).getTime() : 0
+    const state = inT >= outT && inT > 0 ? 'returned' : 'with_warehouse'
+    const ageDays = Math.max(0, Math.floor((now - lastScan.getTime()) / 86_400_000))
+    return {
+      ...r,
+      boxes: Number(r.boxes),
+      boxWeight: Number(r.boxWeight),
+      state,
+      lastScan: lastScan.toISOString(),
+      ageDays,
+      stale: ageDays >= 3, // physically in-house 3+ days with no movement → chase it
+      inData: !!r.soNumber,
+    }
+  })
 }
 
 // ── Ship departures (Nima, 2026-07-16) — every packed IF, grouped by its
@@ -202,41 +313,72 @@ export async function getAffection() {
   return computeAffection(tasks).map((a) => ({ ...a, character: getCharacterById(a.characterId) }))
 }
 
-// ── Launch Bay (Nima, 2026-07-17) ────────────────────────────────────────────
-// The 2D launch-bay visual of pending departures. Ships are IFs that are
-// packed but not yet shipped (actual_ship_date null = still in the bay):
-//   - grounded, colored by why they can't launch: payment (red), invoice
-//     (yellow), FOB (amber);
-//   - approved-to-ship ships float above the warehouse, cleared for launch.
-// The DELAY WARNING is the point of the feature: an approved ship is "meant to
-// leave the day it's cleared". `approvedSince` (first REACHED_APPROVED ledger
-// stamp) pins that launch day; if it's still floating on a later calendar day
-// (never marked shipped), it's the record-loss miss Nima wants flagged.
-function launchState(packedStatus) {
-  const s = (packedStatus || '').toLowerCase()
-  if (s.includes('approved to ship')) return 'approved'
-  if (s.includes('waiting on payment')) return 'payment'
-  if (s.includes('pending invoice')) return 'invoice'
-  if (s.includes('fob')) return 'fob'
+// ── Launch Bay (Nima, 2026-07-17; reliability rework same day) ───────────────
+// Ships = fulfillments not yet shipped (actual_ship_date null = still in the
+// bay). REWORKED to stop depending on the hand-keyed IF-Packed-Status field —
+// that search went stale and left the bay showing 1 of ~11 real orders. State
+// now comes from FRESH, reliable tables (imported with every batch):
+//   • invoices.shipping_status — 'Approved For Shipping' → cleared to launch
+//     (floats); 'Pending Payment' → grounded on payment;
+//   • else orders.billing_status 'Pending Billing' / no invoice yet → grounded,
+//     awaiting invoice;
+//   • the old manual packed_status is only a last-resort fallback now.
+// China-Warehouse orders (orders.location ~ 'China') are EXCLUDED — they ship
+// FOB direct from China and never leave Naghedi's dock. (Open question with
+// Nima: whether an approved-to-ship China order should still show.)
+// approved ships float; the REACHED_APPROVED ledger stamp drives the delay warning.
+function launchState(r) {
+  const ship = (r.invShip || '').toLowerCase()
+  if (ship.includes('approved')) return 'approved'
+  if (ship.includes('pending payment')) return 'payment'
+  const bill = (r.billingStatus || '').toLowerCase()
+  if (bill.includes('pending billing') || !r.invoiceNumber) return 'invoice'
+  // last-resort fallback to the legacy manual field for rows with no invoice signal
+  const pk = (r.packedStatus || '').toLowerCase()
+  if (pk.includes('approved to ship')) return 'approved'
+  if (pk.includes('waiting on payment')) return 'payment'
+  if (pk.includes('pending invoice')) return 'invoice'
   return 'other'
 }
 
 export async function getLaunchBay({ today = new Date() } = {}) {
+  // Only PACKED IFs belong in the bay (Nima, 2026-07-17) — a merely-Picked IF
+  // isn't ready. The ONE exception: a Picked IF we've physically scanned back
+  // into our possession (custody IN latest) surfaces as a highlighted
+  // 'scanned_in' ship — the prompt to generate its shipping label and get it
+  // ready to invoice. Custody state (latest OUT vs IN) comes from the ledger.
   const { rows } = await pool.query(`
     SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.packed_status AS "packedStatus",
+           f.status AS "ifStatus",
            f.days_pending AS "daysPending", f.invoice_number AS "invoiceNumber",
            f.if_date AS "ifDate", f.actual_ship_date AS "actualShipDate",
-           o.customer, o.source, o.po_number AS "poNumber",
-           a.approved_since AS "approvedSince"
+           o.customer, o.source, o.po_number AS "poNumber", o.location,
+           o.billing_status AS "billingStatus",
+           i.shipping_status AS "invShip", i.status AS "invStatus",
+           a.approved_since AS "approvedSince",
+           c.custody_out AS "custodyOut", c.custody_in AS "custodyIn"
     FROM fulfillments f
     LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN invoices i ON i.inv_number = f.invoice_number
     LEFT JOIN (
       SELECT doc_number, MIN(occurred_at) AS approved_since
       FROM order_events
       WHERE event_type = 'REACHED_APPROVED' AND doc_type = 'IF'
       GROUP BY doc_number
     ) a ON a.doc_number = f.if_number
-    WHERE f.packed_status IS NOT NULL AND f.actual_ship_date IS NULL
+    LEFT JOIN (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_OUT') AS custody_out,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_IN')  AS custody_in
+      FROM order_events WHERE doc_type = 'IF' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN')
+      GROUP BY doc_number
+    ) c ON c.doc_number = f.if_number
+    WHERE f.actual_ship_date IS NULL
+      AND COALESCE(o.location, '') NOT ILIKE '%china%'   -- China ships FOB direct, not from our dock
+      AND (
+        f.status IS NULL OR f.status NOT ILIKE '%picked%'   -- packed (or a packed sub-status), not just picked
+        OR (c.custody_in IS NOT NULL AND (c.custody_out IS NULL OR c.custody_in >= c.custody_out))  -- picked but back in our hands
+      )
     ORDER BY f.days_pending DESC NULLS LAST
   `)
 
@@ -244,7 +386,10 @@ export async function getLaunchBay({ today = new Date() } = {}) {
   const todayStart = startOfDay(today)
 
   return rows.map((r) => {
-    const state = launchState(r.packedStatus)
+    const isPicked = /picked/i.test(r.ifStatus || '')
+    const scannedIn = r.custodyIn && (!r.custodyOut || new Date(r.custodyIn) >= new Date(r.custodyOut))
+    // a picked-but-scanned-back-in IF is the highlighted "prep it to ship" case
+    const state = isPicked && scannedIn ? 'scanned_in' : launchState(r)
     // whole calendar days the ship has been cleared-for-launch but still here
     const floatingDays =
       state === 'approved' && r.approvedSince
@@ -395,14 +540,28 @@ async function fetchEdiSourcedOrders() {
 }
 
 export async function getEdiReview() {
-  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, manualOrders] = await Promise.all([
+  const [transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs, manualOrders, resolutions] = await Promise.all([
     fetchEdiTransactions(), fetchEdiFulfillments(), fetchEdiSourcedOrders(), fetchEdiManualLinks(), fetchEdiDocumentPoRefs(),
-    fetchEdiManualOrders(),
+    fetchEdiManualOrders(), fetchEdiPoResolutions(),
   ])
   const pipeline = computeEdiPipeline(transactions, fulfillments, netsuiteOrders, manualLinks, documentPoRefs)
   // manualOrders are returned ALONGSIDE (never merged into) the automated
   // pipeline — the EDI view renders them in their own clearly-flagged section.
-  return { ...pipeline, manualOrders }
+  // resolutions ride along for the client-side work layer (src/model/ediWork.js).
+  return { ...pipeline, manualOrders, resolutions }
+}
+
+// Manual PO resolution (Nima, 2026-07-18): connect a PO to its NetSuite ref
+// and/or mark it closed. Empty businessNumber is a caller bug, reject loudly.
+export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note }) {
+  if (!businessNumber?.trim()) throw new Error('businessNumber is required')
+  await upsertEdiPoResolution({ businessNumber: businessNumber.trim(), closed, cancelled, netsuiteRef, note })
+  return getEdiReview()
+}
+
+export async function unresolveEdiPo(businessNumber) {
+  await deleteEdiPoResolution(businessNumber)
+  return getEdiReview()
 }
 
 export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
@@ -508,6 +667,26 @@ export async function applyQuestEmailLabel({ id, label }) {
 
 export async function dismissQuestEmailLine(id, dismissed = true) {
   await dismissQuestEmail(id, dismissed)
+  // "Clear once" (Nima, 2026-07-20): dismissing here also marks it read in
+  // Gmail so the same email never needs reviewing in both places. Best-effort
+  // — a Gmail hiccup must not block the in-app dismiss.
+  if (dismissed) {
+    try { await markMessageRead(id); await markQuestEmailReadLocal(id) } catch { /* next sync reconciles */ }
+  }
+  return getQuestEmails()
+}
+
+// The user's real Gmail labels, for the label picker.
+export async function getGmailLabels() {
+  return listUserLabels()
+}
+
+// Spam (Nima, 2026-07-20): Gmail's own SPAM label (trains its filter, leaves
+// the inbox) + dismissed here — gone from both places in one click.
+export async function spamQuestEmail(id) {
+  await markMessageSpam(id)
+  await markQuestEmailReadLocal(id)
+  await dismissQuestEmail(id, true)
   return getQuestEmails()
 }
 
@@ -554,6 +733,48 @@ export async function createTaskFromQuestEmail(emailId) {
   })
   await dismissQuestEmail(emailId, true)
   await logTaskActivity({ taskId, kind: 'created', note: `Claimed as a task: "${email.subject}"` })
+  return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
+}
+
+// The note ledger, standalone (Nima, 2026-07-20): every email carrying a
+// Datapad note, oldest first isn't useful — newest first, with the source
+// email's Gmail link and (if promoted) its task's subject/status alongside.
+export async function getLedgerNotes() {
+  const { rows } = await pool.query(`
+    SELECT e.id, e.thread_id AS "threadId", e.subject, e.note, e.character_id AS "characterId",
+           e.received_at AS "receivedAt",
+           t.id AS "taskId", t.subject AS "taskSubject", t.status AS "taskStatus"
+    FROM quest_emails e
+    LEFT JOIN quest_tasks t ON t.email_id = e.id
+    WHERE e.note IS NOT NULL AND e.note <> ''
+    ORDER BY e.received_at DESC
+  `)
+  return rows.map((r) => ({ ...r, character: getCharacterById(r.characterId) }))
+}
+
+// Note ledger (Nima, 2026-07-18): save/clear the personal summary on an email.
+export async function setEmailNote(emailId, note) {
+  await setQuestEmailNote(emailId, note)
+  return getQuestEmails()
+}
+
+// One-click acknowledge (Nima, 2026-07-18): an email that only needs "seen and
+// understood" shouldn't take create-task → open it → mark done. This records
+// the acknowledgment as a task that was created AND completed in one motion —
+// it lands in the journal/Calendar like any finished quest, the messenger's
+// affection still counts it, and the transmission is dismissed.
+export async function acknowledgeQuestEmail(emailId) {
+  const email = await fetchQuestEmailById(emailId)
+  if (!email) throw new Error(`no quest email found for id ${emailId}`)
+  const taskId = await createQuestTask({
+    emailId: email.id, threadId: email.threadId, characterId: email.characterId, fromAddress: email.fromAddress,
+    fromName: email.fromName, subject: email.subject, snippet: email.snippet,
+  })
+  await updateTaskNeeds({ id: taskId, needsType: 'acknowledgment', needsNote: null, netsuiteDocType: null, netsuiteDocNumber: null })
+  await completeQuestTask(taskId, true)
+  await dismissQuestEmail(emailId, true)
+  await logTaskActivity({ taskId, kind: 'created', note: `Acknowledged: "${email.subject}"` })
+  await logTaskActivity({ taskId, kind: 'done', note: 'Acknowledged on receipt' })
   return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
 }
 
@@ -630,16 +851,30 @@ export async function setTaskChecklistItem(id, itemKey, done) {
 // the actual dedupe — this function is safe to call as often as you like.
 const URGENCY_UP = { lo: 'mid', mid: 'hi', hi: 'hi' }
 
-// An in-character nag when a 'daily' task is overdue (Nima, 2026-07-17: "if it
-// hasn't been completed in time, increase the urgency and update with a new
+// A repeat-asked task hands off to a DIFFERENT messenger, not just the same
+// one getting louder (Nima, 2026-07-20: "another character take the task
+// letting me [know] they were told previously by the other task manager to
+// give me the task"). A template with a fixed characterId (Bugs owns the CSV
+// monitor) never hands off — that's a dedicated role, not a rotation.
+function pickHandoffCharacter(fixedCharacterId, currentCharacterId) {
+  if (fixedCharacterId) return fixedCharacterId
+  const pool = CHARACTERS.filter((c) => c.id !== currentCharacterId)
+  return (pool.length ? pool : CHARACTERS)[Math.floor(Math.random() * (pool.length || CHARACTERS.length))].id
+}
+
+// An in-character nag when a recurring task is overdue (Nima, 2026-07-17: "if
+// it hasn't been completed in time, increase the urgency and update with a new
 // message in character asking what's going on"). Bugs (the CSV monitor) gets
-// her own voice; others get a firm generic line.
-function overdueNag(template, characterId, daysOverdue) {
-  const d = `${daysOverdue} day${daysOverdue === 1 ? '' : 's'} overdue`
+// her own voice and never hands off. Everyone else, when a handoff happened,
+// opens by naming who passed it to them — that's the "told previously by the
+// other task manager" cue Nima wants visible in the message itself.
+function overdueNag(template, characterId, agoLabel, prevCharacterId) {
   if (characterId === 'bugs' || template.verifyKey === 'csv_freshness_workhub') {
-    return `Ehhh — what's up, Doc? These CSVs STILL aren't uploaded and we're ${d}. I can't see a thing in here without 'em — let's get 'em in. 🥕`
+    return `Ehhh — what's up, Doc? These CSVs STILL aren't uploaded and we're ${agoLabel} overdue. I can't see a thing in here without 'em — let's get 'em in. 🥕`
   }
-  return `⚠ Still not done — ${d}. Bumping this up; it needs handling now. ${template.description || ''}`.trim()
+  const prevName = prevCharacterId && prevCharacterId !== characterId ? getCharacterById(prevCharacterId)?.name : null
+  const handoff = prevName ? `${prevName} asked me to make sure this actually gets to you — ` : ''
+  return `⚠ ${handoff}Still not done — ${agoLabel} overdue. Bumping this up; it needs handling now. ${template.description || ''}`.trim()
 }
 
 export async function ensureRecurringTasks() {
@@ -659,11 +894,16 @@ export async function ensureRecurringTasks() {
         const keptDay = new Date(keep.createdAt).toISOString().slice(0, 10)
         if (keptDay < dateStr) {
           const daysOverdue = Math.round((new Date(dateStr) - new Date(keptDay)) / 86_400_000)
+          const nextCharacterId = pickHandoffCharacter(t.characterId, keep.characterId)
           await escalateRecurringTask(keep.id, {
             urgency: URGENCY_UP[keep.urgency] || 'hi',
-            snippet: overdueNag(t, keep.characterId, daysOverdue),
+            snippet: overdueNag(t, nextCharacterId, `${daysOverdue}d`, keep.characterId),
+            characterId: nextCharacterId,
           })
-          await logTaskActivity({ taskId: keep.id, kind: 'escalated', note: `Overdue ${daysOverdue}d — urgency raised, message updated` })
+          const handoffNote = nextCharacterId !== keep.characterId
+            ? ` — handed off from ${getCharacterById(keep.characterId)?.name || 'previous messenger'} to ${getCharacterById(nextCharacterId)?.name || 'next messenger'}`
+            : ''
+          await logTaskActivity({ taskId: keep.id, kind: 'escalated', note: `Overdue ${daysOverdue}d — urgency raised${handoffNote}` })
         }
         continue // never spawn a second one
       }
@@ -676,8 +916,38 @@ export async function ensureRecurringTasks() {
       continue
     }
 
-    // 'daily_times' (e.g. 9am/2pm reminders) — one instance per elapsed slot,
-    // as before; these are transient nudges, not a single standing task.
+    // 'daily_times' (e.g. 9am/2pm reminders) — stays SINGLE too (Nima,
+    // 2026-07-20: "asked over and over" shouldn't spawn ANOTHER separate nag;
+    // it should escalate the one already open and hand off to a different
+    // messenger). A slot only spawns a fresh instance when nothing for this
+    // key is currently open; if one IS open and a later slot has since
+    // passed, that's the repeat-ask moment — escalate instead of duplicating.
+    const openDT = await fetchOpenRecurringInstances(t.key)
+    if (openDT.length) {
+      const [keep, ...extras] = openDT
+      for (const e of extras) await deleteQuestTask(e.id)
+      const keptAt = new Date(keep.createdAt)
+      const passedSlotSince = (t.scheduleTimes || []).some((slot) => {
+        const [hh, mm] = slot.split(':').map(Number)
+        const slotTime = new Date(now); slotTime.setHours(hh, mm, 0, 0)
+        return slotTime > keptAt && slotTime <= now
+      })
+      if (passedSlotSince) {
+        const nextCharacterId = pickHandoffCharacter(t.characterId, keep.characterId)
+        const hours = Math.round((now - keptAt) / 3.6e6)
+        const agoLabel = hours < 24 ? `${Math.max(1, hours)}h` : `${Math.round(hours / 24)}d`
+        await escalateRecurringTask(keep.id, {
+          urgency: URGENCY_UP[keep.urgency] || 'hi',
+          snippet: overdueNag(t, nextCharacterId, agoLabel, keep.characterId),
+          characterId: nextCharacterId,
+        })
+        const handoffNote = nextCharacterId !== keep.characterId
+          ? ` — handed off from ${getCharacterById(keep.characterId)?.name || 'previous messenger'} to ${getCharacterById(nextCharacterId)?.name || 'next messenger'}`
+          : ''
+        await logTaskActivity({ taskId: keep.id, kind: 'escalated', note: `Still open past a scheduled reminder${handoffNote}` })
+      }
+      continue // never spawn a duplicate while one is already open
+    }
     for (const slot of t.scheduleTimes || []) {
       const [hh, mm] = slot.split(':').map(Number)
       const slotTime = new Date(now)
@@ -691,6 +961,8 @@ export async function ensureRecurringTasks() {
       if (!taskId) continue
       await logTaskActivity({ taskId, kind: 'created', note: `Recurring: ${t.title}` })
       created++
+      break // one instance per key per run — later elapsed slots escalate it
+            // on a future run instead of piling on a second fresh task
     }
   }
   return created

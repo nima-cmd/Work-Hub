@@ -126,6 +126,22 @@ export async function syncEdi() {
   return res.json()
 }
 
+// Manual PO resolution — connect a PO to its NetSuite ref and/or mark closed.
+export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note }) {
+  const res = await fetch('/api/edi/resolution', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ businessNumber, closed, cancelled, netsuiteRef, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function unresolveEdiPo(businessNumber) {
+  const res = await fetch(`/api/edi/resolution/${encodeURIComponent(businessNumber)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Manual override when an 856/810 can't auto-link to its 850.
 export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
   const res = await fetch('/api/edi/link', {
@@ -228,6 +244,43 @@ export async function createQuestTask(emailId) {
   return res.json()
 }
 
+// The user's Gmail labels (label picker).
+export async function fetchGmailLabels() {
+  const res = await fetch('/api/gmail/labels')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Spam — Gmail SPAM label + dismissed here, one click.
+export async function spamQuestEmail(id) {
+  const res = await fetch(`/api/quest-emails/${id}/spam`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// The Datapad ledger — all email notes, standalone.
+export async function fetchLedgerNotes() {
+  const res = await fetch('/api/ledger-notes')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Note ledger — save/clear the personal summary note on an email.
+export async function saveQuestEmailNote(emailId, note) {
+  const res = await fetch(`/api/quest-emails/${emailId}/note`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// One-click acknowledge — a created-and-completed acknowledgment task.
+export async function acknowledgeQuestEmail(emailId) {
+  const res = await fetch(`/api/quest-emails/${emailId}/acknowledge`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // A task the user writes themselves (no source email).
 export async function createManualTask(fields) {
   const res = await fetch('/api/quest-tasks', {
@@ -310,13 +363,31 @@ export async function fetchQuestActivity(date) {
 }
 
 // ── Custody scans (QR labels) — direction 'OUT' | 'IN' ──────────────────────
-export async function recordCustodyScan({ docNumber, direction, note }) {
+export async function recordCustodyScan({ docNumber, direction, note, confirm }) {
   const res = await fetch('/api/custody/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ docNumber, direction, note }),
+    body: JSON.stringify({ docNumber, direction, note, confirm }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Box capture — carton weight + L×W×H for an IF (all but ifNumber optional).
+export async function recordFulfillmentBox(box) {
+  const res = await fetch('/api/custody/box', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(box),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Custody register — IFs scanned into custody but not yet departed.
+export async function fetchCustodyRegister() {
+  const res = await fetch('/api/custody/register')
+  if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
 

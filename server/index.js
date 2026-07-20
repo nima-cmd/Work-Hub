@@ -11,19 +11,40 @@ import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
-  getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine,
-  getQuestTasks, createTaskFromQuestEmail, addManualTask, completeTask, getQuestEmailThread,
+  resolveEdiPo, unresolveEdiPo,
+  getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
+  getGmailLabels, spamQuestEmail,
+  getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
+  recordFulfillmentBox, getCustodyRegister,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
+import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001
 
 app.use(express.json({ limit: '40mb' })) // CSV exports can be a few MB
+
+// Access terminal (Nima, 2026-07-20): a single shared password gates the
+// whole site — see server/auth.js. Login/logout are registered BEFORE the
+// gate so they're always reachable; everything else (API + the built client)
+// goes through authGate. No-op if SITE_PASSWORD isn't set (local dev).
+app.post('/api/login', (req, res) => {
+  if (checkPassword(req.body?.password)) {
+    issueSessionCookie(res)
+    return res.json({ ok: true })
+  }
+  res.status(401).json({ error: 'Incorrect passcode' })
+})
+app.post('/api/logout', (req, res) => {
+  clearSessionCookie(res)
+  res.json({ ok: true })
+})
+app.use(authGate)
 
 app.get('/api/orders', async (_req, res) => {
   try {
@@ -117,6 +138,26 @@ app.post('/api/custody/scan', async (req, res) => {
   }
 })
 
+// Box capture from the Scan Bay (IN-scan carton measurement, skippable)
+app.post('/api/custody/box', async (req, res) => {
+  try {
+    res.json(await recordFulfillmentBox(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Custody register — IFs in the custody gap (scanned, not yet departed)
+app.get('/api/custody/register', async (_req, res) => {
+  try {
+    res.json(await getCustodyRegister())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Order-events ledger feed (?date=YYYY-MM-DD, ?docNumber=IF123, ?soNumber=SO123)
 app.get('/api/events', async (req, res) => {
   try {
@@ -203,6 +244,25 @@ app.get('/api/edi/review', async (_req, res) => {
 app.post('/api/edi/sync', async (_req, res) => {
   try {
     res.json(await syncEdi())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Manual PO resolution: connect to a NetSuite ref and/or mark closed.
+app.post('/api/edi/resolution', async (req, res) => {
+  try {
+    res.json(await resolveEdiPo(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/edi/resolution/:businessNumber', async (req, res) => {
+  try {
+    res.json(await unresolveEdiPo(req.params.businessNumber))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
@@ -342,6 +402,56 @@ app.get('/api/quest-tasks', async (_req, res) => {
 app.post('/api/quest-emails/:id/create-task', async (req, res) => {
   try {
     res.json(await createTaskFromQuestEmail(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// The Datapad ledger — every email note, standalone (Nima, 2026-07-20).
+app.get('/api/ledger-notes', async (_req, res) => {
+  try {
+    res.json(await getLedgerNotes())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// The user's Gmail labels (for the label picker).
+app.get('/api/gmail/labels', async (_req, res) => {
+  try {
+    res.json(await getGmailLabels())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Spam: Gmail SPAM label + dismissed locally, one click.
+app.post('/api/quest-emails/:id/spam', async (req, res) => {
+  try {
+    res.json(await spamQuestEmail(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Note ledger: save (or clear with empty text) the summary note on an email.
+app.post('/api/quest-emails/:id/note', async (req, res) => {
+  try {
+    res.json(await setEmailNote(req.params.id, req.body?.note ?? ''))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// One-click acknowledge: records a created-and-completed acknowledgment task.
+app.post('/api/quest-emails/:id/acknowledge', async (req, res) => {
+  try {
+    res.json(await acknowledgeQuestEmail(req.params.id))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

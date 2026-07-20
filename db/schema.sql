@@ -244,6 +244,27 @@ CREATE TABLE IF NOT EXISTS edi_manual_orders (
   created_at       TIMESTAMPTZ DEFAULT now()
 );
 
+-- ── EDI PO resolutions (Nima, 2026-07-18) — the human's open/closed override ─
+-- "Manually connect an 850 to data in NetSuite we may or may not have access
+-- to in these saved searches." One row per EDI PO (business number):
+--   netsuite_ref — the NetSuite doc it corresponds to (SO/IF/INV #, free text),
+--                  recorded while the PO stays OPEN;
+--   closed       — the human says this PO's work is DONE (shipped pre-Orderful,
+--                  handled outside EDI, cancelled…) — takes it off the open queue.
+-- Always displayed as a manual override, never merged silently with inference
+-- (same principle as edi_manual_links).
+CREATE TABLE IF NOT EXISTS edi_po_resolutions (
+  business_number  TEXT PRIMARY KEY,
+  closed           BOOLEAN NOT NULL DEFAULT false,
+  netsuite_ref     TEXT,
+  note             TEXT,
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+-- cancelled (Nima, 2026-07-20): the buyer killed the PO — no further documents
+-- are ever coming. Off the open queue like closed, but recorded distinctly so
+-- a cancelled PO can't be mistaken for completed work.
+ALTER TABLE edi_po_resolutions ADD COLUMN IF NOT EXISTS cancelled BOOLEAN DEFAULT false;
+
 -- ── NetSuite Fulfillments (856 ASN search) — the BOL join key ────────────────
 -- One row per PO DC Identifier, from the NetSuite saved search Nima already
 -- exports for Airtable's "NetSuite Fulfillments" table. BOL is what actually
@@ -290,6 +311,10 @@ CREATE TABLE IF NOT EXISTS quest_emails (
   synced_at      TIMESTAMPTZ DEFAULT now()
 );
 ALTER TABLE quest_emails ADD COLUMN IF NOT EXISTS body TEXT;
+-- Note ledger (Nima, 2026-07-18): a hand-written summary/highlight per email,
+-- for later reference. App-owned like character_id/dismissed — the Gmail sync
+-- upsert never writes it, so a re-sync can't clobber a note.
+ALTER TABLE quest_emails ADD COLUMN IF NOT EXISTS note TEXT;
 CREATE INDEX IF NOT EXISTS idx_quest_emails_received ON quest_emails(received_at);
 
 -- Remembers which character was manually assigned for a given sender, so
@@ -430,6 +455,27 @@ CREATE TABLE IF NOT EXISTS order_events (
 CREATE INDEX IF NOT EXISTS idx_order_events_doc      ON order_events(doc_type, doc_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_so       ON order_events(so_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_occurred ON order_events(occurred_at);
+
+-- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
+-- When a packed IF is scanned back IN from the warehouse, the scanner may
+-- capture its carton's weight and L×W×H here. Always SKIPPABLE — a custody
+-- scan never blocks on it. One row per carton, so a multi-box IF gets several
+-- rows. This is a WORKING table for the custody register, NOT the ledger: on
+-- departure the rows are pruned and a single CUSTODY_CLEARED order_event keeps
+-- the summary (box count + total weight), the same "snapshot before it's gone"
+-- pattern as stampShippedValue. Loose if_number ref (no FK) — a box can be
+-- captured before the IF lands in an import, same as the custody scans.
+CREATE TABLE IF NOT EXISTS fulfillment_boxes (
+  id           SERIAL PRIMARY KEY,
+  if_number    TEXT NOT NULL,
+  weight_lb    NUMERIC,
+  length_in    NUMERIC,
+  width_in     NUMERIC,
+  height_in    NUMERIC,
+  note         TEXT,
+  captured_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_boxes_if ON fulfillment_boxes(if_number);
 
 -- Weaver → NetSuite update, twice daily (Nima, 2026-07-17) — same seed
 -- pattern as above: ON CONFLICT DO NOTHING so re-migrating never resets edits.

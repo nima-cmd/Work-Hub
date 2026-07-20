@@ -271,7 +271,7 @@ h2 .count { color: var(--hi); margin-left: 6px; }
   border: 1px solid rgba(59,130,246,0.5);
 }
 .holoImg {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block;
   animation: holoImageReveal 900ms ease-out;
 }
 /* Exact duplicate of .holoImg, clipped down to the moving warp band by
@@ -279,7 +279,7 @@ h2 .count { color: var(--hi); margin-left: 6px; }
    the clipped sliver it's pixel-identical to the layer underneath and
    invisible; only the sliver's sideways offset reads as a warp. */
 .holoImgWarp {
-  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none;
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top center; pointer-events: none;
   animation: holoWarpBand 2.5s linear infinite;
 }
 .holoImgWrap::after {
@@ -298,7 +298,13 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .holoName { font-weight: 700; }
 .holoUniverse { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
 .holoMeta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
-.holoSubject { margin-top: 10px; font-weight: 600; }
+.holoSubject { margin-top: 4px; font-weight: 600; }
+/* the messenger's in-character delivery line */
+.holoSpeech {
+  margin: 8px 0 0; font-size: 12.5px; font-style: italic; color: #9fd4ff;
+  border-left: 2px solid rgba(88,166,255,0.45); padding-left: 8px; line-height: 1.4;
+}
+.taskCard.done .holoSpeech { color: #7ee787; border-left-color: rgba(126,231,135,0.45); }
 .holoBody { margin-top: 8px; }
 .holoSnippet { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
 .holoActions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
@@ -353,7 +359,43 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .linkBtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; margin-left: 8px; padding: 0; }
 .linkBtn:hover { text-decoration: underline; }
 .scanLog { min-width: 0; }
+.scanNote { color: var(--muted); font-size: 11px; font-style: italic; margin: 2px 0 4px; }
+
+/* Repeat-scan confirm — "this already went OUT, log it again?" + optional note */
+.scanConfirm .confirmNote {
+  width: 100%; margin-top: 8px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 8px; color: var(--text); padding: 8px 10px; font-size: 13px; resize: vertical; min-height: 46px;
+}
+.confirmActions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 @media (max-width: 900px) { .scanbay { grid-template-columns: 1fr; } }
+
+/* Box capture — the skippable IN-scan carton measurement */
+.boxCapture { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.boxHead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.boxHead .boxSkip { margin-left: auto; color: var(--muted); }
+.boxFields { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.boxFields label { display: flex; flex-direction: column; font-size: 10px; color: var(--muted); letter-spacing: 0.06em; gap: 2px; }
+.boxFields input {
+  width: 58px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); padding: 6px 8px; font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.boxFields .boxX { color: var(--muted); padding-bottom: 7px; }
+.boxFields .importBtn { margin-left: 6px; }
+.boxNote { font-size: 12px; margin-top: 6px; }
+.boxNote.ok { color: #7ee787; }
+.boxNote.bad { color: var(--hi); }
+
+/* Custody register */
+.custodyIntro { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.custodyIntro b { font-size: 20px; }
+.custodyMeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.boxTag { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.boxTag.muted { opacity: 0.6; font-style: italic; }
+.kcard.stale { border-left-color: var(--hi); }
+.custodyBoxes { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.custodyBoxes .boxList { list-style: none; padding: 0; margin: 0 0 4px; }
+.custodyBoxes .boxList li { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.custodyBoxForm { margin-top: 4px; }
 
 /* ── Launch Bay — 2D departure bay (Nima, 2026-07-17, Phase B) ─────────────── */
 .launchBay { max-width: 1200px; }
@@ -361,94 +403,106 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .bayHeader h2 { margin: 0; }
 .baySummary { display: flex; gap: 8px; }
 
-/* one ship card — used both floating (sky) and grounded (ground) */
-.ship {
-  position: relative; width: 150px; flex: none; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 12px 10px 10px; text-align: center; display: flex; flex-direction: column; align-items: center;
+/* the scene stage — Mos Espa backdrop, ships composited on top */
+.bayScene {
+  position: relative; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  min-height: 74vh; background: linear-gradient(180deg, #0b1020 0%, #10151f 58%, #1a1408 100%);
 }
-.shipBody { position: relative; width: 100%; height: 56px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 6px; }
-.shipHull {
-  position: relative; width: 30px; height: 42px; z-index: 1;
-  background: linear-gradient(180deg, #cfd8e3, #8b98a8);
-  clip-path: polygon(50% 0%, 90% 40%, 78% 100%, 22% 100%, 10% 40%);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+.bayScene.hasBackdrop { background-size: cover; background-position: center; background-repeat: no-repeat; }
+.sceneEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.75); }
+.whLabel {
+  position: absolute; right: 16px; bottom: 10px; font-size: 10px; letter-spacing: 0.15em; z-index: 5;
+  color: rgba(255,255,255,0.75); font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.9); pointer-events: none;
 }
-.shipCockpit { position: absolute; top: 28%; left: 50%; width: 7px; height: 7px; border-radius: 50%; transform: translateX(-50%); }
 
-/* grounded ships: colour the hull + cockpit by why they're held */
+/* a ship placed into the scene */
+.sceneShip {
+  position: absolute; transform: translate(-50%, -50%); width: 150px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; z-index: 2;
+}
+.sceneShip.flying { animation: shipBob 3.4s ease-in-out infinite; }
+.sceneShipCraft { position: relative; height: 68px; display: flex; align-items: center; justify-content: center; }
+
+/* real ship art (assets/ships/), else the CSS hull fallback */
+.shipArt { width: 132px; height: 68px; object-fit: contain; -webkit-user-select: none; user-select: none;
+  filter: drop-shadow(0 6px 7px rgba(0,0,0,0.6)); }
+.sceneShip.flying .shipArt { filter: drop-shadow(0 0 9px rgba(126,231,135,0.55)); }
+.ship-payment .shipArt { filter: drop-shadow(0 0 8px rgba(248,81,73,0.7)); }
+.ship-invoice .shipArt { filter: drop-shadow(0 0 8px rgba(217,164,65,0.7)); }
+.sceneShip.delayed .shipArt { filter: drop-shadow(0 0 10px rgba(248,81,73,0.85)); }
+.shipHull {
+  position: relative; width: 34px; height: 50px;
+  background: linear-gradient(180deg, #e4ecf7, #a9c8d9);
+  clip-path: polygon(50% 0%, 90% 40%, 78% 100%, 22% 100%, 10% 40%);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+}
+.shipCockpit { position: absolute; top: 26%; left: 50%; width: 8px; height: 8px; border-radius: 50%; transform: translateX(-50%);
+  background: #bfe3ff; box-shadow: 0 0 6px 1px rgba(126,231,135,0.8); }
 .ship-payment .shipHull { background: linear-gradient(180deg, #ff9d97, #f85149); }
 .ship-invoice .shipHull { background: linear-gradient(180deg, #ffe08a, #d9a441); }
-.ship-fob     .shipHull { background: linear-gradient(180deg, #ffc38a, #d9822b); }
-.ship-payment .shipCockpit { background: #ffd7d4; box-shadow: 0 0 5px 1px rgba(248,81,73,0.8); }
-.ship-invoice .shipCockpit { background: #fff2cf; box-shadow: 0 0 5px 1px rgba(217,164,65,0.8); }
-.ship-fob     .shipCockpit { background: #ffe6cc; box-shadow: 0 0 5px 1px rgba(217,130,43,0.8); }
-.ship-other   .shipCockpit { background: var(--lo); box-shadow: 0 0 5px 1px rgba(59,130,246,0.7); }
 
-/* clamps pin grounded ships to the pad */
-.clamp { position: absolute; bottom: 6px; width: 7px; height: 20px; z-index: 2;
-  background: linear-gradient(180deg, #4a5568, #2a323d); border: 1px solid var(--line); border-radius: 2px; }
-.clampL { left: calc(50% - 22px); transform: rotate(12deg); }
-.clampR { right: calc(50% - 22px); transform: rotate(-12deg); }
-
-.shipLabel { font-weight: 700; font-variant-numeric: tabular-nums; }
-.shipCust { color: var(--muted); font-size: 11px; margin: 2px 0 6px; line-height: 1.3; }
-.shipStatus { font-size: 10px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); margin-bottom: 6px; }
-.st-payment { color: #ffb3ad; border-color: rgba(248,81,73,0.5); }
-.st-invoice { color: #ffca8a; border-color: rgba(217,164,65,0.5); }
-.st-fob { color: #ffca8a; border-color: rgba(217,130,43,0.5); }
-.st-approved { color: #7ee787; border-color: rgba(126,231,135,0.4); }
-.st-other { color: var(--muted); }
-.st-delayed { color: #ffb3ad; border-color: rgba(248,81,73,0.6); }
-
-/* ── the sky: approved ships float above the warehouse ─────────────────────── */
-.baySky {
-  position: relative; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 22px;
-  background: linear-gradient(180deg, #0b1020 0%, #10151f 70%, #141a24 100%); overflow: hidden;
+/* grounded ships cast a sand shadow; flying ones get a thruster glow */
+.sceneShip.grounded .sceneShipCraft::after {
+  content: ''; position: absolute; left: 50%; bottom: -6px; width: 96px; height: 14px; transform: translateX(-50%);
+  border-radius: 50%; background: radial-gradient(ellipse at center, rgba(0,0,0,0.42), transparent 70%);
 }
-.skyShips { display: flex; flex-wrap: wrap; gap: 16px; padding: 20px 16px 30px; justify-content: center; }
-.ship.floating { background: rgba(20,26,36,0.6); border-color: rgba(126,231,135,0.35); animation: shipBob 3s ease-in-out infinite; }
-.ship.floating .shipHull { background: linear-gradient(180deg, #e4ecf7, #a9c8d9); }
-.ship.floating .shipThrust {
-  position: absolute; bottom: 2px; left: 50%; width: 16px; height: 12px; transform: translateX(-50%);
-  background: radial-gradient(ellipse at center, rgba(126,231,135,0.7), transparent 70%); filter: blur(1px);
+.shipThrust {
+  position: absolute; bottom: 2px; left: 50%; width: 20px; height: 14px; transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, rgba(126,231,135,0.75), transparent 70%); filter: blur(1px);
   animation: thrustFlicker 1s ease-in-out infinite;
 }
-@keyframes shipBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-@keyframes thrustFlicker { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.sceneShip.delayed .shipThrust { background: radial-gradient(ellipse at center, rgba(248,81,73,0.8), transparent 70%); }
 
-/* delayed float — should have launched already; pulse red + alarm badge */
-.ship.delayed { border-color: var(--hi); box-shadow: 0 0 0 1px rgba(248,81,73,0.3); animation: delayPulse 1s ease-in-out infinite; }
-.ship.delayed .shipHull { background: linear-gradient(180deg, #ff9d97, #f85149); }
-.ship.delayed .shipThrust { background: radial-gradient(ellipse at center, rgba(248,81,73,0.8), transparent 70%); }
-@keyframes delayPulse { 0%, 100% { box-shadow: 0 0 0 1px rgba(248,81,73,0.3); } 50% { box-shadow: 0 0 14px 2px rgba(248,81,73,0.55); } }
+/* the info tag under each ship — legible over the bright scene */
+.sceneShipTag {
+  margin-top: 4px; background: rgba(8,11,18,0.82); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px; padding: 5px 8px 6px; min-width: 132px;
+}
+.tagTop { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.tagIf { font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; font-size: 13px; }
+.tagDot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.tagCust { color: rgba(255,255,255,0.7); font-size: 10px; line-height: 1.25; margin: 1px 0 3px; }
+.tagStatus { font-size: 10px; padding: 2px 6px; border-radius: 5px; border: 1px solid; display: inline-block; }
+.tagWhy { color: rgba(255,255,255,0.62); font-size: 9.5px; font-style: italic; line-height: 1.25; margin-top: 3px; }
+
+/* status colours — shared by the dot + the status chip */
+.st-payment { color: #ffb3ad; border-color: rgba(248,81,73,0.6); }
+.st-invoice { color: #ffca8a; border-color: rgba(217,164,65,0.6); }
+.st-approved { color: #7ee787; border-color: rgba(126,231,135,0.5); }
+.st-other { color: rgba(255,255,255,0.7); border-color: var(--line); }
+.st-delayed { color: #ffb3ad; border-color: rgba(248,81,73,0.7); }
+.st-scanned_in { color: #7fdfff; border-color: rgba(88,166,255,0.75); }
+.tagDot.st-payment { background: #f85149; }
+.tagDot.st-invoice { background: #d9a441; }
+.tagDot.st-approved { background: #3fb950; }
+.tagDot.st-other { background: #6e7681; }
+.tagDot.st-delayed { background: #f85149; }
+.tagDot.st-scanned_in { background: #58a6ff; }
+
+/* scanned-back-in: a picked IF physically in our hands — needs label + invoice.
+   Highlighted so it grabs attention over the rest of the bay. */
+.sceneShip.ship-scanned_in .sceneShipTag {
+  border-color: #58a6ff; animation: scannedPulse 1.5s ease-in-out infinite;
+}
+.sceneShip.ship-scanned_in .shipArt,
+.sceneShip.ship-scanned_in .shipHull { filter: drop-shadow(0 0 10px rgba(88,166,255,0.8)); }
+@keyframes scannedPulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(88,166,255,0.35); }
+  50% { box-shadow: 0 0 16px rgba(88,166,255,0.7); }
+}
+
+/* delayed = cleared on a prior day, still here — pulse + alarm badge */
+.sceneShip.delayed .sceneShipCraft { animation: delayPulse 1s ease-in-out infinite; }
 .shipAlarm {
-  position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; border-radius: 50%; z-index: 3;
-  background: var(--hi); color: #1a0605; font-weight: 900; font-size: 15px; line-height: 22px;
+  position: absolute; top: -6px; right: 22px; width: 22px; height: 22px; border-radius: 50%; z-index: 4;
+  background: var(--hi); color: #1a0605; font-weight: 900; font-size: 15px; line-height: 22px; text-align: center;
   box-shadow: 0 0 8px 2px rgba(248,81,73,0.6); animation: warnBlink 0.8s ease-in-out infinite;
 }
+@keyframes shipBob { 0%, 100% { transform: translate(-50%, -50%); } 50% { transform: translate(-50%, calc(-50% - 6px)); } }
+@keyframes thrustFlicker { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@keyframes delayPulse { 0%, 100% { filter: drop-shadow(0 0 0 transparent); } 50% { filter: drop-shadow(0 0 12px rgba(248,81,73,0.75)); } }
 @keyframes warnBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-.warehouseRoof {
-  position: relative; height: 40px; background: linear-gradient(180deg, #262d38, #1a1f28);
-  border-top: 2px solid var(--line);
-  clip-path: polygon(0 100%, 0 45%, 8% 45%, 10% 15%, 16% 45%, 100% 45%, 100% 100%);
-}
-.whLabel {
-  position: absolute; right: 16px; bottom: 8px; font-size: 10px; letter-spacing: 0.15em;
-  color: var(--muted); font-weight: 700;
-}
-
-/* ── the ground: held ships in status groups ───────────────────────────────── */
-.bayGround { display: flex; flex-direction: column; gap: 18px; }
-.groundGroup .colHead { margin-bottom: 8px; }
-.groundRow { display: flex; flex-wrap: wrap; gap: 14px; }
-.ship.grounded { position: relative; }
-.ship.grounded::after {
-  content: ''; position: absolute; left: 50%; bottom: 6px; width: 80%; height: 14px; transform: translateX(-50%);
-  border-radius: 50%; background: radial-gradient(ellipse at center, rgba(255,255,255,0.05), transparent 70%);
-  border: 1px solid var(--line); z-index: 0;
-}
-.tagBtns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.tagBtns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
 
 /* Shipment credits counter — header readout, "galactic credits" (real $) */
 .credits { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 12px; border-radius: 999px;
@@ -524,3 +578,648 @@ h2 .count { color: var(--hi); margin-left: 6px; }
   background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: indeterminate 1.1s ease-in-out infinite; }
 .grid tr.groupMember { background: rgba(255,255,255,0.015); }
 .grid tr.groupMember td { color: var(--muted); border-bottom-color: rgba(42,50,61,0.5); }
+
+/* ═══ COMMAND CENTER re-skin (Nima, 2026-07-17) — the hub as a console ═══════ */
+
+/* subtle deep-space starfield behind everything — pure CSS, no image assets */
+body {
+  background:
+    radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,0.18) 50%, transparent 51%),
+    radial-gradient(1px 1px at 78% 9%,  rgba(255,255,255,0.12) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 55% 32%, rgba(217,164,65,0.16) 50%, transparent 51%),
+    radial-gradient(1px 1px at 33% 71%, rgba(255,255,255,0.10) 50%, transparent 51%),
+    radial-gradient(1px 1px at 89% 58%, rgba(255,255,255,0.14) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 8% 89%,  rgba(139,148,158,0.14) 50%, transparent 51%),
+    radial-gradient(1px 1px at 67% 84%, rgba(255,255,255,0.10) 50%, transparent 51%),
+    linear-gradient(180deg, #0a0d13 0%, var(--bg) 40%);
+  background-attachment: fixed;
+}
+/* topbar: a console header with an amber energy line under it */
+.topbar { position: sticky; box-shadow: 0 1px 0 rgba(217,164,65,0.35), 0 6px 18px rgba(0,0,0,0.35); }
+
+.commandCenter { max-width: 1500px; }
+
+/* the sector grid — every operation in its own panel, never one blob */
+.sectorGrid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+.sector {
+  grid-column: span 4; background: rgba(22,27,34,0.88); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 14px; min-width: 0;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.sector:nth-child(1) { grid-column: span 6; } /* attention queue */
+.sector:nth-child(2) { grid-column: span 6; } /* order pipeline */
+.sector:nth-child(6) { grid-column: span 12; } /* task command */
+@media (max-width: 1100px) { .sector, .sector:nth-child(n) { grid-column: span 12; } }
+
+.sector-hot { border-color: rgba(248,81,73,0.45); box-shadow: 0 0 14px rgba(248,81,73,0.08), inset 0 1px 0 rgba(255,255,255,0.03); }
+
+.sectorHead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.sectorTitle { font-size: 12px; letter-spacing: 0.14em; color: var(--accent); font-weight: 700; }
+.sectorCount { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; font-size: 11px; color: var(--text); }
+.sectorOpen { margin-left: auto; }
+
+/* clickable stage pills + hot marker */
+.stagePill.clickable { cursor: pointer; color: inherit; font: inherit; }
+.stagePill.clickable:hover { border-color: var(--accent); }
+.stagePill .hotDot {
+  font-style: normal; font-size: 11px; color: #1a0605; background: var(--hi);
+  border-radius: 999px; padding: 0 6px; font-weight: 700;
+}
+
+/* mini order rows + cards inside sectors */
+.miniRow { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px 4px 8px; border-left: 2px solid transparent; font-size: 12.5px; }
+.miniRow.sev-hi { border-left-color: var(--hi); }
+.miniRow.sev-mid { border-left-color: var(--mid); }
+.miniRow.sev-lo { border-left-color: var(--lo); }
+.miniSo { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.miniCust { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.miniAge { color: var(--muted); font-variant-numeric: tabular-nums; }
+.miniCard { background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.miniCardTop { display: flex; align-items: baseline; gap: 8px; }
+.miniNext { font-size: 12.5px; margin: 3px 0 5px; }
+.moreLine { color: var(--muted); font-size: 12px; padding: 4px 6px; }
+
+/* order-pipeline stage board */
+.stageBoard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.stageCell { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-width: 0; }
+.stageCellHead { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 6px; }
+.stageCellHead b { font-size: 16px; color: var(--text); }
+
+/* operations stats */
+.opStats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.opStat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
+.opStat b { color: var(--text); font-size: 15px; margin-right: 4px; }
+.opStat.ok { border-color: rgba(126,231,135,0.4); } .opStat.ok b { color: #7ee787; }
+.opStat.bad { border-color: rgba(248,81,73,0.5); } .opStat.bad b { color: var(--hi); }
+.opStat.info { border-color: rgba(88,166,255,0.5); } .opStat.info b { color: #58a6ff; }
+
+/* task command groups + chips */
+.taskGroup { margin-bottom: 12px; }
+.taskGroupHead { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+  margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.taskChip { display: flex; gap: 10px; background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+.chipAvatar { width: 40px; height: 40px; border-radius: 8px; overflow: hidden; flex: none;
+  background: #0b1020; display: flex; align-items: center; justify-content: center; }
+.chipAvatar img { width: 100%; height: 100%; object-fit: cover; object-position: top center; filter: saturate(0.9); }
+.chipGlyph { color: var(--accent); }
+.chipBody { min-width: 0; flex: 1; }
+.chipTop { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.chipSpeech { font-size: 12px; font-style: italic; color: #9fd4ff; margin: 2px 0; line-height: 1.35; }
+.chipSubject { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ═══ HOLOTABLE — 3D launch-bay projection ═══════════════════════════════════ */
+.holotable { max-width: 2400px; }
+.holotableBar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.holoLegend { margin-left: auto; display: flex; gap: 12px; font-size: 11px; font-style: normal; }
+.holoLegend i { font-style: normal; }
+.holoStage {
+  position: relative; height: 76vh; border: 1px solid rgba(79,209,255,0.28); border-radius: 12px;
+  overflow: hidden; background: #05070d;
+  box-shadow: 0 0 30px rgba(79,209,255,0.07) inset, 0 0 18px rgba(79,209,255,0.05);
+}
+.holoStage canvas { display: block; }
+.holoMount { position: absolute; inset: 0; }
+.holoLabels { position: absolute; inset: 0; pointer-events: none; }
+.holoLoadNote { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.holoTag {
+  background: rgba(5,10,18,0.82); border: 1px solid rgba(79,209,255,0.4); border-radius: 6px;
+  padding: 4px 8px; font-size: 11px; line-height: 1.3; text-align: center; white-space: nowrap;
+  transform: translateY(-100%);
+}
+.holoTag b { display: block; font-size: 12px; color: #dff3ff; }
+.holoTag span { display: block; color: rgba(200,220,240,0.65); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.holoTag em { display: block; font-style: normal; font-weight: 600; }
+.holoTag.delayed { border-color: rgba(248,81,73,0.7); animation: warnBlink 0.9s ease-in-out infinite; }
+
+/* ═══ STAR WARS COMMAND-HUB re-skin (Nima, 2026-07-17 pt.2) ══════════════════ */
+:root { --holo: #4fd1ff; }
+
+/* faint CRT scanlines + corner vignette over everything — the console feel */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 999;
+  background:
+    repeating-linear-gradient(0deg, rgba(180,220,255,0.016) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,0.32) 100%);
+}
+
+/* chamfered corners — the signature SW console panel shape */
+.sector, .stagePill, .holoStage, .bayScene {
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  border-radius: 4px;
+}
+.sector { position: relative; }
+.sector::before { /* energy strip along the top edge */
+  content: ''; position: absolute; top: 0; left: 14px; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), rgba(79,209,255,0.45) 55%, transparent);
+  opacity: 0.7; pointer-events: none;
+}
+.sector-hot::before { background: linear-gradient(90deg, var(--hi), rgba(248,81,73,0.3) 60%, transparent); }
+.sectorTitle { text-shadow: 0 0 12px rgba(217,164,65,0.45); }
+.sectorHead { border-bottom: 1px solid rgba(79,209,255,0.14); padding-bottom: 7px; }
+
+/* topbar as a command console header */
+.topbar {
+  background: linear-gradient(180deg, #131922, #10151d);
+  box-shadow: 0 1px 0 rgba(217,164,65,0.5), 0 2px 0 rgba(79,209,255,0.12), 0 8px 22px rgba(0,0,0,0.45);
+}
+.brand .sub { color: rgba(79,209,255,0.75); text-transform: uppercase; font-size: 11px; letter-spacing: 0.12em; }
+.tab.active {
+  border-color: rgba(217,164,65,0.55); color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+  border-radius: 2px;
+}
+
+/* holo-tinted secondary accents */
+.chipSpeech, .holoSpeech { color: var(--holo); }
+.stagePill b { color: var(--holo); text-shadow: 0 0 10px rgba(79,209,255,0.4); }
+.stagePill.clickable:hover { border-color: var(--holo); box-shadow: 0 0 10px rgba(79,209,255,0.15); }
+
+/* task chips flow into columns so wide screens use the width */
+.taskGroup { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 6px 10px; }
+.taskGroupHead { grid-column: 1 / -1; margin-bottom: 0; }
+
+/* ═══ ULTRAWIDE layout — second monitor's extra length (≥1800px) ═════════════ */
+.commandCenter { max-width: 2400px; }
+@media (min-width: 1800px) {
+  main { padding: 24px 32px; }
+  .sectorGrid { gap: 16px; }
+  .sector:nth-child(1) { grid-column: span 4; }  /* attention */
+  .sector:nth-child(2) { grid-column: span 8; }  /* pipeline gets the width */
+  .sector:nth-child(3), .sector:nth-child(4), .sector:nth-child(5) { grid-column: span 4; }
+  .sector:nth-child(6) { grid-column: span 12; } /* task command, chips already flow */
+  .stageBoard { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .holoStage { height: 82vh; }
+  .bayScene { min-height: 80vh; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+}
+
+/* ═══ CALENDAR v2 — [ duties | month grid | day detail ] (Nima, 2026-07-18) ══ */
+.calendar3 { display: grid; grid-template-columns: 290px minmax(0, 1fr) 360px; gap: 14px; max-width: 2400px; align-items: start; }
+@media (max-width: 1200px) { .calendar3 { grid-template-columns: 1fr; } }
+.calTasks, .calDay {
+  background: rgba(22,27,34,0.88); border: 1px solid var(--line); padding: 12px 14px;
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  border-radius: 4px;
+}
+.calOverdueNote { color: var(--hi); font-size: 12px; border: 1px solid rgba(248,81,73,0.4); border-radius: 6px; padding: 6px 8px; margin-bottom: 10px; }
+.calTask { display: flex; gap: 8px; align-items: center; padding: 6px; border-left: 2px solid transparent; border-radius: 6px; margin-bottom: 4px; background: var(--panel2); }
+.calTask.sev-hi { border-left-color: var(--hi); } .calTask.sev-mid { border-left-color: var(--mid); } .calTask.sev-lo { border-left-color: var(--lo); }
+.calTaskAvatar { width: 30px; height: 30px; border-radius: 6px; overflow: hidden; flex: none; background: #0b1020; display: flex; align-items: center; justify-content: center; color: var(--accent); }
+.calTaskAvatar img { width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+.calTaskBody { min-width: 0; display: flex; flex-direction: column; }
+.calTaskBody b { font-size: 12px; }
+.calTaskBody span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calCellBtn { font: inherit; color: inherit; text-align: left; cursor: pointer; background: var(--panel); border: 1px solid var(--line); position: relative; }
+.calCellBtn:hover { border-color: var(--holo); }
+.calCell-sel { border-color: var(--accent) !important; box-shadow: inset 0 0 0 1px var(--accent), 0 0 10px rgba(217,164,65,0.2); }
+.calDots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+.calDot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; }
+.d-deadline { background: var(--hi); } .d-shipped { background: #7ee787; } .d-ledger { background: var(--accent); } .d-journal { background: var(--lo); }
+.calCount { position: absolute; top: 4px; right: 6px; font-size: 10px; color: var(--holo); font-variant-numeric: tabular-nums; }
+.calKey { margin-top: 8px; color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 4px; }
+.calDayGroup { margin-bottom: 12px; }
+.calNote { color: var(--muted); font-style: italic; font-size: 11px; }
+
+/* ═══ MOVIE-GUI pass — war-room console detailing (Nima refs, 2026-07-18) ════ */
+/* targeting-grid wash inside sectors, like the Death Star plan screens */
+.sector, .calTasks, .calDay {
+  background-image:
+    linear-gradient(rgba(79,209,255,0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79,209,255,0.028) 1px, transparent 1px);
+  background-size: 26px 26px, 26px 26px;
+  background-color: rgba(20,25,33,0.92);
+}
+/* cyan corner brackets (targeting-computer frame ticks) */
+.sector::after {
+  content: ''; position: absolute; inset: 4px; pointer-events: none;
+  background:
+    linear-gradient(rgba(79,209,255,0.55), rgba(79,209,255,0.55)) left 0 top 14px / 2px 12px,
+    linear-gradient(rgba(79,209,255,0.55), rgba(79,209,255,0.55)) left 14px top 0 / 12px 2px,
+    linear-gradient(rgba(79,209,255,0.55), rgba(79,209,255,0.55)) right 0 bottom 14px / 2px 12px,
+    linear-gradient(rgba(79,209,255,0.55), rgba(79,209,255,0.55)) right 14px bottom 0 / 12px 2px;
+  background-repeat: no-repeat;
+}
+/* technical readout type for every number & id on the console */
+.sectorCount, .stagePill b, .miniSo, .miniAge, .calCount, .caldate, .holoTag b,
+.opStat b, .chipTop b, .so, .credits, .calDayNum {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* the red glowing counter (FLIGHT STATUS style) for the things that burn */
+.sector-hot .sectorCount, .stagePill .hotDot, .pill.danger {
+  background: #180505; color: #ff6a5e; border: 1px solid rgba(248,81,73,0.65);
+  text-shadow: 0 0 8px rgba(248,81,73,0.8); border-radius: 4px;
+}
+h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.12em;
+}
+
+/* ═══ TRANSMISSION message as a comms readout (cards/portraits untouched) ═══ */
+.commFrame {
+  position: relative; margin-top: 8px; padding: 10px 12px 10px;
+  border: 1px solid rgba(79,209,255,0.3); border-radius: 6px; background: rgba(6,12,20,0.55);
+}
+.commFrame::before { /* corner ticks */
+  content: ''; position: absolute; inset: -1px; pointer-events: none;
+  background:
+    linear-gradient(var(--holo), var(--holo)) left top / 10px 2px,
+    linear-gradient(var(--holo), var(--holo)) left top / 2px 10px,
+    linear-gradient(var(--holo), var(--holo)) right bottom / 10px 2px,
+    linear-gradient(var(--holo), var(--holo)) right bottom / 2px 10px;
+  background-repeat: no-repeat; opacity: 0.7;
+}
+.commMeta {
+  display: flex; gap: 10px; flex-wrap: wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: 0.1em; color: rgba(79,209,255,0.85);
+  border-bottom: 1px solid rgba(79,209,255,0.18); padding-bottom: 6px; margin-bottom: 8px; text-transform: uppercase;
+}
+.commFrame .holoSubject { margin-top: 0; }
+.commFrame .holoSnippet { margin-bottom: 2px; }
+
+/* header action bar — every transmission control up top, compressed-view usable */
+.holoActionsTop { margin: 6px 0 2px; gap: 6px; flex-wrap: wrap; }
+.holoActionsTop .btn, .holoActionsTop .btnGhost { font-size: 11px; padding: 4px 9px; }
+.compactSel { width: 150px; font-size: 11px; padding: 4px 6px; }
+
+/* ═══ RADIAL COMMAND HUB — central war-table, sectors around it (2026-07-18) ═ */
+.sectorGrid.radial {
+  grid-template-columns: minmax(320px, 1fr) minmax(380px, 480px) minmax(320px, 1fr);
+  grid-template-areas:
+    "attn core tasks"
+    "launch custody edi"
+    "pipe pipe pipe";
+  align-items: stretch;
+}
+.sectorGrid.radial .sector { grid-column: unset; } /* areas own placement now */
+@media (max-width: 1100px) {
+  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "attn" "pipe" "launch" "custody" "edi" "tasks"; }
+}
+@media (min-width: 1800px) {
+  .sectorGrid.radial { grid-template-columns: minmax(380px, 1fr) minmax(460px, 560px) minmax(380px, 1fr); }
+}
+
+/* the tactical core — concentric rings, tick marks, radar sweep */
+.tacticalCore {
+  position: relative; min-height: 420px; display: flex; align-items: center; justify-content: center;
+  background:
+    radial-gradient(circle at center, rgba(79,209,255,0.06) 0%, rgba(10,14,22,0.9) 62%),
+    linear-gradient(rgba(79,209,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79,209,255,0.03) 1px, transparent 1px);
+  background-size: auto, 26px 26px, 26px 26px;
+  border: 1px solid rgba(79,209,255,0.3);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  border-radius: 4px; overflow: hidden;
+}
+.coreRing { position: absolute; border-radius: 50%; pointer-events: none; }
+.ringTicks {
+  width: 340px; height: 340px;
+  background:
+    repeating-conic-gradient(rgba(79,209,255,0.55) 0deg 0.7deg, transparent 0.7deg 6deg);
+  -webkit-mask: radial-gradient(circle, transparent 46%, #000 47%, #000 50%, transparent 51%);
+          mask: radial-gradient(circle, transparent 46%, #000 47%, #000 50%, transparent 51%);
+  animation: coreSpin 90s linear infinite;
+}
+.ringDash {
+  width: 260px; height: 260px; border: 1px dashed rgba(217,164,65,0.5);
+  animation: coreSpin 45s linear infinite reverse;
+}
+.coreSweep {
+  position: absolute; width: 340px; height: 340px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(rgba(79,209,255,0.20), transparent 55deg);
+  -webkit-mask: radial-gradient(circle, transparent 18%, #000 19%, #000 50%, transparent 51%);
+          mask: radial-gradient(circle, transparent 18%, #000 19%, #000 50%, transparent 51%);
+  animation: coreSpin 7s linear infinite;
+}
+@keyframes coreSpin { to { transform: rotate(360deg); } }
+.coreInner { position: relative; text-align: center; z-index: 1; max-width: 240px; }
+.coreLabel { font-family: ui-monospace, Menlo, monospace; font-size: 10px; letter-spacing: 0.3em; color: rgba(79,209,255,0.8); margin-bottom: 4px; }
+.coreBig {
+  font-family: ui-monospace, Menlo, monospace; font-size: 54px; font-weight: 700; line-height: 1;
+  color: var(--holo); text-shadow: 0 0 22px rgba(79,209,255,0.5);
+}
+.coreBigLabel { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; margin: 2px 0 10px; }
+.coreStats { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.coreStat { font-size: 12px; color: var(--muted); }
+.coreStat b { font-family: ui-monospace, Menlo, monospace; color: var(--text); margin-right: 4px; }
+.coreStat.ok b { color: #7ee787; } .coreStat.amber b { color: var(--accent); }
+.coreStat.bad { color: #ffb3ad; } .coreStat.bad b { color: var(--hi); text-shadow: 0 0 10px rgba(248,81,73,0.7); }
+
+/* ═══ EDI command board — partner rail | open queue | closed drawer ══════════ */
+.ediBoard { max-width: 2400px; }
+.ediStats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.ediSplit { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .ediSplit { grid-template-columns: 1fr; } }
+.partnerRail { display: flex; flex-direction: column; gap: 8px; }
+.partnerTile {
+  background: rgba(22,27,34,0.9); border: 1px solid var(--line); padding: 10px 12px; cursor: pointer;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  border-radius: 3px;
+}
+.partnerTile:hover { border-color: var(--holo); }
+.partnerTile.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ptName { font-family: ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: 0.08em; font-weight: 700; }
+.ptCounts { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.ptCounts b { color: var(--hi); font-family: ui-monospace, Menlo, monospace; font-size: 15px; }
+.ratioBar { height: 4px; background: rgba(248,81,73,0.25); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+.ratioBar > div { height: 100%; background: linear-gradient(90deg, #2ea043, #7ee787); }
+.ptFlags { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.ediQueue { min-width: 0; }
+.poCard {
+  background: rgba(22,27,34,0.9); border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+}
+.poCard.po-danger { border-left-color: var(--hi); box-shadow: 0 0 10px rgba(248,81,73,0.08); }
+.poCard.po-warn { border-left-color: var(--mid); }
+.poHead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; cursor: pointer; }
+.poDates { margin-left: auto; color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+.neededLine { margin-top: 5px; font-size: 13px; color: #ffca8a; }
+.po-danger .neededLine { color: #ffb3ad; font-weight: 600; }
+.poNs { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.poDetail { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.resolveRow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.closedDrawer { margin-top: 18px; }
+
+/* read (but kept visible) transmissions sit quieter than unread ones */
+.hologram.read { opacity: 0.72; }
+.hologram.read:hover { opacity: 1; }
+
+/* internal scroll for dense sectors (Task Command) — whole console stays on one screen */
+.sectorScroll { max-height: 300px; overflow-y: auto; padding-right: 4px; }
+.sectorScroll::-webkit-scrollbar { width: 6px; }
+.sectorScroll::-webkit-scrollbar-thumb { background: rgba(79,209,255,0.25); border-radius: 3px; }
+
+/* ops-core additions: chrono, insignia watermark, crew bonds */
+.coreClock { display: flex; flex-direction: column; margin-bottom: 8px; }
+.coreTime { font-family: ui-monospace, Menlo, monospace; font-size: 20px; color: var(--accent); text-shadow: 0 0 12px rgba(217,164,65,0.5); letter-spacing: 0.08em; }
+.coreDate { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--muted); letter-spacing: 0.18em; text-transform: uppercase; }
+.coreInsignia {
+  position: absolute; width: 300px; height: 300px; pointer-events: none;
+  fill: rgba(79,209,255,0.06); stroke: rgba(79,209,255,0.16);
+}
+.coreCrew { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; }
+.crewChip { display: inline-flex; align-items: center; gap: 4px; }
+.crewChip img, .crewChip i { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; object-position: top center;
+  border: 1px solid rgba(79,209,255,0.5); box-shadow: 0 0 8px rgba(79,209,255,0.25); display: inline-flex; align-items: center; justify-content: center; font-style: normal; color: var(--accent); }
+.crewChip b { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #ff9dd6; }
+.crewLabel { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+/* targeting-protocol partner tiles + relationship health */
+.partnerTile.targeting { position: relative; }
+.partnerTile.targeting::before {
+  content: ''; position: absolute; inset: 3px; pointer-events: none;
+  background:
+    linear-gradient(currentColor, currentColor) left top / 8px 1.5px,
+    linear-gradient(currentColor, currentColor) left top / 1.5px 8px,
+    linear-gradient(currentColor, currentColor) right top / 8px 1.5px,
+    linear-gradient(currentColor, currentColor) right top / 1.5px 8px,
+    linear-gradient(currentColor, currentColor) left bottom / 8px 1.5px,
+    linear-gradient(currentColor, currentColor) left bottom / 1.5px 8px,
+    linear-gradient(currentColor, currentColor) right bottom / 8px 1.5px,
+    linear-gradient(currentColor, currentColor) right bottom / 1.5px 8px;
+  background-repeat: no-repeat; opacity: 0.65;
+}
+.pt-red { color: rgba(248,81,73,0.8); box-shadow: 0 0 12px rgba(248,81,73,0.12); }
+.pt-amber { color: rgba(217,164,65,0.8); }
+.pt-green { color: rgba(126,231,135,0.7); }
+.partnerTile .ptName, .partnerTile .ptCounts { color: var(--text); }
+.partnerTile .ptCounts { color: var(--muted); }
+.ptHealth { font-family: ui-monospace, Menlo, monospace; font-size: 9px; letter-spacing: 0.16em; display: block; margin-bottom: 3px; }
+.h-red { color: #ff6a5e; text-shadow: 0 0 8px rgba(248,81,73,0.7); animation: warnBlink 1.2s ease-in-out infinite; }
+.h-amber { color: var(--accent); }
+.h-green { color: #7ee787; }
+
+/* EDI ship-window calendar */
+.ediCal { background: rgba(22,27,34,0.9); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+.ediCalGrid .calCell { min-height: 44px; padding: 3px 5px; }
+.ediDue { font-family: ui-monospace, Menlo, monospace; font-size: 10px; padding: 0 4px; border-radius: 3px; }
+.ediDue.bad { background: rgba(248,81,73,0.2); color: #ff8d84; border: 1px solid rgba(248,81,73,0.5); }
+.ediDue.win { background: rgba(79,209,255,0.14); color: var(--holo); border: 1px solid rgba(79,209,255,0.4); }
+.ediCellOverdue { box-shadow: inset 0 0 0 1px rgba(248,81,73,0.45); }
+.ediCalDay { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+.orphanBox { margin-bottom: 18px; }
+.poQuickClose { margin-left: 8px; font-size: 11px; }
+
+/* ── core panel v2: corner readouts, partner scan, crew clear of the ring ──── */
+.tacticalCore { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; padding: 12px; }
+.coreCenter { position: relative; flex: 1; min-height: 330px; display: flex; align-items: center; justify-content: center; }
+.coreCorner { position: absolute; z-index: 3; }
+.coreCorner.tl { top: 10px; left: 14px; }
+.coreCorner.tr { top: 10px; right: 14px; }
+/* the chrono goes holo-cyan (was amber) per Nima 2026-07-20 */
+.coreTime { color: var(--holo); text-shadow: 0 0 12px rgba(79,209,255,0.55); }
+.coreClock { margin-bottom: 0; }
+.coreComms {
+  background: none; border: 1px solid rgba(79,209,255,0.35); border-radius: 6px; cursor: pointer;
+  padding: 4px 10px; display: flex; align-items: center; gap: 8px; color: inherit; text-align: right;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+}
+.coreComms:hover { border-color: var(--holo); box-shadow: 0 0 10px rgba(79,209,255,0.2); }
+.coreComms b { font-family: ui-monospace, Menlo, monospace; font-size: 22px; color: var(--holo); text-shadow: 0 0 10px rgba(79,209,255,0.5); }
+.coreComms span { font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); line-height: 1.3; text-align: left; }
+
+/* partner scan — the red targeting readout from the films */
+.partnerScan {
+  position: relative; margin: 10px 0 0; padding: 8px 12px 9px; cursor: pointer; text-align: left;
+  background: rgba(24,5,5,0.55); border: 1px solid rgba(248,81,73,0.45); color: inherit; font: inherit;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+.partnerScan::before {
+  content: ''; position: absolute; inset: 3px; pointer-events: none; color: rgba(255,90,80,0.8);
+  background:
+    linear-gradient(currentColor, currentColor) left top / 9px 1.5px,
+    linear-gradient(currentColor, currentColor) left top / 1.5px 9px,
+    linear-gradient(currentColor, currentColor) right top / 9px 1.5px,
+    linear-gradient(currentColor, currentColor) right top / 1.5px 9px,
+    linear-gradient(currentColor, currentColor) left bottom / 9px 1.5px,
+    linear-gradient(currentColor, currentColor) left bottom / 1.5px 9px,
+    linear-gradient(currentColor, currentColor) right bottom / 9px 1.5px,
+    linear-gradient(currentColor, currentColor) right bottom / 1.5px 9px;
+  background-repeat: no-repeat;
+}
+.partnerScan:hover { box-shadow: 0 0 14px rgba(248,81,73,0.18); }
+.scanTitle { font-family: ui-monospace, Menlo, monospace; font-size: 10px; letter-spacing: 0.22em; color: #ff8d84; text-shadow: 0 0 10px rgba(248,81,73,0.6); margin-bottom: 5px; }
+.scanRow { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
+.scanName { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.scanOpen { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+.scanState { font-family: ui-monospace, Menlo, monospace; font-size: 10px; letter-spacing: 0.1em; }
+.scanRow.h-red .scanState { color: #ff6a5e; text-shadow: 0 0 8px rgba(248,81,73,0.7); animation: warnBlink 1.2s ease-in-out infinite; }
+.scanRow.h-amber .scanState { color: var(--accent); }
+.scanRow.h-green .scanState { color: #7ee787; }
+
+/* crew bonds: name + relationship status under each face, spaced off the ring */
+.coreCrew { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(79,209,255,0.14); gap: 18px; }
+.crewChip { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.crewChip img, .crewChip i { width: 34px; height: 34px; }
+.crewChip b { color: var(--text); font-size: 10px; }
+.crewChip em { font-style: normal; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: #ff9dd6; }
+
+/* ── core: new-task control + task form ── */
+.coreTrStack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.coreNewTask { font-size: 12px; }
+.coreTaskForm {
+  position: absolute; top: 88px; right: 14px; z-index: 6; width: 320px;
+  background: rgba(14,18,26,0.97); border: 1px solid var(--accent); border-radius: 8px; padding: 10px;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.coreTaskForm input, .coreTaskForm select {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; color: var(--text);
+  padding: 7px 9px; font-size: 13px; width: 100%;
+}
+.coreTaskRow { display: flex; gap: 6px; align-items: center; }
+.coreTaskRow select { width: auto; flex: 1; }
+
+/* crew: square holo frames, horizontal scroll as the roster grows */
+.crewScroll { justify-content: flex-start; overflow-x: auto; padding-bottom: 6px; flex-wrap: nowrap; }
+.crewScroll::-webkit-scrollbar { height: 6px; }
+.crewScroll::-webkit-scrollbar-thumb { background: rgba(79,209,255,0.25); border-radius: 3px; }
+.crewChip { flex: none; }
+.crewChip img, .crewChip i {
+  width: 52px; height: 52px; border-radius: 6px; /* square holo frame */
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+.crewMissing { background: none; border: 1px dashed rgba(79,209,255,0.4); border-radius: 8px; padding: 4px 8px; cursor: pointer; color: inherit; }
+.crewMissing i { border-style: dashed; color: var(--holo); }
+.crewMissing:hover { border-color: var(--holo); }
+
+/* Transmissions: the missing-portrait upload list */
+.missingArt {
+  border: 1px dashed rgba(79,209,255,0.4); border-radius: 8px; padding: 10px 12px; margin: 8px 0 14px;
+  font-size: 12.5px; color: var(--muted);
+}
+.missingArt b { color: var(--holo); }
+.missingArt code { color: var(--text); font-size: 12px; }
+.missingList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.missingList code { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+.missingList code span { color: var(--muted); }
+
+/* ═══ COCKPIT ROUND (Nima refs 2026-07-20: X-wing scope · panel buttons · canopy) ═ */
+
+/* ── Star Wars console buttons: lit square switches, not yellow pills ────────
+   Primary = the glowing white-blue lit switch from the Falcon dash;
+   ghost = dark panel switch; danger keeps its red lamp look. */
+.importBtn, .btn {
+  background: linear-gradient(180deg, #eef7ff 0%, #b9d9f6 55%, #9cc4e8 100%);
+  color: #0a1524; border: 1px solid #57708c; border-radius: 3px;
+  font-family: ui-monospace, Menlo, monospace; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.07em; font-size: 11.5px; padding: 7px 12px; cursor: pointer;
+  box-shadow: 0 0 12px rgba(150,205,255,0.35), inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -3px 0 rgba(20,40,70,0.28);
+}
+.importBtn:hover, .btn:hover { filter: brightness(1.06); box-shadow: 0 0 18px rgba(150,205,255,0.55), inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -3px 0 rgba(20,40,70,0.28); }
+.importBtn:active, .btn:active { transform: translateY(1px); box-shadow: 0 0 8px rgba(150,205,255,0.3), inset 0 2px 3px rgba(20,40,70,0.35); }
+.importBtn:disabled { opacity: 0.55; cursor: default; }
+.btnGhost {
+  background: linear-gradient(180deg, #2a3442, #1c242f); color: #b9cde0;
+  border: 1px solid #46586c; border-radius: 3px; cursor: pointer;
+  font-family: ui-monospace, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; padding: 6px 10px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -2px 0 rgba(0,0,0,0.4);
+}
+.btnGhost:hover { border-color: var(--holo); color: #e2f2ff; box-shadow: 0 0 8px rgba(79,209,255,0.2), inset 0 1px 0 rgba(255,255,255,0.08); }
+.linkBtn { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.04em; }
+
+/* ── X-wing targeting-scope treatment for the partner readouts ───────────────
+   Blue radial tick strips top & bottom (the scope's graticule), red target
+   content inside — applied to the core PARTNER SCAN and the EDI rail tiles. */
+.partnerScan, .partnerTile.targeting {
+  --tick: rgba(120,190,255,0.75);
+  position: relative;
+}
+.partnerScan::after, .partnerTile.targeting::after {
+  content: ''; position: absolute; left: 12%; right: 12%; height: 8px; top: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--tick) 0 1.5px, transparent 1.5px 7px);
+  -webkit-mask: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+          mask: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+}
+.partnerScan .scanTitle { text-align: center; }
+.partnerScanBottomTick { display: none; }
+.partnerScan::before { color: rgba(120,190,255,0.65); } /* corner brackets go scope-blue */
+.partnerTile.targeting::before { opacity: 0.85; }
+.partnerScan { border-color: rgba(120,190,255,0.35); background: radial-gradient(ellipse at center, rgba(30,8,8,0.35) 0%, rgba(8,12,20,0.7) 75%); }
+/* red target content, like the wireframe ship in the scope */
+.partnerScan .scanName { color: #ff9d94; text-shadow: 0 0 8px rgba(248,81,73,0.35); }
+.partnerScan .scanOpen { color: #ff8d84; }
+
+/* custody readout in the core — same scope chrome, cyan channel */
+.custodyScan {
+  position: relative; margin: 8px 0 0; padding: 8px 12px 9px; cursor: pointer; text-align: left;
+  background: radial-gradient(ellipse at center, rgba(8,20,26,0.5) 0%, rgba(8,12,20,0.7) 75%);
+  border: 1px solid rgba(79,209,255,0.35); color: inherit; font: inherit; width: 100%;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+.custodyScan::after {
+  content: ''; position: absolute; left: 12%; right: 12%; height: 8px; top: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, rgba(120,190,255,0.75) 0 1.5px, transparent 1.5px 7px);
+  -webkit-mask: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+          mask: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+}
+.custodyScan:hover { box-shadow: 0 0 14px rgba(79,209,255,0.18); }
+.scanTitle.cyan { color: var(--holo); text-shadow: 0 0 10px rgba(79,209,255,0.6); text-align: center; }
+.scanRow.h-amber .scanState { color: var(--accent); }
+
+/* ── the canopy: forward viewport with animated stars ───────────────────────── */
+.canopy {
+  position: relative; height: 170px; margin-bottom: 16px; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 120%, #10203a 0%, #05070d 60%, #02030a 100%);
+  border: 2px solid #3d4654; border-radius: 14px 14px 46% 46% / 14px 14px 26px 26px;
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.7), inset 0 -8px 22px rgba(79,209,255,0.05), 0 4px 18px rgba(0,0,0,0.5);
+}
+.canopy.hasSpace { background-size: cover; background-position: center; animation: spaceDrift 120s linear infinite alternate; }
+@keyframes spaceDrift { from { background-position: 40% center; } to { background-position: 60% center; } }
+/* three parallax star layers, drifting like sublight cruise */
+.starLayer { position: absolute; inset: -50% 0 0 0; pointer-events: none; background-repeat: repeat; }
+.sl1 {
+  background-image: radial-gradient(1px 1px at 17% 22%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 63% 74%, #cfe7ff 50%, transparent 51%),
+    radial-gradient(1px 1px at 41% 49%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 88% 33%, #ffffffcc 50%, transparent 51%);
+  background-size: 210px 190px; animation: starDrift 70s linear infinite;
+}
+.sl2 {
+  background-image: radial-gradient(1.4px 1.4px at 28% 61%, #fff 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 76% 18%, #bcdcff 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 52% 86%, #fff 50%, transparent 51%);
+  background-size: 340px 300px; animation: starDrift 45s linear infinite;
+}
+.sl3 {
+  background-image: radial-gradient(2px 2px at 12% 41%, #eaf4ff 50%, transparent 51%),
+    radial-gradient(1.8px 1.8px at 69% 55%, #fff 50%, transparent 51%);
+  background-size: 520px 460px; animation: starDrift 28s linear infinite;
+}
+@keyframes starDrift { from { transform: translateX(0); } to { transform: translateX(-520px); } }
+/* canopy frame struts, Falcon-style */
+.canopyStruts { position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent calc(25% - 3px), #39424f calc(25% - 3px), #4a5563 25%, #39424f calc(25% + 3px), transparent calc(25% + 3px)),
+    linear-gradient(90deg, transparent calc(50% - 4px), #39424f calc(50% - 4px), #4a5563 50%, #39424f calc(50% + 4px), transparent calc(50% + 4px)),
+    linear-gradient(90deg, transparent calc(75% - 3px), #39424f calc(75% - 3px), #4a5563 75%, #39424f calc(75% + 3px), transparent calc(75% + 3px));
+}
+.canopyLabel {
+  position: absolute; right: 16px; bottom: 8px; font-family: ui-monospace, Menlo, monospace;
+  font-size: 9px; letter-spacing: 0.28em; color: rgba(140,180,215,0.55);
+}
+
+/* console-metal framing so the sectors read as ship panels under the window */
+.sector, .tacticalCore { border-color: #3d4654; box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 3px 10px rgba(0,0,0,0.45); }
+
+/* clickable links inside task/email text (Nima, 2026-07-20) */
+.taskLink { color: var(--holo); text-decoration: none; font-weight: 600; }
+.taskLink:hover { text-decoration: underline; }
+
+/* crew top-banner strip in Transmissions (Nima, 2026-07-20) — reuses the core's
+   square crewChip/crewScroll styling, just needs its own spacing + click affordance */
+.crewBanner { margin-bottom: 16px; padding: 8px 4px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.crewPage { max-width: 1200px; }
+
+/* Datapad — standalone note ledger */
+.datapad { max-width: 900px; }
+.datapadEntry { display: flex; gap: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.datapadBody { flex: 1; min-width: 0; }
+
+/* Command Center: expandable task chip */
+.taskChip { cursor: pointer; }
+.taskChipOpen { border-color: var(--holo); }
+.chipExpand { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.chipActions { display: flex; gap: 8px; margin-top: 6px; }
