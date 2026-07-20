@@ -193,6 +193,13 @@ export async function saveSeason({ docType, docNumber, season }) {
   return res.json()
 }
 
+// Make an EDI PO into a task (the manual "＋ Task" button). Idempotent per PO.
+export async function createEdiTask(businessNumber) {
+  const res = await fetch(`/api/edi/${encodeURIComponent(businessNumber)}/task`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // Manually-entered EDI orders (shipped/aged out of the searches). Always shown
 // in their own section, flagged as unconfirmed.
 export async function addEdiManualOrder({ businessNumber, tradingPartner, note }) {

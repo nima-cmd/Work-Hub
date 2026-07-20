@@ -791,7 +791,7 @@ export default function Transmissions({ onNavigate } = {}) {
                   <div className="commFrame">
                     <div className="commMeta">
                       <span>{t.status === 'done' ? '✓ Directive complete' : '⦿ Active directive'}</span>
-                      <span>Origin: {t.recurringKey ? 'PROTOCOL' : t.emailId ? 'COMM RELAY' : 'MANUAL LOG'}</span>
+                      <span>Origin: {t.recurringKey ? 'PROTOCOL' : t.emailId ? 'COMM RELAY' : t.instanceKey?.startsWith('edi:') ? 'EDI RELAY' : 'MANUAL LOG'}</span>
                       {t.urgency && <span>Priority: {t.urgency.toUpperCase()}</span>}
                     </div>
                     <div className="holoSubject">{t.subject}</div>

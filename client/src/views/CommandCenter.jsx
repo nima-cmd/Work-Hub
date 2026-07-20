@@ -311,10 +311,12 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
   const topAttention = attention.slice(0, 8)
 
   // ── task command: WHERE each task belongs (origin groups) ──────────────────
+  const isEdiTask = (t) => t.instanceKey?.startsWith('edi:')
   const taskGroups = [
     { key: 'protocol', label: 'Protocols · recurring duties', items: openTasks.filter((t) => t.recurringKey) },
     { key: 'transmission', label: 'Transmissions · from the comm relay', items: openTasks.filter((t) => !t.recurringKey && t.emailId) },
-    { key: 'manual', label: 'Manual · logged by hand', items: openTasks.filter((t) => !t.recurringKey && !t.emailId) },
+    { key: 'edi', label: 'EDI relay · open PO work', items: openTasks.filter((t) => isEdiTask(t)) },
+    { key: 'manual', label: 'Manual · logged by hand', items: openTasks.filter((t) => !t.recurringKey && !t.emailId && !isEdiTask(t)) },
   ].filter((g) => g.items.length)
 
   // ── operations summaries ────────────────────────────────────────────────────

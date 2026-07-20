@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import {
   fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
-  ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason,
+  ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { NoteWidget, SeasonBadge } from '../lib.jsx'
@@ -93,7 +93,7 @@ function EdiCalendar({ openPos }) {
 // partner's OPEN work queue RIGHT, closed POs in their own drawer below.
 // Manual resolution — connect a PO to its NetSuite ref, or close it out —
 // lives on every card; always flagged as manual (src/model/ediWork.js).
-export default function EdiOrders() {
+export default function EdiOrders({ onNavigate } = {}) {
   const [review, setReview] = useState(null)
   const [err, setErr] = useState(null)
   const [syncing, setSyncing] = useState(false)
@@ -110,6 +110,7 @@ export default function EdiOrders() {
   const [ackDrafts, setAckDrafts] = useState({}) // txnId -> linkedTransactionId
   const [ackBusy, setAckBusy] = useState(null)
   const [seasons, setSeasons] = useState({})
+  const [taskBusy, setTaskBusy] = useState(null)
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
@@ -169,6 +170,14 @@ export default function EdiOrders() {
   async function undoAck(txnId) {
     setAckBusy(txnId)
     try { setReview(await unackEdiTransaction(txnId)) } catch (e) { setErr(e.message) } finally { setAckBusy(null) }
+  }
+
+  // Make this PO into a task (Nima, 2026-07-20). Idempotent — POs that already
+  // exist as a NetSuite SO auto-generate a task, so this is mainly for the
+  // no-SO cases (missed 850s / needs entering).
+  async function makeTask(bn) {
+    setTaskBusy(bn); setErr(null)
+    try { setReview(await createEdiTask(bn)) } catch (e) { setErr(e.message) } finally { setTaskBusy(null) }
   }
 
   // Manual resolution: save a NetSuite connection (stays open), close the PO,
@@ -360,6 +369,14 @@ export default function EdiOrders() {
                           onClick={(ev) => { ev.stopPropagation(); if (window.confirm(`Mark ${o.businessNumber} CANCELLED — no further documents coming?`)) submitResolution(o, 'cancel') }}>
                     ⊘ Cancelled
                   </button>
+                  {review.ediTasks?.[o.businessNumber] === 'open'
+                    ? <button className="btnGhost poQuickClose" title="A task is open for this PO — open Transmissions"
+                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('transmissions') }}>◉ Task</button>
+                    : review.ediTasks?.[o.businessNumber] === 'done'
+                    ? <button className="btnGhost poQuickClose" title="This PO's task was completed — open Transmissions"
+                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('transmissions') }}>✓ Task</button>
+                    : <button className="btnGhost poQuickClose" disabled={taskBusy === o.businessNumber}
+                              onClick={(ev) => { ev.stopPropagation(); makeTask(o.businessNumber) }}>＋ Task</button>}
                   <span className="cust">{isOpen ? '▾' : '▸'}</span>
                 </div>
                 <div className="neededLine">→ {w.needed}</div>

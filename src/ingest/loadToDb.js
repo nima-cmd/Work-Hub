@@ -621,6 +621,48 @@ export async function createManualTask({ subject, snippet, characterId, urgency,
   return rows[0].id
 }
 
+// ── EDI-sourced tasks (Nima, 2026-07-20) — an open EDI PO that needs work
+// becomes a durable task in the SAME quest_tasks system (the canonical model).
+// instance_key 'edi:<businessNumber>' dedups (a PO is only ever one task) via
+// the same UNIQUE-index / ON CONFLICT DO NOTHING mechanism recurring instances
+// use, so this is safe to call repeatedly. netsuite_doc_* records the linked SO
+// so the task shows what it's tied to.
+export async function createEdiTask(
+  { businessNumber, characterId, fromName, subject, snippet, netsuiteDocType, netsuiteDocNumber, urgency },
+  db = pool,
+) {
+  const { rows } = await db.query(
+    `INSERT INTO quest_tasks
+       (instance_key, character_id, from_name, subject, snippet, netsuite_doc_type, netsuite_doc_number, urgency, needs_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'none')
+     ON CONFLICT (instance_key) DO NOTHING
+     RETURNING id`,
+    [`edi:${businessNumber}`, characterId || null, fromName || 'EDI Relay', subject || null, snippet || null,
+     netsuiteDocType || null, netsuiteDocNumber || null, urgency || null],
+  )
+  return rows[0]?.id || null
+}
+
+// Current state of every EDI task (open|done), keyed by instance_key — lets the
+// EDI view show "task exists" vs offer a "make task" button, and lets the
+// reconcile below find EDI tasks whose PO is no longer open work.
+export async function fetchEdiTaskStates(db = pool) {
+  const { rows } = await db.query(
+    `SELECT instance_key AS "instanceKey", id, status FROM quest_tasks WHERE instance_key LIKE 'edi:%'`,
+  )
+  return rows
+}
+
+// Close (not delete) an EDI task whose PO's work is done — direct status write,
+// deliberately NOT completeQuestTask: an auto-generated task closing on its own
+// shouldn't award affection like a hand-completed quest.
+export async function closeEdiTask(businessNumber, db = pool) {
+  await db.query(
+    `UPDATE quest_tasks SET status='done', completed_at=now() WHERE instance_key = $1 AND status='open'`,
+    [`edi:${businessNumber}`],
+  )
+}
+
 // Open instances of one recurring template, oldest first — used to keep a
 // 'daily' task single (one open at a time) and escalate it instead of spawning
 // duplicates (Nima, 2026-07-17).
@@ -656,7 +698,7 @@ const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", charact
   from_address AS "fromAddress", from_name AS "fromName", subject, snippet, status,
   needs_type AS "needsType", needs_note AS "needsNote",
   netsuite_doc_type AS "netsuiteDocType", netsuite_doc_number AS "netsuiteDocNumber",
-  urgency, recurring_key AS "recurringKey", completion_mode AS "completionMode",
+  urgency, recurring_key AS "recurringKey", instance_key AS "instanceKey", completion_mode AS "completionMode",
   verify_key AS "verifyKey", checklist, created_at AS "createdAt", completed_at AS "completedAt"`
 
 export async function fetchQuestTasks(db = pool) {

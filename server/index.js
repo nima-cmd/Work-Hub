@@ -11,7 +11,7 @@ import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
-  ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason,
+  ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
@@ -330,6 +330,17 @@ app.get('/api/seasons', async (_req, res) => {
 app.post('/api/seasons', async (req, res) => {
   try {
     res.json(await setSeason(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Make an EDI PO into a task (Nima, 2026-07-20) — the manual button for POs
+// the auto-reconcile skips (no matching SO yet). Idempotent per business number.
+app.post('/api/edi/:businessNumber/task', async (req, res) => {
+  try {
+    res.json(await createEdiTaskFor(req.params.businessNumber))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

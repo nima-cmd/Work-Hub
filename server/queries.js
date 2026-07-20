@@ -13,6 +13,7 @@ import {
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
+import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
@@ -29,6 +30,7 @@ import {
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
   fetchOpenRecurringInstances, escalateRecurringTask, deleteQuestTask,
+  createEdiTask, fetchEdiTaskStates, closeEdiTask,
 } from '../src/ingest/loadToDb.js'
 import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile, listUserLabels, markMessageSpam } from '../src/ingest/gmail.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
@@ -550,7 +552,82 @@ export async function getEdiReview() {
   // manualOrders are returned ALONGSIDE (never merged into) the automated
   // pipeline — the EDI view renders them in their own clearly-flagged section.
   // resolutions ride along for the client-side work layer (src/model/ediWork.js).
-  return { ...pipeline, manualOrders, resolutions }
+  // ediTasks (bn → 'open'|'done') lets each PO card show "task exists" vs a
+  // "make task" button (Nima, 2026-07-20).
+  const taskStates = await fetchEdiTaskStates()
+  const ediTasks = Object.fromEntries(taskStates.map((s) => [s.instanceKey.slice(4), s.status]))
+  return { ...pipeline, manualOrders, resolutions, ediTasks }
+}
+
+// Deterministic messenger per PO (stable across regenerations, like the ship /
+// portrait hashes) so an EDI PO's task always shows the same face.
+function ediTaskCharacter(businessNumber) {
+  const s = String(businessNumber)
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return CHARACTERS[h % CHARACTERS.length].id
+}
+
+// One work-attached EDI order → its task (idempotent via instance_key).
+async function createEdiTaskFromOrder(o) {
+  const partner = o.tradingPartner || 'EDI'
+  const so = o.netsuiteOrder?.soNumber || null
+  const subject = `${partner} · PO ${o.businessNumber}${so ? ` · ${so}` : ''}`
+  const snippet = o.work?.needed || 'Review this EDI order'
+  const urgency = (o.work?.cancelState === 'passed' || o.work?.missed850) ? 'hi'
+    : o.work?.cancelState === 'soon' ? 'mid' : null
+  return createEdiTask({
+    businessNumber: o.businessNumber,
+    characterId: ediTaskCharacter(o.businessNumber),
+    fromName: partner,
+    subject, snippet,
+    netsuiteDocType: so ? 'SO' : null,
+    netsuiteDocNumber: so,
+    urgency,
+  })
+}
+
+// Reconcile EDI tasks with the live work board (Nima, 2026-07-20): open EDI POs
+// that ALREADY exist as a NetSuite SO are confirmed, actionable work, so they
+// auto-materialize as tasks ("if the SO exists it should be a task already").
+// POs with no SO yet only become tasks via the manual button (createEdiTaskFor)
+// — they're a "needs entering" judgment call, not automatic. Any EDI task whose
+// PO is no longer open work is closed. Best-effort caller (see ensureRecurringTasks).
+export async function ensureEdiTasks() {
+  const review = await getEdiReview()
+  const work = computeEdiWork(review.orders || [], review.resolutions || [])
+  const openByBn = new Map()
+  let created = 0
+  for (const o of work.orders) {
+    if (o.work.closed) continue
+    openByBn.set(o.businessNumber, o)
+    if (!o.netsuiteOrder) continue // only "SO exists" ones auto-materialize
+    const id = await createEdiTaskFromOrder(o)
+    if (id) {
+      await logTaskActivity({ taskId: id, kind: 'created', note: `EDI: ${(o.tradingPartner || '').trim()} PO ${o.businessNumber}`.replace(/\s+/g, ' ') })
+      created++
+    }
+  }
+  let closed = 0
+  for (const s of await fetchEdiTaskStates()) {
+    if (s.status !== 'open') continue
+    const bn = s.instanceKey.slice(4)
+    if (!openByBn.has(bn)) { await closeEdiTask(bn); closed++ }
+  }
+  return { created, closed }
+}
+
+// The manual "＋ Task" button on an EDI PO card — works for ANY open PO,
+// including the no-SO ones the auto-reconcile skips. Same instance_key, so it
+// collapses with any auto-created task for the same PO.
+export async function createEdiTaskFor(businessNumber) {
+  const review = await getEdiReview()
+  const work = computeEdiWork(review.orders || [], review.resolutions || [])
+  const o = work.orders.find((x) => x.businessNumber === businessNumber)
+  if (!o) throw new Error(`No EDI order found for ${businessNumber}`)
+  const id = await createEdiTaskFromOrder(o)
+  if (id) await logTaskActivity({ taskId: id, kind: 'created', note: `EDI task created from the relay · PO ${businessNumber}` })
+  return getEdiReview()
 }
 
 // Per-document acknowledgment (Nima, 2026-07-20) — distinct from resolveEdiPo:
@@ -616,7 +693,11 @@ export async function removeEdiManualOrder(id) {
 
 export async function syncEdi() {
   if (!process.env.ORDERFUL_API_KEY) throw new Error('ORDERFUL_API_KEY is not set in .env.local')
-  return syncOrderful(process.env.ORDERFUL_API_KEY)
+  const r = await syncOrderful(process.env.ORDERFUL_API_KEY)
+  // Fresh Orderful data can shift what's open — refresh the auto-generated
+  // tasks right after (best-effort; a failure here mustn't fail the sync).
+  try { await ensureEdiTasks() } catch (e) { console.error('EDI task generation after sync failed:', e.message) }
+  return r
 }
 
 export async function commitOcPoLink(payload) {
@@ -1042,6 +1123,16 @@ export async function ensureRecurringTasks() {
       break // one instance per key per run — later elapsed slots escalate it
             // on a future run instead of piling on a second fresh task
     }
+  }
+
+  // EDI orders that already exist as NetSuite SOs are real, confirmed work —
+  // surface them as tasks automatically (Nima, 2026-07-20). Best-effort: an
+  // Orderful/DB hiccup here must never break the core recurring reconcile.
+  try {
+    const edi = await ensureEdiTasks()
+    created += edi.created
+  } catch (e) {
+    console.error('EDI task generation failed (recurring tasks still processed):', e.message)
   }
   return created
 }
