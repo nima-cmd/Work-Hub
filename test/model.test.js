@@ -16,6 +16,9 @@ import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeAffection } from '../src/model/affection.js'
 import { groupOrdersByPo } from '../src/model/poGroups.js'
 import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.js'
+import { SHIPS, resolveShipForKey } from '../src/model/ships.js'
+import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
+import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
@@ -324,6 +327,112 @@ test('resolveCharacterForSender ignores a stale/unknown preference id and falls 
 test('resolveCharacterForSender picks randomly (via injected rng) for a sender with no preference', () => {
   assert.equal(resolveCharacterForSender('new@example.com', {}, () => 0), CHARACTERS[0].id)
   assert.equal(resolveCharacterForSender('new@example.com', {}, () => 0.999999), CHARACTERS[CHARACTERS.length - 1].id)
+})
+
+test('resolveShipForKey is deterministic — same order key always maps to the same ship', () => {
+  const a = resolveShipForKey('IF7228')
+  const b = resolveShipForKey('IF7228')
+  assert.equal(a, b)
+  assert.ok(SHIPS.some((s) => s.id === a))
+})
+
+test('resolveShipForKey spreads different keys across the roster and never divides by zero on an empty roster', () => {
+  const ids = new Set(['IF1', 'IF2', 'IF3', 'SO9', 'SO10'].map((k) => resolveShipForKey(k)))
+  assert.ok(ids.size > 1) // not all collapsing to one ship
+  assert.equal(resolveShipForKey('IF1', []), null)
+})
+
+// ── EDI work layer ───────────────────────────────────────────────────────────
+const T0 = new Date('2026-07-18T12:00:00Z').getTime()
+const DAY_MS = 86400000
+const edi850 = (daysAgo, extra = {}) => ({
+  businessNumber: 'PO1', tradingPartner: 'Nordstrom', stageRank: 1, hasIssue: false,
+  bucket: 'NEEDS_IMPORT', linkGaps: [], netsuiteOrder: null, cancelAfter: null,
+  transactions: [{ id: 't1', type: '850_PURCHASE_ORDER', createdAt: new Date(T0 - daysAgo * DAY_MS).toISOString() }],
+  ...extra,
+})
+
+test('ediWork: an old 850 with no NetSuite order and no resolution is flagged MISSED', () => {
+  const w = deriveWork(edi850(30), null, T0)
+  assert.equal(w.missed850, true)
+  assert.match(w.needed, /Enter in NetSuite — 850 arrived 30d ago/)
+  const fresh = deriveWork(edi850(MISSED_AFTER_DAYS - 1), null, T0)
+  assert.equal(fresh.missed850, false)
+})
+
+test('ediWork: a manual resolution suppresses the missed flag and can close a PO outright', () => {
+  const linked = deriveWork(edi850(30), { businessNumber: 'PO1', closed: false, netsuiteRef: 'SO9999' }, T0)
+  assert.equal(linked.missed850, false)
+  assert.match(linked.needed, /SO9999/)
+  const closed = deriveWork(edi850(30), { businessNumber: 'PO1', closed: true, note: 'shipped pre-Orderful' }, T0)
+  assert.equal(closed.closed, true)
+  assert.equal(closed.closedBy, 'manual')
+  assert.equal(closed.needed, null)
+})
+
+test('ediWork: a cancelled PO closes with its own closedBy so it can never read as completed work', () => {
+  const w = deriveWork(edi850(30), { businessNumber: 'PO1', cancelled: true, note: 'buyer cancelled 6/12' }, T0)
+  assert.equal(w.closed, true)
+  assert.equal(w.closedBy, 'cancelled')
+  assert.equal(w.missed850, false)
+})
+
+test('ediWork: 810-complete auto-closes; shipped-in-NetSuite needs the ASN', () => {
+  const done = deriveWork(edi850(10, { stageRank: 4 }), null, T0)
+  assert.equal(done.closed, true)
+  assert.equal(done.closedBy, 'docs')
+  const needsAsn = deriveWork(
+    edi850(10, { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } }), null, T0)
+  assert.match(needsAsn.needed, /856 ASN/)
+})
+
+test('ediWork: passed cancel date on an unshipped PO screams in the needed line', () => {
+  const w = deriveWork(edi850(20, { cancelAfter: new Date(T0 - 3 * DAY_MS).toISOString() }), null, T0)
+  assert.equal(w.cancelState, 'passed')
+  assert.match(w.needed, /Cancel date passed 3d ago/)
+})
+
+test('computeEdiWork: partner rollup counts open/closed and the ratio', () => {
+  const orders = [
+    edi850(30),                                              // open + missed
+    edi850(2, { businessNumber: 'PO2', stageRank: 4 }),      // auto-closed
+    edi850(2, { businessNumber: 'PO3' }),                    // open
+  ]
+  const { partners, totals } = computeEdiWork(orders, [], T0)
+  assert.equal(partners.length, 1)
+  assert.equal(partners[0].open, 2)
+  assert.equal(partners[0].closed, 1)
+  assert.equal(partners[0].missed, 1)
+  assert.ok(Math.abs(partners[0].closedRatio - 1 / 3) < 1e-9)
+  assert.deepEqual({ open: totals.open, closed: totals.closed }, { open: 2, closed: 1 })
+})
+
+test('every roster character has a dialogue voice (catches drift when adding characters)', () => {
+  for (const c of CHARACTERS) {
+    assert.ok(DIALOGUE[c.id], `no DIALOGUE entry for ${c.id}`)
+    assert.ok(DIALOGUE[c.id].greeting?.length, `no greeting lines for ${c.id}`)
+  }
+})
+
+test('speakLine is deterministic per (character, context, seed) and varies across seeds', () => {
+  const a = speakLine('yoda', 'greeting', 42)
+  assert.equal(a, speakLine('yoda', 'greeting', 42))
+  assert.ok(typeof a === 'string' && a.length > 0)
+  // with 3 greeting lines, some pair of these seeds must differ
+  const picks = new Set([1, 2, 3, 4, 5, 6].map((s) => speakLine('yoda', 'greeting', s)))
+  assert.ok(picks.size > 1)
+})
+
+test('speakLine falls back: unknown context → greeting, unknown character → default voice', () => {
+  assert.ok(speakLine('yoda', 'not-a-context', 1))
+  assert.ok(speakLine('not-a-character', 'greeting', 1))
+})
+
+test('taskContext ranks done > urgent > recurring > greeting', () => {
+  assert.equal(taskContext({ status: 'done', urgency: 'hi', recurringKey: 'x' }), 'done')
+  assert.equal(taskContext({ status: 'open', urgency: 'hi', recurringKey: 'x' }), 'urgent')
+  assert.equal(taskContext({ status: 'open', recurringKey: 'x' }), 'reminder')
+  assert.equal(taskContext({ status: 'open' }), 'greeting')
 })
 
 test('normalizeDocNumber prepends the prefix only when missing', () => {

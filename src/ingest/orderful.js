@@ -194,6 +194,8 @@ export async function fetchEdiTransactions(db = pool) {
             acknowledgment_status AS "acknowledgmentStatus", created_at AS "createdAt",
             last_updated_at AS "lastUpdatedAt", ship_not_before AS "shipNotBefore", cancel_after AS "cancelAfter"
      FROM edi_transactions
+     WHERE stream = 'LIVE'   -- TEST-stream docs stay stored but never enter the
+                             -- review: a test 850 must not read as a missed PO
      ORDER BY created_at DESC`,
   )
   return rows
