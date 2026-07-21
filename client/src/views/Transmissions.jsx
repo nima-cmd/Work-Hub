@@ -9,7 +9,7 @@ import {
 import { imagesFor } from '../data/characterImages.js'
 import { speakLine, taskContext } from '../../../src/model/dialogue.js'
 import TradingCard from '../lib/TradingCard.jsx'
-import { fmtAge, LinkedText } from '../lib.jsx'
+import { fmtAge, LinkedText, DocLinks } from '../lib.jsx'
 
 function initials(name) {
   if (!name) return '?'
@@ -684,6 +684,7 @@ export default function Transmissions({ onNavigate } = {}) {
                     </div>
                     <div className="holoSubject">{e.subject}</div>
                     {e.note && <div className="ledgerNote">📌 {e.note}</div>}
+                    <DocLinks docType="EMAIL" docNumber={e.id} selfLabel={e.subject} />
                   {isOpen && (
                     <div className="holoBody">
                       <p className="holoSnippet" style={{ whiteSpace: 'pre-wrap' }}>{e.body || e.snippet}</p>
@@ -796,6 +797,7 @@ export default function Transmissions({ onNavigate } = {}) {
                     </div>
                     <div className="holoSubject">{t.subject}</div>
                     <p className="holoSnippet"><LinkedText text={t.snippet} /></p>
+                    <DocLinks docType="TASK" docNumber={String(t.id)} selfLabel={t.subject} />
                   </div>
                   {/* Bugs' CSV-freshness task: live per-source status, each with its
                       NetSuite saved-search link, plus an import right here so the

@@ -424,6 +424,49 @@ export async function deleteEdiTransactionAck(transactionId, db = pool) {
   await db.query('DELETE FROM edi_transaction_acks WHERE transaction_id = $1', [transactionId])
 }
 
+// ── Document links — attach any doc/transaction to any other (see schema).
+// Query is bidirectional: given one endpoint, return the OTHER side of every
+// link it appears in, regardless of which column it was stored in.
+export async function fetchLinksFor(docType, docNumber, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id,
+       CASE WHEN a_type=$1 AND a_number=$2 THEN b_type   ELSE a_type   END AS "otherType",
+       CASE WHEN a_type=$1 AND a_number=$2 THEN b_number ELSE a_number END AS "otherNumber",
+       label, created_at AS "createdAt"
+     FROM doc_links
+     WHERE (a_type=$1 AND a_number=$2) OR (b_type=$1 AND b_number=$2)
+     ORDER BY created_at DESC`,
+    [docType, docNumber],
+  )
+  return rows
+}
+
+// Add a link. Self-links are rejected; direction doesn't matter (the UNIQUE
+// constraint + bidirectional read make (A,B) and querying from B symmetric),
+// but we also guard the reverse duplicate so linking A→B then B→A is a no-op.
+export async function addDocLink({ aType, aNumber, bType, bNumber, label }, db = pool) {
+  if (!aType || !aNumber || !bType || !bNumber) throw new Error('Both ends of a link are required')
+  if (aType === bType && aNumber === bNumber) throw new Error('Cannot link a document to itself')
+  const { rows: existing } = await db.query(
+    `SELECT id FROM doc_links WHERE (a_type=$1 AND a_number=$2 AND b_type=$3 AND b_number=$4)
+                                  OR (a_type=$3 AND a_number=$4 AND b_type=$1 AND b_number=$2)`,
+    [aType, aNumber, bType, bNumber],
+  )
+  if (existing.length) {
+    if (label) await db.query('UPDATE doc_links SET label=$2 WHERE id=$1', [existing[0].id, label])
+    return existing[0].id
+  }
+  const { rows } = await db.query(
+    `INSERT INTO doc_links (a_type, a_number, b_type, b_number, label) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [aType, aNumber, bType, bNumber, label || null],
+  )
+  return rows[0].id
+}
+
+export async function deleteDocLink(id, db = pool) {
+  await db.query('DELETE FROM doc_links WHERE id = $1', [id])
+}
+
 // ── EDI supply link — inbound production PO (or from-stock) per EDI order.
 export async function fetchEdiSupply(db = pool) {
   const { rows } = await db.query(

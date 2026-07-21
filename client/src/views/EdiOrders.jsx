@@ -6,7 +6,7 @@ import {
   setEdiSupply, clearEdiSupply,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
-import { NoteWidget, SeasonBadge } from '../lib.jsx'
+import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 const isIssueValue = (v) => ISSUE_STATUSES.has(v)
@@ -454,6 +454,7 @@ export default function EdiOrders({ onNavigate } = {}) {
                     </div>
 
                     <NoteWidget docType="EDI_PO" docNumber={o.businessNumber} />
+                    <DocLinks docType="EDI_PO" docNumber={o.businessNumber} selfLabel={o.tradingPartner} />
 
                     {!!o.linkGaps.length && (
                       <div className="allocPos">{o.linkGaps.map((g, i) => <div key={i} className="sev-hi">⚠ {g}</div>)}</div>

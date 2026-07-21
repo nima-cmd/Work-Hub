@@ -13,6 +13,7 @@ const SECTION_VIEW = { EDI_PO: 'edi', SO: 'table', IF: 'table' }
 export default function Datapad({ onNavigate }) {
   const [emailNotes, setEmailNotes] = useState(null)
   const [otherNotes, setOtherNotes] = useState(null)
+  const [q, setQ] = useState('')
 
   function load() {
     fetchLedgerNotes().then(setEmailNotes).catch(() => setEmailNotes([]))
@@ -27,22 +28,33 @@ export default function Datapad({ onNavigate }) {
 
   if (!emailNotes || !otherNotes) return <div className="banner">Loading the datapad…</div>
 
-  const grouped = otherNotes.reduce((acc, n) => {
+  // Keyword search (Nima, 2026-07-20) — match note text, the doc it's on, its
+  // subject, a linked doc, or the messenger, so "net bag" / a PO / a customer
+  // surfaces everything across the whole ledger.
+  const kw = q.trim().toLowerCase()
+  const matches = (n) => !kw || [n.note, n.docNumber, n.subject, n.taskSubject, n.linkedDocNumber, n.character?.name]
+    .some((v) => v && String(v).toLowerCase().includes(kw))
+  const emails = emailNotes.filter(matches)
+  const others = otherNotes.filter(matches)
+
+  const grouped = others.reduce((acc, n) => {
     (acc[n.docType] ||= []).push(n)
     return acc
   }, {})
-  const total = emailNotes.length + otherNotes.length
+  const total = emails.length + others.length
 
   return (
     <div className="datapad">
       <h2>Datapad <span className="count">{total}</span></h2>
       <p className="hint">Every note left on anything — an email, an EDI PO, a sales order — newest first, grouped by what it's on.</p>
-      {!total && <div className="empty">No notes saved yet — use ✎ Notes on any card to keep a highlight here.</div>}
+      <input className="qtyInput" style={{ width: '100%', maxWidth: 420, margin: '4px 0 14px' }} value={q}
+             placeholder="Search notes — a keyword, doc number, customer…" onChange={(e) => setQ(e.target.value)} />
+      {!total && <div className="empty">{kw ? `No notes match “${q}”.` : 'No notes saved yet — use ✎ Notes on any card to keep a highlight here.'}</div>}
 
-      {!!emailNotes.length && (
+      {!!emails.length && (
         <div className="datapadSection">
           <div className="datapadSectionTitle">Transmissions</div>
-          {emailNotes.map((n) => {
+          {emails.map((n) => {
             const img = imagesFor(n.characterId)[0]
             return (
               <div key={n.id} className="datapadEntry">

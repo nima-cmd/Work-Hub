@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchShipDepartures } from '../api.js'
-import { SourceBadge, LabelButtons, NoteWidget, ChannelTag, CustomerName } from '../lib.jsx'
+import { SourceBadge, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
 
 // Nima's framing (2026-07-16) for each IF-Packed-Status bucket, in priority
 // order — "Approved to Ship" can leave TODAY, so it goes first; anything not
@@ -52,6 +52,7 @@ export default function ShipDepartures() {
                 <LabelButtons info={r} />
               </div>
               <NoteWidget docType={r.ifNumber ? 'IF' : 'SO'} docNumber={r.ifNumber || r.soNumber} />
+              <DocLinks docType={r.ifNumber ? 'IF' : 'SO'} docNumber={r.ifNumber || r.soNumber} selfLabel={r.customer} />
             </div>
           ))}
         </div>

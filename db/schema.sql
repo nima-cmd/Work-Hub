@@ -264,6 +264,29 @@ CREATE TABLE IF NOT EXISTS doc_seasons (
   PRIMARY KEY (doc_type, doc_number)
 );
 
+-- ── Document links (Nima, 2026-07-20) — the thing NetSuite can't do ─────────
+-- A first-class, bidirectional association between ANY two documents /
+-- transactions the app knows: attach an email to a Sales Order, tie an Item
+-- Fulfillment to a task, connect an EDI PO to an SO, etc. Endpoints are typed
+-- natural keys (a_type/a_number ↔ b_type/b_number), so this links across every
+-- record type without a schema change per pairing. `label` is an optional
+-- human note on the relationship (e.g. the email's subject, or "payment
+-- dispute"). Distinct from notes.linked_doc_* (a note that happens to point
+-- somewhere) — this is a pure link, no note required.
+--   types: 'EMAIL' | 'TASK' | 'SO' | 'IF' | 'INV' | 'EDI_PO' | 'PO' | 'OC'
+CREATE TABLE IF NOT EXISTS doc_links (
+  id         SERIAL PRIMARY KEY,
+  a_type     TEXT NOT NULL,
+  a_number   TEXT NOT NULL,
+  b_type     TEXT NOT NULL,
+  b_number   TEXT NOT NULL,
+  label      TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (a_type, a_number, b_type, b_number)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_links_a ON doc_links(a_type, a_number);
+CREATE INDEX IF NOT EXISTS idx_doc_links_b ON doc_links(b_type, b_number);
+
 -- ── EDI supply link (Nima, 2026-07-20) ──────────────────────────────────────
 -- Which INBOUND production PO an EDI order's goods come from — the vendor/
 -- container PO (purchase_orders.po_number) that supplies it — OR a from_stock

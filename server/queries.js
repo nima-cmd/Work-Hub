@@ -23,6 +23,7 @@ import {
   fetchEdiTransactionAcks, upsertEdiTransactionAck, deleteEdiTransactionAck,
   fetchSeasons, upsertSeason,
   fetchEdiSupply, upsertEdiSupply, deleteEdiSupply,
+  fetchLinksFor, addDocLink, deleteDocLink,
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
@@ -574,6 +575,44 @@ export async function setEdiSupply({ businessNumber, poNumber, fromStock, note }
 export async function clearEdiSupply(businessNumber) {
   await deleteEdiSupply(businessNumber)
   return getEdiReview()
+}
+
+// ── Document links (Nima, 2026-07-20) — attach any doc/transaction to any
+// other. getLinksFor returns the other endpoint of every link touching a doc.
+export async function getLinksFor(docType, docNumber) {
+  return fetchLinksFor(docType, docNumber)
+}
+
+export async function createDocLink(payload) {
+  await addDocLink(payload)
+  return getLinksFor(payload.aType, payload.aNumber)
+}
+
+export async function removeDocLink(id) {
+  await deleteDocLink(id)
+  return { ok: true }
+}
+
+// Search every real document number the app knows (Nima, 2026-07-20: "every
+// document number that exists we'd like to choose them") — so linking picks a
+// verified doc instead of typing a typo-prone number. Merges the natural keys
+// across orders/fulfillments/invoices/POs/OCs/EDI, each with a bit of context.
+export async function searchDocNumbers(q) {
+  const term = `%${String(q || '').trim()}%`
+  if (term.length < 3) return [] // need at least 1 real char between the %s
+  const { rows } = await pool.query(
+    `
+    (SELECT 'SO' AS type, so_number AS number, customer AS label FROM orders WHERE so_number ILIKE $1 LIMIT 8)
+    UNION ALL (SELECT 'IF', if_number, so_number FROM fulfillments WHERE if_number ILIKE $1 LIMIT 8)
+    UNION ALL (SELECT 'INV', inv_number, so_number FROM invoices WHERE inv_number ILIKE $1 LIMIT 8)
+    UNION ALL (SELECT 'PO', po_number, MAX(vendor) FROM purchase_orders WHERE po_number ILIKE $1 GROUP BY po_number LIMIT 8)
+    UNION ALL (SELECT 'OC', oc_number, MAX(customer) FROM order_confirmations WHERE oc_number ILIKE $1 GROUP BY oc_number LIMIT 8)
+    UNION ALL (SELECT 'EDI_PO', business_number, MAX(trading_partner) FROM edi_transactions WHERE business_number ILIKE $1 GROUP BY business_number LIMIT 8)
+    LIMIT 30
+    `,
+    [term],
+  )
+  return rows
 }
 
 // Deterministic messenger per PO (stable across regenerations, like the ship /

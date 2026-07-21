@@ -200,6 +200,35 @@ export async function createEdiTask(businessNumber) {
   return res.json()
 }
 
+// Search known document numbers across every record type (link picker).
+export async function fetchDocNumbers(q) {
+  const res = await fetch(`/api/doc-numbers?q=${encodeURIComponent(q)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Document links — attach any doc/transaction to any other.
+export async function fetchLinksFor(docType, docNumber) {
+  const res = await fetch(`/api/links?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function addDocLink({ aType, aNumber, bType, bNumber, label }) {
+  const res = await fetch('/api/links', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ aType, aNumber, bType, bNumber, label }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function deleteDocLink(id) {
+  const res = await fetch(`/api/links/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Assign an EDI order's inbound production PO (or mark from-stock).
 export async function setEdiSupply({ businessNumber, poNumber, fromStock, note }) {
   const res = await fetch(`/api/edi/${encodeURIComponent(businessNumber)}/supply`, {

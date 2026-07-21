@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
@@ -54,6 +54,7 @@ export default function TableView({ orders }) {
               </div>
             ))}
             {!o.isGroup && <NoteWidget docType="SO" docNumber={o.soNumber} />}
+            {!o.isGroup && <DocLinks docType="SO" docNumber={o.soNumber} selfLabel={o.customer} />}
           </td>
           <td className="num">{o.daysPending ?? ''}</td>
           <td>{o.nextAction}</td>

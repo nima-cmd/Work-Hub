@@ -12,7 +12,7 @@ import {
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
-  setEdiSupply, clearEdiSupply,
+  setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
@@ -334,6 +334,46 @@ app.post('/api/seasons', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Document links — attach any doc/transaction to any other (Nima, 2026-07-20).
+app.get('/api/links', async (req, res) => {
+  try {
+    const { docType, docNumber } = req.query
+    if (!docType || !docNumber) return res.status(400).json({ error: 'docType and docNumber are required' })
+    res.json(await getLinksFor(docType, docNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/links', async (req, res) => {
+  try {
+    res.json(await createDocLink(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/links/:id', async (req, res) => {
+  try {
+    res.json(await removeDocLink(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Search known document numbers across every record type (for the link picker).
+app.get('/api/doc-numbers', async (req, res) => {
+  try {
+    res.json(await searchDocNumbers(req.query.q))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 

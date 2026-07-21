@@ -5,7 +5,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
 import { fetchLaunchBay } from '../api.js'
 import { channelMeta } from '../../../src/model/channels.js'
-import { NoteWidget, ChannelTag, CustomerName } from '../lib.jsx'
+import { NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
 
 // Holotable (Nima, 2026-07-17) — the 3D hologram twin of the 2D Launch Bay,
 // built from the OBJ models in the Drive "Holograms" folder (decimated to web
@@ -299,6 +299,11 @@ export default function LaunchBay3D() {
             <NoteWidget key={selected.ifNumber || selected.soNumber}
                         docType={selected.ifNumber ? 'IF' : 'SO'}
                         docNumber={selected.ifNumber || selected.soNumber} compact />
+            <p className="hint" style={{ margin: '8px 0 2px' }}>Linked documents</p>
+            <DocLinks key={'l-' + (selected.ifNumber || selected.soNumber)}
+                      docType={selected.ifNumber ? 'IF' : 'SO'}
+                      docNumber={selected.ifNumber || selected.soNumber}
+                      selfLabel={selected.customer} compact />
           </div>
         )}
       </div>

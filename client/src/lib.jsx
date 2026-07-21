@@ -1,6 +1,6 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote } from './api.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers } from './api.js'
 import { NETSUITE_DOC_TYPES } from '../../src/model/netsuiteDocs.js'
 import { channelMeta } from '../../src/model/channels.js'
 
@@ -104,7 +104,93 @@ export const LINK_DOC_TYPES = [
   { value: 'EDI_PO', label: 'EDI PO' },
   { value: 'PO', label: 'Purchase Order' },
   { value: 'OC', label: 'Order Confirmation' },
+  { value: 'TASK', label: 'Task' },
 ]
+const LINK_TYPE_LABEL = Object.fromEntries(LINK_DOC_TYPES.map((t) => [t.value, t.label]))
+
+// Document links (Nima, 2026-07-20) — the thing NetSuite can't do: attach any
+// doc/transaction to any other. Bidirectional, so a link added from an email
+// shows on the sales order and vice versa. `selfLabel` (e.g. an email's
+// subject) rides along as the link's label so the counterpart reads nicely.
+export function DocLinks({ docType, docNumber, selfLabel, compact = false }) {
+  const [links, setLinks] = useState([])
+  const [open, setOpen] = useState(compact)
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState([])
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open || !docType || !docNumber) return
+    fetchLinksFor(docType, docNumber).then(setLinks).catch(() => {})
+  }, [open, docType, docNumber])
+
+  // Search real document numbers as you type (debounced) — pick, don't type.
+  useEffect(() => {
+    if (q.trim().length < 2) { setResults([]); return }
+    let live = true
+    const t = setTimeout(() => {
+      fetchDocNumbers(q).then((r) => { if (live) setResults(r.filter((x) => !(x.type === docType && x.number === docNumber))) }).catch(() => {})
+    }, 200)
+    return () => { live = false; clearTimeout(t) }
+  }, [q, docType, docNumber])
+
+  async function link(target) {
+    setBusy(true)
+    try {
+      await addDocLink({
+        aType: docType, aNumber: docNumber, bType: target.type, bNumber: target.number,
+        label: selfLabel || null,
+      })
+      setLinks(await fetchLinksFor(docType, docNumber))
+      setQ(''); setResults([])
+    } finally { setBusy(false) }
+  }
+
+  async function remove(id) {
+    await deleteDocLink(id)
+    setLinks((prev) => prev.filter((l) => l.id !== id))
+  }
+
+  if (!docType || !docNumber) return null
+  const body = (
+    <div className="noteWidgetBody">
+      {links.map((l) => (
+        <div key={l.id} className="noteWidgetEntry">
+          <span>
+            <span className="linkChip">{LINK_TYPE_LABEL[l.otherType] || l.otherType}</span> {l.otherNumber}
+            {l.label && <span className="noteLink"> · {l.label}</span>}
+          </span>
+          <button type="button" className="linkBtn" onClick={() => remove(l.id)}>✕</button>
+        </div>
+      ))}
+      <div className="docLinkPicker">
+        <input className="qtyInput" value={q} disabled={busy}
+               placeholder="Search a document to attach… (SO / IF / INV / PO / OC)"
+               onChange={(e) => setQ(e.target.value)} />
+        {!!results.length && (
+          <div className="docLinkResults">
+            {results.map((r) => (
+              <button type="button" key={r.type + r.number} className="docLinkResult" disabled={busy}
+                      onClick={() => link(r)}>
+                <span className="linkChip">{LINK_TYPE_LABEL[r.type] || r.type}</span> {r.number}
+                {r.label && <span className="noteLink"> · {r.label}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+  if (compact) return <div className="noteWidget">{body}</div>
+  return (
+    <div className="noteWidget">
+      <button type="button" className="linkBtn" onClick={() => setOpen((o) => !o)}>
+        🔗 Links{links.length ? ` (${links.length})` : ''}
+      </button>
+      {open && body}
+    </div>
+  )
+}
 
 // The universal note-on-anything widget (Nima, 2026-07-20) — a small
 // textarea + save + list, meant to drop onto any card that has a doc type
