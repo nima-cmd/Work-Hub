@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fetchAffection, fetchQuestEmails, importCsv } from '../api.js'
+import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fetchAffection, fetchQuestEmails, importCsv, completeQuestTask } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeRoute, DEFAULT_DURATIONS_MIN } from '../../../src/model/routePlan.js'
 import { channelKey } from '../../../src/model/channels.js'
@@ -455,6 +455,7 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
   const [plan, setPlan] = useState(null)
   const [busyCsv, setBusyCsv] = useState(false)
   const [linksOpen, setLinksOpen] = useState(false)
+  const [expandedTask, setExpandedTask] = useState(null)
 
   function loadAll() {
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
@@ -688,14 +689,28 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
                      count={openTasks.length} bodyHeight={352}>
               {taskRows.map((r) => {
                 const t = r.taskId ? taskById.get(r.taskId) : null
+                const open = t && expandedTask === t.id
                 return (
-                  <div key={r.id} className={'fdTask' + (r.seq === 1 ? ' now' : '') + (r.atRisk ? ' risk' : '')}>
-                    {t ? <Face characterId={t.characterId} size={24} /> : <span className="fdFace fdFaceGlyph" style={{ width: 24, height: 24, fontSize: 12 }}>⬡</span>}
-                    <span className="seq">{r.seq ? hhmm(r.start) : ''}</span>
-                    <span className="lab">{r.label}</span>
-                    <span className="slack">
-                      {r.slackMin != null ? (r.slackMin >= 0 ? `+${r.slackMin}m` : `${r.slackMin}m`) : r.atRisk ? '!' : ''}
-                    </span>
+                  <div key={r.id} className={'fdTaskWrap' + (open ? ' open' : '')}>
+                    <div className={'fdTask' + (r.seq === 1 ? ' now' : '') + (r.atRisk ? ' risk' : '') + (t ? ' clickable' : '')}
+                         onClick={t ? () => setExpandedTask(open ? null : t.id) : (r.id.startsWith('edi-') ? () => onNavigate('edi') : undefined)}>
+                      {t ? <Face characterId={t.characterId} size={24} /> : <span className="fdFace fdFaceGlyph" style={{ width: 24, height: 24, fontSize: 12 }}>⬡</span>}
+                      <span className="seq">{r.seq ? hhmm(r.start) : ''}</span>
+                      <span className="lab">{r.label}</span>
+                      <span className="slack">
+                        {r.slackMin != null ? (r.slackMin >= 0 ? `+${r.slackMin}m` : `${r.slackMin}m`) : r.atRisk ? '!' : ''}
+                      </span>
+                    </div>
+                    {open && (
+                      <div className="fdTaskExpand">
+                        {t.snippet && <p className="fdTaskSnippet">{t.snippet}</p>}
+                        <div className="fdTaskActions">
+                          <button className="fdMiniBtn" onClick={() => completeQuestTask(t.id, true).then(syncAll)}>✓ Done</button>
+                          {t.threadId && <a className="fdMiniBtn" href={`https://mail.google.com/mail/u/0/#all/${t.threadId}`} target="_blank" rel="noreferrer">↗ Gmail</a>}
+                          <button className="fdMiniBtn" onClick={() => onNavigate('tasks')}>↗ open in Tasks</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}

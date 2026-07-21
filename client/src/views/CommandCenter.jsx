@@ -233,7 +233,7 @@ function MiniOrder({ o }) {
 // this and what did they say" identity, kept identical to Transmissions.
 // Clickable/expandable (Nima, 2026-07-20): full task access right here — no
 // trip to Transmissions needed just to read or close a task.
-function TaskChip({ t, onRefresh }) {
+function TaskChip({ t, onRefresh, onNavigate }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const img = imagesFor(t.characterId)[0]
@@ -265,6 +265,9 @@ function TaskChip({ t, onRefresh }) {
               {t.threadId && (
                 <a className="btnGhost" href={`https://mail.google.com/mail/u/0/#all/${t.threadId}`}
                    target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>↗ Gmail</a>
+              )}
+              {onNavigate && (
+                <button className="btnGhost" onClick={(e) => { e.stopPropagation(); onNavigate('tasks') }}>↗ open in Tasks</button>
               )}
             </div>
           </div>
@@ -466,7 +469,7 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
           {taskGroups.map((g) => (
             <div key={g.key} className="taskGroup">
               <div className="taskGroupHead">{g.label} <span className="sectorCount">{g.items.length}</span></div>
-              {g.items.map((t) => <TaskChip key={t.id} t={t} onRefresh={onRefresh} />)}
+              {g.items.map((t) => <TaskChip key={t.id} t={t} onRefresh={onRefresh} onNavigate={onNavigate} />)}
             </div>
           ))}
           {!openTasks.length && <div className="empty">No open tasks — the crew is idle.</div>}

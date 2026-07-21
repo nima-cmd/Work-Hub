@@ -1,8 +1,10 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers } from './api.js'
-import { NETSUITE_DOC_TYPES } from '../../src/model/netsuiteDocs.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask } from './api.js'
+import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { channelMeta } from '../../src/model/channels.js'
+import { speakLine, taskContext } from '../../src/model/dialogue.js'
+import { imagesFor } from './data/characterImages.js'
 
 // Channel tag + colored customer name (Nima, 2026-07-20) — one consistent
 // color per account across every view, so Nordstrom/Bloomingdale's/Shopbop/
@@ -467,6 +469,115 @@ export function LinkedText({ text }) {
   }
   if (last < text.length) parts.push(text.slice(last))
   return <>{parts}</>
+}
+
+// Which surface a task came from — drives the origin groups in the Tasks view
+// and the "where does this belong" labels everywhere else.
+export function taskOrigin(t) {
+  if (String(t.instanceKey || '').startsWith('edi:')) return 'edi'
+  if (t.recurringKey) return 'protocol'
+  if (t.emailId) return 'transmission'
+  return 'manual'
+}
+export const ORIGIN_LABEL = {
+  protocol: 'Protocols · recurring duties',
+  transmission: 'Transmissions · from the comm relay',
+  edi: 'EDI relay · open PO work',
+  manual: 'Manual · logged by hand',
+}
+// The view a task's linked NetSuite doc opens into.
+const DOC_VIEW = { SO: 'table', IF: 'table', INV: 'table', PO: 'allocations', OC: 'allocations', EDI_PO: 'edi' }
+
+// One expandable task — the shared card used by the Tasks view, the Flight
+// Deck task monitor, and (soon) the Command chips. Collapsed: messenger face +
+// spoken line + subject + urgency. Expanded: the snippet, Mark done, a Gmail
+// deep link, its linked NetSuite doc, and an "open in Tasks" jump so a click
+// in any panel is never a dead end.
+export function TaskItem({ t, expanded, onToggle, onRefresh, onNavigate, showOpen = true }) {
+  const [busy, setBusy] = useState(false)
+  const img = imagesFor(t.characterId)[0]
+  const sev = t.urgency === 'hi' ? 3 : t.urgency === 'mid' ? 2 : 1
+
+  async function markDone(e) {
+    e.stopPropagation()
+    setBusy(true)
+    try { await completeQuestTask(t.id, true); onRefresh?.() } finally { setBusy(false) }
+  }
+
+  return (
+    <div className={'taskItem ' + sevClass(sev) + (expanded ? ' taskItemOpen' : '')}
+         onClick={() => onToggle?.(t.id)}>
+      <div className="tiAvatar">{img ? <img src={img} alt="" /> : <span className="tiGlyph">◈</span>}</div>
+      <div className="tiBody">
+        <div className="tiTop">
+          <b>{t.character?.name || t.fromName || 'Unknown Messenger'}</b>
+          {t.status === 'done' && <span className="flag sev-lo">done</span>}
+          {t.status === 'open' && t.urgency && (
+            <span className={'flag ' + (t.urgency === 'hi' ? 'sev-hi' : t.urgency === 'mid' ? 'sev-mid' : 'sev-lo')}>{t.urgency}</span>
+          )}
+        </div>
+        <div className="tiSpeech">“{speakLine(t.characterId, taskContext(t), t.id)}”</div>
+        <div className="tiSubject"><LinkedText text={t.subject} /></div>
+        {expanded && (
+          <div className="tiExpand" onClick={(e) => e.stopPropagation()}>
+            {t.snippet && <p className="tiSnippet"><LinkedText text={t.snippet} /></p>}
+            <div className="tiActions">
+              {t.status === 'open' && <button className="btn" disabled={busy} onClick={markDone}>✓ Mark done</button>}
+              {t.threadId && (
+                <a className="btnGhost" href={`https://mail.google.com/mail/u/0/#all/${t.threadId}`}
+                   target="_blank" rel="noreferrer">↗ Gmail</a>
+              )}
+              {t.netsuiteDocNumber && DOC_VIEW[t.netsuiteDocType] && (
+                <button className="btnGhost" onClick={() => onNavigate?.(DOC_VIEW[t.netsuiteDocType])}>
+                  ↗ {t.netsuiteDocType} {t.netsuiteDocNumber}
+                </button>
+              )}
+              {showOpen && onNavigate && <button className="btnGhost" onClick={() => onNavigate('tasks')}>↗ open in Tasks</button>}
+            </div>
+            <DocLinks docType="TASK" docNumber={String(t.id)} selfLabel={t.subject} />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Index of existing tasks by their linked NetSuite doc, so any view can tell
+// "a task already exists for this SO/IF" and link to it instead of letting you
+// silently create a duplicate. Key = "TYPE:NORMALIZED_NUMBER".
+export function buildTaskDocIndex(tasks = []) {
+  const idx = new Map()
+  for (const t of tasks) {
+    if (!t.netsuiteDocNumber || !t.netsuiteDocType) continue
+    const key = `${t.netsuiteDocType}:${t.netsuiteDocNumber}`
+    // an open task wins over a done one for the same doc
+    if (idx.get(key) !== 'open') idx.set(key, t.status)
+  }
+  return idx
+}
+
+// The 3-state task control for a NetSuite doc (mirrors the EDI card's button):
+// ◉ Task (open, jump to it) · ✓ Task (done, jump) · ＋ Task (create). Creating
+// files a doc-linked manual task so it shows up indexed and never doubles up.
+export function TaskLink({ docType, docNumber, index, onCreated, onNavigate, label }) {
+  const [busy, setBusy] = useState(false)
+  if (!docNumber) return null
+  const norm = normalizeDocNumber(docType, docNumber) || docNumber
+  const status = index?.get(`${docType}:${norm}`)
+  async function create(e) {
+    e.stopPropagation()
+    setBusy(true)
+    try {
+      await createManualTask({
+        subject: `Follow up · ${docNumber}${label ? ` · ${label}` : ''}`,
+        needsType: 'netsuite_doc', netsuiteDocType: docType, netsuiteDocNumber: docNumber, urgency: 'mid',
+      })
+      onCreated?.()
+    } finally { setBusy(false) }
+  }
+  if (status === 'open') return <button className="linkBtn taskLinkBtn open" title="A task is open for this doc" onClick={(e) => { e.stopPropagation(); onNavigate?.('tasks') }}>◉ Task</button>
+  if (status === 'done') return <button className="linkBtn taskLinkBtn done" title="This doc's task was completed" onClick={(e) => { e.stopPropagation(); onNavigate?.('tasks') }}>✓ Task</button>
+  return <button className="linkBtn taskLinkBtn" disabled={busy} onClick={create} title="Create a task for this doc">＋ Task</button>
 }
 
 // Human-friendly age from hours.

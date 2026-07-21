@@ -1,15 +1,16 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks, TaskLink, buildTaskDocIndex } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
 // By default it collapses the buyer-PO fan-out (one customer PO that NetSuite
 // split into many SOs — e.g. Bloomingdale's 23 SOs on one PO) into a single
 // row you can expand; toggle off to see every raw SO.
-export default function TableView({ orders }) {
+export default function TableView({ orders, tasks = [], onNavigate = () => {}, onRefresh }) {
   const [sort, setSort] = useState({ key: 'severity', dir: -1 })
   const [grouped, setGrouped] = useState(true)
   const [open, setOpen] = useState(() => new Set())
+  const taskIndex = buildTaskDocIndex(tasks)
 
   const rows = grouped ? groupOrdersByPo(orders) : orders
   const sorted = [...rows].sort((a, b) => {
@@ -53,6 +54,7 @@ export default function TableView({ orders }) {
                 <LabelButtons info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
               </div>
             ))}
+            {!o.isGroup && <TaskLink docType="SO" docNumber={o.soNumber} label={o.customer} index={taskIndex} onCreated={onRefresh} onNavigate={onNavigate} />}
             {!o.isGroup && <NoteWidget docType="SO" docNumber={o.soNumber} />}
             {!o.isGroup && <DocLinks docType="SO" docNumber={o.soNumber} selfLabel={o.customer} />}
           </td>
@@ -74,6 +76,7 @@ export default function TableView({ orders }) {
               {(m.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                 <div key={f.ifNumber}><LabelButtons info={{ ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber }} /></div>
               ))}
+              <TaskLink docType="SO" docNumber={m.soNumber} label={m.customer} index={taskIndex} onCreated={onRefresh} onNavigate={onNavigate} />
               <NoteWidget docType="SO" docNumber={m.soNumber} />
             </td>
             <td className="num">{m.daysPending ?? ''}</td>

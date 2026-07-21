@@ -3,7 +3,7 @@ import {
   fetchEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction,
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
-  setEdiSupply, clearEdiSupply,
+  setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
@@ -94,8 +94,10 @@ function EdiCalendar({ openPos }) {
 // partner's OPEN work queue RIGHT, closed POs in their own drawer below.
 // Manual resolution — connect a PO to its NetSuite ref, or close it out —
 // lives on every card; always flagged as manual (src/model/ediWork.js).
-export default function EdiOrders({ onNavigate } = {}) {
+export default function EdiOrders({ orders = [], onNavigate } = {}) {
   const [review, setReview] = useState(null)
+  const [labelSizes, setLabelSizes] = useState({})
+  const [labelBusy, setLabelBusy] = useState(null)
   const [err, setErr] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState(null)
@@ -120,6 +122,23 @@ export default function EdiOrders({ onNavigate } = {}) {
     fetchSeasons().then((rows) => setSeasons(Object.fromEntries(rows.map((s) => [`${s.docType}|${s.docNumber}`, s.season])))).catch(() => {})
   }
   useEffect(load, [])
+  useEffect(() => { fetchLabelSizes().then(setLabelSizes).catch(() => {}) }, [])
+
+  // stores per customer PO = the SO fan-out count (poGroups' one-PO-per-store rule)
+  const storeCountFor = (bn) => orders.filter((o) => o.poNumber === bn).length
+
+  // Print the EDI outbound carton label for a PO (4×6 Zebra). One per PO.
+  async function printEdiLabel(o) {
+    const bn = o.businessNumber
+    const supply = review?.ediSupply?.[bn] || {}
+    setLabelBusy(bn); setErr(null)
+    try {
+      await printCargoTag({
+        kind: 'edi', poNumber: bn, partner: (o.tradingPartner || '').replace(/\s*\(.*$/, ''),
+        storeCount: storeCountFor(bn), supplyPo: supply.poNumber || '', fromStock: !!supply.fromStock,
+      }, '4x6')
+    } catch (e) { setErr(e.message) } finally { setLabelBusy(null) }
+  }
 
   async function onSaveSeason(businessNumber, season) {
     // 'EDI_PO' — the customer's own PO number on the sales side, a different
@@ -396,13 +415,20 @@ export default function EdiOrders({ onNavigate } = {}) {
                     ⊘ Cancelled
                   </button>
                   {review.ediTasks?.[o.businessNumber] === 'open'
-                    ? <button className="btnGhost poQuickClose" title="A task is open for this PO — open Transmissions"
-                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('transmissions') }}>◉ Task</button>
+                    ? <button className="btnGhost poQuickClose" title="A task is open for this PO — open Tasks"
+                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('tasks') }}>◉ Task</button>
                     : review.ediTasks?.[o.businessNumber] === 'done'
-                    ? <button className="btnGhost poQuickClose" title="This PO's task was completed — open Transmissions"
-                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('transmissions') }}>✓ Task</button>
+                    ? <button className="btnGhost poQuickClose" title="This PO's task was completed — open Tasks"
+                              onClick={(ev) => { ev.stopPropagation(); onNavigate?.('tasks') }}>✓ Task</button>
                     : <button className="btnGhost poQuickClose" disabled={taskBusy === o.businessNumber}
                               onClick={(ev) => { ev.stopPropagation(); makeTask(o.businessNumber) }}>＋ Task</button>}
+                  {labelSizes['4x6'] && (
+                    <button className="btnGhost poQuickClose" disabled={labelBusy === o.businessNumber}
+                            title={`Print the EDI outbound label — PO ${o.businessNumber} · ${storeCountFor(o.businessNumber)} stores`}
+                            onClick={(ev) => { ev.stopPropagation(); printEdiLabel(o) }}>
+                      {labelBusy === o.businessNumber ? '…' : '⎙ Label'}
+                    </button>
+                  )}
                   <span className="cust">{isOpen ? '▾' : '▸'}</span>
                 </div>
                 <div className="neededLine">→ {w.needed}</div>
