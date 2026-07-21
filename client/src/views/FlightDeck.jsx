@@ -4,18 +4,26 @@ import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeRoute, DEFAULT_DURATIONS_MIN } from '../../../src/model/routePlan.js'
 import { channelKey } from '../../../src/model/channels.js'
 import { imagesFor } from '../data/characterImages.js'
+import consoleStrip from '../assets/flightdeck/console-strip.png'
 
-// Flight Deck v5 (Nima, 2026-07-21) — the Falcon-cockpit hub, redrawn to the
-// 2D cockpit-controls reference: a DRAWN canopy frame (SVG) whose panes are
-// true transparent glass over the live hyperspace canvas, with the HUDs
-// written ON the glass (no floating cards) and the side consoles carrying
-// inset screens + working buttons (hyperdrive, CSV import, sync, display
-// toggles). Comms and Tasks are the two big panes; every task/transmission
-// shows its character. The panel board below the stage is unchanged.
+// Flight Deck v6 (Nima, 2026-07-21) — the settled composition:
+// - VIEWPORT: the drawn SVG canopy (hub + arch band + three big panes) as pure
+//   glass over the hyperspace canvas. Only flight things live on the glass:
+//   the hyperspace-route waypoints, the crew band, and the Ops Core in the hub.
+// - CONSOLE: the 3D-rendered Falcon console (cropped from the round-1 plate)
+//   returns as the physical dash, carrying the working buttons (hyperdrive,
+//   CSV import, sync, per-monitor power), two inset screens (EDI relay +
+//   system status) and the route computer.
+// - MONITORS: the data lives on side-wall monitor screens — slightly angled
+//   toward the pilot (nothing tilted much), never overlapping the viewport,
+//   scrollable when content runs long. Comms (port) and Tasks (starboard) are
+//   the big ones; custody and partner scan sit beneath them. Every
+//   transmission/task row shows its character.
+// The panel board below the stage is unchanged.
 //
 // Geometry: everything lives in one 2000x900 "scene" that scales uniformly
-// (cover, anchored bottom-center) so HUDs stay registered to their panes at
-// any window size. Hub center: (1000, 640).
+// (cover, anchored bottom-center) so all parts stay registered at any window
+// size. Hub center: (1000, 520).
 
 const PANELS = [
   { key: 'comms', label: 'Comms' },
@@ -37,23 +45,20 @@ function loadPanels() {
   return Object.fromEntries(PANELS.map((p) => [p.key, true]))
 }
 
-// ── scene geometry helpers (SVG canopy frame) ────────────────────────────────
-const CX = 1000, CY = 640
+// ── scene geometry (SVG canopy frame) ────────────────────────────────────────
+const CX = 1000, CY = 520
 const rad = (d) => (d * Math.PI) / 180
 const px = (r, a) => CX + r * Math.cos(rad(a))
 const py = (r, a) => CY - r * Math.sin(rad(a))
 const pt = (r, a) => `${px(r, a).toFixed(1)},${py(r, a).toFixed(1)}`
-// annular sector path between radii r0..r1, math angles a0..a1 (deg, a1 > a0)
 function sector(r0, r1, a0, a1) {
   const large = Math.abs(a1 - a0) > 180 ? 1 : 0
   return `M${pt(r0, a0)} L${pt(r1, a0)} A${r1},${r1} 0 ${large} 0 ${pt(r1, a1)} L${pt(r0, a1)} A${r0},${r0} 0 ${large} 1 ${pt(r0, a0)} Z`
 }
 
-const OUTER_A = [200, 150, 105, 75, 30, -20]      // big-pane mullion angles
-const INNER_A = [200, 170, 140, 110, 90, 70, 40, 10, -20]  // arch-band spokes
-const R_HUB = 150, R_BAND0 = 190, R_BAND1 = 300, R_OUT0 = 340, R_OUT1 = 880
-// panes that host a HUD get darker "polarized" glass for readability
-const HUD_PANES = new Set([1, 2, 3, 4])            // outer panes L→R (0-indexed)
+const OUTER_A = [150, 105, 75, 30]                 // three big panes
+const INNER_A = [160, 135, 110, 90, 70, 45, 20]    // arch-band spokes
+const R_HUB = 140, R_BAND0 = 180, R_BAND1 = 280, R_OUT0 = 320, R_OUT1 = 860
 
 function CockpitFrame() {
   const outerPanes = OUTER_A.slice(0, -1).map((a, i) => sector(R_OUT0, R_OUT1, OUTER_A[i + 1], a))
@@ -61,39 +66,32 @@ function CockpitFrame() {
   return (
     <svg className="fdSvg" viewBox="0 0 2000 900" preserveAspectRatio="none" aria-hidden="true">
       <defs>
-        <linearGradient id="fdWing" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#2b3542" /><stop offset="0.25" stopColor="#151c26" /><stop offset="1" stopColor="#080c12" />
-        </linearGradient>
-        <linearGradient id="fdDashG" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#232f3e" /><stop offset="1" stopColor="#0b1119" />
-        </linearGradient>
         <radialGradient id="fdHubGlow" cx="50%" cy="50%" r="50%">
           <stop offset="0" stopColor="rgba(92,216,255,0.10)" /><stop offset="1" stopColor="transparent" />
         </radialGradient>
       </defs>
 
-      {/* glass panes — light tint everywhere, darker where a HUD is written */}
+      {/* glass panes — a light polarized tint; the top pane hosts the route HUD */}
       {outerPanes.map((d, i) => (
-        <path key={'o' + i} d={d} fill={HUD_PANES.has(i) ? 'rgba(2,8,16,0.52)' : 'rgba(3,10,20,0.20)'} />
+        <path key={'o' + i} d={d} fill={i === 1 ? 'rgba(2,8,16,0.42)' : 'rgba(3,10,20,0.18)'} />
       ))}
-      {bandPanes.map((d, i) => <path key={'b' + i} d={d} fill="rgba(2,8,16,0.45)" />)}
+      {bandPanes.map((d, i) => <path key={'b' + i} d={d} fill="rgba(2,8,16,0.42)" />)}
       <circle cx={CX} cy={CY} r={R_HUB} fill="rgba(2,8,16,0.55)" />
       <circle cx={CX} cy={CY} r={R_HUB} fill="url(#fdHubGlow)" />
 
       {/* glass glare streaks */}
-      <polygon points="180,80 320,60 700,520 560,560" fill="rgba(210,235,255,0.035)" />
-      <polygon points="1500,40 1620,70 1300,470 1210,430" fill="rgba(210,235,255,0.028)" />
+      <polygon points="480,120 600,95 900,420 800,460" fill="rgba(210,235,255,0.035)" />
+      <polygon points="1420,90 1530,120 1250,430 1160,395" fill="rgba(210,235,255,0.028)" />
 
-      {/* frame: hub rings, band rings, outer rim, spokes */}
+      {/* frame */}
       <circle cx={CX} cy={CY} r={R_HUB} fill="none" stroke="#141b25" strokeWidth="40" />
       <circle cx={CX} cy={CY} r={R_HUB} fill="none" stroke="#39485c" strokeWidth="3" />
       <circle cx={CX} cy={CY} r={R_BAND0} fill="none" stroke="#161e29" strokeWidth="28" />
       <circle cx={CX} cy={CY} r={R_BAND0} fill="none" stroke="#334052" strokeWidth="2.5" />
       <circle cx={CX} cy={CY} r={R_BAND1} fill="none" stroke="#161e29" strokeWidth="34" />
       <circle cx={CX} cy={CY} r={R_BAND1 + 6} fill="none" stroke="#334052" strokeWidth="2.5" />
-      {/* solid structural band between the arch band and the big panes */}
-      <path d={sector(R_BAND1 + 13, R_OUT0, -20, 200)} fill="#161e29" />
-      <path d={sector(R_OUT0 - 4, R_OUT0, -20, 200)} fill="#2c3949" />
+      <path d={sector(R_BAND1 + 13, R_OUT0, OUTER_A[OUTER_A.length - 1], OUTER_A[0])} fill="#161e29" />
+      <path d={sector(R_OUT0 - 4, R_OUT0, OUTER_A[OUTER_A.length - 1], OUTER_A[0])} fill="#2c3949" />
       {INNER_A.map((a) => (
         <line key={'is' + a} x1={px(R_BAND0, a)} y1={py(R_BAND0, a)} x2={px(R_BAND1, a)} y2={py(R_BAND1, a)}
               stroke="#161e29" strokeWidth="22" />
@@ -104,35 +102,16 @@ function CockpitFrame() {
           <line x1={px(R_OUT0, a)} y1={py(R_OUT0, a)} x2={px(R_OUT1, a)} y2={py(R_OUT1, a)} stroke="#323f50" strokeWidth="4" />
         </g>
       ))}
-      {/* spokes from hub through the band (the diagram's inner cross-ribs) */}
-      {[150, 105, 75, 30].map((a) => (
+      {[105, 75].map((a) => (
         <line key={'hs' + a} x1={px(R_HUB, a)} y1={py(R_HUB, a)} x2={px(R_BAND0, a)} y2={py(R_BAND0, a)}
               stroke="#161e29" strokeWidth="18" />
       ))}
 
-      {/* hull beyond the canopy rim (dark corners, like the reference photo) */}
+      {/* hull beyond the canopy rim */}
       <path d={`M0,0 H2000 V900 H0 Z M${pt(R_OUT1, 0)} A${R_OUT1},${R_OUT1} 0 1 0 ${pt(R_OUT1, 180)} A${R_OUT1},${R_OUT1} 0 1 0 ${pt(R_OUT1, 0)} Z`}
             fill="#070b11" fillRule="evenodd" />
       <circle cx={CX} cy={CY} r={R_OUT1} fill="none" stroke="#101722" strokeWidth="64" />
       <circle cx={CX} cy={CY} r={R_OUT1 - 24} fill="none" stroke="#2c3949" strokeWidth="3" />
-
-      {/* console wings + centre dash + pedestal */}
-      <path d="M0,660 L560,720 L620,900 L0,900 Z" fill="url(#fdWing)" />
-      <path d="M0,660 L560,720" stroke="#46586c" strokeWidth="3" fill="none" />
-      <path d="M2000,660 L1440,720 L1380,900 L2000,900 Z" fill="url(#fdWing)" />
-      <path d="M2000,660 L1440,720" stroke="#46586c" strokeWidth="3" fill="none" />
-      <path d="M560,720 L940,752 L1060,752 L1440,720 L1380,900 L620,900 Z" fill="url(#fdDashG)" />
-      <path d="M560,720 L940,752 L1060,752 L1440,720" stroke="#4a5c70" strokeWidth="3" fill="none" />
-      <path d="M905,900 L922,742 L1078,742 L1095,900 Z" fill="#10161f" />
-      <path d="M922,742 L1078,742" stroke="#4a5c70" strokeWidth="3" />
-      {/* dash status lights */}
-      {[988, 1000, 1012].map((x, i) => (
-        <circle key={x} cx={x} cy={762} r="3.5" fill={i === 1 ? '#ff5b52' : '#2c3949'} />
-      ))}
-      {/* console greebles */}
-      {[[70, 700], [150, 707], [230, 714], [1770, 707], [1850, 700], [1690, 714]].map(([x, y]) => (
-        <rect key={x} x={x} y={y} width="56" height="10" rx="3" fill="#232d3a" stroke="#334052" strokeWidth="1" />
-      ))}
     </svg>
   )
 }
@@ -154,11 +133,11 @@ function HyperspaceCanvas({ hyper }) {
       const r = c.getBoundingClientRect()
       W = c.width = Math.max(1, r.width * dpr)
       H = c.height = Math.max(1, r.height * dpr)
-      // the vanishing point rides the canopy hub: scene (1000,640) of 2000x900,
-      // cover-scaled and bottom-anchored — same math as .fdScene
+      // vanishing point = canopy hub (scene 1000,520 of 2000x900, cover-scaled
+      // bottom-anchored — same math as .fdScene)
       const k = Math.max(r.width / 2000, r.height / 900)
       cx = W / 2
-      cy = (r.height - 260 * k) * dpr
+      cy = (r.height - 380 * k) * dpr
     }
     function reset(s) {
       s.a = Math.random() * Math.PI * 2
@@ -334,18 +313,21 @@ function routeLegs(route) {
   return legs
 }
 
-// crew chip positions along the inner arch band (scene px)
-const CREW_ANGLES = [148, 124, 100, 80, 56, 32]
-const CREW_R = 245
+// crew chips along the inner arch band (scene px)
+const CREW_ANGLES = [142, 118, 97, 83, 62, 38]
+const CREW_R = 230
 
-// a HUD written on the glass — no card chrome, just projected light
-function Hud({ name, on, style, head, headAccent, count, children }) {
+// a side-wall monitor: bezeled screen, powered by the console buttons,
+// scrollable body when content runs long
+function Monitor({ on, className, head, headAccent, count, bodyHeight, children }) {
   return (
-    <div className={`fdHud fd-${name}${on ? '' : ' off'}`} style={style}>
-      <div className="fdHudHead">◤ {head} <span className="b">{headAccent}</span>
+    <div className={`fdMon ${className}${on ? '' : ' mOff'}`}>
+      <div className="monHead">◤ {head} <span className="b">{headAccent}</span>
         {count != null && <span className="n">{count}</span>}
       </div>
-      {children}
+      {on
+        ? <div className="monBody" style={bodyHeight ? { maxHeight: bodyHeight } : undefined}>{children}</div>
+        : <div className="monOffline">— display offline —</div>}
     </div>
   )
 }
@@ -420,7 +402,7 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
   const attention = orders.filter((o) => o.severity > 0).length + openTasks.length
   const bayStats = bay && { cleared: bay.filter((s) => s.floating).length, delayed: bay.filter((s) => s.delayed).length }
   const unread = emails.filter((e) => e.isUnread).length
-  const inbox = emails.filter((e) => !e.dismissed).sort((a, b) => (b.isUnread - a.isUnread)).slice(0, 4)
+  const inbox = emails.filter((e) => !e.dismissed).sort((a, b) => (b.isUnread - a.isUnread)).slice(0, 14)
   const topCrew = [...crew].sort((a, b) => (b.affection || 0) - (a.affection || 0)).slice(0, CREW_ANGLES.length)
 
   function planRoute() {
@@ -428,10 +410,9 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
   }
 
   const taskRows = plan
-    ? plan.route.slice(0, 8)
+    ? plan.route
     : [...openTasks]
         .sort((a, b) => (b.urgency === 'hi') - (a.urgency === 'hi') || (b.urgency === 'mid') - (a.urgency === 'mid'))
-        .slice(0, 8)
         .map((t) => ({ id: 'task-' + t.id, taskId: t.id, label: (t.subject || 'task').slice(0, 46), atRisk: t.urgency === 'hi' }))
 
   return (
@@ -442,46 +423,10 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
         <div className="fdScene" style={{ transform: `translateX(-50%) scale(${k})` }}>
           <CockpitFrame />
 
-          {/* ── HUDs written on the glass ── */}
-          <Hud name="comms" on={panels.comms} head="Comm" headAccent="relay"
-               count={unread ? `${unread} unread` : null}
-               style={{ left: 335, top: 55, width: 430 }}>
-            {inbox.map((e) => (
-              <button key={e.id} className="fdTx" onClick={() => onNavigate('transmissions')}>
-                <Face characterId={e.characterId} size={34} />
-                <span className="txBody">
-                  <span className="top">
-                    <span className="who">{e.character?.name || e.fromName || 'Unknown'}</span>
-                    <span className="age">{ageOf(e.receivedAt)}</span>
-                  </span>
-                  <span className="sub">{e.subject}</span>
-                </span>
-              </button>
-            ))}
-            {!inbox.length && <div className="fdDim">relay silent</div>}
-          </Hud>
-
-          <Hud name="tasks" on={panels.tasks} head="Task" headAccent="command" count={openTasks.length}
-               style={{ left: 1235, top: 55, width: 430 }}>
-            {taskRows.map((r) => {
-              const t = r.taskId ? taskById.get(r.taskId) : null
-              return (
-                <div key={r.id} className={'fdTask' + (r.seq === 1 ? ' now' : '') + (r.atRisk ? ' risk' : '')}>
-                  {t ? <Face characterId={t.characterId} size={24} /> : <span className="fdFace fdFaceGlyph" style={{ width: 24, height: 24, fontSize: 12 }}>⬡</span>}
-                  <span className="seq">{r.seq ? hhmm(r.start) : ''}</span>
-                  <span className="lab">{r.label}</span>
-                  <span className="slack">
-                    {r.slackMin != null ? (r.slackMin >= 0 ? `+${r.slackMin}m` : `${r.slackMin}m`) : r.atRisk ? '!' : ''}
-                  </span>
-                </div>
-              )
-            })}
-            {!taskRows.length && <div className="fdDim">no open tasks — crew idle</div>}
-          </Hud>
-
-          <Hud name="route" on={panels.route} head="Hyperspace" headAccent="route"
-               style={{ left: 845, top: 28, width: 310 }}>
-            {!plan && <div className="fdDim">no route plotted — hit ◈ PLAN on the pedestal</div>}
+          {/* ── on the glass: only flight things ── */}
+          <div className={'fdHud fd-route' + (panels.route ? '' : ' off')}>
+            <div className="fdHudHead">◤ Hyperspace <span className="b">route</span></div>
+            {!plan && <div className="fdDim">no route plotted — hit ◈ PLAN on the console</div>}
             {plan && routeLegs(plan.route).slice(0, 5).map((r, i) => (
               <div key={r.id} className={'fdWp' + (i === 0 ? ' now' : '') + (r.atRisk ? ' risk' : '')}>
                 <i /><span>{i === 0 ? '▶ ' : ''}{r.label}{r.n > 1 ? ` ×${r.n}` : ''}</span>
@@ -489,34 +434,8 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
               </div>
             ))}
             {plan && routeLegs(plan.route).length > 5 && <div className="fdDim">+ {routeLegs(plan.route).length - 5} more legs</div>}
-          </Hud>
+          </div>
 
-          <Hud name="cust" on={panels.cust} head="Custody" headAccent="register" count={custody?.length}
-               style={{ left: 130, top: 355, width: 370 }}>
-            {custody?.slice(0, 4).map((c) => (
-              <button key={c.ifNumber} className="fdCrow" onClick={() => onNavigate('custody')}>
-                <b>{c.ifNumber}</b>
-                <span>{c.customer || 'unknown'}</span>
-                <span className={'st ' + (c.stale ? 'stale' : c.state === 'with_warehouse' ? 'ware' : 'hand')}>
-                  {c.stale ? `STALE ${c.ageDays}d` : c.state === 'with_warehouse' ? 'AT WHSE' : 'IN HAND'}
-                </span>
-              </button>
-            ))}
-            {custody?.length === 0 && <div className="fdDim">register clear</div>}
-          </Hud>
-
-          <Hud name="scan" on={panels.scan} head="Partner" headAccent="scan"
-               style={{ left: 1500, top: 355, width: 370 }}>
-            {partnerScan?.slice(0, 4).map((p) => (
-              <button key={p.tradingPartner} className={'fdSrow h-' + p.health} onClick={() => onNavigate('edi')}>
-                <span>{p.tradingPartner.replace(/\s*\(.*$/, '')}</span>
-                <b>{p.open} open{p.health === 'red' ? ' · CRIT' : ''}</b>
-              </button>
-            ))}
-            {!partnerScan && <div className="fdDim">scanning…</div>}
-          </Hud>
-
-          {/* crew — portraits set into the arch-band panes */}
           {panels.crew && topCrew.map((c, i) => {
             const a = CREW_ANGLES[i]
             return (
@@ -524,13 +443,12 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
                       style={{ left: px(CREW_R, a), top: py(CREW_R, a) }}
                       onClick={() => onNavigate('crew')}
                       title={`${c.character?.name || ''} · ${c.level?.name || ''}`}>
-                <Face characterId={c.characterId} size={44} />
+                <Face characterId={c.characterId} size={42} />
                 <b>{c.character?.name?.split(' ')[0] || ''}</b>
               </button>
             )
           })}
 
-          {/* ops core — inside the hub circle */}
           <div className={'fdCore' + (panels.core ? '' : ' off')}>
             <div className="fdRing r1" /><div className="fdRing r2" /><div className="fdRing r3" />
             <Starbird />
@@ -542,7 +460,34 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
             </div>
           </div>
 
-          {/* ── console screens (inset displays) ── */}
+          {/* ── the 3D console (round-1 render) with its working controls ── */}
+          <div className="fdConsole">
+            <img src={consoleStrip} alt="" draggable="false" />
+            <div className="fdConsoleFade" />
+          </div>
+
+          <div className="fdBtns left">
+            <button className={'fdCBtn' + (hyper ? ' lit' : '')} onClick={toggleHyper}>
+              <i /><span>Hyper</span>
+            </button>
+            <label className={'fdCBtn' + (busyCsv ? ' lit blink' : '')} title="Import NetSuite saved-search CSVs">
+              <input type="file" accept=".csv" multiple onChange={onCsvPick} />
+              <i /><span>{busyCsv ? '…' : 'CSV'}</span>
+            </label>
+            <button className="fdCBtn" onClick={syncAll} title="Re-sync all feeds">
+              <i /><span>Sync</span>
+            </button>
+          </div>
+
+          <div className="fdBtns right">
+            {PANELS.map((p) => (
+              <button key={p.key} className={'fdCBtn sm' + (panels[p.key] ? ' lit' : '')}
+                      onClick={() => togglePanel(p.key)} title={`Power the ${p.label} display`}>
+                <i /><span>{p.label}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="fdScreen left">
             <div className="scrHead">◤ EDI RELAY {ediWork && <span className="n">{ediWork.totals.open + ediWork.totals.closed}</span>}</div>
             {ediWork ? (
@@ -574,30 +519,6 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
             </div>
           </div>
 
-          {/* ── console buttons (they work) ── */}
-          <div className="fdBtns left">
-            <button className={'fdCBtn' + (hyper ? ' lit' : '')} onClick={toggleHyper}>
-              <i /><span>Hyper</span>
-            </button>
-            <label className={'fdCBtn' + (busyCsv ? ' lit blink' : '')} title="Import NetSuite saved-search CSVs">
-              <input type="file" accept=".csv" multiple onChange={onCsvPick} />
-              <i /><span>{busyCsv ? '…' : 'CSV'}</span>
-            </label>
-            <button className="fdCBtn" onClick={syncAll} title="Re-sync all feeds">
-              <i /><span>Sync</span>
-            </button>
-          </div>
-
-          <div className="fdBtns right">
-            {PANELS.map((p) => (
-              <button key={p.key} className={'fdCBtn sm' + (panels[p.key] ? ' lit' : '')}
-                      onClick={() => togglePanel(p.key)} title={`Toggle the ${p.label} display`}>
-                <i /><span>{p.label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* pedestal: the route computer */}
           <div className="fdPedestal">
             <button className="fdPlanBtn" onClick={planRoute}>◈ Plan route</button>
             {plan && (
@@ -607,10 +528,71 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
               </div>
             )}
           </div>
+
+          {/* ── side-wall monitors: the data lives here, slightly angled ── */}
+          <div className="fdWall left">
+            <Monitor className="big" on={!!panels.comms} head="Comm" headAccent="relay"
+                     count={unread ? `${unread} unread` : emails.length} bodyHeight={352}>
+              {inbox.map((e) => (
+                <button key={e.id} className="fdTx" onClick={() => onNavigate('transmissions')}>
+                  <Face characterId={e.characterId} size={34} />
+                  <span className="txBody">
+                    <span className="top">
+                      <span className="who">{e.character?.name || e.fromName || 'Unknown'}</span>
+                      <span className="age">{ageOf(e.receivedAt)}</span>
+                    </span>
+                    <span className="sub">{e.subject}</span>
+                  </span>
+                </button>
+              ))}
+              {!inbox.length && <div className="fdDim">relay silent</div>}
+            </Monitor>
+            <Monitor on={!!panels.cust} head="Custody" headAccent="register" count={custody?.length} bodyHeight={128}>
+              {custody?.map((c) => (
+                <button key={c.ifNumber} className="fdCrow" onClick={() => onNavigate('custody')}>
+                  <b>{c.ifNumber}</b>
+                  <span>{c.customer || 'unknown'}</span>
+                  <span className={'st ' + (c.stale ? 'stale' : c.state === 'with_warehouse' ? 'ware' : 'hand')}>
+                    {c.stale ? `STALE ${c.ageDays}d` : c.state === 'with_warehouse' ? 'AT WHSE' : 'IN HAND'}
+                  </span>
+                </button>
+              ))}
+              {custody?.length === 0 && <div className="fdDim">register clear</div>}
+            </Monitor>
+          </div>
+
+          <div className="fdWall right">
+            <Monitor className="big" on={!!panels.tasks} head="Task" headAccent="command"
+                     count={openTasks.length} bodyHeight={352}>
+              {taskRows.map((r) => {
+                const t = r.taskId ? taskById.get(r.taskId) : null
+                return (
+                  <div key={r.id} className={'fdTask' + (r.seq === 1 ? ' now' : '') + (r.atRisk ? ' risk' : '')}>
+                    {t ? <Face characterId={t.characterId} size={24} /> : <span className="fdFace fdFaceGlyph" style={{ width: 24, height: 24, fontSize: 12 }}>⬡</span>}
+                    <span className="seq">{r.seq ? hhmm(r.start) : ''}</span>
+                    <span className="lab">{r.label}</span>
+                    <span className="slack">
+                      {r.slackMin != null ? (r.slackMin >= 0 ? `+${r.slackMin}m` : `${r.slackMin}m`) : r.atRisk ? '!' : ''}
+                    </span>
+                  </div>
+                )
+              })}
+              {!taskRows.length && <div className="fdDim">no open tasks — crew idle</div>}
+            </Monitor>
+            <Monitor on={!!panels.scan} head="Partner" headAccent="scan" bodyHeight={128}>
+              {partnerScan?.map((p) => (
+                <button key={p.tradingPartner} className={'fdSrow h-' + p.health} onClick={() => onNavigate('edi')}>
+                  <span>{p.tradingPartner.replace(/\s*\(.*$/, '')}</span>
+                  <b>{p.open} open{p.health === 'red' ? ' · CRIT' : ''}</b>
+                </button>
+              ))}
+              {!partnerScan && <div className="fdDim">scanning…</div>}
+            </Monitor>
+          </div>
         </div>
       </div>
 
-      {/* ── panel board (unchanged, per Nima) ── */}
+      {/* ── panel board (unchanged) ── */}
       <div className="fdDash">
         <div className="fdTabrow">
           {views.map((v) => (

@@ -1365,8 +1365,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .chipExpand { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
 .chipActions { display: flex; gap: 8px; margin-top: 6px; }
 
-/* ═══ FLIGHT DECK — Falcon cockpit HUD v5: drawn frame, HUDs written on the
-   glass, console screens + working buttons (2026-07-21) ═══ */
+/* ═══ FLIGHT DECK v6 — drawn canopy viewport + 3D-rendered console +
+   side-wall monitors (2026-07-21) ═══ */
 .flightDeck {
   --fdAmber: #e6b23c;
   --fdCrit: #ff5b52;
@@ -1374,7 +1374,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   --fdGood: #4fd18a;
   --fdInk: #c9ecff;
   margin: -20px;                     /* escape main's padding — full-bleed cockpit */
-  height: calc(100vh - 57px);        /* everything below the sticky topbar */
+  height: calc(100vh - 57px);
   min-height: 620px;
   display: flex;
   flex-direction: column;
@@ -1388,7 +1388,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdScene { position: absolute; left: 50%; bottom: 0; width: 2000px; height: 900px; transform-origin: 50% 100%; }
 .fdSvg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
-/* ── HUDs: projected light on the glass — no card chrome ── */
+/* ── on-glass HUD (route only) — projected light, no card chrome ── */
 .fdHud {
   position: absolute; z-index: 3;
   font-family: var(--mono, ui-monospace); color: var(--fdInk);
@@ -1412,37 +1412,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdHudHead .b { color: #7fe0ff; }
 .fdHudHead .n { margin-left: auto; font-size: 10px; color: #9fc4dd; }
 .fdDim { font-size: 11px; color: #7e96ab; text-shadow: none; padding: 3px 0; }
-.fdHud button { font: inherit; color: inherit; background: none; border: none; text-align: left; padding: 0; cursor: pointer; text-shadow: inherit; }
+.fd-route { left: 855px; top: 30px; width: 290px; }
 
-.fd-comms { transform: rotate(-2deg); }
-.fd-tasks { transform: rotate(2deg); }
-.fd-cust { transform: rotate(-4deg); }
-.fd-scan { transform: rotate(4deg); }
-
-/* character faces — everywhere */
 .fdFace { border-radius: 6px; border: 1px solid rgba(92, 216, 255, 0.45); object-fit: cover; object-position: top center; flex: none; box-shadow: 0 0 8px rgba(92, 216, 255, 0.25); }
 .fdFaceGlyph { display: inline-flex; align-items: center; justify-content: center; background: rgba(20, 34, 48, 0.7); color: #5cd8ff; font-style: normal; }
 
-/* comm relay — big, portside */
-.fdTx { display: flex !important; gap: 9px; width: 100%; align-items: center; border-top: 1px solid rgba(140, 220, 255, 0.14); padding: 6px 0 !important; }
-.fdTx:first-of-type { border-top: none; }
-.fdTx .txBody { min-width: 0; flex: 1; display: block; }
-.fdTx .top { display: flex; gap: 8px; align-items: baseline; }
-.fdTx .who { font-size: 13px; color: #8fe2ff; }
-.fdTx .age { margin-left: auto; font-size: 10px; color: #7e96ab; }
-.fdTx .sub { display: block; font-size: 12px; color: #e6f2fb; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* task command — big, starboard */
-.fdTask { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; border-top: 1px solid rgba(140, 220, 255, 0.14); }
-.fdTask:first-of-type { border-top: none; }
-.fdTask .seq { font-size: 10.5px; color: #8fe2ff; width: 52px; flex: none; }
-.fdTask .lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e6f2fb; }
-.fdTask .slack { margin-left: auto; font-size: 10.5px; color: var(--fdGood); flex: none; }
-.fdTask.now { background: rgba(230, 178, 60, 0.10); border-radius: 5px; }
-.fdTask.now .seq { color: var(--fdAmber); }
-.fdTask.risk .slack { color: var(--fdCrit); }
-
-/* hyperspace route — top-center pane */
 .fdWp { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #8fe2ff; padding: 3px 0; }
 .fdWp i { width: 9px; height: 9px; border-radius: 50%; border: 2px solid currentColor; box-shadow: 0 0 7px currentColor; flex: none; }
 .fdWp span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1451,17 +1425,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdWp.now i { background: var(--fdAmber); animation: fdPulse 1.3s ease-in-out infinite; }
 .fdWp.risk { color: #ff9d94; }
 @keyframes fdPulse { 50% { transform: scale(1.35); } }
-
-/* custody + partner scan — outer low panes */
-.fdCrow { display: flex; gap: 8px; width: 100%; font-size: 12px; padding: 3.5px 0; align-items: baseline; }
-.fdCrow b { color: #eaf6ff; flex: none; }
-.fdCrow span { color: #9fc4dd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fdCrow .st { margin-left: auto; flex: none; font-size: 10.5px; }
-.fdCrow .st.stale { color: var(--fdCrit); } .fdCrow .st.hand { color: var(--fdGood); } .fdCrow .st.ware { color: var(--fdWarn); }
-.fdSrow { display: flex; justify-content: space-between; width: 100%; font-size: 12px; padding: 3.5px 0; }
-.fdSrow.h-red span { color: #ffb7b1; } .fdSrow.h-red b { color: var(--fdCrit); }
-.fdSrow.h-amber span { color: #ffd58a; } .fdSrow.h-amber b { color: var(--fdWarn); }
-.fdSrow.h-green span { color: #9fc4dd; } .fdSrow.h-green b { color: var(--fdGood); }
 
 /* crew — portraits set into the arch band */
 .fdCrewChip {
@@ -1472,8 +1435,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 }
 .fdCrewChip b { color: #8fe2ff; font-weight: 600; text-shadow: 0 0 6px rgba(92, 216, 255, 0.6); }
 
-/* ops core — inside the hub circle (scene px: hub center 1000,640 r150) */
-.fdCore { position: absolute; z-index: 3; left: 860px; top: 500px; width: 280px; height: 280px; transition: opacity 0.25s ease; }
+/* ops core — inside the hub circle (hub center 1000,520 r140) */
+.fdCore { position: absolute; z-index: 3; left: 870px; top: 390px; width: 260px; height: 260px; transition: opacity 0.25s ease; }
 .fdCore.off { opacity: 0; pointer-events: none; }
 .fdRing { position: absolute; inset: 0; border-radius: 50%; }
 .fdRing.r1 {
@@ -1482,7 +1445,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
           mask: radial-gradient(circle, transparent 62%, #000 63%, #000 68%, transparent 69%);
   animation: fdSpin 40s linear infinite;
 }
-.fdRing.r2 { border: 1px dashed rgba(92, 216, 255, 0.4); inset: 16px; animation: fdSpinR 28s linear infinite; }
+.fdRing.r2 { border: 1px dashed rgba(92, 216, 255, 0.4); inset: 15px; animation: fdSpinR 28s linear infinite; }
 .fdRing.r3 {
   background: conic-gradient(from 0deg, rgba(92, 216, 255, 0.45), transparent 70deg);
   -webkit-mask: radial-gradient(circle, transparent 40%, #000 41%, #000 60%, transparent 61%);
@@ -1491,25 +1454,31 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 }
 @keyframes fdSpin { to { transform: rotate(360deg); } }
 @keyframes fdSpinR { to { transform: rotate(-360deg); } }
-.fdInsignia { position: absolute; inset: 34px; opacity: 0.12; fill: none; stroke: #5cd8ff; stroke-width: 2.5; }
+.fdInsignia { position: absolute; inset: 32px; opacity: 0.12; fill: none; stroke: #5cd8ff; stroke-width: 2.5; }
 .fdCoreMid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-family: var(--mono, ui-monospace); }
 .fdCoreClock { font-size: 11px; color: var(--fdAmber); text-shadow: 0 0 8px rgba(230, 178, 60, 0.55); }
-.fdCoreNum { font-size: 46px; font-weight: 700; line-height: 1.05; color: #7fe0ff; text-shadow: 0 0 24px rgba(92, 216, 255, 0.55); font-variant-numeric: tabular-nums; }
+.fdCoreNum { font-size: 42px; font-weight: 700; line-height: 1.05; color: #7fe0ff; text-shadow: 0 0 24px rgba(92, 216, 255, 0.55); font-variant-numeric: tabular-nums; }
 .fdCoreSub { font-size: 8px; letter-spacing: 0.22em; color: #9fc4dd; text-transform: uppercase; }
 .fdCoreInc { margin-top: 3px; font-family: inherit; font-size: 9px; color: #ffd58a; background: none; border: none; cursor: pointer; text-shadow: 0 0 8px rgba(230, 178, 60, 0.5); }
 
-/* ── console screens: inset displays with a little perspective ── */
+/* ── the 3D-rendered console strip ── */
+.fdConsole { position: absolute; z-index: 4; left: 0; top: 540px; width: 2000px; height: 360px; pointer-events: none; }
+.fdConsole img { width: 100%; height: 100%; object-fit: fill; display: block; }
+.fdConsoleFade { position: absolute; left: 0; top: 0; width: 100%; height: 70px;
+  background: linear-gradient(180deg, rgba(2, 4, 10, 0.85), transparent); }
+
+/* console screens (inset displays over the render) */
 .fdScreen {
-  position: absolute; z-index: 3; width: 430px; height: 145px;
+  position: absolute; z-index: 5; width: 300px; height: 122px;
   background: linear-gradient(180deg, #060b12, #04070c);
-  border: 2px solid #34445a; border-radius: 8px; padding: 7px 10px;
+  border: 2px solid #34445a; border-radius: 8px; padding: 6px 9px;
   box-shadow: inset 0 0 26px rgba(92, 216, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.6);
   font-family: var(--mono, ui-monospace); color: #bfe3f5; overflow: hidden;
 }
 .fdScreen::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(140, 220, 255, 0.05) 0 1px, transparent 1px 3px); }
-.fdScreen.left { left: 62px; top: 738px; transform: perspective(900px) rotateX(11deg) rotateY(6deg); }
-.fdScreen.right { left: 1508px; top: 738px; transform: perspective(900px) rotateX(11deg) rotateY(-6deg); }
+.fdScreen.left { left: 330px; top: 722px; transform: perspective(900px) rotateX(9deg) rotateY(3deg); }
+.fdScreen.right { left: 1330px; top: 722px; transform: perspective(900px) rotateX(9deg) rotateY(-3deg); }
 .scrHead { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: 0.16em; color: var(--fdAmber); margin-bottom: 5px; }
 .scrHead .n { color: #8fa2b4; font-size: 9.5px; margin-left: auto; }
 .scrClock { margin-left: auto; color: #7fe0ff; font-size: 10px; display: flex; gap: 8px; }
@@ -1525,10 +1494,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .scrGrid b { color: #eaf6ff; font-variant-numeric: tabular-nums; margin-right: 4px; }
 .scrGrid .bad b { color: var(--fdCrit); } .scrGrid .ok b { color: var(--fdGood); } .scrGrid .amber b { color: var(--fdWarn); }
 
-/* ── console buttons — chunky lit switches, they work ── */
-.fdBtns { position: absolute; z-index: 4; display: flex; gap: 12px; }
-.fdBtns.left { left: 88px; top: 678px; transform: rotate(2.5deg); }
-.fdBtns.right { left: 1430px; top: 678px; transform: rotate(-2.5deg); gap: 8px; }
+/* console buttons — they work */
+.fdBtns { position: absolute; z-index: 5; display: flex; gap: 12px; }
+.fdBtns.left { left: 380px; top: 622px; transform: rotate(1.5deg); }
+.fdBtns.right { left: 1140px; top: 622px; transform: rotate(-1.5deg); gap: 8px; }
 .fdCBtn {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   width: 58px; padding: 5px 4px 4px; cursor: pointer;
@@ -1549,20 +1518,84 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdCBtn.blink i { animation: fdBlink 0.8s ease-in-out infinite; }
 
 /* pedestal — the route computer */
-.fdPedestal { position: absolute; z-index: 4; left: 928px; top: 768px; width: 144px; text-align: center; }
+.fdPedestal { position: absolute; z-index: 5; left: 925px; top: 826px; width: 150px; text-align: center; }
 .fdPlanBtn {
   display: block; width: 100%; cursor: pointer;
   font-family: var(--mono, ui-monospace); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
-  padding: 7px 4px; border-radius: 6px; border: 1px solid rgba(92, 216, 255, 0.5); color: #06121c; font-weight: 700;
+  padding: 6px 4px; border-radius: 6px; border: 1px solid rgba(92, 216, 255, 0.5); color: #06121c; font-weight: 700;
   background: linear-gradient(180deg, #bfe9ff, #5cd8ff); box-shadow: 0 0 14px rgba(92, 216, 255, 0.35);
 }
 .fdPlanBtn:hover { filter: brightness(1.1); }
-.fdPlanSum { margin-top: 5px; font-family: var(--mono, ui-monospace); font-size: 9.5px; color: #9fc4dd; }
+.fdPlanSum { margin-top: 4px; font-family: var(--mono, ui-monospace); font-size: 9.5px; color: #cfe7f5; text-shadow: 0 1px 2px #000; }
 .fdPlanSum .crit { color: var(--fdCrit); } .fdPlanSum .good { color: var(--fdGood); }
+
+/* ── side walls with monitors ── */
+.fdWall {
+  position: absolute; z-index: 6; top: 70px; width: 386px; height: 588px;
+  padding: 10px; display: flex; flex-direction: column; gap: 12px;
+  background: linear-gradient(180deg, #1c2530 0%, #10161f 55%, #0a0f16 100%);
+  border: 1px solid #3a4a5e; border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.fdWall.left { left: -6px; transform: perspective(1600px) rotateY(4deg); transform-origin: left center; }
+.fdWall.right { right: -6px; transform: perspective(1600px) rotateY(-4deg); transform-origin: right center; }
+
+.fdMon {
+  background: linear-gradient(180deg, #0a1018, #060a10);
+  border: 2px solid #3a4a5e; border-radius: 8px; padding: 7px 9px;
+  box-shadow: inset 0 0 26px rgba(92, 216, 255, 0.06);
+  font-family: var(--mono, ui-monospace); color: #cfe7f5;
+  position: relative; overflow: hidden;
+}
+.fdMon::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(140, 220, 255, 0.04) 0 1px, transparent 1px 3px); }
+.fdMon.big { flex: 1; min-height: 0; }
+.monHead {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--fdAmber); border-bottom: 1px solid rgba(230, 178, 60, 0.3);
+  padding-bottom: 3px; margin-bottom: 5px;
+}
+.monHead .b { color: #7fe0ff; }
+.monHead .n { margin-left: auto; font-size: 10px; color: #9fc4dd; }
+.monBody { overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(92, 216, 255, 0.4) transparent; position: relative; }
+.monBody::-webkit-scrollbar { width: 6px; }
+.monBody::-webkit-scrollbar-thumb { background: rgba(92, 216, 255, 0.35); border-radius: 3px; }
+.fdMon.mOff { opacity: 0.55; }
+.monOffline { font-size: 10px; color: #55697c; text-align: center; padding: 14px 0; letter-spacing: 0.2em; text-transform: uppercase; }
+.fdMon button { font: inherit; color: inherit; background: none; border: none; text-align: left; padding: 0; cursor: pointer; }
+
+/* monitor rows */
+.fdTx { display: flex; gap: 9px; width: 100%; align-items: center; border-top: 1px solid rgba(140, 220, 255, 0.12); padding: 6px 0; }
+.fdTx:first-of-type { border-top: none; }
+.fdTx .txBody { min-width: 0; flex: 1; display: block; }
+.fdTx .top { display: flex; gap: 8px; align-items: baseline; }
+.fdTx .who { font-size: 12.5px; color: #8fe2ff; }
+.fdTx .age { margin-left: auto; font-size: 10px; color: #7e96ab; }
+.fdTx .sub { display: block; font-size: 11.5px; color: #e6f2fb; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fdTask { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 4px 0; border-top: 1px solid rgba(140, 220, 255, 0.12); }
+.fdTask:first-of-type { border-top: none; }
+.fdTask .seq { font-size: 10px; color: #8fe2ff; width: 50px; flex: none; }
+.fdTask .lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e6f2fb; }
+.fdTask .slack { margin-left: auto; font-size: 10px; color: var(--fdGood); flex: none; }
+.fdTask.now { background: rgba(230, 178, 60, 0.10); border-radius: 5px; }
+.fdTask.now .seq { color: var(--fdAmber); }
+.fdTask.risk .slack { color: var(--fdCrit); }
+
+.fdCrow { display: flex; gap: 8px; width: 100%; font-size: 11.5px; padding: 3.5px 0; align-items: baseline; }
+.fdCrow b { color: #eaf6ff; flex: none; }
+.fdCrow span { color: #9fc4dd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fdCrow .st { margin-left: auto; flex: none; font-size: 10px; }
+.fdCrow .st.stale { color: var(--fdCrit); } .fdCrow .st.hand { color: var(--fdGood); } .fdCrow .st.ware { color: var(--fdWarn); }
+.fdSrow { display: flex; justify-content: space-between; width: 100%; font-size: 11.5px; padding: 3.5px 0; }
+.fdSrow.h-red span { color: #ffb7b1; } .fdSrow.h-red b { color: var(--fdCrit); }
+.fdSrow.h-amber span { color: #ffd58a; } .fdSrow.h-amber b { color: var(--fdWarn); }
+.fdSrow.h-green span { color: #9fc4dd; } .fdSrow.h-green b { color: var(--fdGood); }
 
 /* ── the panel board (unchanged) ── */
 .fdDash {
-  position: relative; z-index: 6; flex: none;
+  position: relative; z-index: 7; flex: none;
   background: radial-gradient(140% 100% at 50% 0, #232f3e 0%, #141b26 45%, #0a0f16 100%);
   border-top: 3px solid #3d4a5b; padding: 8px 16px 10px;
   box-shadow: 0 -14px 34px rgba(0, 0, 0, 0.55);
@@ -1626,15 +1659,15 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdTicker b { font-variant-numeric: tabular-nums; color: #eaf2f9; }
 .fdTicker .warn { color: var(--fdWarn); } .fdTicker .crit { color: var(--fdCrit); } .fdTicker .good { color: var(--fdGood); }
 
-/* small screens: stack the HUDs under the viewport */
+/* small screens: stack everything under the viewport */
 @media (max-width: 900px) {
   .flightDeck { height: auto; }
   .fdStage { height: auto; min-height: 0; overflow: visible; padding: 10px; }
   .fdSpace { position: fixed; inset: 0; }
   .fdScene { position: static; width: auto; height: auto; transform: none !important; }
-  .fdSvg { display: none; }
-  .fdHud, .fdCore, .fdScreen, .fdBtns, .fdPedestal { position: static; transform: none; width: auto !important; margin: 10px auto; max-width: 440px; }
+  .fdSvg, .fdConsole { display: none; }
+  .fdHud, .fdCore, .fdScreen, .fdBtns, .fdPedestal, .fdWall { position: static; transform: none; width: auto !important; height: auto; margin: 10px auto; max-width: 440px; }
   .fdHud.off, .fdCore.off { display: none; }
   .fdCrewChip { position: static; transform: none; display: inline-flex; margin: 4px; }
-  .fdCore { height: 280px; width: 280px !important; }
+  .fdCore { height: 260px; width: 260px !important; }
 }
