@@ -988,6 +988,11 @@ export async function acknowledgeQuestEmail(emailId) {
   await updateTaskNeeds({ id: taskId, needsType: 'acknowledgment', needsNote: null, netsuiteDocType: null, netsuiteDocNumber: null })
   await completeQuestTask(taskId, true)
   await dismissQuestEmail(emailId, true)
+  // Acknowledging is "seen and understood" — mark it read in Gmail too, same
+  // "clear once" rule as dismiss (Nima, 2026-07-21). Best-effort: a Gmail
+  // hiccup must not block the acknowledgment. dismiss already does this; this
+  // brings acknowledge in line so BOTH paths clear the email in Gmail.
+  try { await markMessageRead(emailId); await markQuestEmailReadLocal(emailId) } catch { /* next sync reconciles */ }
   await logTaskActivity({ taskId, kind: 'created', note: `Acknowledged: "${email.subject}"` })
   await logTaskActivity({ taskId, kind: 'done', note: 'Acknowledged on receipt' })
   return { ...(await getQuestEmails()), tasks: await getQuestTasks() }
