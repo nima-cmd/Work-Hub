@@ -841,6 +841,10 @@ body::after {
 .calDots { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
 .calDot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; }
 .d-deadline { background: var(--hi); } .d-shipped { background: #7ee787; } .d-ledger { background: var(--accent); } .d-journal { background: var(--lo); }
+.d-invite { background: var(--holo); }
+/* holocall — a Zoom/Meet invite, themed as an incoming transmission */
+.caltag.holo { color: var(--holo); border-color: rgba(79,209,255,0.6); background: rgba(79,209,255,0.12); text-shadow: 0 0 8px rgba(79,209,255,0.4); }
+.calRow.holocall { border-left: 2px solid var(--holo); padding-left: 6px; box-shadow: 0 0 10px rgba(79,209,255,0.08) inset; }
 .calCount { position: absolute; top: 4px; right: 6px; font-size: 10px; color: var(--holo); font-variant-numeric: tabular-nums; }
 .calKey { margin-top: 8px; color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 4px; }
 .calDayGroup { margin-bottom: 12px; }
@@ -1347,6 +1351,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .noteWidgetForm textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; color: inherit; font: inherit; padding: 4px 6px; resize: vertical; }
 .noteLinkRow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .noteLink { color: var(--holo); font-size: 11px; }
+.linkChip { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 5px; border-radius: 4px; background: rgba(79,209,255,0.15); color: var(--holo); border: 1px solid rgba(79,209,255,0.4); }
+.docLinkPicker { margin-top: 6px; position: relative; }
+.docLinkPicker input { width: 100%; }
+.docLinkResults { display: flex; flex-direction: column; margin-top: 4px; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.docLinkResult { text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--line); color: var(--text); padding: 6px 8px; cursor: pointer; font-size: 12px; }
+.docLinkResult:last-child { border-bottom: none; }
+.docLinkResult:hover { background: var(--panel2); }
 
 /* Command Center: expandable task chip */
 .taskChip { cursor: pointer; }

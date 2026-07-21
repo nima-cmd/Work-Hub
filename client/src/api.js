@@ -459,6 +459,13 @@ export async function fetchQuestActivity(date) {
   return res.json()
 }
 
+// Upcoming Google Calendar events (in-app calendar + holocalls).
+export async function fetchCalendarEvents() {
+  const res = await fetch('/api/calendar/events')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // ── Custody scans (QR labels) — direction 'OUT' | 'IN' ──────────────────────
 export async function recordCustodyScan({ docNumber, direction, note, confirm }) {
   const res = await fetch('/api/custody/scan', {

@@ -25,7 +25,13 @@ const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
 authUrl.searchParams.set('client_id', CLIENT_ID)
 authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
 authUrl.searchParams.set('response_type', 'code')
-authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.modify')
+// gmail.modify (read/mark-read/label) + calendar.readonly (pull events for the
+// in-app calendar + holocalls, Nima 2026-07-21). Re-run this after adding the
+// calendar scope to mint a refresh token that carries BOTH.
+authUrl.searchParams.set('scope', [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/calendar.readonly',
+].join(' '))
 authUrl.searchParams.set('access_type', 'offline') // required to get a refresh token
 authUrl.searchParams.set('prompt', 'consent') // forces a refresh token even on repeat runs
 

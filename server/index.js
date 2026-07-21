@@ -16,7 +16,7 @@ import {
   resolveEdiPo, unresolveEdiPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
-  getGmailLabels, spamQuestEmail,
+  getGmailLabels, spamQuestEmail, getCalendarEvents,
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
@@ -569,6 +569,16 @@ app.delete('/api/notes/:id', async (req, res) => {
 app.get('/api/gmail/labels', async (_req, res) => {
   try {
     res.json(await getGmailLabels())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Upcoming Google Calendar events (in-app calendar + holocalls).
+app.get('/api/calendar/events', async (_req, res) => {
+  try {
+    res.json(await getCalendarEvents())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

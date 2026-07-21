@@ -35,6 +35,7 @@ import {
   createEdiTask, fetchEdiTaskStates, closeEdiTask,
 } from '../src/ingest/loadToDb.js'
 import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile, listUserLabels, markMessageSpam } from '../src/ingest/gmail.js'
+import { fetchCalendarEvents } from '../src/ingest/googleCalendar.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 
@@ -845,6 +846,14 @@ export async function dismissQuestEmailLine(id, dismissed = true) {
 // The user's real Gmail labels, for the label picker.
 export async function getGmailLabels() {
   return listUserLabels()
+}
+
+// Upcoming Google Calendar events (Nima, 2026-07-21) — for the in-app calendar
+// + holocalls. 30-day window from now. Fails soft to {configured:false} when
+// the token lacks calendar scope (before re-auth).
+export async function getCalendarEvents() {
+  const timeMax = new Date(Date.now() + 30 * 86400000).toISOString()
+  return fetchCalendarEvents({ timeMax })
 }
 
 // Spam (Nima, 2026-07-20): Gmail's own SPAM label (trains its filter, leaves
