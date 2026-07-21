@@ -36,6 +36,15 @@ const PANELS = [
 const PANEL_STORE = 'fd.panels'
 const HYPER_STORE = 'fd.hyper'
 
+// The guarded red button pops these up — swap freely for the real deep links.
+const QUICK_LINKS = [
+  { label: 'NetSuite', url: 'https://system.netsuite.com' },
+  { label: 'Airtable · EDI base', url: 'https://airtable.com' },
+  { label: 'Gmail', url: 'https://mail.google.com' },
+  { label: 'Orderful', url: 'https://app.orderful.com' },
+  { label: 'Work-Hub · live', url: 'https://work-hub-jooy.onrender.com' },
+]
+
 function loadPanels() {
   try {
     const saved = JSON.parse(localStorage.getItem(PANEL_STORE))
@@ -127,13 +136,13 @@ function ConsoleFrame({ hyper }) {
         if ((r * 31 + c * 17) % 7 !== 3)   // gaps so it reads like the render
           chicks.push([x0 + c * (w + g), y0 + r * (h + g), w, h])
   }
-  grid(600, 626, 8, 3)                 // left panel button grid
-  grid(1408, 626, 8, 3)                // right panel button grid
-  grid(430, 838, 13, 2, 18, 12, 6)     // keyboard strips
-  grid(1290, 838, 13, 2, 18, 12, 6)
+  grid(566, 628, 7, 3)                 // left button grid (row 1)
+  grid(1500, 628, 5, 3)                // right button grid (row 1)
+  grid(400, 742, 12, 2, 18, 12, 6)     // keyboard strips (row 2)
+  grid(1320, 742, 12, 2, 18, 12, 6)
   const reds = []
-  for (let x = 400; x <= 960; x += 28) reds.push([x, 812])
-  for (let x = 1040; x <= 1600; x += 28) reds.push([x, 812])
+  for (let x = 400; x <= 880; x += 28) reds.push([x, 856])
+  for (let x = 1120; x <= 1600; x += 28) reds.push([x, 856])
   return (
     <svg className="fdSvg fdConsoleSvg" viewBox="0 0 2000 900" preserveAspectRatio="none" aria-hidden="true">
       <defs>
@@ -145,68 +154,72 @@ function ConsoleFrame({ hyper }) {
         </linearGradient>
       </defs>
 
-      {/* back rail */}
-      <path d="M360,614 L1640,614 L1618,586 L382,586 Z" fill="#20252c" />
-      <path d="M382,586 L1618,586" stroke="#4a5666" strokeWidth="3" fill="none" />
-
-      {/* side panels */}
-      <path d="M390,614 L975,614 L990,900 L350,900 Z" fill="url(#fdConG)" stroke="#454f5c" strokeWidth="2" />
-      <path d="M1025,614 L1610,614 L1650,900 L1010,900 Z" fill="url(#fdConG)" stroke="#454f5c" strokeWidth="2" />
-
-      {/* left panel: dial sub-panel + dials */}
-      <rect x="415" y="626" width="165" height="96" rx="6" fill="#262b33" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
-      {[[458, 674], [536, 674]].map(([cx, cy]) => (
-        <g key={cx}>
-          <circle cx={cx} cy={cy} r="27" fill="#1a1e24" stroke="#4a5666" strokeWidth="3" />
-          <circle cx={cx} cy={cy} r="19" fill="#5a3336" />
-          <line x1={cx} y1={cy - 16} x2={cx} y2={cy - 6} stroke="#e8edf3" strokeWidth="2.5" />
+      {/* full-width back rail + console body */}
+      <path d="M0,612 L2000,612 L2000,586 L0,586 Z" fill="#20252c" />
+      <path d="M0,586 L2000,586" stroke="#4a5666" strokeWidth="3" fill="none" />
+      <rect x="0" y="612" width="2000" height="288" fill="url(#fdConG)" />
+      {/* panel joints */}
+      {[370, 906, 1094, 1630].map((x) => (
+        <g key={x}>
+          <line x1={x} y1="612" x2={x} y2="900" stroke="#171c22" strokeWidth="5" />
+          <line x1={x + 3} y1="612" x2={x + 3} y2="900" stroke="#454f5c" strokeWidth="1.5" />
         </g>
       ))}
-      {/* chicklet grids + keyboards */}
+
+      {/* far-left carved panel: EDI relay display */}
+      <rect x="24" y="674" width="338" height="166" rx="11" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.55" />
+      <rect x="28" y="678" width="330" height="158" rx="9" fill="#14181e" stroke="#4a5666" strokeWidth="4" />
+      {/* far-right carved panel: system status display */}
+      <rect x="1638" y="674" width="338" height="166" rx="11" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.55" />
+      <rect x="1642" y="678" width="330" height="158" rx="9" fill="#14181e" stroke="#4a5666" strokeWidth="4" />
+
+      {/* left-centre row 1: dials · chicklets · Hyper/CSV/Sync well */}
+      <rect x="390" y="624" width="150" height="96" rx="6" fill="#262b33" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
+      {[[430, 672], [500, 672]].map(([cx, cy]) => (
+        <g key={cx}>
+          <circle cx={cx} cy={cy} r="24" fill="#1a1e24" stroke="#4a5666" strokeWidth="3" />
+          <circle cx={cx} cy={cy} r="17" fill="#5a3336" />
+          <line x1={cx} y1={cy - 14} x2={cx} y2={cy - 5} stroke="#e8edf3" strokeWidth="2.5" />
+        </g>
+      ))}
+      <rect x="558" y="622" width="170" height="100" rx="6" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.6" />
+      <rect x="740" y="622" width="190" height="66" rx="7" fill="#20252c" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
+
+      {/* right-centre row 1: display power bank · chicklets */}
+      <rect x="1060" y="622" width="428" height="66" rx="7" fill="#20252c" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
+      <rect x="1492" y="622" width="130" height="100" rx="6" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.6" />
+
+      {/* row 2: keyboards, sliders, the guarded links button well */}
       {chicks.map(([x, y, w, h], i) => (
         <rect key={i} x={x} y={y} width={w} height={h} rx="2"
               fill={i % 9 === 4 ? '#8fa4b8' : '#cdd4dc'} stroke="#1a1e24" strokeWidth="0.8" />
       ))}
-      <rect x="594" y="620" width="188" height="102" rx="6" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.6" />
-      <rect x="1402" y="620" width="188" height="102" rx="6" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.6" />
-
-      {/* left buttons well (Hyper / CSV / Sync live here) */}
-      <rect x="790" y="618" width="182" height="66" rx="7" fill="#20252c" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
-      {/* right power-bank well (the display switches live here) */}
-      <rect x="1032" y="616" width="428" height="68" rx="7" fill="#20252c" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
-
-      {/* screen bezels: EDI relay (left) + system status (right) */}
-      {[445, 1225].map((x) => (
+      {[710, 750, 790, 830, 1180, 1220, 1260].map((x, i) => (
         <g key={x}>
-          <rect x={x} y="688" width="330" height="150" rx="9" fill="#14181e" stroke="#4a5666" strokeWidth="4" />
-          <rect x={x - 4} y="684" width="338" height="158" rx="11" fill="none" stroke="#c99b3f" strokeWidth="1.5" opacity="0.55" />
+          <rect x={x} y="728" width="5" height="98" rx="2.5" fill="#14181e" stroke="#454f5c" strokeWidth="1" />
+          <rect x={x - 7} y={742 + (i % 3) * 24} width="19" height="12" rx="3" fill="#9fb0c2" stroke="#55677c" strokeWidth="1" />
         </g>
       ))}
-      {/* slider decor beside the bezels */}
-      {[822, 862, 902, 1105, 1145, 1185].map((x, i) => (
-        <g key={x}>
-          <rect x={x} y="700" width="5" height="104" rx="2.5" fill="#14181e" stroke="#454f5c" strokeWidth="1" />
-          <rect x={x - 7} y={716 + (i % 3) * 26} width="19" height="12" rx="3" fill="#9fb0c2" stroke="#55677c" strokeWidth="1" />
-        </g>
-      ))}
+      <rect x="1096" y="722" width="72" height="96" rx="7" fill="#20252c" stroke="#c99b3f" strokeWidth="1.5" opacity="0.9" />
+
       {/* indicator dot rows */}
       {reds.map(([x, y], i) => (
         <circle key={i} cx={x} cy={y} r="3.2" fill={i % 5 === 2 ? '#c2453d' : i % 7 === 3 ? '#c99b3f' : '#2c3949'} />
       ))}
 
-      {/* centre pedestal + throttle quadrant */}
-      <path d="M930,566 L1070,566 L1090,900 L910,900 Z" fill="url(#fdPedG)" stroke="#4a5666" strokeWidth="2.5" />
-      <path d="M930,566 L1070,566" stroke="#5b6b7e" strokeWidth="3" />
-      {[962, 992, 1022, 1052].map((x) => (
-        <rect key={x} x={x - 3} y="596" width="6" height="124" rx="3" fill="#14181e" stroke="#3a4a5e" strokeWidth="1" />
+      {/* centre throttle column — flush with the console, nothing overlapped */}
+      <rect x="906" y="612" width="188" height="288" fill="url(#fdPedG)" stroke="#4a5666" strokeWidth="2.5" />
+      <path d="M906,612 L1094,612" stroke="#5b6b7e" strokeWidth="3" />
+      {[946, 986, 1026, 1066].map((x) => (
+        <rect key={x} x={x - 3} y="630" width="6" height="118" rx="3" fill="#14181e" stroke="#3a4a5e" strokeWidth="1" />
       ))}
       <g className={'fdThrottle' + (hyper ? ' up' : '')}>
-        {[962, 992, 1022, 1052].map((x) => (
-          <rect key={x} x={x - 11} y="660" width="22" height="15" rx="4" strokeWidth="1" />
+        {[946, 986, 1026, 1066].map((x) => (
+          <rect key={x} x={x - 11} y="692" width="22" height="15" rx="4" strokeWidth="1" />
         ))}
       </g>
-      {/* plan-computer recess on the pedestal face */}
-      <rect x="915" y="790" width="170" height="86" rx="8" fill="#10141a" stroke="#454f5c" strokeWidth="2" />
+      {/* plan-computer recess on the column face */}
+      <rect x="916" y="776" width="168" height="92" rx="8" fill="#10141a" stroke="#454f5c" strokeWidth="2" />
     </svg>
   )
 }
@@ -441,6 +454,7 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
   const [hyper, setHyper] = useState(() => localStorage.getItem(HYPER_STORE) !== '0')
   const [plan, setPlan] = useState(null)
   const [busyCsv, setBusyCsv] = useState(false)
+  const [linksOpen, setLinksOpen] = useState(false)
 
   function loadAll() {
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
@@ -610,6 +624,22 @@ export default function FlightDeck({ orders, tasks = [], views = [], onNavigate 
               <span><b>{unread}</b> unread comms</span>
             </div>
           </div>
+
+          {/* the guarded red button — pops up the quick links */}
+          <div className="fdGuardWrap">
+            <button className="fdGuard" title="Quick links" onClick={() => setLinksOpen((v) => !v)}><i /></button>
+            <span className="fdCLab">Links</span>
+          </div>
+          {linksOpen && (
+            <div className="fdLinks">
+              <div className="monHead">◤ Quick <span className="b">links</span>
+                <button className="fdLinksClose" onClick={() => setLinksOpen(false)}>✕</button>
+              </div>
+              {QUICK_LINKS.map((l) => (
+                <a key={l.url} className="fdLinkRow" href={l.url} target="_blank" rel="noreferrer">↗ {l.label}</a>
+              ))}
+            </div>
+          )}
 
           <div className="fdPedestal">
             <button className="fdPlanBtn" onClick={planRoute}>◈ Plan route</button>

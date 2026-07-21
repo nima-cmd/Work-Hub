@@ -1476,8 +1476,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 }
 .fdScreen::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(140, 220, 255, 0.05) 0 1px, transparent 1px 3px); }
-.fdScreen.left { left: 455px; top: 698px; border: none; }
-.fdScreen.right { left: 1235px; top: 698px; border: none; }
+.fdScreen.left { left: 38px; top: 690px; border: none; }
+.fdScreen.right { left: 1652px; top: 690px; border: none; }
 .scrHead { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: 0.16em; color: var(--fdAmber); margin-bottom: 5px; }
 .scrHead .n { color: #8fa2b4; font-size: 9.5px; margin-left: auto; }
 .scrClock { margin-left: auto; color: #7fe0ff; font-size: 10px; display: flex; gap: 8px; }
@@ -1495,9 +1495,25 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 /* console buttons — they work */
 .fdBtns { position: absolute; z-index: 5; display: flex; gap: 12px; }
-.fdBtns.left { left: 800px; top: 626px; gap: 8px; }
+.fdBtns.left { left: 752px; top: 630px; gap: 8px; }
 .fdBtns.left .fdCBtn { width: 54px; }
-.fdBtns.right { left: 1040px; top: 624px; gap: 8px; }
+.fdBtns.right { left: 1068px; top: 630px; gap: 8px; }
+
+/* the guarded links button on the console + its popup */
+.fdGuardWrap { position: absolute; z-index: 5; left: 1108px; top: 732px; width: 48px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.fdLinks {
+  position: absolute; z-index: 8; left: 590px; top: 400px; width: 250px;
+  background: linear-gradient(180deg, #0a1018, #060a10);
+  border: 2px solid #3a4a5e; border-radius: 8px; padding: 8px 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.7), inset 0 0 26px rgba(92, 216, 255, 0.06);
+  font-family: var(--mono, ui-monospace);
+}
+.fdLinksClose { margin-left: auto; font: inherit; font-size: 11px; color: #93a6b8; background: none; border: none; cursor: pointer; }
+.fdLinkRow { display: block; font-size: 12px; color: #8fe2ff; text-decoration: none; padding: 5px 2px;
+  border-top: 1px solid rgba(140, 220, 255, 0.12); }
+.fdLinkRow:first-of-type { border-top: none; }
+.fdLinkRow:hover { color: #d9f2ff; }
 .fdCBtn {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   width: 58px; padding: 5px 4px 4px; cursor: pointer;
@@ -1518,7 +1534,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdCBtn.blink i { animation: fdBlink 0.8s ease-in-out infinite; }
 
 /* pedestal — the route computer */
-.fdPedestal { position: absolute; z-index: 5; left: 925px; top: 800px; width: 150px; text-align: center; }
+.fdPedestal { position: absolute; z-index: 5; left: 926px; top: 788px; width: 148px; text-align: center; }
 .fdPlanBtn {
   display: block; width: 100%; cursor: pointer;
   font-family: var(--mono, ui-monospace); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
@@ -1666,7 +1682,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .fdSpace { position: fixed; inset: 0; }
   .fdScene { position: static; width: auto; height: auto; transform: none !important; }
   .fdSvg { display: none; }
-  .fdHud, .fdCore, .fdScreen, .fdBtns, .fdPedestal, .fdWall { position: static; transform: none; width: auto !important; height: auto; margin: 10px auto; max-width: 440px; }
+  .fdHud, .fdCore, .fdScreen, .fdBtns, .fdPedestal, .fdWall, .fdGuardWrap, .fdLinks { position: static; transform: none; width: auto !important; height: auto; margin: 10px auto; max-width: 440px; }
   .fdHud.off, .fdCore.off { display: none; }
   .fdCrewChip { position: static; transform: none; display: inline-flex; margin: 4px; }
   .fdCore { height: 260px; width: 260px !important; }
