@@ -76,15 +76,18 @@ function buildEdiPdf(path, cfg, { poNumber, partner, storeCount, supplyPo, fromS
     const supply = fromStock ? 'FROM STOCK' : (supplyPo ? `SUPPLY PO ${supplyPo}` : null)
 
     if (cfg.layout === 'compact') {
-      const qrSize = cfg.h - MARGIN * 2
-      drawQr(doc, PO, MARGIN, MARGIN, qrSize)
-      const tx = MARGIN + qrSize + 8
+      // 2.25×1.25 MUNBYN: QR left (encodes the PO), tight text column right.
+      const qrSize = 62
+      const top = (cfg.h - qrSize) / 2
+      drawQr(doc, PO, MARGIN, top, qrSize)
+      const tx = MARGIN + qrSize + 7
       const tw = cfg.w - tx - MARGIN
-      doc.font('Helvetica-Bold').fontSize(7).text('◆ NAGHEDI · EDI', tx, MARGIN, { width: tw })
-      doc.font('Helvetica-Bold').fontSize(15).text(`PO ${PO}`, tx, MARGIN + 10, { width: tw })
-      doc.font('Helvetica').fontSize(8)
-        .text([partner, `${stores} ${stores === 1 ? 'STORE' : 'STORES'}`, supply].filter(Boolean).join('\n'),
-          tx, MARGIN + 30, { width: tw, lineGap: 1 })
+      let y = MARGIN
+      doc.font('Helvetica-Bold').fontSize(6).text('◆ NAGHEDI · EDI OUT', tx, y, { width: tw }); y += 9
+      doc.font('Helvetica-Bold').fontSize(13).text(PO, tx, y, { width: tw, lineBreak: false }); y += 16
+      if (partner) { doc.font('Helvetica').fontSize(7).text(partner, tx, y, { width: tw, lineBreak: false }); y += 10 }
+      doc.font('Helvetica-Bold').fontSize(11).text(`${stores} ${stores === 1 ? 'STORE' : 'STORES'}`, tx, y, { width: tw }); y += 13
+      if (supply) doc.font('Helvetica').fontSize(7).text(supply, tx, y, { width: tw, lineBreak: false })
     } else {
       const cx = cfg.w / 2
       doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 28, { width: cfg.w, align: 'center' })

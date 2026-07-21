@@ -127,7 +127,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   // stores per customer PO = the SO fan-out count (poGroups' one-PO-per-store rule)
   const storeCountFor = (bn) => orders.filter((o) => o.poNumber === bn).length
 
-  // Print the EDI outbound carton label for a PO (4×6 Zebra). One per PO.
+  // Print the EDI outbound label for a PO on the MUNBYN (2.25×1.25). One per PO.
   async function printEdiLabel(o) {
     const bn = o.businessNumber
     const supply = review?.ediSupply?.[bn] || {}
@@ -136,7 +136,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
       await printCargoTag({
         kind: 'edi', poNumber: bn, partner: (o.tradingPartner || '').replace(/\s*\(.*$/, ''),
         storeCount: storeCountFor(bn), supplyPo: supply.poNumber || '', fromStock: !!supply.fromStock,
-      }, '4x6')
+      }, '2.25x1.25')
     } catch (e) { setErr(e.message) } finally { setLabelBusy(null) }
   }
 
@@ -422,9 +422,9 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                               onClick={(ev) => { ev.stopPropagation(); onNavigate?.('tasks') }}>✓ Task</button>
                     : <button className="btnGhost poQuickClose" disabled={taskBusy === o.businessNumber}
                               onClick={(ev) => { ev.stopPropagation(); makeTask(o.businessNumber) }}>＋ Task</button>}
-                  {labelSizes['4x6'] && (
+                  {labelSizes['2.25x1.25'] && (
                     <button className="btnGhost poQuickClose" disabled={labelBusy === o.businessNumber}
-                            title={`Print the EDI outbound label — PO ${o.businessNumber} · ${storeCountFor(o.businessNumber)} stores`}
+                            title={`Print the EDI label on the MUNBYN — PO ${o.businessNumber} · ${storeCountFor(o.businessNumber)} stores`}
                             onClick={(ev) => { ev.stopPropagation(); printEdiLabel(o) }}>
                       {labelBusy === o.businessNumber ? '…' : '⎙ Label'}
                     </button>
