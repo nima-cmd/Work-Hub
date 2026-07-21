@@ -20,6 +20,7 @@ import { SHIPS, resolveShipForKey } from '../src/model/ships.js'
 import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
 import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
+import { computeRoute } from '../src/model/routePlan.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -602,4 +603,35 @@ test('groupOrdersByPo rolls same-PO SOs into one group, leaves blank-PO orders a
   assert.equal(rows.filter((r) => r.isGroup).length, 1)
   assert.ok(rows.some((r) => r.soNumber === 'SO3' && !r.isGroup)) // blank PO stays single
   assert.ok(rows.some((r) => r.soNumber === 'SO4' && !r.isGroup)) // lone PO stays single
+})
+
+// ── routePlan: the hyperspace task route (EDF) ───────────────────────────────
+test('computeRoute orders by deadline (EDF), then priority, then shorter first', () => {
+  const T0 = new Date('2026-07-21T09:00:00').getTime()
+  const at = (h, m = 0) => { const d = new Date(T0); d.setHours(h, m, 0, 0); return d.getTime() }
+  const items = [
+    { id: 'a', label: 'urgent ship', kind: 'ship', deadline: at(15), durationMin: 12, priority: 0 },
+    { id: 'b', label: 'nordstrom route', kind: 'edi_route', deadline: at(12), durationMin: 10, priority: 1 },
+    { id: 'c', label: 'planning', kind: 'planning', deadline: null, durationMin: 30, priority: 5 },
+    { id: 'd', label: 'boutique invoice', kind: 'invoice', deadline: at(12), durationMin: 8, priority: 1 },
+  ]
+  const { route, summary } = computeRoute(items, { now: T0, dayStartHour: 9 })
+  // noon deadlines first; between the two noon items the shorter (invoice 8m) leads
+  assert.deepEqual(route.map((r) => r.id), ['d', 'b', 'a', 'c'])
+  assert.equal(route[0].seq, 1)
+  assert.equal(summary.count, 4)
+  assert.equal(summary.atRisk, 0) // all fit before their cutoffs starting 9am
+})
+
+test('computeRoute flags an item that cannot make its cutoff', () => {
+  const T0 = new Date('2026-07-21T11:30:00').getTime()
+  const noon = (() => { const d = new Date(T0); d.setHours(12, 0, 0, 0); return d.getTime() })()
+  const items = [
+    { id: 'x', label: 'long job', kind: 'pack', deadline: noon, durationMin: 45, priority: 1 },
+  ]
+  const { route, summary } = computeRoute(items, { now: T0 })
+  assert.equal(route[0].atRisk, true) // 11:30 + 45m = 12:15 > noon
+  assert.ok(route[0].slackMin < 0)
+  assert.equal(summary.atRisk, 1)
+  assert.ok(summary.maxLatenessMin >= 15)
 })
