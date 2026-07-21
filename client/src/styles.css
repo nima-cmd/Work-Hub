@@ -1461,15 +1461,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdCoreSub { font-size: 8px; letter-spacing: 0.22em; color: #9fc4dd; text-transform: uppercase; }
 .fdCoreInc { margin-top: 3px; font-family: inherit; font-size: 9px; color: #ffd58a; background: none; border: none; cursor: pointer; text-shadow: 0 0 8px rgba(230, 178, 60, 0.5); }
 
-/* ── the 3D-rendered console strip ── */
-.fdConsole { position: absolute; z-index: 4; left: 0; top: 540px; width: 2000px; height: 360px; pointer-events: none; }
-.fdConsole img { width: 100%; height: 100%; object-fit: fill; display: block; }
-.fdConsoleFade { position: absolute; left: 0; top: 0; width: 100%; height: 70px;
-  background: linear-gradient(180deg, rgba(2, 4, 10, 0.85), transparent); }
+/* ── the drawn console (mirrors the render's layout) ── */
+.fdConsoleSvg { z-index: 4; pointer-events: none; }
+.fdThrottle rect { fill: #9fb0c2; stroke: #55677c; transition: transform 0.3s ease, fill 0.3s ease; }
+.fdThrottle.up rect { fill: #e6b23c; stroke: #c79a34; transform: translateY(-52px); }
 
 /* console screens (inset displays over the render) */
 .fdScreen {
-  position: absolute; z-index: 5; width: 300px; height: 122px;
+  position: absolute; z-index: 5; width: 310px; height: 130px;
   background: linear-gradient(180deg, #060b12, #04070c);
   border: 2px solid #34445a; border-radius: 8px; padding: 6px 9px;
   box-shadow: inset 0 0 26px rgba(92, 216, 255, 0.07), 0 4px 14px rgba(0, 0, 0, 0.6);
@@ -1477,8 +1476,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 }
 .fdScreen::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(140, 220, 255, 0.05) 0 1px, transparent 1px 3px); }
-.fdScreen.left { left: 330px; top: 722px; transform: perspective(900px) rotateX(9deg) rotateY(3deg); }
-.fdScreen.right { left: 1330px; top: 722px; transform: perspective(900px) rotateX(9deg) rotateY(-3deg); }
+.fdScreen.left { left: 455px; top: 698px; border: none; }
+.fdScreen.right { left: 1235px; top: 698px; border: none; }
 .scrHead { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: 0.16em; color: var(--fdAmber); margin-bottom: 5px; }
 .scrHead .n { color: #8fa2b4; font-size: 9.5px; margin-left: auto; }
 .scrClock { margin-left: auto; color: #7fe0ff; font-size: 10px; display: flex; gap: 8px; }
@@ -1496,8 +1495,9 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 /* console buttons — they work */
 .fdBtns { position: absolute; z-index: 5; display: flex; gap: 12px; }
-.fdBtns.left { left: 380px; top: 622px; transform: rotate(1.5deg); }
-.fdBtns.right { left: 1140px; top: 622px; transform: rotate(-1.5deg); gap: 8px; }
+.fdBtns.left { left: 800px; top: 626px; gap: 8px; }
+.fdBtns.left .fdCBtn { width: 54px; }
+.fdBtns.right { left: 1040px; top: 624px; gap: 8px; }
 .fdCBtn {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   width: 58px; padding: 5px 4px 4px; cursor: pointer;
@@ -1518,7 +1518,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fdCBtn.blink i { animation: fdBlink 0.8s ease-in-out infinite; }
 
 /* pedestal — the route computer */
-.fdPedestal { position: absolute; z-index: 5; left: 925px; top: 826px; width: 150px; text-align: center; }
+.fdPedestal { position: absolute; z-index: 5; left: 925px; top: 800px; width: 150px; text-align: center; }
 .fdPlanBtn {
   display: block; width: 100%; cursor: pointer;
   font-family: var(--mono, ui-monospace); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
@@ -1665,7 +1665,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .fdStage { height: auto; min-height: 0; overflow: visible; padding: 10px; }
   .fdSpace { position: fixed; inset: 0; }
   .fdScene { position: static; width: auto; height: auto; transform: none !important; }
-  .fdSvg, .fdConsole { display: none; }
+  .fdSvg { display: none; }
   .fdHud, .fdCore, .fdScreen, .fdBtns, .fdPedestal, .fdWall { position: static; transform: none; width: auto !important; height: auto; margin: 10px auto; max-width: 440px; }
   .fdHud.off, .fdCore.off { display: none; }
   .fdCrewChip { position: static; transform: none; display: inline-flex; margin: 4px; }
