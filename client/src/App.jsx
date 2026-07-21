@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits } from './api.js'
 import { fmtAge } from './lib.jsx'
 import CommandCenter from './views/CommandCenter.jsx'
+import FlightDeck from './views/FlightDeck.jsx'
 import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
@@ -78,6 +79,9 @@ function CreditsCounter({ credits }) {
 
 const VIEWS = [
   { key: 'command', label: 'Command', C: CommandCenter },
+  // Second, switchable HUD (Nima, 2026-07-21) — the Falcon-cockpit hub.
+  // Command stays untouched; the two coexist as separate tabs.
+  { key: 'flight', label: 'Flight Deck', C: FlightDeck },
   { key: 'kanban', label: 'Mission Quests', C: Kanban },
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
@@ -195,7 +199,7 @@ export default function App() {
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} onNavigate={setView} onRefresh={refresh} />}
+        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS} onNavigate={setView} onRefresh={refresh} />}
       </main>
     </div>
   )
