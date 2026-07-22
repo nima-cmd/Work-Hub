@@ -1754,3 +1754,40 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .custodyDelete { margin-left: 8px; font-size: 11px; color: #7e8a96; }
 .custodyDelete:hover { color: var(--hi, #f85149); }
+
+/* ── EDI Routing (Nima, 2026-07-22) ──────────────────────────────────────── */
+.routing { padding: 4px 2px 40px; }
+.rt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.rt-head h2 { margin: 0 0 4px; font-size: 20px; }
+.rt-sub { font-size: 13px; max-width: 640px; line-height: 1.4; }
+.rt-empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); }
+
+.rt-pos { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 18px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.rt-poChip { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 3px 10px; border-radius: 999px; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.rt-poChip.on { color: #1a1206; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+.rt-partner { margin-bottom: 22px; }
+.rt-partner h3 { margin: 0 0 10px; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.rt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+.rt-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.rt-card.has-bol { border-color: rgba(126,231,135,0.4); }
+
+.rt-dc { display: flex; align-items: baseline; gap: 10px; }
+.rt-dcCode { font-size: 30px; font-weight: 800; letter-spacing: 1px; color: var(--holo); line-height: 1; }
+.rt-dcName { font-size: 14px; color: var(--text); }
+.rt-memberPos { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.rt-portal { display: flex; gap: 8px; flex-wrap: wrap; }
+.rt-cell { flex: 1 1 auto; min-width: 62px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; text-align: center; }
+.rt-cellV { font-size: 15px; font-weight: 700; text-align: center; }
+.rt-cell.big .rt-cellV { font-size: 22px; }
+.rt-cellL { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+
+.rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
+
+.rt-assign { align-self: flex-start; }
+.rt-bol { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px dashed var(--line); }
+.rt-bol.assigned .rt-bolLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.rt-bolNum { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; color: #7ee787; }
+.rt-detached .rt-card { opacity: 0.85; }

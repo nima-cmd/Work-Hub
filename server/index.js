@@ -14,6 +14,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo,
+  getRouting, assignRoutingBol, voidRouting,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -286,6 +287,34 @@ app.post('/api/edi/resolution', async (req, res) => {
 app.delete('/api/edi/resolution/:businessNumber', async (req, res) => {
   try {
     res.json(await unresolveEdiPo(req.params.businessNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── EDI routing + BOL ────────────────────────────────────────────────────────
+app.get('/api/routing', async (_req, res) => {
+  try {
+    res.json(await getRouting())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/routing/assign-bol', async (req, res) => {
+  try {
+    res.json(await assignRoutingBol(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/routing/shipment/:id', async (req, res) => {
+  try {
+    res.json(await voidRouting(req.params.id))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

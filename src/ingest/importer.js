@@ -16,6 +16,7 @@ import {
   fromEdiFulfillments,
   fromPoReceiving,
   fromOcPipeline,
+  fromEdiPackagesVolume,
 } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
 import { deriveSource } from '../model/source.js'
@@ -23,6 +24,7 @@ import {
   loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
   pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+  loadEdiPackages,
 } from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
@@ -46,6 +48,10 @@ const LINE_LEVEL_MAPPERS = {
   ediFulfillments: { map: fromEdiFulfillments, load: loadEdiFulfillments },
   poReceiving: { map: fromPoReceiving, load: loadPurchaseOrders, prune: prunePurchaseOrders },
   ocPipeline: { map: fromOcPipeline, load: loadOrderConfirmations, prune: pruneOrderConfirmations },
+  // Routing feed — per-PO-DC packages. No prune: a routed PO drops off the
+  // export but its numbers don't change, and the shipment rows are the durable
+  // record (see edi_packages comment in schema.sql).
+  ediPackagesVolume: { map: fromEdiPackagesVolume, load: loadEdiPackages },
 }
 
 // files: [{ name, text, lastModified }]

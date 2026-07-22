@@ -66,3 +66,25 @@ export function dcBreakdown(members = []) {
     .map(([dc, stores]) => ({ dc: dc || null, abbrev: dc ? dcAbbrev(dc) : null, stores }))
     .sort((a, b) => b.stores - a.stores)
 }
+
+// Reverse of DC_ABBREV — code → friendly DC name. Built once at module load.
+const CODE_TO_NAME = Object.fromEntries(Object.entries(DC_ABBREV).map(([name, code]) => [code, name]))
+
+// A human label for a DC *code* (what the EDIPackagesVolume feed carries in
+// "PO Number - DC"). Bloomingdale's 2-letter codes map back to their city;
+// Nordstrom numeric codes read as "DC 584". Falls back to the code itself.
+export function dcLabel(code) {
+  const c = String(code || '').trim()
+  if (!c) return ''
+  if (CODE_TO_NAME[c]) return CODE_TO_NAME[c]
+  if (/^\d+$/.test(c)) return `DC ${c}`
+  return c
+}
+
+// Which trading partner a DC code belongs to. Nordstrom's DCs are numeric
+// (584/599/569…); Bloomingdale's are our 2-letter warehouse abbreviations. This
+// is the one signal the routing rollup needs to split shipments by partner and
+// to know Nordstrom needs a unit count in its portal entry (Nima, 2026-07-22).
+export function partnerForDc(code) {
+  return /^\d+$/.test(String(code || '').trim()) ? 'Nordstrom' : "Bloomingdale's"
+}

@@ -580,3 +580,25 @@ export async function deleteNote(id) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// ── EDI routing + BOL (Nima, 2026-07-22) ─────────────────────────────────────
+export async function fetchRouting() {
+  const res = await fetch('/api/routing')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function assignRoutingBol(shipment) {
+  const res = await fetch('/api/routing/assign-bol', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(shipment),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function voidRoutingShipment(id) {
+  const res = await fetch(`/api/routing/shipment/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

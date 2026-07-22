@@ -27,6 +27,10 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
+  fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment,
+} from '../src/ingest/loadToDb.js'
+import { consolidateRouting } from '../src/model/routing.js'
+import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
@@ -822,6 +826,45 @@ export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuite
 export async function unresolveEdiPo(businessNumber) {
   await deleteEdiPoResolution(businessNumber)
   return getEdiReview()
+}
+
+// ── EDI routing + BOL ────────────────────────────────────────────────────────
+// The Routing view's read model: the raw package feed, consolidated into one
+// group per (partner, DC), each annotated with the shipment/BOL already
+// assigned to that exact PO-set (if any). Shipments whose PO-set is no longer
+// in the feed (already routed/exported away) surface separately so a minted BOL
+// is never lost from view.
+export async function getRouting() {
+  const [packages, shipments] = await Promise.all([fetchEdiPackages(), fetchRoutingShipments()])
+  const groups = consolidateRouting(packages)
+
+  const byKey = new Map()
+  for (const s of shipments) byKey.set(s.dcPoKey, s)
+
+  const consolidated = groups.map((g) => {
+    const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
+    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null }
+  })
+
+  const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
+  const detached = shipments.filter((s) => !liveKeys.has(s.dcPoKey))
+
+  // packages returned raw too, so the view can re-consolidate over a PO subset
+  // (the "consolidate by DC across selected POs" interaction) client-side.
+  return { packages, consolidated, shipments, detached, packageCount: packages.length }
+}
+
+export async function assignRoutingBol(body = {}) {
+  const { partner, dc, memberPos, cartons, units, weightLb, cubicFeet } = body
+  if (!partner || !dc) throw new Error('partner and dc are required')
+  if (!Array.isArray(memberPos) || !memberPos.length) throw new Error('memberPos is required')
+  await assignBol({ partner, dc, memberPos, cartons, units, weightLb, cubicFeet })
+  return getRouting()
+}
+
+export async function voidRouting(id) {
+  await voidRoutingShipment(id)
+  return getRouting()
 }
 
 export async function linkEdiTransaction({ transactionId, businessNumber, note }) {

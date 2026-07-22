@@ -275,3 +275,42 @@ export function fromInvoicedPending(rows) {
       approvalStatus: r['Approval Status'] || '',
     }))
 }
+
+// ── EDIPackagesVolume.csv — the routing feed (searchid=3947, Nima 2026-07-22) ─
+// Pre-aggregated per PO-DC (one row per "<PO>-<DCcode>"), from the packing done
+// in NetSuite's Orderful tab (customrecord_hb_edi_packages). Feeds the Routing
+// view, which consolidates these rows into one shipment/BOL per DC. The export
+// carries a trailing "Total" summary row — dropped here.
+//
+//   PO Number - DC        "7527064-CG"  → poNumber 7527064, dc CG
+//   Total Weight (lbs)    per PO-DC, summed again across POs in the rollup
+//   Carton Count / Total Units
+//   Cubic Feet (Rounded)  the feed's own per-row round-up (kept for cross-check)
+//   Cubic Feet            raw — what the rollup sums then ceils per DC
+//   BOL                   the feed's *suggested* BOL ("<PO>DC<code>"); the app
+//                         mints its own guaranteed-unique number, so this is
+//                         reference-only.
+export function fromEdiPackagesVolume(rows) {
+  return rows
+    .filter((r) => {
+      const id = (r['PO Number - DC'] || '').trim()
+      return id && id.toLowerCase() !== 'total'
+    })
+    .map((r) => {
+      const id = (r['PO Number - DC'] || '').trim()
+      const dash = id.indexOf('-')
+      const poNumber = dash === -1 ? id : id.slice(0, dash).trim()
+      const dc = dash === -1 ? '' : id.slice(dash + 1).trim()
+      return {
+        poDc: id,
+        poNumber,
+        dc,
+        weight: num(r['Total Weight (lbs)']),
+        cartons: num(r['Carton Count']),
+        units: num(r['Total Units']),
+        cubicFeetRounded: num(r['Cubic Feet (Rounded)']),
+        cubicFeetRaw: num(r['Cubic Feet']),
+        suggestedBol: (r['BOL'] || '').trim(),
+      }
+    })
+}

@@ -36,6 +36,10 @@ export function detectSource(headers) {
   // BOL is the join key from an Orderful 856 back to its originating PO.
   if (has('PO DC Identifier', 'Maximum of BOL')) return 'ediFulfillments'
 
+  // EDIPackagesVolume — the routing feed (per PO-DC cartons/weight/volume).
+  // Keyed on its two signature columns; "PO Number - DC" is unique to it.
+  if (has('PO Number - DC', 'Cubic Feet (Rounded)')) return 'ediPackagesVolume'
+
   return null // unrecognized — the UI will report this back
 }
 
@@ -45,6 +49,7 @@ export const SOURCE_LABELS = {
   poReceiving: 'Warehouse PO Receiving Pipeline',
   ocPipeline: 'Warehouse OC Pipeline',
   ediFulfillments: 'EDI 856 ASN / BOL search',
+  ediPackagesVolume: 'EDI Packages Volume (routing feed)',
   // The "Waiting to Ship" search — the ONLY source of IF-Packed-Status
   // (Approved to Ship / FOB / Waiting On Payment / Pending Invoice), which the
   // Launch Bay + Ship Departures depend on. Formerly treated as legacy; promoted
@@ -79,6 +84,8 @@ export const SOURCE_LINKS = {
   poReceiving: NS + '3945',
   ocPipeline: NS + '3946',
   ediFulfillments: NS + '3936',
+  // EDI Packages Volume — the routing feed (Nima, 2026-07-22).
+  ediPackagesVolume: NS + '3947',
   // "Waiting to Ship" — the packed-status feed for the Launch Bay (Nima,
   // 2026-07-17). NOTE: its PO#, Invoice-for-IF and IF-Packed-Status columns are
   // MANUALLY maintained in NetSuite, so this data is only as good as the last

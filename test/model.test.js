@@ -21,6 +21,9 @@ import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
 import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
+import { fromEdiPackagesVolume } from '../src/ingest/savedSearches.js'
+import { consolidateRouting } from '../src/model/routing.js'
+import { partnerForDc, dcLabel } from '../src/model/dc.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -634,4 +637,72 @@ test('computeRoute flags an item that cannot make its cutoff', () => {
   assert.ok(route[0].slackMin < 0)
   assert.equal(summary.atRisk, 1)
   assert.ok(summary.maxLatenessMin >= 15)
+})
+
+// ── EDI routing + BOL rollup (Nima, 2026-07-22) ────────────────────────────
+const EDI_PKG_CSV =
+  'PO Number - DC,Total Weight (lbs),Carton Count,Total Units,Cubic Feet (Rounded),Cubic Feet,BOL\n' +
+  '7527064-CG,26,1,15,3,2.7,7527064DCCG\n' +
+  '7776929-CG,15,1,5,2,1.4,7776929DCCG\n' +
+  'Total,41.0,2,20,5.0,4.1,\n'
+
+test('detectSource recognizes the EDI Packages Volume feed', () => {
+  const rows = parseCsv(EDI_PKG_CSV)
+  assert.equal(detectSource(Object.keys(rows[0])), 'ediPackagesVolume')
+})
+
+test('fromEdiPackagesVolume parses PO-DC and drops the Total row', () => {
+  const rows = fromEdiPackagesVolume(parseCsv(EDI_PKG_CSV))
+  assert.equal(rows.length, 2) // Total row skipped
+  assert.deepEqual(
+    { po: rows[0].poNumber, dc: rows[0].dc, w: rows[0].weight, raw: rows[0].cubicFeetRaw },
+    { po: '7527064', dc: 'CG', w: 26, raw: 2.7 },
+  )
+})
+
+test('dc helpers classify partner and label by code', () => {
+  assert.equal(partnerForDc('CG'), "Bloomingdale's")
+  assert.equal(partnerForDc('584'), 'Nordstrom')
+  assert.equal(dcLabel('CG'), 'China Grove DC')
+  assert.equal(dcLabel('584'), 'DC 584')
+})
+
+test('consolidateRouting rolls up multiple POs into one DC shipment', () => {
+  const rows = fromEdiPackagesVolume(parseCsv(EDI_PKG_CSV))
+  const [cg] = consolidateRouting(rows)
+  assert.equal(cg.partner, "Bloomingdale's")
+  assert.equal(cg.dc, 'CG')
+  assert.deepEqual(cg.memberPos, ['7527064', '7776929']) // both POs consolidated
+  assert.equal(cg.poCount, 2)
+  assert.equal(cg.cartons, 2)
+  assert.equal(cg.units, 20)
+  assert.equal(cg.weightLb, 41) // 26 + 15, whole pounds
+  assert.equal(cg.cubicFeet, 5) // ceil(2.7 + 1.4) = ceil(4.1) = 5
+  assert.equal(cg.showUnits, false) // Bloomingdale's portal doesn't need units
+})
+
+test('consolidateRouting always rounds cubic feet UP and never to a decimal', () => {
+  const rows = [
+    { poNumber: 'A', dc: 'SC', weight: 10.2, cartons: 1, units: 3, cubicFeetRaw: 1.1, cubicFeetRounded: 2 },
+    { poNumber: 'B', dc: 'SC', weight: 5, cartons: 1, units: 2, cubicFeetRaw: 2.05, cubicFeetRounded: 3 },
+  ]
+  const [sc] = consolidateRouting(rows)
+  assert.equal(sc.cubicFeet, 4) // ceil(1.1 + 2.05 = 3.15) = 4
+  assert.equal(sc.weightLb, 16) // ceil(15.2) = 16
+  assert.equal(Number.isInteger(sc.cubicFeet), true)
+})
+
+test('consolidateRouting shows units for Nordstrom and splits by partner', () => {
+  const rows = [
+    { poNumber: 'A', dc: '584', weight: 8, cartons: 2, units: 12, cubicFeetRaw: 3, cubicFeetRounded: 3 },
+    { poNumber: 'B', dc: 'CG', weight: 4, cartons: 1, units: 4, cubicFeetRaw: 1, cubicFeetRounded: 1 },
+  ]
+  const groups = consolidateRouting(rows)
+  const nord = groups.find((g) => g.partner === 'Nordstrom')
+  const bloom = groups.find((g) => g.partner === "Bloomingdale's")
+  assert.equal(nord.showUnits, true)
+  assert.equal(nord.units, 12)
+  assert.equal(bloom.showUnits, false)
+  // sorted Bloomingdale's before Nordstrom
+  assert.deepEqual(groups.map((g) => g.partner), ["Bloomingdale's", 'Nordstrom'])
 })

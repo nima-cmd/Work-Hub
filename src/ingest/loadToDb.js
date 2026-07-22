@@ -342,6 +342,114 @@ export async function loadEdiFulfillments(rows, db = pool) {
   return n
 }
 
+// ── EDI routing feed (EDIPackagesVolume) ─────────────────────────────────────
+// Upsert per-PO-DC package rows. Natural key po_dc → re-import updates in place.
+export async function loadEdiPackages(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    if (!r.poDc) continue
+    await db.query(
+      `INSERT INTO edi_packages
+         (po_dc, po_number, dc, weight_lb, cartons, units, cubic_feet_rounded, cubic_feet_raw, suggested_bol, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       ON CONFLICT (po_dc) DO UPDATE SET
+         po_number          = EXCLUDED.po_number,
+         dc                 = EXCLUDED.dc,
+         weight_lb          = EXCLUDED.weight_lb,
+         cartons            = EXCLUDED.cartons,
+         units              = EXCLUDED.units,
+         cubic_feet_rounded = EXCLUDED.cubic_feet_rounded,
+         cubic_feet_raw     = EXCLUDED.cubic_feet_raw,
+         suggested_bol      = EXCLUDED.suggested_bol,
+         updated_at         = now()`,
+      [
+        r.poDc, r.poNumber || null, r.dc || null, r.weight ?? null, r.cartons ?? null,
+        r.units ?? null, r.cubicFeetRounded ?? null, r.cubicFeetRaw ?? null, r.suggestedBol || null,
+      ],
+    )
+    n++
+  }
+  return n
+}
+
+export async function fetchEdiPackages(db = pool) {
+  const { rows } = await db.query(
+    `SELECT po_dc AS "poDc", po_number AS "poNumber", dc,
+            weight_lb AS weight, cartons, units,
+            cubic_feet_rounded AS "cubicFeetRounded", cubic_feet_raw AS "cubicFeetRaw",
+            suggested_bol AS "suggestedBol"
+     FROM edi_packages
+     ORDER BY po_number, dc`,
+  )
+  return rows
+}
+
+// ── Routing shipments + BOL minting ──────────────────────────────────────────
+// The dc_po_key makes BOL assignment idempotent: re-assigning the SAME
+// (partner, DC, PO-set) returns the existing shipment (and its BOL) rather than
+// minting a second number for the same physical shipment. A different PO-set is
+// a genuinely different shipment and gets its own BOL.
+function dcPoKey(partner, dc, memberPos) {
+  return `${partner}|${dc}|${[...(memberPos || [])].map(String).sort().join(',')}`
+}
+
+// Mint a guaranteed-unique BOL number and persist the shipment. The sequence
+// guarantees the number is never reused, even if this shipment is later voided.
+export async function assignBol(shipment, db = pool) {
+  const { partner, dc, memberPos, cartons, units, weightLb, cubicFeet } = shipment
+  const key = dcPoKey(partner, dc, memberPos)
+
+  const existing = await db.query('SELECT * FROM routing_shipment WHERE dc_po_key = $1', [key])
+  if (existing.rows.length) {
+    // Refresh the rolled-up numbers (a re-export may have changed them) but keep
+    // the already-minted BOL number and any phase-2/3 references.
+    const { rows } = await db.query(
+      `UPDATE routing_shipment
+          SET cartons = $2, units = $3, weight_lb = $4, cubic_feet = $5, updated_at = now()
+        WHERE dc_po_key = $1
+        RETURNING *`,
+      [key, cartons ?? null, units ?? null, weightLb ?? null, cubicFeet ?? null],
+    )
+    return rows[0]
+  }
+
+  const seq = await db.query("SELECT 'NB' || nextval('bol_number_seq') AS bol")
+  const bolNumber = seq.rows[0].bol
+  await db.query(
+    'INSERT INTO bol_registry (bol_number, partner, dc, member_pos) VALUES ($1,$2,$3,$4)',
+    [bolNumber, partner, dc, memberPos || []],
+  )
+  const { rows } = await db.query(
+    `INSERT INTO routing_shipment
+       (dc_po_key, partner, dc, member_pos, cartons, units, weight_lb, cubic_feet, bol_number, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'bol_assigned')
+     RETURNING *`,
+    [key, partner, dc, memberPos || [], cartons ?? null, units ?? null, weightLb ?? null, cubicFeet ?? null, bolNumber],
+  )
+  return rows[0]
+}
+
+export async function fetchRoutingShipments(db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, dc_po_key AS "dcPoKey", partner, dc, member_pos AS "memberPos",
+            cartons, units, weight_lb AS "weightLb", cubic_feet AS "cubicFeet",
+            bol_number AS "bolNumber", status,
+            project_number AS "projectNumber", shipment_number AS "shipmentNumber",
+            auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
+            bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM routing_shipment
+     ORDER BY created_at DESC`,
+  )
+  return rows
+}
+
+// Void a shipment — deletes the routing_shipment row but LEAVES its BOL number
+// in bol_registry so the number is never reissued (the never-reuse guarantee).
+export async function voidRoutingShipment(id, db = pool) {
+  const { rowCount } = await db.query('DELETE FROM routing_shipment WHERE id = $1', [id])
+  return rowCount
+}
+
 export async function fetchEdiFulfillments(db = pool) {
   const { rows } = await db.query(
     `SELECT po_dc_identifier AS "poDcIdentifier", po_number AS "poNumber", dc, bol,

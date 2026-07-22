@@ -594,6 +594,79 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_doc ON notes(doc_type, doc_number);
 
+-- ── EDI routing + BOL (Nima, 2026-07-22) ─────────────────────────────────────
+-- Replaces the NetSuite routing_helper.js Suitelet + Google-Sheet BOL step.
+--
+-- edi_packages: the routing feed (EDIPackagesVolume, searchid=3947), one row
+-- per PO-DC — exactly the grain the export ships. Natural key po_dc so a
+-- re-import upserts. This is the raw material the Routing view consolidates by
+-- DC. Rows for a PO that's fully shipped simply stop appearing on re-export;
+-- we keep the last-seen values (no prune) since a routed PO's numbers don't
+-- change and the shipment rows below are the durable record.
+CREATE TABLE IF NOT EXISTS edi_packages (
+  po_dc                TEXT PRIMARY KEY,   -- "7527064-CG"
+  po_number            TEXT,
+  dc                   TEXT,               -- DC code: "CG", "584"
+  weight_lb            NUMERIC,            -- total weight for this PO-DC
+  cartons              INTEGER,
+  units                INTEGER,
+  cubic_feet_rounded   NUMERIC,            -- feed's own per-row round-up
+  cubic_feet_raw       NUMERIC,            -- unrounded; the rollup sums then ceils
+  suggested_bol        TEXT,               -- feed's suggestion, reference-only
+  updated_at           TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_edi_packages_po ON edi_packages(po_number);
+CREATE INDEX IF NOT EXISTS idx_edi_packages_dc ON edi_packages(dc);
+
+-- BOL number sequence — the "never reuse a BOL" guarantee. A Postgres sequence
+-- never hands out the same value twice, even across rollbacks or deletes, so a
+-- voided shipment can never recycle its number. Base is arbitrary/readability
+-- only (Nima: the 1731230… base isn't meaningful) — uniqueness is the point.
+CREATE SEQUENCE IF NOT EXISTS bol_number_seq START WITH 1731231;
+
+-- bol_registry: append-only ledger of every BOL number ever minted, and to
+-- what. Rows are NEVER deleted — voiding a shipment leaves its number claimed
+-- here forever. The UNIQUE PK is the belt to the sequence's suspenders.
+CREATE TABLE IF NOT EXISTS bol_registry (
+  bol_number   TEXT PRIMARY KEY,
+  partner      TEXT,
+  dc           TEXT,
+  member_pos   TEXT[],
+  minted_at    TIMESTAMPTZ DEFAULT now()
+);
+
+-- routing_shipment: one shipment = (partner, DC) rolling up 1..many POs, with
+-- ONE BOL. The rollup is computed live in the Routing view; a row is persisted
+-- when Nima assigns a BOL. dc_po_key (partner|dc|sorted-POs) is the idempotency
+-- key: re-assigning the same DC+PO set returns the same shipment/BOL instead of
+-- burning a new number; adding/removing a PO is a genuinely different shipment.
+-- Reference + auth fields (phase 2) and BOL-doc fields (phase 3) are nullable.
+CREATE TABLE IF NOT EXISTS routing_shipment (
+  id               SERIAL PRIMARY KEY,
+  dc_po_key        TEXT UNIQUE NOT NULL,
+  partner          TEXT NOT NULL,
+  dc               TEXT NOT NULL,
+  member_pos       TEXT[] NOT NULL,
+  cartons          INTEGER,
+  units            INTEGER,
+  weight_lb        INTEGER,     -- rounded UP whole pounds (portal entry)
+  cubic_feet       INTEGER,     -- ceil(sum raw cubic feet) (portal entry)
+  bol_number       TEXT UNIQUE, -- assigned from bol_number_seq; NULL until assigned
+  status           TEXT DEFAULT 'bol_assigned',
+  -- phase 2: routing references captured off the portal/routing email
+  project_number   TEXT,        -- Bloomingdale's returns this on portal entry
+  shipment_number  TEXT,        -- Bloomingdale's returns this too
+  auth_number      TEXT,        -- from the routing email (may be shared across shipments)
+  carrier          TEXT,
+  scac             TEXT,
+  ship_date        DATE,
+  -- phase 3: generated BOL document
+  bol_generated_at TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ DEFAULT now(),
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_routing_shipment_partner ON routing_shipment(partner);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);
