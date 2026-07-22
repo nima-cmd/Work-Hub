@@ -687,6 +687,19 @@ CREATE TABLE IF NOT EXISTS routing_auth (
   updated_at   TIMESTAMPTZ DEFAULT now()
 );
 
+-- routing_hold (Nima, 2026-07-22): a PO-DC deliberately pulled OUT of routing —
+-- packed but can't ship yet, so it must NOT be consolidated onto another PO's
+-- BOL. A held (po, dc) is excluded from consolidation and shown in a "held"
+-- section until released. Holding a PO already on a BOL restructures that
+-- shipment (the PO is dropped from it; the shipment is recomputed or voided).
+CREATE TABLE IF NOT EXISTS routing_hold (
+  po          TEXT NOT NULL,
+  dc          TEXT NOT NULL,
+  note        TEXT,
+  created_at  TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (po, dc)
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);

@@ -469,6 +469,52 @@ export async function voidRoutingShipment(id, db = pool) {
   return rowCount
 }
 
+// ── Manual PO holds ──────────────────────────────────────────────────────────
+export async function fetchRoutingHolds(db = pool) {
+  const { rows } = await db.query('SELECT po, dc, note, created_at AS "createdAt" FROM routing_hold')
+  return rows
+}
+export async function addRoutingHold({ po, dc, note }, db = pool) {
+  await db.query(
+    `INSERT INTO routing_hold (po, dc, note) VALUES ($1,$2,$3)
+     ON CONFLICT (po, dc) DO UPDATE SET note = COALESCE(EXCLUDED.note, routing_hold.note)`,
+    [String(po), String(dc), note || null],
+  )
+}
+export async function removeRoutingHold(po, dc, db = pool) {
+  const { rowCount } = await db.query('DELETE FROM routing_hold WHERE po = $1 AND dc = $2', [String(po), String(dc)])
+  return rowCount
+}
+
+// Restructure a shipment after a member PO is held: drop the PO, recompute the
+// dc_po_key, and rewrite the rolled-up totals (keeping the same BOL). If nothing
+// remains, the caller voids it. `newTotals` = { cartons, units, weightLb,
+// cubicFeet } recomputed from the remaining PO-DCs.
+export async function updateShipmentComposition(id, { memberPos, cartons, units, weightLb, cubicFeet }, db = pool) {
+  const partnerRow = await db.query('SELECT partner, dc FROM routing_shipment WHERE id = $1', [id])
+  if (!partnerRow.rows.length) return null
+  const { partner, dc } = partnerRow.rows[0]
+  const newKey = dcPoKey(partner, dc, memberPos)
+  const { rows } = await db.query(
+    `UPDATE routing_shipment
+        SET dc_po_key = $2, member_pos = $3, cartons = $4, units = $5, weight_lb = $6, cubic_feet = $7, updated_at = now()
+      WHERE id = $1 RETURNING *`,
+    [id, newKey, memberPos, cartons ?? null, units ?? null, weightLb ?? null, cubicFeet ?? null],
+  )
+  return rows[0]
+}
+
+// Active shipments for a DC whose member_pos still includes `po` (used to find
+// what a hold has to restructure).
+export async function fetchShipmentsForPoDc(po, dc, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, partner, dc, member_pos AS "memberPos", bol_number AS "bolNumber"
+     FROM routing_shipment WHERE dc = $1 AND $2 = ANY(member_pos)`,
+    [String(dc), String(po)],
+  )
+  return rows
+}
+
 // Phase 2 — per-shipment routing references (portal Project#/Shipment#, carrier,
 // SCAC, ship date, status). Only the fields present in `fields` are written, so
 // a partial edit never clobbers the others. `status` moves the shipment along

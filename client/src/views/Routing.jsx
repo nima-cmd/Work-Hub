@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   fetchRouting, assignRoutingBol, voidRoutingShipment,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
-  bolPdfUrl, fileBolToDrive,
+  bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 
@@ -49,9 +49,11 @@ export default function Routing() {
 
   // Re-consolidate client-side over the selected POs (same pure model the
   // server uses), then re-attach any already-assigned shipment by its key.
+  // Held PO-DCs are excluded so they can't be bundled into a DC's BOL.
   const groups = useMemo(() => {
     if (!data) return []
-    const rows = (data.packages || []).filter((p) => isSelected(p.poNumber))
+    const held = new Set(data.heldKeys || [])
+    const rows = (data.packages || []).filter((p) => isSelected(p.poNumber) && !held.has(`${p.poNumber}|${p.dc}`))
     const byKey = new Map((data.shipments || []).map((s) => [s.dcPoKey, s]))
     return consolidateRouting(rows).map((g) => {
       const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
@@ -82,6 +84,12 @@ export default function Routing() {
     run('void' + s.id, () => voidRoutingShipment(s.id))
   }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
+  function onHold(po, dc) {
+    const note = window.prompt(`Hold PO ${po} · DC ${dc} out of routing (packed, can’t ship yet). Reason (optional):`, '')
+    if (note === null) return // cancelled
+    run('hold' + po + dc, () => holdRoutingPo({ po, dc, note: note || null }))
+  }
+  const onRelease = (po, dc) => run('rel' + po + dc, () => releaseRoutingPo(po, dc))
 
   if (err && !data) return <div className="banner error">⚠ {err}</div>
   if (!data) return <div className="banner">Loading routing feed…</div>
@@ -122,6 +130,8 @@ export default function Routing() {
 
           <GapsPanel gaps={data.gaps} />
 
+          <HeldPanel held={data.held} busy={busy} onRelease={onRelease} />
+
           <AuthPanel auths={auths} busy={busy}
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
@@ -132,7 +142,7 @@ export default function Routing() {
               <div className="rt-cards">
                 {list.map((g) => (
                   <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
-                    onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} />
+                    onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold} />
                 ))}
               </div>
             </section>
@@ -185,6 +195,29 @@ function GapsPanel({ gaps }) {
   )
 }
 
+// Held PO-DCs — pulled out of routing (packed, can't ship). Kept off every DC
+// group so they're never bundled onto another PO's BOL; released back here.
+function HeldPanel({ held, busy, onRelease }) {
+  const items = held || []
+  if (!items.length) return null
+  return (
+    <div className="rt-heldPanel">
+      <div className="rt-heldHead">⏸ Held — packed, not shipping <span className="muted">· kept off every BOL until released</span></div>
+      <div className="rt-heldList">
+        {items.map((h) => (
+          <div key={h.label} className="rt-heldChip">
+            <b>{h.label}</b>
+            {h.cartons != null && <span className="muted"> · {h.cartons} ctn</span>}
+            {h.note && <span className="rt-heldNote">“{h.note}”</span>}
+            {!h.inFeed && <span className="muted"> · not in feed</span>}
+            <button className="rt-return" disabled={busy === 'rel' + h.po + h.dc} onClick={() => onRelease(h.po, h.dc)}>↩ return to routing</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function AuthPanel({ auths, busy, onSave, onDelete }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
@@ -232,10 +265,11 @@ function AuthPanel({ auths, busy, onSave, onDelete }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, detached }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
+  const canHold = onHold && !detached
 
   return (
     <div className={'rt-card' + (s ? ' has-bol' : '')}>
@@ -244,8 +278,17 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }
         <span className="rt-dcName">{g.dcLabel}</span>
         {st && <span className={'rt-status ' + st.cls}>{st.label}</span>}
       </div>
-      <div className="muted rt-memberPos">
-        {g.poCount} PO{g.poCount === 1 ? '' : 's'}: {(g.memberPos || []).join(', ')}
+      <div className="rt-memberPos">
+        <span className="muted">{g.poCount} PO{g.poCount === 1 ? '' : 's'}:</span>
+        {(g.memberPos || []).map((po) => (
+          <span key={po} className="rt-poTag">
+            {po}
+            {canHold && (
+              <button className="rt-holdBtn" title="Hold this PO out of routing (packed, can’t ship — keeps it off this BOL)"
+                disabled={busy === 'hold' + po + g.dc} onClick={() => onHold(po, g.dc)}>⊘</button>
+            )}
+          </span>
+        ))}
       </div>
 
       <div className="rt-portal">

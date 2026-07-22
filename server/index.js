@@ -15,7 +15,7 @@ import {
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
-  streamShipmentBol, fileShipmentToDrive,
+  streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -344,6 +344,25 @@ app.post('/api/routing/auth', async (req, res) => {
 app.delete('/api/routing/auth/:authNumber', async (req, res) => {
   try {
     res.json(await removeRoutingAuth(req.params.authNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Manual PO holds — pull a PO-DC out of routing (packed, can't ship yet)
+app.post('/api/routing/hold', async (req, res) => {
+  try {
+    res.json(await holdRoutingPo(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/routing/hold/:po/:dc', async (req, res) => {
+  try {
+    res.json(await releaseRoutingPo({ po: req.params.po, dc: req.params.dc }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

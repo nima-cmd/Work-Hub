@@ -1846,3 +1846,17 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-gapChip { font-size: 12px; font-variant-numeric: tabular-nums; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); }
 .rt-gapChip.miss { color: var(--hi); border-color: rgba(248,81,73,0.5); background: rgba(248,81,73,0.08); }
 .rt-gapChip.stale { color: var(--mid); border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.08); }
+
+/* ── Routing manual PO hold (Nima, 2026-07-22) ───────────────────────────── */
+.rt-memberPos { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.rt-poTag { display: inline-flex; align-items: center; gap: 2px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 3px 1px 7px; }
+.rt-holdBtn { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 3px; line-height: 1; }
+.rt-holdBtn:hover { color: var(--hi); }
+.rt-heldPanel { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--mid); border-radius: 10px; padding: 10px 14px; margin-bottom: 18px; }
+.rt-heldHead { font-size: 13px; font-weight: 600; color: var(--mid); margin-bottom: 8px; }
+.rt-heldList { display: flex; flex-direction: column; gap: 6px; }
+.rt-heldChip { font-size: 12px; font-variant-numeric: tabular-nums; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 5px 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; }
+.rt-heldNote { font-style: italic; color: var(--muted); }
+.rt-return { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--holo); border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+.rt-return:hover { border-color: var(--holo); }
+.rt-return:disabled { opacity: 0.5; cursor: default; }

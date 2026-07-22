@@ -30,6 +30,7 @@ import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
   fetchRoutingShipmentById,
+  fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
 } from '../src/ingest/loadToDb.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
@@ -861,10 +862,21 @@ export async function unresolveEdiPo(businessNumber) {
 // in the feed (already routed/exported away) surface separately so a minted BOL
 // is never lost from view.
 export async function getRouting() {
-  const [packages, shipments, auths] = await Promise.all([
-    fetchEdiPackages(), fetchRoutingShipments(), fetchRoutingAuths(),
+  const [packages, shipments, auths, holds] = await Promise.all([
+    fetchEdiPackages(), fetchRoutingShipments(), fetchRoutingAuths(), fetchRoutingHolds(),
   ])
-  const groups = consolidateRouting(packages)
+  // Held PO-DCs are pulled OUT of consolidation so they can never be bundled
+  // onto another PO's BOL; they surface in their own "held" list instead.
+  const heldSet = new Set(holds.map((h) => `${h.po}|${h.dc}`))
+  const active = packages.filter((p) => !heldSet.has(`${p.poNumber}|${p.dc}`))
+  const groups = consolidateRouting(active)
+  const held = holds.map((h) => {
+    const row = packages.find((p) => String(p.poNumber) === String(h.po) && String(p.dc) === String(h.dc))
+    return {
+      po: h.po, dc: h.dc, note: h.note, label: `PO ${h.po} · DC ${h.dc}`,
+      cartons: row?.cartons ?? null, weight: row?.weight ?? null, units: row?.units ?? null, inFeed: !!row,
+    }
+  })
 
   const byKey = new Map()
   for (const s of shipments) byKey.set(s.dcPoKey, s)
@@ -877,11 +889,48 @@ export async function getRouting() {
   const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
   const detached = shipments.filter((s) => !liveKeys.has(s.dcPoKey))
 
-  const gaps = await computeRoutingGaps({ packages, shipments })
+  const gaps = await computeRoutingGaps({ packages: active, shipments })
 
   // packages returned raw too, so the view can re-consolidate over a PO subset
   // (the "consolidate by DC across selected POs" interaction) client-side.
-  return { packages, consolidated, shipments, detached, auths, gaps, packageCount: packages.length }
+  // heldKeys lets the client exclude held PO-DCs from that client-side rollup.
+  return {
+    packages, consolidated, shipments, detached, auths, gaps,
+    held, heldKeys: [...heldSet], packageCount: packages.length,
+  }
+}
+
+// Hold a PO-DC out of routing. If it's already on a BOL, restructure that
+// shipment: drop the PO and recompute its totals from the remaining PO-DCs, or
+// void it if nothing's left (the BOL number stays retired, never reused).
+export async function holdRoutingPo({ po, dc, note }) {
+  if (!po || !dc) throw new Error('po and dc are required')
+  await addRoutingHold({ po: String(po), dc: String(dc), note })
+  const affected = await fetchShipmentsForPoDc(po, dc)
+  if (affected.length) {
+    const packages = await fetchEdiPackages()
+    for (const s of affected) {
+      const remaining = (s.memberPos || []).filter((p) => String(p) !== String(po))
+      if (!remaining.length) {
+        await voidRoutingShipment(s.id) // nothing left to ship on this BOL
+        continue
+      }
+      // Recompute the rolled-up totals over the remaining PO-DCs for this DC.
+      const rows = packages.filter((p) => String(p.dc) === String(s.dc) && remaining.includes(String(p.poNumber)))
+      const [g] = consolidateRouting(rows)
+      await updateShipmentComposition(s.id, {
+        memberPos: remaining,
+        cartons: g?.cartons ?? null, units: g?.units ?? null,
+        weightLb: g?.weightLb ?? null, cubicFeet: g?.cubicFeet ?? null,
+      })
+    }
+  }
+  return getRouting()
+}
+
+export async function releaseRoutingPo({ po, dc }) {
+  await removeRoutingHold(po, dc)
+  return getRouting()
 }
 
 // The Scan Bay ↔ Routing bridge (Nima, 2026-07-22): a DC carton we've scanned

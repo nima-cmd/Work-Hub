@@ -638,3 +638,19 @@ export async function fileBolToDrive(shipmentId) {
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
 }
+
+// Manual PO holds — pull a PO-DC out of routing
+export async function holdRoutingPo({ po, dc, note }) {
+  const res = await fetch('/api/routing/hold', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ po, dc, note }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function releaseRoutingPo(po, dc) {
+  const res = await fetch(`/api/routing/hold/${encodeURIComponent(po)}/${encodeURIComponent(dc)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
