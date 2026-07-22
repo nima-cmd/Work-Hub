@@ -327,6 +327,7 @@ export function LabelButtons({ info }) {
 export function GroupLabelButtons({ group }) {
   const [sizes, setSizes] = useState({})
   const [busy, setBusy] = useState(null)
+  const [err, setErr] = useState(null)
   useEffect(() => {
     if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
     _labelSizes.then(setSizes)
@@ -342,8 +343,8 @@ export function GroupLabelButtons({ group }) {
 
   async function printAll(size) {
     if (tags.length > 1 && !window.confirm(`Print ${tags.length} cargo tags for PO ${group.poNumber}?`)) return
-    setBusy(size)
-    try { for (const info of tags) await printCargoTag(info, size) } finally { setBusy(null) }
+    setBusy(size); setErr(null)
+    try { for (const info of tags) await printCargoTag(info, size) } catch (e) { setErr(e.message) } finally { setBusy(null) }
   }
   return (
     <span className="tagBtns">
@@ -354,6 +355,7 @@ export function GroupLabelButtons({ group }) {
           🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${tags.length} ${noun} (${SIZE_LABEL[s]})`}
         </button>
       ))}
+      {err && <span className="tagErr">⚠ {err}</span>}
     </span>
   )
 }
@@ -637,6 +639,7 @@ export function DcBreakdown({ group }) {
 export function DcTagButtons({ group }) {
   const [sizes, setSizes] = useState({})
   const [busy, setBusy] = useState(null)
+  const [err, setErr] = useState(null)
   useEffect(() => {
     if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
     _labelSizes.then(setSizes)
@@ -648,12 +651,12 @@ export function DcTagButtons({ group }) {
 
   async function printAll(size) {
     if (n > 1 && !window.confirm(`Print ${n} DC tags for PO ${group.poNumber}?`)) return
-    setBusy(size)
+    setBusy(size); setErr(null)
     try {
       for (const r of breakdown) {
         await printCargoTag({ kind: 'dc', poNumber: group.poNumber, dc: r.abbrev, storeCount: r.stores }, size)
       }
-    } finally { setBusy(null) }
+    } catch (e) { setErr(e.message) } finally { setBusy(null) }
   }
   return (
     <span className="tagBtns">
@@ -664,6 +667,7 @@ export function DcTagButtons({ group }) {
           🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${n} DC tag${n === 1 ? '' : 's'} (${SIZE_LABEL[s]})`}
         </button>
       ))}
+      {err && <span className="tagErr">⚠ {err}</span>}
     </span>
   )
 }
