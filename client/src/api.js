@@ -493,11 +493,11 @@ export async function fetchCalendarEvents() {
 }
 
 // ── Custody scans (QR labels) — direction 'OUT' | 'IN' ──────────────────────
-export async function recordCustodyScan({ docNumber, direction, note, confirm }) {
+export async function recordCustodyScan({ docNumber, direction, note, allowRescan }) {
   const res = await fetch('/api/custody/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ docNumber, direction, note, confirm }),
+    body: JSON.stringify({ docNumber, direction, note, allowRescan }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()

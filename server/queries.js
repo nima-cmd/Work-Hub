@@ -126,7 +126,11 @@ const num = (v) => (v == null ? null : Number(v))
 // the source of truth for the physical handoff, so an event is recorded even
 // when the IF isn't (yet) in our data — `found:false` warns the scanner, and
 // the event backfills its meaning once the next CSV import brings the IF in.
-export async function recordCustodyScan({ docNumber, direction, note, confirm = false }) {
+// allowRescan (Nima, 2026-07-22): a repeat scan of the same direction is
+// SILENTLY IGNORED by default — no blocking prompt, so scanning stays fast and
+// re-reading a tag doesn't create noise. When Nima flips "Re-scan mode" on
+// (a genuine re-handoff), allowRescan=true logs the repeat with its note.
+export async function recordCustodyScan({ docNumber, direction, note, allowRescan = false }) {
   const dir = String(direction || '').toUpperCase()
   if (dir !== 'OUT' && dir !== 'IN') throw new Error(`direction must be OUT or IN, got: ${direction}`)
   const eventType = dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN'
@@ -156,8 +160,10 @@ export async function recordCustodyScan({ docNumber, direction, note, confirm = 
     const { rows: prior } = await pool.query(
       `SELECT count(*)::int AS n, MAX(occurred_at) AS last
        FROM order_events WHERE doc_type='DC' AND doc_number=$1 AND event_type=$2`, [doc, eventType])
-    if (prior[0].n > 0 && !confirm) {
-      return { needsConfirm: true, isDc: true, direction: dir, docNumber: doc,
+    if (prior[0].n > 0 && !allowRescan) {
+      // Already scanned this direction — ignore it (don't log), tell the client
+      // so it can flash a quick non-blocking "already scanned" note.
+      return { ignored: true, alreadyScanned: true, isDc: true, direction: dir, docNumber: doc,
         poNumber: po, dc: dcTok.dc, customer: sample?.customer || null, location: sample?.location || null,
         storeCount: cnt[0].n, priorSameDir: prior[0].n, lastSameDirAt: prior[0].last, found: !!sample }
     }
@@ -190,9 +196,10 @@ export async function recordCustodyScan({ docNumber, direction, note, confirm = 
     [doc, eventType],
   )
   const priorSameDir = prior[0].n
-  if (priorSameDir > 0 && !confirm) {
+  if (priorSameDir > 0 && !allowRescan) {
     return {
-      needsConfirm: true,
+      ignored: true,
+      alreadyScanned: true,
       direction: dir,
       docNumber: doc,
       priorSameDir,

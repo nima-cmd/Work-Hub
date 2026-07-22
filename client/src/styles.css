@@ -1827,3 +1827,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-driveMsg.ok { color: #7ee787; }
 .rt-driveMsg.err { color: var(--mid); }
 .rt-driveMsg a { color: var(--holo); }
+
+/* ── Scan Bay re-scan mode (Nima, 2026-07-22) ────────────────────────────── */
+.rescanToggle { width: 100%; margin-bottom: 10px; background: var(--panel2); border: 1px dashed var(--line); color: var(--muted); padding: 8px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.rescanToggle:hover { color: var(--text); }
+.rescanToggle.on { color: var(--accent); border-color: var(--accent); border-style: solid; background: rgba(217,164,65,0.08); }
+.scanResult.ignored { border-left-color: var(--muted); background: rgba(139,148,158,0.08); }
+.scanResult .rescanTag { margin-left: 8px; }

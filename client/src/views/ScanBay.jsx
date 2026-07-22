@@ -19,8 +19,10 @@ export default function ScanBay() {
   const [busy, setBusy] = useState(false)
   const [manual, setManual] = useState('')
   const [todayEvents, setTodayEvents] = useState([])
-  const [pending, setPending] = useState(null) // a repeat scan awaiting confirm
-  const [confirmNote, setConfirmNote] = useState('')
+  // Re-scan mode (Nima, 2026-07-22): OFF by default — a repeat scan is silently
+  // ignored so scanning stays fast. Flip it ON for a genuine re-handoff (e.g.
+  // cargo sent back to the warehouse for a fix) to log the repeat on purpose.
+  const [rescan, setRescan] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -28,9 +30,10 @@ export default function ScanBay() {
   const lastReadRef = useRef({ code: null, at: 0 })
   const modeRef = useRef(mode)
   modeRef.current = mode
-  // Single lock the camera loop can read even from its stale closure — held
-  // while a scan is in flight OR a confirm dialog is open, so re-reads of the
-  // same tag don't stack scans behind the "log it again?" prompt.
+  const rescanRef = useRef(rescan)
+  rescanRef.current = rescan
+  // Lock the camera loop reads (even from its stale closure) while a scan is in
+  // flight, so a tag lingering in frame doesn't fire twice.
   const lockRef = useRef(false)
 
   function refreshEvents() {
@@ -51,53 +54,16 @@ export default function ScanBay() {
     lockRef.current = true
     setBusy(true)
     try {
-      const r = await recordCustodyScan({ docNumber, direction: modeRef.current })
-      setBusy(false)
-      if (r.needsConfirm) {
-        // already scanned this direction — ask before adding another log
-        setPending({ ...r, via: source })
-        setConfirmNote('')
-        setResult(null)
-        return // keep the lock; the confirm panel owns the flow now
-      }
+      const r = await recordCustodyScan({ docNumber, direction: modeRef.current, allowRescan: rescanRef.current })
       setResult({ ...r, error: null, via: source })
-      refreshEvents()
-      lockRef.current = false
+      // A silently-ignored repeat didn't change the ledger, so skip the refetch.
+      if (!r.ignored) refreshEvents()
     } catch (e) {
-      setBusy(false)
       setResult({ error: e.message, docNumber })
-      lockRef.current = false
-    }
-  }
-
-  // User said "yes, log it anyway" on a repeat scan — resend with confirm + the
-  // (optional) note explaining why (e.g. a re-handoff back to the warehouse).
-  async function confirmScan() {
-    if (!pending) return
-    setBusy(true)
-    try {
-      const r = await recordCustodyScan({
-        docNumber: pending.docNumber,
-        direction: pending.direction,
-        note: confirmNote.trim() || null,
-        confirm: true,
-      })
-      setResult({ ...r, error: null, via: pending.via })
-      refreshEvents()
-    } catch (e) {
-      setResult({ error: e.message, docNumber: pending.docNumber })
     } finally {
       setBusy(false)
-      setPending(null)
-      setConfirmNote('')
       lockRef.current = false
     }
-  }
-
-  function cancelConfirm() {
-    setPending(null)
-    setConfirmNote('')
-    lockRef.current = false
   }
 
   // ── camera + decode loop ────────────────────────────────────────────────────
@@ -178,6 +144,14 @@ export default function ScanBay() {
           </button>
         </div>
 
+        <button
+          className={'rescanToggle' + (rescan ? ' on' : '')}
+          onClick={() => setRescan((v) => !v)}
+          title="When off, scanning something already scanned this direction is ignored. Turn on to log a deliberate re-handoff."
+        >
+          {rescan ? '🔓 Re-scan mode ON — repeats will be logged' : '🔒 Re-scan mode off — repeats ignored'}
+        </button>
+
         <div className={'scanViewport' + (cameraOn ? ' live' : '')}>
           <video ref={videoRef} muted playsInline />
           {!cameraOn && (
@@ -209,41 +183,28 @@ export default function ScanBay() {
           <button className="importBtn" disabled={busy || !manual.trim()}>Log {mode}</button>
         </form>
 
-        {pending && (
-          <div className="scanResult warn scanConfirm">
+        {result && result.ignored && (
+          // A repeat scan we deliberately ignored — quick, non-blocking heads-up.
+          <div className="scanResult ignored">
             <div className="scanHead">
-              ⚠ {pending.isDc ? `PO ${pending.poNumber}${pending.dc ? ` · DC ${pending.dc}` : ''}` : pending.docNumber} was already scanned {pending.direction}{' '}
-              {pending.priorSameDir === 1 ? 'once' : `${pending.priorSameDir}×`}
-              {pending.lastSameDirAt &&
-                ` · last ${new Date(pending.lastSameDirAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+              ↺ Already scanned {result.direction} · <b>{result.isDc ? `PO ${result.poNumber}${result.dc ? ` · DC ${result.dc}` : ''}` : result.docNumber}</b>
             </div>
             <div className="scanMeta">
-              Cargo should go out once and in once. Log another {pending.direction}?
-              {pending.fulfillment && ` · ${pending.fulfillment.customer || pending.fulfillment.soNumber || ''}`}
-            </div>
-            <textarea
-              className="confirmNote"
-              value={confirmNote}
-              onChange={(e) => setConfirmNote(e.target.value)}
-              placeholder="Why? (optional) — e.g. giving it back to the warehouse for a fix"
-            />
-            <div className="confirmActions">
-              <button className="importBtn" disabled={busy} onClick={confirmScan}>
-                Log {pending.direction} anyway
-              </button>
-              <button type="button" className="linkBtn" onClick={cancelConfirm}>Cancel</button>
+              Ignored (no duplicate logged){result.lastSameDirAt && ` · last ${new Date(result.lastSameDirAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}.
+              {' '}Turn on <b>Re-scan mode</b> above to log it on purpose.
             </div>
           </div>
         )}
 
-        {result && !pending && (
+        {result && !result.ignored && (
           <div className={'scanResult ' + (result.error ? 'bad' : result.found ? 'good' : 'warn')}>
             {result.error ? (
               <>⚠ {result.error}</>
             ) : (
               <>
                 <div className="scanHead">
-                  {result.direction === 'OUT' ? '⬆ OUT — with the warehouse' : '⬇ IN — back in our hands'}
+                  ✓ {result.direction === 'OUT' ? 'OUT — with the warehouse' : 'IN — back in our hands'}
+                  {result.repeat && <span className="pill warn rescanTag">re-scan logged</span>}
                   <b> · {result.isDc ? `PO ${result.poNumber}${result.dc ? ` · DC ${result.dc}` : ''}` : result.docNumber}</b>
                 </div>
                 {result.isDc ? (
