@@ -267,19 +267,25 @@ export default function ScanBay() {
 
       <div className="scanLog">
         <div className="colHead">Today’s custody log <span className="count">{custodyToday.length}</span></div>
-        {custodyToday.map((e) => (
-          <div key={e.id} className="kcard">
-            <div className="krow">
-              <span className="so">{e.docNumber}</span>
-              <span className={'pill ' + (e.eventType === 'CUSTODY_OUT' ? 'warn' : 'fresh')}>
-                {e.eventType === 'CUSTODY_OUT' ? '⬆ OUT' : '⬇ IN'}
-              </span>
+        {custodyToday.map((e) => {
+          // DC-carton events store doc_number as '<po>:<abbrev>' — show it as PO · DC.
+          const dc = e.docType === 'DC' ? e.docNumber.split(':') : null
+          return (
+            <div key={e.id} className="kcard">
+              <div className="krow">
+                <span className="so">{dc ? `PO ${dc[0]}${dc[1] ? ` · DC ${dc[1]}` : ''}` : e.docNumber}</span>
+                <span className={'pill ' + (e.eventType === 'CUSTODY_OUT' ? 'warn' : 'fresh')}>
+                  {e.eventType === 'CUSTODY_OUT' ? '⬆ OUT' : '⬇ IN'}
+                </span>
+              </div>
+              <div className="cust">
+                {e.customer ? <><ChannelTag order={e} /> <CustomerName order={e} /></> : (e.soNumber || '—')}
+              </div>
+              {e.note && <div className="scanNote">“{e.note}”</div>}
+              <div className="ifs docdate">{new Date(e.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
             </div>
-            <div className="cust">{e.customer || e.soNumber || '—'}</div>
-            {e.note && <div className="scanNote">“{e.note}”</div>}
-            <div className="ifs docdate">{new Date(e.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-          </div>
-        ))}
+          )
+        })}
         {!custodyToday.length && <div className="empty">No scans yet today — the bay is quiet.</div>}
       </div>
     </div>

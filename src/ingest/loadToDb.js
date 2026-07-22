@@ -1000,7 +1000,12 @@ export async function fetchOrderEvents({ date, docNumber, soNumber } = {}, db = 
   const { rows } = await db.query(
     `SELECT e.id, e.event_type AS "eventType", e.doc_type AS "docType", e.doc_number AS "docNumber",
             e.so_number AS "soNumber", e.note, e.source, e.occurred_at AS "occurredAt",
-            o.customer
+            -- DC-carton custody events (doc_type='DC', doc_number '<po>:<abbrev>')
+            -- carry no SO, so resolve the customer/location from the PO instead.
+            COALESCE(o.customer,
+              (SELECT customer FROM orders WHERE e.doc_type='DC' AND po_number = split_part(e.doc_number, ':', 1) LIMIT 1)
+            ) AS customer,
+            (SELECT location FROM orders WHERE e.doc_type='DC' AND po_number = split_part(e.doc_number, ':', 1) LIMIT 1) AS location
      FROM order_events e LEFT JOIN orders o ON o.so_number = e.so_number
      ${where}
      ORDER BY e.occurred_at DESC
