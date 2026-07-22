@@ -65,7 +65,10 @@ export const SOURCE_LABELS = {
 // Freshness tracking checks each independently so a stale/missing one is obvious.
 // pendingOrders is here because the Launch Bay's packed-status data comes from
 // nowhere else — if it's not re-exported, the bay silently goes stale.
-export const REQUIRED_SOURCES = ['openSalesOrders', 'fulfillmentPipeline', 'poReceiving', 'ocPipeline', 'pendingOrders']
+// ediPackagesVolume (routing feed, searchid=3947) is tracked here so its
+// saved-search link shows in the data-links/freshness panel and a stale export
+// is flagged (Nima, 2026-07-22) — the Routing view needs it current.
+export const REQUIRED_SOURCES = ['openSalesOrders', 'fulfillmentPipeline', 'poReceiving', 'ocPipeline', 'pendingOrders', 'ediPackagesVolume']
 
 // Direct links to each saved search in NetSuite, so the freshness panel and
 // Bugs' CSV-freshness task can jump straight to the export page (same pattern
