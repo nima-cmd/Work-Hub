@@ -393,6 +393,12 @@ function dcPoKey(partner, dc, memberPos) {
   return `${partner}|${dc}|${[...(memberPos || [])].map(String).sort().join(',')}`
 }
 
+// BOL number scheme: a fixed prefix + a never-reused sequence value. "NB" =
+// "Naghedi BOL" — it carries no meaning beyond marking the number as ours and
+// keeping it readable; uniqueness comes from bol_number_seq. Change here to
+// rename the prefix.
+const BOL_PREFIX = 'NB' // Naghedi BOL
+
 // Mint a guaranteed-unique BOL number and persist the shipment. The sequence
 // guarantees the number is never reused, even if this shipment is later voided.
 export async function assignBol(shipment, db = pool) {
@@ -413,7 +419,7 @@ export async function assignBol(shipment, db = pool) {
     return rows[0]
   }
 
-  const seq = await db.query("SELECT 'NB' || nextval('bol_number_seq') AS bol")
+  const seq = await db.query("SELECT $1 || nextval('bol_number_seq') AS bol", [BOL_PREFIX])
   const bolNumber = seq.rows[0].bol
   await db.query(
     'INSERT INTO bol_registry (bol_number, partner, dc, member_pos) VALUES ($1,$2,$3,$4)',
@@ -422,7 +428,7 @@ export async function assignBol(shipment, db = pool) {
   const { rows } = await db.query(
     `INSERT INTO routing_shipment
        (dc_po_key, partner, dc, member_pos, cartons, units, weight_lb, cubic_feet, bol_number, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'bol_assigned')
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'needs_routing')
      RETURNING *`,
     [key, partner, dc, memberPos || [], cartons ?? null, units ?? null, weightLb ?? null, cubicFeet ?? null, bolNumber],
   )
@@ -530,7 +536,7 @@ export async function assignAuthToShipments({ authNumber, shipmentIds }, db = po
         SET auth_number = $1,
             carrier = COALESCE($2, carrier),
             scac    = COALESCE($3, scac),
-            status  = CASE WHEN status IN ('bol_assigned','submitted') THEN 'authorized' ELSE status END,
+            status  = CASE WHEN status IN ('needs_routing','submitted') THEN 'authorized' ELSE status END,
             updated_at = now()
       WHERE id = ANY($4::int[])`,
     [authNumber, a.carrier || null, a.scac || null, shipmentIds.map(Number)],

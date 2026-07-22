@@ -1834,3 +1834,4 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rescanToggle.on { color: var(--accent); border-color: var(--accent); border-style: solid; background: rgba(217,164,65,0.08); }
 .scanResult.ignored { border-left-color: var(--muted); background: rgba(139,148,158,0.08); }
 .scanResult .rescanTag { margin-left: 8px; }
+.rt-status.st-need { color: var(--hi); border-color: rgba(248,81,73,0.45); }

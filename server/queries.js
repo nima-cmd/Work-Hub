@@ -887,14 +887,26 @@ export async function removeRoutingAuth(authNumber) {
 }
 
 // Phase 3 — VICS BOL PDF + Drive filing
+// Enrich a shipment with per-PO line items (cartons/weight) for the BOL's
+// Customer Order Information table, pulled from the package feed for this DC.
+async function withLineItems(shipment) {
+  if (!shipment) return shipment
+  const pkgs = await fetchEdiPackages()
+  const lineItems = (shipment.memberPos || []).map((po) => {
+    const row = pkgs.find((p) => String(p.poNumber) === String(po) && String(p.dc) === String(shipment.dc))
+    return { po, cartons: row?.cartons ?? '', weight: row ? Math.ceil(Number(row.weight) || 0) : '' }
+  })
+  return { ...shipment, lineItems }
+}
+
 export async function streamShipmentBol(res, id) {
-  const shipment = await fetchRoutingShipmentById(id)
+  const shipment = await withLineItems(await fetchRoutingShipmentById(id))
   if (!shipment) throw new Error('shipment not found')
   await renderBolTo(res, shipment)
 }
 
 export async function fileShipmentToDrive(id) {
-  const shipment = await fetchRoutingShipmentById(id)
+  const shipment = await withLineItems(await fetchRoutingShipmentById(id))
   if (!shipment) throw new Error('shipment not found')
   const buffer = await buildBolPdf(shipment)
   const filename = `BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf`

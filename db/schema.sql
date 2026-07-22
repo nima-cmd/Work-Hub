@@ -652,7 +652,9 @@ CREATE TABLE IF NOT EXISTS routing_shipment (
   weight_lb        INTEGER,     -- rounded UP whole pounds (portal entry)
   cubic_feet       INTEGER,     -- ceil(sum raw cubic feet) (portal entry)
   bol_number       TEXT UNIQUE, -- assigned from bol_number_seq; NULL until assigned
-  status           TEXT DEFAULT 'bol_assigned',
+  -- A freshly-assigned BOL still needs to be routed (Nima, 2026-07-22) — that's
+  -- the default state until it's submitted to the portal / authorized / routed.
+  status           TEXT DEFAULT 'needs_routing',
   -- phase 2: routing references captured off the portal/routing email
   project_number   TEXT,        -- Bloomingdale's returns this on portal entry
   shipment_number  TEXT,        -- Bloomingdale's returns this too

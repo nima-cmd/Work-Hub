@@ -13,12 +13,14 @@ import { consolidateRouting } from '../../../src/model/routing.js'
 // unique BOL per DC, then capture the routing references (portal Project# /
 // Shipment#, authorization, carrier / SCAC) as they come back.
 const STATUS = {
-  bol_assigned: { label: 'BOL assigned', cls: '' },
+  needs_routing: { label: 'Needs routing', cls: 'st-need' },
   submitted: { label: 'Submitted', cls: 'st-sub' },
   authorized: { label: 'Authorized', cls: 'st-auth' },
   routed: { label: 'Routed', cls: 'st-routed' },
+  // legacy value from before the rename — still render it if any row has it
+  bol_assigned: { label: 'Needs routing', cls: 'st-need' },
 }
-const STATUS_ORDER = ['bol_assigned', 'submitted', 'authorized', 'routed']
+const STATUS_ORDER = ['needs_routing', 'submitted', 'authorized', 'routed']
 
 export default function Routing() {
   const [data, setData] = useState(null)
@@ -201,7 +203,7 @@ function AuthPanel({ auths, busy, onSave, onDelete }) {
 function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
-  const st = s ? (STATUS[s.status] || STATUS.bol_assigned) : null
+  const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
 
   return (
     <div className={'rt-card' + (s ? ' has-bol' : '')}>

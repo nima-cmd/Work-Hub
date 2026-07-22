@@ -1,72 +1,69 @@
 // src/model/bolAddresses.js — the ship-from / ship-to address book the VICS BOL
-// generator draws from (Nima, 2026-07-22).
+// generator draws from. Values transcribed from Nima's real BOL templates
+// (Bloomingdales / Nordstrom "Address" + "Carrier" tabs) on 2026-07-22, so the
+// generated BOL matches what he files today.
 //
-// SAFETY: this is a real freight document. Any field left `null` renders as a
-// loud "⚠ CONFIRM" on the BOL rather than a guess — a wrong address misroutes
-// a truck. Fill nulls from the partner BOL templates in Drive
-// (Warehouse Documents/Big Department Stores/{Bloomingdales,Nordstrom}) — they
-// were cloud-only placeholders that wouldn't download the session this was
-// built, so the confirmed values below come from Nima's notes, and the rest
-// wait for him.
+// A field left `null` renders "(confirm …)" in red on the BOL rather than a
+// guess — a wrong freight address misroutes a truck.
 
-// Where every shipment ships FROM.
+import { dcLabel } from './dc.js'
+
+// Where every shipment ships FROM (the master BOL's Ship From block).
 export const SHIP_FROM = {
-  name: 'NAGHEDI NYC',
-  street: '825 Western Ave, Unit 13',
+  name: 'Naghedi',
+  street: '825 Western Unit 13',
   city: 'Glendale',
   state: 'CA',
   zip: '91201',
 }
 
-// Bloomingdale's: EVERY DC ships to the SAME consolidator — MEGA-MERGE in Santa
-// Fe Springs — with the destination DC called out "c/o". So one address serves
-// all Bloomingdale's DCs; only the "c/o <DC>" line changes.
+// Bloomingdale's: EVERY DC ships to the SAME consolidator — Macy's MEGA-MERGE in
+// Santa Fe Springs — with the destination DC named on the "c/o" line. So one
+// address serves all Bloomingdale's DCs; only the DC name changes.
 export const BLOOMINGDALES_CONSOLIDATOR = {
   name: 'MEGA-MERGE CA',
-  street: '12801 Excelsior Dr',
-  city: 'Santa Fe Springs',
+  street: '12801 EXCELSIOR DRIVE',
+  city: 'SANTA FE SPGS',
   state: 'CA',
-  zip: null, // ⚠ confirm from the Bloomingdale's master BOL template
+  zip: '90670',
 }
 
-// Nordstrom: each DC is its own ship-to. Memory carries the DC city/state; the
-// street lines + ZIPs wait on the Nordstrom BOL templates / Store Address List.
-// Keyed by DC code (numeric), matching the feed's "PO Number - DC".
+// Nordstrom: each DC is its own ship-to (from the Nordstrom "Address" tab).
+// Keyed by DC code (numeric), matching the feed's "PO Number - DC". 089 is
+// listed both zero-padded and bare since the feed/sheets use both.
 export const NORDSTROM_DCS = {
-  '569': { name: 'Nordstrom DC #569', city: 'Elizabethtown', state: 'PA', street: null, zip: null },
-  '584': { name: 'Nordstrom DC #584', city: 'Riverside', state: 'CA', street: null, zip: null },
-  '599': { name: 'Nordstrom DC #599', city: 'Cedar Rapids', state: 'IA', street: null, zip: null },
-  '299': { name: 'Nordstrom DC #299', city: 'Dubuque', state: 'IA', street: null, zip: null },
-  '399': { name: 'Nordstrom DC #399', city: 'Ontario', state: 'CA', street: null, zip: null },
-  '499': { name: 'Nordstrom DC #499', city: 'Newark', state: 'CA', street: null, zip: null },
-  '699': { name: 'Nordstrom DC #699', city: 'Upper Marlboro', state: 'MD', street: null, zip: null },
-  '799': { name: 'Nordstrom DC #799', city: 'Gainesville', state: 'FL', street: null, zip: null },
-  '089': { name: 'Nordstrom DC #089', city: 'Portland', state: 'OR', street: null, zip: null },
+  '569': { name: 'Nordstrom DC #569', street: '30 Distribution Drive', city: 'Elizabethtown', state: 'PA', zip: '17022' },
+  '584': { name: 'Nordstrom DC #584', street: '490 Columbia Ave', city: 'Riverside', state: 'CA', zip: '92507' },
+  '599': { name: 'Nordstrom DC #599', street: '7700 18th Street SW', city: 'Cedar Rapids', state: 'IA', zip: '52404' },
+  '299': { name: 'Nordstrom DC #299', street: '5050 Chavenelle Drive', city: 'Dubuque', state: 'IA', zip: '52002' },
+  '399': { name: 'Nordstrom DC #399', street: '1600 S Miliken Avenue', city: 'Ontario', state: 'CA', zip: '91761' },
+  '499': { name: 'Nordstrom DC #499', street: '37599 Filbert Street', city: 'Newark', state: 'CA', zip: '94560' },
+  '699': { name: 'Nordstrom DC #699', street: '839 Commerce Drive', city: 'Upper Marlboro', state: 'MD', zip: '20774' },
+  '799': { name: 'Nordstrom DC #799', street: '5497 NE 49th Terrace', city: 'Gainesville', state: 'FL', zip: '32609' },
+  '089': { name: 'Nordstrom DC #089', street: '5703 North Marine Drive', city: 'Portland', state: 'OR', zip: '97203-6421' },
+  '89': { name: 'Nordstrom DC #089', street: '5703 North Marine Drive', city: 'Portland', state: 'OR', zip: '97203-6421' },
 }
 
-// Known carriers → SCAC (Nima, 2026-07-22). Nordstrom always routes CTE.
+// Known carriers → SCAC (from the "Carrier" tab). Nordstrom always routes CTE.
 export const CARRIERS = {
-  'FedEx Freight': 'FXNL',
-  'FedEx Economy Freight': 'FXNL',
-  'FedEx Priority Freight': 'FXNL',
+  'PERFORMANCE TRANSPORT LLC': 'GLTN',
   'California Transport Enterprises': 'CAIE', // Nordstrom's CTE
-  'Performance Transport': 'GLTN',
+  'FEDEX ECONOMY': 'FXNL',
 }
 
 // Commodity line — Naghedi ships one thing on these BOLs.
-export const COMMODITY = { description: 'Polyester Handbags', nmfc: '100', packaging: 'PLT' }
+export const COMMODITY = { description: 'Polyester Handbags', nmfc: '', class: '100', packaging: 'PLT' }
 
 // Resolve the ship-to block for a shipment. Bloomingdale's → the shared
-// consolidator with a "c/o <DC>" attention line; Nordstrom → its DC entry.
-// Returns { block, missing[] } — `missing` lists any null fields so the caller
-// and the BOL can flag them instead of shipping a blank/guessed address.
-export function shipToFor(partner, dc, dcLabel) {
+// consolidator, its name line reading "<DC> c/o MEGA-MERGE CA" (matching the
+// template's Address tab); Nordstrom → its DC entry. Returns { block, missing[] }.
+export function shipToFor(partner, dc, label) {
   let block
   if (partner === 'Nordstrom') {
-    const entry = NORDSTROM_DCS[String(dc)] || { name: `Nordstrom DC #${dc}`, street: null, city: null, state: null, zip: null }
-    block = { ...entry }
+    block = { ...(NORDSTROM_DCS[String(dc)] || { name: `Nordstrom DC #${dc}`, street: null, city: null, state: null, zip: null }) }
   } else {
-    block = { ...BLOOMINGDALES_CONSOLIDATOR, attn: `c/o ${dcLabel || dc}` }
+    const dcName = (label || dcLabel(dc) || String(dc)).toUpperCase()
+    block = { ...BLOOMINGDALES_CONSOLIDATOR, name: `${dcName} c/o MEGA-MERGE CA` }
   }
   const missing = ['street', 'city', 'state', 'zip'].filter((k) => !block[k])
   return { block, missing }
