@@ -37,14 +37,40 @@ export async function fetchLaunchBay() {
 // dialog). Two sizes: '4x6' (Zebra thermal) and '2.25x1.25' (MUNBYN). The
 // availability map says which sizes can print from this host so the UI hides
 // buttons whose printer isn't reachable (e.g. the cloud deploy).
+// Printing runs server-side via `lp`, so it only works where the printers are.
+// The main server handles it on the iMac (local dev / npm run server). On the
+// Render deploy the cloud server has no printers, so we fall back to a LOCAL
+// print agent (scripts/print-agent.js) that the user runs on the iMac — a
+// browser on that machine can reach it at localhost even from the https site.
+const PRINT_AGENT = `http://localhost:${window.__PRINT_AGENT_PORT__ || 7777}`
+let _printProvider // { base, sizes } — resolved once: main API, else the agent
+
+async function resolvePrintProvider() {
+  if (_printProvider) return _printProvider
+  // 1) main server (same origin) — the local-server / dev case
+  try {
+    const r = await fetch('/api/print-label/available')
+    if (r.ok) {
+      const sizes = await r.json()
+      if (Object.values(sizes).some(Boolean)) return (_printProvider = { base: '', sizes })
+    }
+  } catch { /* fall through to the agent */ }
+  // 2) local print agent — the cloud-deploy-on-the-iMac case
+  try {
+    const r = await fetch(`${PRINT_AGENT}/available`, { signal: AbortSignal.timeout(1500) })
+    if (r.ok) return (_printProvider = { base: PRINT_AGENT, sizes: await r.json() })
+  } catch { /* no agent running */ }
+  return (_printProvider = { base: '', sizes: {} })
+}
+
 export async function fetchLabelSizes() {
-  const res = await fetch('/api/print-label/available')
-  if (!res.ok) return {}
-  return res.json()
+  return (await resolvePrintProvider()).sizes
 }
 
 export async function printCargoTag(info, size) {
-  const res = await fetch('/api/print-label', {
+  const { base } = await resolvePrintProvider()
+  const url = base ? `${base}/print` : '/api/print-label'
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...info, size }),

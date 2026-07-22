@@ -14,7 +14,8 @@
     "start": "node server/index.js",
     "recurring-check": "node scripts/recurring-check.js",
     "client:build": "npm --prefix client install && npm --prefix client run build",
-    "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\""
+    "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\"",
+    "print-agent": "node --env-file=.env.local scripts/print-agent.js"
   },
   "dependencies": {
     "concurrently": "^10.0.3",
