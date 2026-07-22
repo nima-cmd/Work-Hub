@@ -443,6 +443,19 @@ export async function fetchRoutingShipments(db = pool) {
   return rows
 }
 
+export async function fetchRoutingShipmentById(id, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, dc_po_key AS "dcPoKey", partner, dc, member_pos AS "memberPos",
+            cartons, units, weight_lb AS "weightLb", cubic_feet AS "cubicFeet",
+            bol_number AS "bolNumber", status,
+            project_number AS "projectNumber", shipment_number AS "shipmentNumber",
+            auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate"
+     FROM routing_shipment WHERE id = $1`,
+    [id],
+  )
+  return rows[0] || null
+}
+
 // Void a shipment — deletes the routing_shipment row but LEAVES its BOL number
 // in bol_registry so the number is never reissued (the never-reuse guarantee).
 export async function voidRoutingShipment(id, db = pool) {

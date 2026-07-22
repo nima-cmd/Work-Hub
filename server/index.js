@@ -15,6 +15,7 @@ import {
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
+  streamShipmentBol, fileShipmentToDrive,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -343,6 +344,25 @@ app.post('/api/routing/auth', async (req, res) => {
 app.delete('/api/routing/auth/:authNumber', async (req, res) => {
   try {
     res.json(await removeRoutingAuth(req.params.authNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Phase 3 — VICS BOL PDF (inline download) + Drive filing
+app.get('/api/routing/shipment/:id/bol.pdf', async (req, res) => {
+  try {
+    await streamShipmentBol(res, req.params.id)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/routing/shipment/:id/file-to-drive', async (req, res) => {
+  try {
+    res.json(await fileShipmentToDrive(req.params.id))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

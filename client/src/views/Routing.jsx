@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   fetchRouting, assignRoutingBol, voidRoutingShipment,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
+  bolPdfUrl, fileBolToDrive,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 
@@ -238,6 +239,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }
             <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
           </div>
 
+          <BolActions s={s} />
           <RefSummary s={s} />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
             {editing ? '▾ Route info' : '✎ Route info'}
@@ -247,6 +249,35 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }
               onSave={(fields) => { onSaveRefs(s.id, fields); setEditing(false) }} />
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// Generate / file the VICS BOL. The PDF opens inline (browser can save/print);
+// "File to Drive" uploads it to /Work-Hub BOLs/<partner>/<PO>/ and links back.
+function BolActions({ s }) {
+  const [state, setState] = useState(null) // { busy } | { msg, ok, links }
+  async function file() {
+    setState({ busy: true })
+    try {
+      const r = await fileBolToDrive(s.id)
+      if (r.needsReauth) setState({ msg: 'Drive not authorized yet — re-run connect-gmail.js to add the Drive scope.', ok: false })
+      else if (r.configured === false) setState({ msg: 'Google not connected on this server.', ok: false })
+      else setState({ msg: `Filed to Drive (${r.uploaded.length} folder${r.uploaded.length === 1 ? '' : 's'}).`, ok: true, links: r.uploaded })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+  return (
+    <div className="rt-bolActions">
+      <a className="btnGhost" href={bolPdfUrl(s.id)} target="_blank" rel="noreferrer">BOL PDF ↗</a>
+      <button className="btnGhost" disabled={state?.busy} onClick={file}>
+        {state?.busy ? 'Filing…' : '⤒ File to Drive'}
+      </button>
+      {state?.msg && (
+        <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>
+          {state.msg}
+          {state.links?.map((u) => u.link && <a key={u.id} href={u.link} target="_blank" rel="noreferrer"> · PO {u.po} ↗</a>)}
+        </div>
       )}
     </div>
   )

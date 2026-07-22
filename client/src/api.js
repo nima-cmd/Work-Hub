@@ -627,3 +627,14 @@ export async function deleteRoutingAuth(authNumber) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Phase 3 — VICS BOL PDF + Drive filing
+export function bolPdfUrl(shipmentId) {
+  return `/api/routing/shipment/${shipmentId}/bol.pdf`
+}
+
+export async function fileBolToDrive(shipmentId) {
+  const res = await fetch(`/api/routing/shipment/${shipmentId}/file-to-drive`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}

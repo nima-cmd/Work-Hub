@@ -1819,3 +1819,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-editor input, .rt-editor select { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 13px; text-transform: none; letter-spacing: 0; }
 .rt-editRow { display: flex; gap: 8px; }
 .rt-editRow label { flex: 1; }
+
+/* ── EDI Routing phase 3: BOL actions ────────────────────────────────────── */
+.rt-bolActions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rt-bolActions .btnGhost { text-decoration: none; }
+.rt-driveMsg { width: 100%; font-size: 11px; margin-top: 2px; }
+.rt-driveMsg.ok { color: #7ee787; }
+.rt-driveMsg.err { color: var(--mid); }
+.rt-driveMsg a { color: var(--holo); }

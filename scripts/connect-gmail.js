@@ -26,11 +26,14 @@ authUrl.searchParams.set('client_id', CLIENT_ID)
 authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
 authUrl.searchParams.set('response_type', 'code')
 // gmail.modify (read/mark-read/label) + calendar.readonly (pull events for the
-// in-app calendar + holocalls, Nima 2026-07-21). Re-run this after adding the
-// calendar scope to mint a refresh token that carries BOTH.
+// in-app calendar + holocalls, Nima 2026-07-21) + drive.file (write the
+// generated VICS BOL PDFs into Drive, Nima 2026-07-22 — drive.file only touches
+// files THIS app creates, never the rest of the Drive). Re-run this after
+// adding a scope to mint a refresh token that carries ALL of them.
 authUrl.searchParams.set('scope', [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/drive.file',
 ].join(' '))
 authUrl.searchParams.set('access_type', 'offline') // required to get a refresh token
 authUrl.searchParams.set('prompt', 'consent') // forces a refresh token even on repeat runs

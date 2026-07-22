@@ -29,8 +29,11 @@ import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
+  fetchRoutingShipmentById,
 } from '../src/ingest/loadToDb.js'
 import { consolidateRouting } from '../src/model/routing.js'
+import { buildBolPdf, renderBolTo } from './bolPdf.js'
+import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
@@ -874,6 +877,23 @@ export async function saveRoutingAuth(body = {}) {
 export async function removeRoutingAuth(authNumber) {
   await deleteRoutingAuth(authNumber)
   return getRouting()
+}
+
+// Phase 3 — VICS BOL PDF + Drive filing
+export async function streamShipmentBol(res, id) {
+  const shipment = await fetchRoutingShipmentById(id)
+  if (!shipment) throw new Error('shipment not found')
+  await renderBolTo(res, shipment)
+}
+
+export async function fileShipmentToDrive(id) {
+  const shipment = await fetchRoutingShipmentById(id)
+  if (!shipment) throw new Error('shipment not found')
+  const buffer = await buildBolPdf(shipment)
+  const filename = `BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf`
+  return uploadBolPdf({
+    partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
+  })
 }
 
 export async function assignRoutingBol(body = {}) {
