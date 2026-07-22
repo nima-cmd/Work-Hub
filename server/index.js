@@ -20,7 +20,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
-  recordFulfillmentBox, getCustodyRegister, clearCustodyItem,
+  recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
@@ -165,6 +165,16 @@ app.get('/api/custody/register', async (_req, res) => {
 app.post('/api/custody/clear', async (req, res) => {
   try {
     res.json(await clearCustodyItem(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Permanently delete a custody scan (mistaken scan) — by id or by doc
+app.post('/api/custody/delete', async (req, res) => {
+  try {
+    res.json(await deleteCustodyScan(req.body || {}))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

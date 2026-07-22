@@ -1751,3 +1751,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .custodyClear { margin-left: auto; font-size: 10px; color: #7e8a96; }
 .custodyClear:hover { color: var(--hi, #f85149); }
+
+.custodyDelete { margin-left: 8px; font-size: 11px; color: #7e8a96; }
+.custodyDelete:hover { color: var(--hi, #f85149); }

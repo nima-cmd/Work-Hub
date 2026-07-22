@@ -333,6 +333,24 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
   return [...ifResults, ...dcResults].sort((a, b) => new Date(a.firstScan) - new Date(b.firstScan))
 }
 
+// Permanently DELETE a custody scan (Nima, 2026-07-22) — distinct from clear:
+// this removes the scan event(s) from the ledger entirely, for a mistaken
+// scan. By `id` deletes one scan row (Scan Bay today-log); by doc deletes all
+// of that IF/DC carton's custody events (Custody Register). Caller warns first.
+const CUSTODY_TYPES = ['CUSTODY_OUT', 'CUSTODY_IN', 'CUSTODY_CLEARED']
+export async function deleteCustodyScan({ id, docType, docNumber }) {
+  if (id != null) {
+    await pool.query(`DELETE FROM order_events WHERE id = $1 AND event_type = ANY($2)`, [id, CUSTODY_TYPES])
+  } else if (docNumber) {
+    const dt = docType === 'DC' ? 'DC' : 'IF'
+    await pool.query(`DELETE FROM order_events WHERE doc_type = $1 AND doc_number = $2 AND event_type = ANY($3)`,
+      [dt, String(docNumber), CUSTODY_TYPES])
+  } else {
+    throw new Error('id or docNumber required')
+  }
+  return { ok: true }
+}
+
 // Manually clear a custody item off the register (Nima, 2026-07-22) — writes a
 // CUSTODY_CLEARED marker so a departed carton or a stale/orphaned scan drops
 // off, the same signal ingest uses at departure. Works for IF and DC docs.

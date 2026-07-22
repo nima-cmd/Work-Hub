@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
-import { recordCustodyScan, fetchOrderEvents, recordFulfillmentBox } from '../api.js'
+import { recordCustodyScan, fetchOrderEvents, recordFulfillmentBox, deleteCustodyScan } from '../api.js'
 import { LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 
 // Scan Bay (Nima, 2026-07-17) — the custody checkpoint. Every IF's cargo tag
@@ -38,6 +38,13 @@ export default function ScanBay() {
     fetchOrderEvents({ date: today }).then(setTodayEvents).catch(() => {})
   }
   useEffect(refreshEvents, [])
+
+  async function deleteScan(e) {
+    const label = e.docType === 'DC' ? `PO ${e.docNumber.split(':')[0]}` : e.docNumber
+    const dir = e.eventType === 'CUSTODY_OUT' ? 'OUT' : 'IN'
+    if (!window.confirm(`Permanently delete this ${dir} scan of ${label}? This removes it from the ledger and can't be undone.`)) return
+    try { await deleteCustodyScan({ id: e.id }); refreshEvents() } catch (err) { setCamErr(err.message) }
+  }
 
   async function submitScan(docNumber, source) {
     if (lockRef.current) return
@@ -277,6 +284,7 @@ export default function ScanBay() {
                 <span className={'pill ' + (e.eventType === 'CUSTODY_OUT' ? 'warn' : 'fresh')}>
                   {e.eventType === 'CUSTODY_OUT' ? '⬆ OUT' : '⬇ IN'}
                 </span>
+                <button className="linkBtn custodyClear" title="Delete this scan" onClick={() => deleteScan(e)}>🗑</button>
               </div>
               <div className="cust">
                 {e.customer ? <><ChannelTag order={e} /> <CustomerName order={e} /></> : (e.soNumber || '—')}

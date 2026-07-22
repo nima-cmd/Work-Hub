@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchCustodyRegister, recordFulfillmentBox, clearCustodyItem } from '../api.js'
+import { fetchCustodyRegister, recordFulfillmentBox, clearCustodyItem, deleteCustodyScan } from '../api.js'
 import { SourceBadge, LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 
 // Custody Register (Nima, 2026-07-17) — every IF that entered the custody gap
@@ -90,6 +90,15 @@ export default function CustodyRegister() {
     catch (e) { setErr(e.message) }
   }
 
+  async function remove(r) {
+    const label = r.isDc ? r.label : r.ifNumber
+    if (!window.confirm(`Permanently DELETE all custody scans for ${label}? This wipes them from the ledger and can't be undone — use this for a mistaken scan.`)) return
+    try {
+      await deleteCustodyScan({ docType: r.isDc ? 'DC' : 'IF', docNumber: r.isDc ? r.docNumber : r.ifNumber })
+      refresh()
+    } catch (e) { setErr(e.message) }
+  }
+
   if (err) return <div className="banner error">⚠ Couldn’t load the custody register: {err}</div>
   if (!rows) return <div className="banner">Loading custody register…</div>
 
@@ -116,7 +125,8 @@ export default function CustodyRegister() {
                   <div className="krow">
                     <span className="so">{r.isDc ? r.label : r.ifNumber}</span>
                     {r.isDc ? <ChannelTag order={r} /> : (r.source && <SourceBadge source={r.source} />)}
-                    <button className="linkBtn custodyClear" title="Clear off the register" onClick={() => clear(r)}>✕ clear</button>
+                    <button className="linkBtn custodyClear" title="Clear off the register (departed)" onClick={() => clear(r)}>✕ clear</button>
+                    <button className="linkBtn custodyDelete" title="Delete the scans (mistake)" onClick={() => remove(r)}>🗑</button>
                   </div>
                   <div className="cust">
                     {r.isDc

@@ -532,6 +532,18 @@ export async function clearCustodyItem({ docType, docNumber }) {
   return res.json()
 }
 
+// Permanently delete a custody scan — by event id (one scan) or by doc (all of
+// that IF/DC carton's custody events). Destructive; the UI warns first.
+export async function deleteCustodyScan({ id, docType, docNumber }) {
+  const res = await fetch('/api/custody/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, docType, docNumber }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // Order-events ledger feed. opts: { date, docNumber, soNumber } (all optional)
 export async function fetchOrderEvents(opts = {}) {
   const params = new URLSearchParams(Object.entries(opts).filter(([, v]) => v))
