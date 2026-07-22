@@ -442,6 +442,7 @@ export async function fetchRoutingShipments(db = pool) {
             bol_number AS "bolNumber", status,
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
+            merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
@@ -455,7 +456,8 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             cartons, units, weight_lb AS "weightLb", cubic_feet AS "cubicFeet",
             bol_number AS "bolNumber", status,
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
-            auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate"
+            auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
+            merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber"
      FROM routing_shipment WHERE id = $1`,
     [id],
   )
@@ -527,6 +529,9 @@ const SHIPMENT_REF_COLS = {
   scac: 'scac',
   shipDate: 'ship_date',
   status: 'status',
+  mergeCenter: 'merge_center',
+  trailerNumber: 'trailer_number',
+  sealNumber: 'seal_number',
 }
 export async function updateShipmentRefs(id, fields = {}, db = pool) {
   const sets = []
@@ -564,10 +569,25 @@ export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, no
 export async function fetchRoutingAuths(db = pool) {
   const { rows } = await db.query(
     `SELECT auth_number AS "authNumber", partner, carrier, scac, note,
+            master_bol_number AS "masterBolNumber", merge_center AS "mergeCenter",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_auth ORDER BY created_at DESC`,
   )
   return rows
+}
+
+// Mint (once) and return the Master BOL number for an authorization — same
+// never-reused sequence + registry as underlying BOLs. Idempotent: re-calling
+// returns the existing number.
+export async function ensureMasterBol(authNumber, db = pool) {
+  const cur = await db.query('SELECT master_bol_number FROM routing_auth WHERE auth_number = $1', [authNumber])
+  if (!cur.rows.length) throw new Error('auth not found')
+  if (cur.rows[0].master_bol_number) return cur.rows[0].master_bol_number
+  const seq = await db.query("SELECT $1 || nextval('bol_number_seq') AS bol", [BOL_PREFIX])
+  const bolNumber = seq.rows[0].bol
+  await db.query('INSERT INTO bol_registry (bol_number, partner, dc, member_pos) VALUES ($1, NULL, $2, $3)', [bolNumber, 'MASTER', [authNumber]])
+  await db.query('UPDATE routing_auth SET master_bol_number = $2, updated_at = now() WHERE auth_number = $1', [authNumber, bolNumber])
+  return bolNumber
 }
 
 // Assign an auth to N shipments at once. Stamps the auth's carrier/SCAC onto

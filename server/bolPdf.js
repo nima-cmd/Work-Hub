@@ -1,260 +1,270 @@
-// server/bolPdf.js — per-DC VICS Bill of Lading, generated with pdfkit, laid out
-// to mirror Nima's real BOL template (the "Master Bol" tab of the Bloomingdales
-// / Nordstrom sheets): same sections, field labels, freight-terms boxes, and
-// the VICS legal + certification language. One BOL per shipment (= one DC,
-// rolling up its POs). Ship-from Naghedi; ship-to the Bloomingdale's MEGA-MERGE
-// consolidator or the Nordstrom DC. Commodity is always Polyester Handbags,
-// class 100, on pallets.
+// server/bolPdf.js — VICS Bill of Lading laid out to match the Macy's Routing
+// Guide examples (§13.2 rev 4/14/26). One form serves both roles:
+//   kind 'final'  — one BOL per final destination DC; ship-to names the DC and
+//                   addresses the assigned 1:1 Merge Center; transmitted on the
+//                   EDI 856.
+//   kind 'master' — one Master BOL per authorization to the merge center,
+//                   aggregating every underlying DC's POs; the Master BOL number
+//                   is NOT transmitted on the 856 and its Special Instructions
+//                   say "MASTER BOL – SEE UNDERLYING BOL'S FOR EACH FINAL DC".
+// Nordstrom ships direct to its DC (kind 'final', no merge center).
 //
-// buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment) streams it.
-// shipment may carry `lineItems: [{ po, cartons, weight }]` for the per-PO rows
-// of the Customer Order Information table; without it the totals still print.
+// Freight terms are COLLECT (or 3rd Party for RXO/XLTL) per the guide — never
+// prepaid. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
 
 import PDFDocument from 'pdfkit'
 import { dcLabel } from '../src/model/dc.js'
 import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 
-const PAGE = { size: 'LETTER', margin: 24 }
-const INK = '#000'
-const HEAD_FILL = '#e8e8e8'
-const RED = '#b00'
+const M = 24
+const RED = '#c00'
 
-// VICS language, transcribed from the template so the BOL reads the same.
 const L = {
-  prepaidNote: '(freight charges are prepaid unless marked collect)',
-  master: 'Master Bill of Lading: with attached underlying Bills of Lading',
-  received:
-    'RECEIVED, subject to the rates, classifications and rules that have been established by the Carrier and are available on request to the Shipper ' +
-    '(Shipper defined in 49 U.S.C.A. § 13102(13)(c)), and to all applicable state and federal regulations. Shipper 1) warrants it has read all applicable ' +
-    'contract(s) or Carrier’s applicable tariff(s) and the limitation of liability provisions set forth therein; and 2) has actual knowledge of and accepts ' +
-    'the applicable contract or tariff terms, including the limits on carrier liability. Carriers’ tariff(s), including OD Rules 100, take precedence in the ' +
-    'event of any terms or conditions conflicts.',
-  value:
-    'Where the rate is dependent on value, shippers are required to state specifically in writing the agreed or declared value of the property as follows: ' +
-    'Noting a value is not a request for Additional Cargo Liability under OD Rules 100, Item 574. “The agreed or declared value of the property is ' +
-    'specifically stated by the shipper to be not exceeding ______ per ______.”',
-  liability: 'NOTE - Liability Limitation applies. See OD Rules 100, Items 574 and 594.',
+  liability: 'NOTE: Liability Limitation for loss or damage in this shipment may be applicable. See 49 U.S.C. 14706(c)(1)(A) and (B).',
+  received: 'RECEIVED, subject to individually determined rates or contracts that have been agreed upon in writing between the carrier and shipper, if applicable, otherwise to the rates, classifications and rules that have been established by the carrier and are available to the shipper, on request, and to all applicable state and federal regulations.',
   carrierDelivery: 'The carrier shall not make delivery of this shipment without payment of freight and all other lawful charges.',
-  shipperCert:
-    'This is to certify that the above named materials are properly classified, described, packaged, marked and labeled, and are in proper condition for ' +
-    'transportation according to the applicable regulations of the U.S. DOT.',
-  carrierCert:
-    'Carrier acknowledges receipt of packages and required placards. Carrier certifies emergency response information was made available and/or carrier has ' +
-    'the U.S. DOT emergency response guidebook or equivalent documentation in the vehicle.',
-  goodOrder: 'Property described above is received in good order, except as noted.',
+  shipperCert: 'This is to certify that the above named materials are properly classified, described, packaged, marked and labeled, and are in proper condition for transportation according to the applicable regulations of the U.S. DOT.',
+  carrierCert: 'Carrier acknowledges receipt of packages and required placards. Carrier certifies emergency response information was made available and/or carrier has the U.S. DOT emergency response guidebook or equivalent documentation in the vehicle. Property described above is received in good order, except as noted.',
+  value: 'Where the rate is dependent on value, shippers are required to state specifically in writing the agreed or declared value of the property as follows: "The agreed or declared value of the property is specifically stated by the shipper to be not exceeding ______ per ______."',
+  masterNote: "MASTER BOL – SEE UNDERLYING BOL'S FOR EACH FINAL DC",
+  finalFoot: 'Final destination Bill of Lading (BOL) — BOL number to final destination DC must be transmitted on EDI 856 (ASN). "Ship To" Name must match the format noted above.',
+  masterFoot: 'Master Bill of Lading (BOL) — BOL number for Master BOL to routing destination is NOT TRANSMITTED on EDI 856 (ASN). "Ship To" Name must match the format noted above.',
 }
 
-export function buildBolPdf(shipment) {
+export function buildBolPdf(shipment, opts = {}) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: PAGE.size, margin: PAGE.margin })
+      const doc = new PDFDocument({ size: 'LETTER', margin: M })
       const chunks = []
       doc.on('data', (c) => chunks.push(c))
       doc.on('end', () => resolve(Buffer.concat(chunks)))
-      render(doc, shipment)
+      render(doc, shipment, opts.kind || shipment.kind || 'final')
       doc.end()
-    } catch (e) {
-      reject(e)
-    }
+    } catch (e) { reject(e) }
   })
 }
 
-export async function renderBolTo(res, shipment) {
-  const pdf = await buildBolPdf(shipment)
+export async function renderBolTo(res, shipment, opts = {}) {
+  const pdf = await buildBolPdf(shipment, opts)
   res.setHeader('Content-Type', 'application/pdf')
-  res.setHeader('Content-Disposition', `inline; filename="BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf"`)
+  const tag = (opts.kind || shipment.kind) === 'master' ? 'MASTER' : shipment.dc
+  res.setHeader('Content-Disposition', `inline; filename="BOL_${shipment.bolNumber || 'draft'}_${tag}.pdf"`)
   res.send(pdf)
 }
 
-function render(doc, shipment) {
-  const M = PAGE.margin
+function render(doc, shipment, kind) {
   const W = doc.page.width - M * 2
+  const half = W / 2
+  const rX = M + half
+  const isMaster = kind === 'master'
   const label = dcLabel(shipment.dc)
-  const { block: shipTo, missing } = shipToFor(shipment.partner, shipment.dc, label)
-  const half = (W - 6) / 2
-  const rightX = M + half + 6
+  const { block: shipTo, missing } = shipToFor(shipment.partner, shipment.dc, label, {
+    kind, mergeCenter: shipment.mergeCenter || 'CA',
+  })
+  // Freight terms: Collect, unless the carrier is RXO (XLTL) → 3rd Party.
+  const term = /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
   let y = M
 
-  // ── Header ────────────────────────────────────────────────────────────────
-  doc.font('Helvetica').fontSize(8).fillColor(INK)
-    .text(shipment.shipDate ? `Date: ${String(shipment.shipDate).slice(0, 10)}` : 'Date:', M, y + 4)
-  doc.font('Helvetica-Bold').fontSize(17).text('BILL OF LADING', M, y, { width: W, align: 'center' })
-  doc.font('Helvetica').fontSize(6.5).text('Bill Of Lading Number', rightX, y, { width: half, align: 'right' })
-  doc.font('Helvetica-Bold').fontSize(13).text(shipment.bolNumber || '—', rightX, y + 9, { width: half, align: 'right' })
-  doc.font('Helvetica').fontSize(7).fillColor('#555')
-    .text(`${shipment.partner}  ·  DC ${shipment.dc} (${label})`, rightX, y + 26, { width: half, align: 'right' })
-  y += 42
+  // ── Header ──────────────────────────────────────────────────────────────
+  doc.font('Helvetica').fontSize(7).fillColor('#000')
+    .text(shipment.shipDate ? `Date: ${String(shipment.shipDate).slice(0, 10)}` : 'Date:', M, y + 3)
+  doc.font('Helvetica-Bold').fontSize(9).text('Page ______', rX, y + 3, { width: half, align: 'right' })
+  y += 16
 
-  // ── Ship From (left) | Carrier block (right) ────────────────────────────────
-  const topH = 92
-  addrBox(doc, M, y, half, topH, 'Ship From', SHIP_FROM, 'SID#')
-  labeledBox(doc, rightX, y, half, topH, [
-    ['Carrier Name', shipment.carrier || ''],
-    ['Trailer Number', ''],
-    ['Seal number(s)', ''],
-    ['SCAC', shipment.scac || ''],
-    ['Pro Number', ''],
-  ])
-  y += topH + 5
+  // ── Ship From | Bill of Lading Number + barcode ─────────────────────────
+  const topH = 66
+  blackBar(doc, M, y, half, 'SHIP FROM')
+  boxOutline(doc, M, y + 11, half, topH - 11)
+  addrLines(doc, M, y + 13, half, SHIP_FROM, [])
+  fob(doc, M + half - 42, y + topH - 12)
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('SID#', M + 3, y + topH - 12)
+  boxOutline(doc, rX, y + 11, half, topH - 11)
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000').text('Bill of Lading Number:', rX + 4, y + 15)
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(RED).text(shipment.bolNumber || '—', rX + 4, y + 24)
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#ccc').text('B A R   C O D E   S P A C E', rX + 4, y + 46, { width: half - 8, align: 'center' })
+  y += topH + 3
 
-  // ── Ship To (left) | Freight charge terms (right) ───────────────────────────
-  const midH = 92
-  addrBox(doc, M, y, half, midH, 'Ship To', shipTo, 'CID#', missing)
-  freightTermsBox(doc, rightX, y, half, midH)
-  y += midH + 5
+  // ── Ship To | Carrier block ─────────────────────────────────────────────
+  const midH = 78
+  blackBar(doc, M, y, half, 'SHIP TO')
+  boxOutline(doc, M, y + 11, half, midH - 11)
+  addrLines(doc, M, y + 13, half, shipTo, missing, true)
+  fob(doc, M + half - 42, y + midH - 12)
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
+  boxOutline(doc, rX, y + 11, half, midH - 11)
+  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', '']]
+  let cy = y + 14
+  for (const [lab, val, red] of carr) {
+    doc.font('Helvetica').fontSize(6.5).fillColor('#000').text(lab, rX + 4, cy, { continued: true })
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(red && val ? RED : '#000').text('  ' + (val || ''))
+    cy += 12
+  }
+  y += midH + 3
 
-  // ── Third party bill-to (left) | Special instructions (right) ───────────────
-  const tpH = 42
-  addrBox(doc, M, y, half, tpH, 'Third Party Freight Charges Bill To', { name: '', street: '', city: '', state: '', zip: '' })
-  box(doc, rightX, y, half, tpH, 'Special Instructions')
-  y += tpH + 5
+  // ── Third party bill-to | Freight charge terms ───────────────────────────
+  const tpH = 54
+  blackBar(doc, M, y, half, 'THIRD PARTY FREIGHT CHARGES BILL TO')
+  boxOutline(doc, M, y + 11, half, tpH - 11)
+  doc.font('Helvetica').fontSize(6.5).fillColor('#000')
+    .text('Name:', M + 4, y + 15).text('Address:', M + 4, y + 27).text('City/State/Zip:', M + 4, y + 41)
+  boxOutline(doc, rX, y + 11, half, tpH - 11)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor('#000').text('Freight Charge Terms:', rX + 4, y + 14, { continued: true })
+    .font('Helvetica-Oblique').fontSize(6).text('  (freight charges are prepaid unless marked otherwise)')
+  const box3 = (x, on, lab) => {
+    doc.rect(x, y + 27, 7, 7).lineWidth(0.6).stroke('#000')
+    if (on) doc.font('Helvetica-Bold').fontSize(7).fillColor('#000').text('X', x + 1.3, y + 27.5)
+    doc.font('Helvetica').fontSize(7).fillColor('#000').text(lab, x + 9, y + 27.5)
+    return x + 9 + doc.widthOfString(lab) + 12
+  }
+  let bx = box3(rX + 4, term === 'Prepaid', 'Prepaid')
+  bx = box3(bx, term === 'Collect', 'Collect')
+  box3(bx, term === '3rd', '3rd Party')
+  doc.rect(rX + 4, y + 40, 7, 7).lineWidth(0.6).stroke('#000')
+  if (isMaster) doc.font('Helvetica-Bold').fontSize(7).text('X', rX + 5.3, y + 40.5)
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('Master Bill of Lading: with attached underlying Bills of Lading', rX + 14, y + 40, { width: half - 18 })
+  y += tpH + 3
 
-  // ── Customer Order Information ──────────────────────────────────────────────
-  const lineItems = (shipment.lineItems && shipment.lineItems.length)
+  // ── Special Instructions ─────────────────────────────────────────────────
+  const siH = isMaster ? 34 : 24
+  boxOutline(doc, M, y, W, siH)
+  doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000').text('SPECIAL INSTRUCTIONS:', M + 4, y + 3)
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(RED)
+    .text(`Macy's Auth / Appt # ${shipment.authNumber || '________'}`, M + 4, y + 12)
+  if (isMaster) doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(L.masterNote, M + 4, y + 23)
+  y += siH + 3
+
+  // ── Customer Order Information ────────────────────────────────────────────
+  const items = (shipment.lineItems && shipment.lineItems.length)
     ? shipment.lineItems
     : (shipment.memberPos || []).map((po) => ({ po, cartons: '', weight: '' }))
-  const coRows = Math.max(lineItems.length, 3)
-  // 14 (section header band) + 13 (column header) + data rows + 13 (grand total)
-  const coH = 27 + (coRows + 1) * 13
-  sectionHeader(doc, M, y, W, 'Customer Order Information')
-  const cCols = [W * 0.46, W * 0.14, W * 0.16, W * 0.12, W * 0.12]
-  tableHeader(doc, M, y + 14, cCols, ['Customer Order Number', '# PKGS', 'Weight', 'Pallet / Slip (Y/N)', 'Add’l Shipper Info'])
-  let ry = y + 14 + 13
-  for (let i = 0; i < coRows; i++) {
-    const it = lineItems[i]
-    tableRow(doc, M, ry, cCols, [
-      it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '',
-      it ? 'Y' : '', '',
-    ])
-    ry += 13
+  const rowsN = Math.max(items.length, 3)
+  sectionBar(doc, M, y, W, 'CUSTOMER ORDER INFORMATION')
+  const cCols = [W * 0.42, W * 0.08, W * 0.14, W * 0.20, W * 0.16]
+  gridHeader(doc, M, y + 11, cCols, ['CUSTOMER ORDER NUMBER', '# PKGS', 'WEIGHT', 'PALLET / SLIP (CIRCLE ONE)', 'ADDITIONAL SHIPPER INFO'])
+  let ry = y + 11 + 15
+  for (let i = 0; i < rowsN; i++) {
+    const it = items[i]
+    gridRow(doc, M, ry, cCols, [it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '', it ? 'Y        N' : '', ''], false, RED)
+    ry += 15
   }
-  tableRow(doc, M, ry, cCols, ['Grand Total', String(shipment.cartons ?? ''), String(shipment.weightLb ?? ''), '', ''], true)
-  boxOutline(doc, M, y, W, coH)
-  y += coH + 5
+  gridRow(doc, M, ry, cCols, ['GRAND TOTAL', String(shipment.cartons ?? ''), String(shipment.weightLb ?? ''), '', ''], true, RED)
+  y = ry + 15 + 3
 
-  // ── Carrier Information (commodity) ─────────────────────────────────────────
-  const kH = 27 + 2 * 13
-  sectionHeader(doc, M, y, W, 'Carrier Information')
-  const kCols = [W * 0.09, W * 0.09, W * 0.09, W * 0.09, W * 0.12, W * 0.08, W * 0.32, W * 0.12]
-  tableHeader(doc, M, y + 14, kCols, ['H.U. Qty', 'H.U. Type', 'Pkg Qty', 'Pkg Type', 'Weight', 'H.M.', 'Commodity Description', 'NMFC / Class'])
-  tableRow(doc, M, y + 14 + 13, kCols, [
-    '1', 'PLT', String(shipment.cartons ?? ''), 'CTN', String(shipment.weightLb ?? ''), '',
-    COMMODITY.description, `${COMMODITY.nmfc || '—'} / ${COMMODITY.class}`,
-  ])
-  tableRow(doc, M, y + 14 + 26, kCols, ['', '', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'Grand Total', `Cubic ft ${shipment.cubicFeet ?? '—'} · Units ${shipment.units ?? '—'}`, ''], true)
-  boxOutline(doc, M, y, W, kH)
-  y += kH + 5
+  // ── Carrier Information ───────────────────────────────────────────────────
+  sectionBar(doc, M, y, W, 'CARRIER INFORMATION')
+  const kCols = [W * 0.08, W * 0.08, W * 0.08, W * 0.09, W * 0.10, W * 0.07, W * 0.34, W * 0.16]
+  gridHeader(doc, M, y + 11, kCols, ['H.U. QTY', 'TYPE', 'PKG QTY', 'TYPE', 'WEIGHT', 'H.M.(X)', 'COMMODITY DESCRIPTION', 'LTL ONLY  NMFC# / CLASS'])
+  const kr = y + 11 + 15
+  gridRow(doc, M, kr, kCols, ['', '', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
+  gridRow(doc, M, kr + 15, kCols, ['', '', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}`, ''], true, RED)
+  y = kr + 30 + 3
 
-  // ── Legal block ─────────────────────────────────────────────────────────────
-  doc.font('Helvetica').fontSize(5.6).fillColor(INK)
-  doc.text(L.value, M, y, { width: half, align: 'justify' })
-  doc.text(L.liability, M, doc.y + 1, { width: half })
-  const leftAfter = doc.y
-  labeledBox(doc, rightX, y, half, 42, [['COD Amount: $', ''], ['Fee Terms', 'Prepaid / Collect']])
-  doc.font('Helvetica').fontSize(5.6).fillColor(INK).text(L.carrierDelivery, rightX, y + 44, { width: half })
-  y = Math.max(leftAfter, y + 60) + 3
+  // ── Value / COD ───────────────────────────────────────────────────────────
+  const vH = 34
+  boxOutline(doc, M, y, half, vH)
+  doc.font('Helvetica').fontSize(5).fillColor('#000').text(L.value, M + 3, y + 3, { width: half - 6 })
+  boxOutline(doc, rX, y, half, vH)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor('#000').text('COD Amount: $ ____________________', rX + 4, y + 4)
+  // Draw real checkboxes (the ☐ glyph isn't in pdfkit's base font).
+  const chk = (x, yy, lab) => {
+    doc.font('Helvetica-Bold').fontSize(7).fillColor('#000').text(lab, x, yy, { continued: false })
+    const bx = x + doc.widthOfString(lab) + 2
+    doc.rect(bx, yy, 6, 6).lineWidth(0.5).stroke('#000')
+    return bx + 12
+  }
+  const fx = chk(rX + 4, y + 16, 'Fee Terms:  Collect:')
+  chk(fx, y + 16, 'Prepaid:')
+  chk(rX + 4, y + 26, 'Customer check acceptable:')
+  y += vH + 2
 
-  doc.font('Helvetica').fontSize(5.8).fillColor(INK).text(L.received, M, y, { width: W, align: 'justify' })
-  y = doc.y + 4
+  // ── Liability note band ───────────────────────────────────────────────────
+  boxOutline(doc, M, y, W, 12)
+  doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000').text(L.liability, M + 3, y + 3, { width: W - 6 })
+  y += 14
 
-  // ── Signatures ──────────────────────────────────────────────────────────────
-  const sH = 66
-  boxOutline(doc, M, y, W, sH)
-  const sHalf = W / 2
-  doc.font('Helvetica-Bold').fontSize(6.5).fillColor(INK).text('SHIPPER SIGNATURE / DATE', M + 4, y + 4)
-  doc.font('Helvetica').fontSize(5).fillColor('#333').text(L.shipperCert, M + 4, y + 13, { width: sHalf - 8 })
-  doc.moveTo(M + 4, y + sH - 8).lineTo(M + sHalf - 8, y + sH - 8).lineWidth(0.5).stroke(INK)
+  // ── Received / carrier delivery ─────────────────────────────────────────
+  const rcH = 26
+  boxOutline(doc, M, y, half, rcH)
+  doc.font('Helvetica').fontSize(4.6).fillColor('#000').text(L.received, M + 3, y + 2, { width: half - 6 })
+  boxOutline(doc, rX, y, half, rcH)
+  doc.font('Helvetica').fontSize(5.2).fillColor('#000').text(L.carrierDelivery, rX + 4, y + 2, { width: half - 8 })
+  doc.font('Helvetica').fontSize(5).fillColor('#000').text('____________________  Shipper Signature', rX + 4, y + rcH - 8)
+  y += rcH + 2
 
-  doc.font('Helvetica-Bold').fontSize(6.5).fillColor(INK).text('CARRIER SIGNATURE / PICKUP DATE', M + sHalf + 4, y + 4)
-  doc.font('Helvetica').fontSize(5).fillColor('#333').text(L.carrierCert, M + sHalf + 4, y + 13, { width: sHalf - 8 })
-  doc.font('Helvetica-Oblique').fontSize(5).fillColor('#333').text(L.goodOrder, M + sHalf + 4, y + sH - 16, { width: sHalf - 8 })
-  doc.moveTo(M + sHalf + 4, y + sH - 8).lineTo(M + W - 4, y + sH - 8).stroke(INK)
-  doc.moveTo(M + sHalf, y).lineTo(M + sHalf, y + sH).stroke(INK)
+  // ── Signature blocks ──────────────────────────────────────────────────────
+  const sH = 56
+  const q = W / 4
+  for (let i = 0; i < 4; i++) boxOutline(doc, M + i * q, y, q, sH)
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#000').text('SHIPPER SIGNATURE / DATE', M + 3, y + 3, { width: q - 6 })
+  doc.font('Helvetica').fontSize(4.3).fillColor('#333').text(L.shipperCert, M + 3, y + 13, { width: q - 6 })
+
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#000').text('Trailer Loaded:', M + q + 3, y + 3)
+  checkRow(doc, M + q + 3, y + 14, 'By Shipper', true)
+  checkRow(doc, M + q + 3, y + 26, 'By Driver', false)
+
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#000').text('Freight Counted:', M + 2 * q + 3, y + 3)
+  checkRow(doc, M + 2 * q + 3, y + 14, 'By Shipper', true)
+  checkRow(doc, M + 2 * q + 3, y + 25, 'By Driver/pallets said to contain', false)
+  checkRow(doc, M + 2 * q + 3, y + 36, 'By Driver/Pieces', false)
+
+  doc.font('Helvetica-Bold').fontSize(6).fillColor('#000').text('CARRIER SIGNATURE / PICKUP DATE', M + 3 * q + 3, y + 3, { width: q - 6 })
+  doc.font('Helvetica').fontSize(4).fillColor('#333').text(L.carrierCert, M + 3 * q + 3, y + 16, { width: q - 6 })
   y += sH + 3
 
-  doc.font('Helvetica').fontSize(5.5).fillColor('#999')
-    .text(`Generated ${new Date().toISOString().slice(0, 10)} · Naghedi Work-Hub · app-assigned BOL, unique & never reused`, M, y, { width: W, align: 'center' })
-}
-
-// ── drawing helpers ──────────────────────────────────────────────────────────
-function boxOutline(doc, x, y, w, h) { doc.lineWidth(0.8).rect(x, y, w, h).stroke(INK) }
-
-function box(doc, x, y, w, h, title) {
-  boxOutline(doc, x, y, w, h)
-  if (title) {
-    doc.save().rect(x, y, w, 12).fill(HEAD_FILL).restore()
-    doc.rect(x, y, w, 12).stroke(INK)
-    doc.fillColor(INK).fontSize(6.5).font('Helvetica-Bold').text(title, x + 3, y + 3.5, { width: w - 6 })
+  // ── Footer note ───────────────────────────────────────────────────────────
+  doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000')
+    .text(isMaster ? L.masterFoot : L.finalFoot, M, y, { width: W })
+  if (missing.length) {
+    doc.fillColor(RED).font('Helvetica-Bold').fontSize(6)
+      .text(`! Ship-to ${missing.join(', ')} not on file — confirm before shipping.`, M, doc.y + 2, { width: W })
   }
-  return y + 14
 }
 
-function sectionHeader(doc, x, y, w, title) {
-  doc.save().rect(x, y, w, 12).fill('#d8d8d8').restore()
-  doc.rect(x, y, w, 12).lineWidth(0.8).stroke(INK)
-  doc.fillColor(INK).fontSize(7).font('Helvetica-Bold').text(title, x + 4, y + 3, { width: w - 8 })
+// ── drawing helpers ───────────────────────────────────────────────────────
+function boxOutline(doc, x, y, w, h) { doc.lineWidth(0.8).rect(x, y, w, h).stroke('#000') }
+function blackBar(doc, x, y, w, title) {
+  doc.save().rect(x, y, w, 11).fill('#111').restore()
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7).text(title, x, y + 2.5, { width: w, align: 'center' })
 }
-
-function addrBox(doc, x, y, w, h, title, a, idLabel, missing = []) {
-  const iy = box(doc, x, y, w, h, title)
+function sectionBar(doc, x, y, w, title) {
+  doc.save().rect(x, y, w, 11).fill('#111').restore()
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7).text(title, x, y + 2.5, { width: w, align: 'center' })
+}
+function fob(doc, x, y) {
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('FOB:', x, y + 0.5)
+  doc.rect(x + 20, y, 7, 7).lineWidth(0.6).stroke('#000')
+}
+function addrLines(doc, x, y, w, a, missing, boldName = false) {
   const line2 = [a.city, a.state].filter(Boolean).join(', ')
-  const lines = [
-    ['Name:', a.name || ''],
-    ['Address:', a.street || (missing.includes('street') ? '(confirm street)' : '')],
-    ['City/State/Zip:', (line2 || (missing.length ? '(confirm city/state)' : '')) + (a.zip ? ` ${a.zip}` : missing.includes('zip') ? ' (confirm ZIP)' : '')],
+  const nameLines = String(a.name || '').split('\n')
+  const rows = [
+    ['Name:', nameLines],
+    ['Address:', [a.street || (missing.includes('street') ? '(confirm street)' : '')]],
+    ['City/State/Zip:', [(line2 || (missing.includes('city') ? '(confirm city/state)' : '')) + (a.zip ? ` ${a.zip}` : missing.includes('zip') ? ' (confirm ZIP)' : '')]],
   ]
-  let ly = iy + 2
-  for (const [lab, val] of lines) {
-    doc.font('Helvetica').fontSize(6).fillColor('#555').text(lab, x + 4, ly)
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(/\(confirm/.test(val) ? RED : INK).text(val || ' ', x + 62, ly - 1, { width: w - 66 })
-    ly += 15
+  let ly = y
+  for (const [lab, vals] of rows) {
+    doc.font('Helvetica').fontSize(6).fillColor('#000').text(lab, x + 3, ly + 1)
+    for (const v of vals) {
+      doc.font(boldName ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5).fillColor(/\(confirm/.test(v) ? RED : (boldName ? RED : '#000')).text(v || ' ', x + 62, ly, { width: w - 66 })
+      ly += 9.5
+    }
+    ly += 2
   }
-  if (idLabel) doc.font('Helvetica').fontSize(6).fillColor('#555').text(idLabel, x + 4, y + h - 10)
 }
-
-function labeledBox(doc, x, y, w, h, rows) {
-  boxOutline(doc, x, y, w, h)
-  const rh = (h - 2) / rows.length
-  rows.forEach(([lab, val], i) => {
-    const ry = y + 2 + i * rh
-    if (i) doc.moveTo(x, ry).lineTo(x + w, ry).lineWidth(0.3).stroke('#bbb')
-    doc.font('Helvetica').fontSize(5.8).fillColor('#555').text(lab, x + 4, ry + 2)
-    doc.font('Helvetica-Bold').fontSize(8).fillColor(INK).text(val || ' ', x + 4, ry + 9, { width: w - 8 })
-  })
-}
-
-function freightTermsBox(doc, x, y, w, h) {
-  const iy = box(doc, x, y, w, h, 'Freight Charge Terms')
-  doc.font('Helvetica').fontSize(5.6).fillColor('#555').text(L.prepaidNote, x + 4, iy)
-  const opts = [['Prepaid', true], ['Collect', false], ['3rd Party', false]]
-  let ox = x + 4
-  doc.fontSize(8)
-  opts.forEach(([lab, on]) => {
-    doc.rect(ox, iy + 12, 8, 8).lineWidth(0.6).stroke(INK)
-    if (on) doc.font('Helvetica-Bold').fillColor(INK).text('X', ox + 1.5, iy + 12.5)
-    doc.font('Helvetica').fontSize(8).fillColor(INK).text(lab, ox + 11, iy + 12.5)
-    ox += 11 + doc.widthOfString(lab) + 14
-  })
-  doc.font('Helvetica').fontSize(6).fillColor('#333').text(L.master, x + 4, iy + 30, { width: w - 8 })
-}
-
-function tableHeader(doc, x, y, cols, labels) {
-  doc.save().rect(x, y, cols.reduce((a, b) => a + b, 0), 13).fill('#f0f0f0').restore()
+function gridHeader(doc, x, y, cols, labels) {
   let cx = x
-  doc.font('Helvetica-Bold').fontSize(5.6).fillColor(INK)
-  cols.forEach((cw, i) => {
-    doc.rect(cx, y, cw, 13).lineWidth(0.4).stroke('#999')
-    doc.text(labels[i], cx + 2, y + 3.5, { width: cw - 4 })
-    cx += cw
-  })
+  doc.save().rect(x, y, cols.reduce((a, b) => a + b, 0), 15).fill('#f0f0f0').restore()
+  doc.font('Helvetica-Bold').fontSize(5.2).fillColor('#000')
+  cols.forEach((cw, i) => { doc.rect(cx, y, cw, 15).lineWidth(0.4).stroke('#999'); doc.text(labels[i], cx + 2, y + 3, { width: cw - 4, align: 'center' }); cx += cw })
 }
-
-function tableRow(doc, x, y, cols, vals, bold = false) {
+function gridRow(doc, x, y, cols, vals, bold, color) {
   let cx = x
-  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5).fillColor(INK)
-  cols.forEach((cw, i) => {
-    doc.rect(cx, y, cw, 13).lineWidth(0.3).stroke('#ccc')
-    doc.text(vals[i] || '', cx + 2, y + 3, { width: cw - 4 })
-    cx += cw
-  })
+  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 7 : 8).fillColor(bold ? '#000' : (color || '#000'))
+  cols.forEach((cw, i) => { doc.rect(cx, y, cw, 15).lineWidth(0.3).stroke('#ccc'); doc.text(vals[i] || '', cx + 2, y + 4, { width: cw - 4, align: i === 0 ? 'left' : 'center' }); cx += cw })
+}
+function checkRow(doc, x, y, lab, on) {
+  doc.rect(x, y, 6, 6).lineWidth(0.5).stroke('#000')
+  if (on) doc.font('Helvetica-Bold').fontSize(6.5).fillColor(RED).text('X', x + 0.8, y + 0.3)
+  doc.font('Helvetica').fontSize(5).fillColor('#000').text(lab, x + 9, y + 0.8, { width: 90 })
 }

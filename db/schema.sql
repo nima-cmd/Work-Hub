@@ -668,6 +668,12 @@ CREATE TABLE IF NOT EXISTS routing_shipment (
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_routing_shipment_partner ON routing_shipment(partner);
+-- Macy's guide fields (Nima, 2026-07-22): which 1:1 Merge Center this
+-- Bloomingdale's shipment routes through (assigned per routing — CA/NJ/HP), plus
+-- the physical trailer + seal numbers that must appear on the BOL.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS merge_center   TEXT DEFAULT 'CA';
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS trailer_number TEXT;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS seal_number    TEXT;
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
@@ -686,6 +692,12 @@ CREATE TABLE IF NOT EXISTS routing_auth (
   created_at   TIMESTAMPTZ DEFAULT now(),
   updated_at   TIMESTAMPTZ DEFAULT now()
 );
+-- Master BOL number (Nima, 2026-07-22): when one authorization covers several
+-- final-destination DCs via a merge center, the app mints ONE Master BOL number
+-- (from bol_number_seq, same never-reuse guarantee) recorded on the auth. It is
+-- NOT transmitted on the 856; the underlying per-DC BOLs are.
+ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS master_bol_number TEXT UNIQUE;
+ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS merge_center TEXT DEFAULT 'CA';
 
 -- routing_hold (Nima, 2026-07-22): a PO-DC deliberately pulled OUT of routing —
 -- packed but can't ship yet, so it must NOT be consolidated onto another PO's

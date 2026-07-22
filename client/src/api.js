@@ -654,3 +654,13 @@ export async function releaseRoutingPo(po, dc) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Master BOL (multi-DC via merge center)
+export function masterBolPdfUrl(authNumber) {
+  return `/api/routing/auth/${encodeURIComponent(authNumber)}/master-bol.pdf`
+}
+export async function fileMasterToDrive(authNumber) {
+  const res = await fetch(`/api/routing/auth/${encodeURIComponent(authNumber)}/master-to-drive`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}

@@ -16,6 +16,7 @@ import {
   resolveEdiPo, unresolveEdiPo,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
+  streamMasterBol, fileMasterToDrive,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -385,6 +386,25 @@ app.post('/api/routing/shipment/:id/file-to-drive', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Master BOL for an authorization (aggregates its DC shipments)
+app.get('/api/routing/auth/:authNumber/master-bol.pdf', async (req, res) => {
+  try {
+    await streamMasterBol(res, req.params.authNumber)
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/routing/auth/:authNumber/master-to-drive', async (req, res) => {
+  try {
+    res.json(await fileMasterToDrive(req.params.authNumber))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 

@@ -31,6 +31,7 @@ import {
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
   fetchRoutingShipmentById,
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
+  ensureMasterBol,
 } from '../src/ingest/loadToDb.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
@@ -1021,6 +1022,54 @@ export async function fileShipmentToDrive(id) {
   return uploadBolPdf({
     partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
   })
+}
+
+// ── Master BOL (multi-DC via 1:1 Merge Center) ───────────────────────────────
+// Aggregate every underlying shipment on an authorization into one Master BOL:
+// union of POs (each PO's cartons/weight summed across its DCs), summed totals,
+// ship-to the merge center. Mints the Master BOL number (once) on the auth.
+async function buildMasterShipment(authNumber) {
+  const auths = await fetchRoutingAuths()
+  const auth = auths.find((a) => a.authNumber === authNumber)
+  if (!auth) throw new Error('auth not found')
+  const all = await fetchRoutingShipments()
+  const members = all.filter((s) => s.authNumber === authNumber)
+  if (!members.length) throw new Error('no shipments are assigned this authorization yet')
+
+  const packages = await fetchEdiPackages()
+  const perPo = new Map()
+  let cartons = 0, units = 0, weight = 0, cubic = 0
+  for (const s of members) {
+    for (const po of (s.memberPos || [])) {
+      const row = packages.find((p) => String(p.poNumber) === String(po) && String(p.dc) === String(s.dc))
+      const c = row?.cartons || 0, w = Math.ceil(Number(row?.weight) || 0), u = row?.units || 0
+      const cur = perPo.get(po) || { po, cartons: 0, weight: 0 }
+      cur.cartons += c; cur.weight += w
+      perPo.set(po, cur)
+      cartons += c; units += u; weight += w
+    }
+    cubic += Number(s.cubicFeet) || 0
+  }
+  const bolNumber = await ensureMasterBol(authNumber)
+  return {
+    kind: 'master', isMaster: true, partner: auth.partner || members[0].partner,
+    dc: 'MERGE', mergeCenter: auth.mergeCenter || members[0].mergeCenter || 'CA',
+    bolNumber, authNumber, carrier: auth.carrier, scac: auth.scac,
+    memberPos: [...perPo.keys()], lineItems: [...perPo.values()],
+    cartons, units, weightLb: weight, cubicFeet: cubic,
+  }
+}
+
+export async function streamMasterBol(res, authNumber) {
+  const master = await buildMasterShipment(authNumber)
+  await renderBolTo(res, master, { kind: 'master' })
+}
+
+export async function fileMasterToDrive(authNumber) {
+  const master = await buildMasterShipment(authNumber)
+  const buffer = await buildBolPdf(master, { kind: 'master' })
+  const filename = `MASTER_BOL_${master.bolNumber}.pdf`
+  return uploadBolPdf({ partner: master.partner, pos: master.memberPos, filename, buffer })
 }
 
 export async function assignRoutingBol(body = {}) {

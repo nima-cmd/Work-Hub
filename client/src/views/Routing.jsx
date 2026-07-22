@@ -3,6 +3,7 @@ import {
   fetchRouting, assignRoutingBol, voidRoutingShipment,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
+  masterBolPdfUrl, fileMasterToDrive,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 
@@ -132,7 +133,7 @@ export default function Routing() {
 
           <HeldPanel held={data.held} busy={busy} onRelease={onRelease} />
 
-          <AuthPanel auths={auths} busy={busy}
+          <AuthPanel auths={auths} shipments={data.shipments || []} busy={busy}
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
 
@@ -218,7 +219,7 @@ function HeldPanel({ held, busy, onRelease }) {
   )
 }
 
-function AuthPanel({ auths, busy, onSave, onDelete }) {
+function AuthPanel({ auths, shipments, busy, onSave, onDelete }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
   function add() {
@@ -226,6 +227,7 @@ function AuthPanel({ auths, busy, onSave, onDelete }) {
     onSave(draft)
     setDraft({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
   }
+  const countFor = (n) => shipments.filter((s) => s.authNumber === n).length
   return (
     <div className="rt-auths">
       <button className="rt-authsToggle" onClick={() => setOpen((o) => !o)}>
@@ -235,18 +237,24 @@ function AuthPanel({ auths, busy, onSave, onDelete }) {
         <div className="rt-authsBody">
           <div className="muted rt-authsHint">
             One auth number covers a set of shipments (from the routing email). Create it here, then
-            select it on each shipment it covers — that stamps the carrier / SCAC.
+            select it on each shipment it covers — that stamps the carrier / SCAC. When an auth covers
+            multiple final DCs, generate ONE Master BOL for the merge center (not sent on the 856).
           </div>
           <div className="rt-authList">
-            {auths.map((a) => (
-              <div key={a.authNumber} className="rt-authChip">
-                <b>{a.authNumber}</b>
-                <span className="muted"> · {a.partner || '—'}</span>
-                {a.carrier && <span className="muted"> · {a.carrier}</span>}
-                {a.scac && <span className="rt-scac">{a.scac}</span>}
-                <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
-              </div>
-            ))}
+            {auths.map((a) => {
+              const n = countFor(a.authNumber)
+              return (
+                <div key={a.authNumber} className="rt-authChip">
+                  <b>{a.authNumber}</b>
+                  <span className="muted"> · {a.partner || '—'}</span>
+                  {a.carrier && <span className="muted"> · {a.carrier}</span>}
+                  {a.scac && <span className="rt-scac">{a.scac}</span>}
+                  <span className="muted"> · {n} shipment{n === 1 ? '' : 's'}</span>
+                  {n >= 2 && a.partner !== 'Nordstrom' && <MasterActions auth={a} />}
+                  <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
+                </div>
+              )
+            })}
             {!auths.length && <span className="muted">No authorizations yet.</span>}
           </div>
           <div className="rt-authForm">
@@ -331,6 +339,30 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, de
   )
 }
 
+// Master BOL for an authorization covering multiple final DCs (merge-center
+// consolidation). Opens the aggregated Master BOL PDF; files it to Drive.
+function MasterActions({ auth }) {
+  const [state, setState] = useState(null)
+  async function file() {
+    setState({ busy: true })
+    try {
+      const r = await fileMasterToDrive(auth.authNumber)
+      if (r.needsReauth) setState({ msg: 'Drive not authorized yet', ok: false })
+      else if (r.configured === false) setState({ msg: 'Google not connected', ok: false })
+      else setState({ msg: 'filed', ok: true })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+  return (
+    <span className="rt-masterActions">
+      <a className="rt-masterLink" href={masterBolPdfUrl(auth.authNumber)} target="_blank" rel="noreferrer">
+        📋 Master BOL{auth.masterBolNumber ? ` ${auth.masterBolNumber}` : ''} ↗
+      </a>
+      <button className="rt-masterFile" disabled={state?.busy} onClick={file}>{state?.busy ? '…' : '⤒ Drive'}</button>
+      {state?.msg && <span className={'rt-masterMsg ' + (state.ok ? 'ok' : 'err')}>{state.ok ? '✓ filed' : state.msg}</span>}
+    </span>
+  )
+}
+
 // Generate / file the VICS BOL. The PDF opens inline (browser can save/print);
 // "File to Drive" uploads it to /Work-Hub BOLs/<partner>/<PO>/ and links back.
 function BolActions({ s }) {
@@ -378,14 +410,18 @@ function RefSummary({ s }) {
 
 function RefEditor({ s, auths, busy, onSave }) {
   const [d, setD] = useState({
-    status: s.status || 'bol_assigned',
+    status: s.status || 'needs_routing',
     authNumber: s.authNumber || '',
     carrier: s.carrier || '',
     scac: s.scac || '',
     projectNumber: s.projectNumber || '',
     shipmentNumber: s.shipmentNumber || '',
     shipDate: s.shipDate ? String(s.shipDate).slice(0, 10) : '',
+    mergeCenter: s.mergeCenter || 'CA',
+    trailerNumber: s.trailerNumber || '',
+    sealNumber: s.sealNumber || '',
   })
+  const isBloomies = s.partner === "Bloomingdale's"
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
 
   // Picking an existing auth fills carrier/SCAC from it (the routing email
@@ -421,6 +457,19 @@ function RefEditor({ s, auths, busy, onSave }) {
       <div className="rt-editRow">
         <label>Carrier<input value={d.carrier} onChange={set('carrier')} /></label>
         <label>SCAC<input value={d.scac} onChange={set('scac')} /></label>
+      </div>
+      {isBloomies && (
+        <label>Merge center (ship-to)
+          <select value={d.mergeCenter} onChange={set('mergeCenter')}>
+            <option value="CA">Mega-Merge CA · Santa Fe Springs</option>
+            <option value="NJ">Mega-Merge NJ · Burlington</option>
+            <option value="HP">High Point Merge · Dynamic</option>
+          </select>
+        </label>
+      )}
+      <div className="rt-editRow">
+        <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>
+        <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>
       </div>
       <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
       <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>

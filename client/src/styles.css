@@ -1860,3 +1860,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-return { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--holo); border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
 .rt-return:hover { border-color: var(--holo); }
 .rt-return:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Master BOL actions (Nima, 2026-07-22) ───────────────────────────────── */
+.rt-masterActions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding-left: 8px; border-left: 1px solid var(--line); }
+.rt-masterLink { color: var(--accent); text-decoration: none; font-size: 11px; font-weight: 600; }
+.rt-masterLink:hover { text-decoration: underline; }
+.rt-masterFile { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+.rt-masterFile:hover { color: var(--text); }
+.rt-masterMsg { font-size: 11px; }
+.rt-masterMsg.ok { color: #7ee787; }
+.rt-masterMsg.err { color: var(--mid); }
