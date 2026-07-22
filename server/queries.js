@@ -337,12 +337,27 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
   const ifResults = rows.map((r) => shape(r, {
     boxes: Number(r.boxes), boxWeight: Number(r.boxWeight), inData: !!r.soNumber,
   }))
+  // Routing status per DC carton (Nima, 2026-07-22): reflect what Routing knows
+  // back onto the scanned doc — is this PO-DC in the package feed, and does it
+  // already have a BOL? So the Custody Register shows where routing stands.
+  const [pkgs, ships] = await Promise.all([fetchEdiPackages(), fetchRoutingShipments()])
+  const feedKeys = new Set(pkgs.map((p) => `${p.poNumber}|${p.dc}`))
+  const bolByKey = new Map()
+  for (const s of ships) for (const po of (s.memberPos || [])) bolByKey.set(`${po}|${s.dc}`, s)
+
   const dcResults = dcRows.map((r) => {
     const [po, abbrev] = String(r.docNumber).split(':')
+    const key = `${po}|${abbrev || ''}`
+    const ship = bolByKey.get(key)
+    const routing = {
+      inFeed: feedKeys.has(key),
+      bolNumber: ship?.bolNumber || null,
+      status: ship?.status || null,
+    }
     return shape(r, {
       isDc: true, poNumber: po, dc: abbrev || null,
       label: `PO ${po}${abbrev ? ` · ${abbrev}` : ''}`,
-      boxes: 0, boxList: [], inData: !!r.customer,
+      boxes: 0, boxList: [], inData: !!r.customer, routing,
     })
   })
   return [...ifResults, ...dcResults].sort((a, b) => new Date(a.firstScan) - new Date(b.firstScan))
@@ -862,9 +877,53 @@ export async function getRouting() {
   const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
   const detached = shipments.filter((s) => !liveKeys.has(s.dcPoKey))
 
+  const gaps = await computeRoutingGaps({ packages, shipments })
+
   // packages returned raw too, so the view can re-consolidate over a PO subset
   // (the "consolidate by DC across selected POs" interaction) client-side.
-  return { packages, consolidated, shipments, detached, auths, packageCount: packages.length }
+  return { packages, consolidated, shipments, detached, auths, gaps, packageCount: packages.length }
+}
+
+// The Scan Bay ↔ Routing bridge (Nima, 2026-07-22): a DC carton we've scanned
+// back into our possession but that ISN'T in the current routing feed means we
+// can't route it yet — and the Scan Bay knows exactly which PO-DC and why.
+//   - 'missing'  — in possession, not in the feed at all → export it / it wasn't
+//                  packed into EDI packages yet.
+//   - 'stale'    — in the feed, but we scanned it back AFTER the last feed
+//                  export → re-upload EDIPackagesVolume; the numbers may be old.
+// Cartons that already have a BOL are flagged handled (hasShipment) so they drop
+// off the "needs attention" list.
+async function computeRoutingGaps({ packages, shipments }) {
+  const { rows: dcRows } = await pool.query(`
+    SELECT doc_number AS "docNumber",
+           MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_OUT') AS out_at,
+           MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_IN')  AS in_at
+    FROM order_events
+    WHERE doc_type='DC' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED')
+    GROUP BY doc_number
+    HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN')) AND NOT bool_or(event_type='CUSTODY_CLEARED')
+  `)
+  const snap = await pool.query(`SELECT MAX(file_modified) AS m FROM import_snapshots WHERE source='ediPackagesVolume'`)
+  const feedAt = snap.rows[0].m ? new Date(snap.rows[0].m).getTime() : 0
+  const inFeed = new Set(packages.map((p) => `${p.poNumber}|${p.dc}`))
+  const shipped = new Set(shipments.flatMap((s) => (s.memberPos || []).map((po) => `${po}|${s.dc}`)))
+
+  const gaps = []
+  for (const r of dcRows) {
+    const outT = r.out_at ? new Date(r.out_at).getTime() : 0
+    const inT = r.in_at ? new Date(r.in_at).getTime() : 0
+    if (!(inT > 0 && inT >= outT)) continue // only cartons currently back in our hands
+    const [po, dc] = String(r.docNumber).split(':')
+    if (!dc) continue
+    const key = `${po}|${dc}`
+    let reason = null
+    if (!inFeed.has(key)) reason = 'missing'
+    else if (feedAt && inT > feedAt) reason = 'stale'
+    if (!reason) continue
+    gaps.push({ po, dc, label: `PO ${po} · DC ${dc}`, reason, lastScanAt: new Date(inT).toISOString(), hasShipment: shipped.has(key) })
+  }
+  gaps.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === 'missing' ? -1 : 1))
+  return { items: gaps, feedImportedAt: feedAt ? new Date(feedAt).toISOString() : null }
 }
 
 export async function setShipmentRefs(id, fields) {

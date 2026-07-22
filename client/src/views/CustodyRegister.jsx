@@ -16,6 +16,16 @@ const COLS = [
   { state: 'returned', label: 'Back in our hands', hint: 'Scanned in — box it, then it’s ready to leave' },
 ]
 
+// Routing status reflected onto a scanned DC carton (Nima, 2026-07-22): shows
+// where this PO-DC stands in the Routing flow — has a BOL, is in the feed
+// awaiting a BOL, or isn't in the feed yet (so Routing can't see it).
+function RoutingTag({ routing }) {
+  if (!routing) return null
+  if (routing.bolNumber) return <span className="pill fresh" title="Routed in the BOL workspace">🚚 BOL {routing.bolNumber}</span>
+  if (routing.inFeed) return <span className="pill warn" title="In the routing feed, no BOL assigned yet">needs BOL</span>
+  return <span className="pill missing" title="Not in the EDI Packages Volume feed — re-export so Routing can see it">not in feed</span>
+}
+
 const ago = (iso) => {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
   if (d <= 0) return 'today'
@@ -146,6 +156,7 @@ export default function CustodyRegister() {
                       {state === 'with_warehouse' ? 'out' : 'in'} {ago(r.lastScan)}
                     </span>
                     {!r.isDc && r.boxes > 0 && <span className="boxTag">📦 {r.boxes} · {r.boxWeight} lb</span>}
+                    {r.isDc && <RoutingTag routing={r.routing} />}
                     {!r.isDc && <LabelButtons info={{ ifNumber: r.ifNumber, soNumber: r.soNumber, customer: r.customer, poNumber: r.poNumber }} />}
                   </div>
                   {!r.isDc && <Boxes r={r} onSaved={refresh} />}

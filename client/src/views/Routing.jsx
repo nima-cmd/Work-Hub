@@ -120,6 +120,8 @@ export default function Routing() {
             <button className="btnGhost" onClick={() => setSelected(new Set())}>None</button>
           </div>
 
+          <GapsPanel gaps={data.gaps} />
+
           <AuthPanel auths={auths} busy={busy}
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
@@ -148,6 +150,36 @@ export default function Routing() {
             </section>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// The Scan Bay bridge: DC cartons in our possession that we can't route because
+// the feed is missing them or is older than the scan. Tells Nima what to export
+// and why. Cartons already given a BOL are shown as handled, not as gaps.
+function GapsPanel({ gaps }) {
+  const items = (gaps?.items || []).filter((g) => !g.hasShipment)
+  if (!items.length) return null
+  const missing = items.filter((g) => g.reason === 'missing')
+  const stale = items.filter((g) => g.reason === 'stale')
+  return (
+    <div className="rt-gaps">
+      <div className="rt-gapsHead">
+        ⚠ {items.length} PO-DC{items.length === 1 ? '' : 's'} in your possession, not routable yet
+        <span className="muted"> — scanned back in but missing package info</span>
+      </div>
+      {missing.length > 0 && (
+        <div className="rt-gapGroup">
+          <div className="rt-gapWhy"><b>Missing from the feed</b> — packed &amp; scanned back, but not in EDI Packages Volume. Export/re-import searchid=3947 (or finish packing them in NetSuite).</div>
+          <div className="rt-gapChips">{missing.map((g) => <span key={g.label} className="rt-gapChip miss">{g.label}</span>)}</div>
+        </div>
+      )}
+      {stale.length > 0 && (
+        <div className="rt-gapGroup">
+          <div className="rt-gapWhy"><b>Feed is stale</b> — you scanned these back <i>after</i> the last EDI Packages Volume export{gaps.feedImportedAt ? ` (${new Date(gaps.feedImportedAt).toLocaleDateString()})` : ''}. Re-import 3947 so the numbers are current.</div>
+          <div className="rt-gapChips">{stale.map((g) => <span key={g.label} className="rt-gapChip stale">{g.label}</span>)}</div>
+        </div>
       )}
     </div>
   )
