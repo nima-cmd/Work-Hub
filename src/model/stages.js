@@ -29,9 +29,12 @@ export const STAGE_RANK = {
 }
 
 export const STAGE_LABEL = {
-  [STAGE.ON_HOLD]: 'On hold — awaiting approval',
-  [STAGE.OPEN]: 'Open — needs Item Fulfillment',
-  [STAGE.PICKED]: 'Picked — with warehouse',
+  // Naming (Nima, 2026-07-21): the early stages read in NetSuite terms —
+  // on-hold = SO awaiting approval, open = approved SO awaiting fulfillment,
+  // picked = an Item Fulfillment has been created.
+  [STAGE.ON_HOLD]: 'Sales Order — Pending Approval',
+  [STAGE.OPEN]: 'Sales Order — Pending Fulfillment',
+  [STAGE.PICKED]: 'Item Fulfillment',
   [STAGE.PACKED]: 'Packed — watching for invoice',
   [STAGE.INVOICED]: 'Invoiced — pending payment',
   [STAGE.APPROVED]: 'Approved for shipping',
