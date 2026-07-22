@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk } from '../api.js'
 
@@ -146,7 +146,7 @@ export default function Kanban({ orders, tasks = [], onRefresh }) {
                     </label>
                     <span className="so">{o.isGroup ? `PO ${o.poNumber}` : o.soNumber}</span>
                     <SourceBadge source={o.source} />
-                    {o.isGroup && <span className="badge edi">{o.memberCount} SOs</span>}
+                    {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
                   <div className="cust"><ChannelTag order={o} /> <CustomerName order={o} /></div>
                   {o.isGroup
@@ -158,11 +158,12 @@ export default function Kanban({ orders, tasks = [], onRefresh }) {
                       </div>
                     )}
                   <Flags flags={o.flags} />
-                  {/* per-IF label print only on single-order cards — a PO group
-                      fans back out to many IFs across SOs, not one print action */}
+                  {/* single-order cards print their one IF tag; a PO group prints
+                      every member IF's tag at once (GroupLabelButtons) */}
                   {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                     <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
                   ))}
+                  {o.isGroup && <GroupLabelButtons group={o} />}
                 </div>
               )
             })}
