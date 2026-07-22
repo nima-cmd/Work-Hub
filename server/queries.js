@@ -126,7 +126,15 @@ export async function recordCustodyScan({ docNumber, direction, note, confirm = 
   // Per-DC cargo tags (Nima, 2026-07-21) encode a `DC:<po>:<abbrev>` token, not
   // an IF. Resolve the customer/partner from the PO so the scan shows it's
   // Bloomingdale's + which DC, and log custody keyed by the PO+DC carton.
-  const dcTok = parseDcToken(docNumber)
+  // Also recognize a BARE customer-PO scan (Nima, 2026-07-22): the older EDI
+  // labels encoded just the PO number, so a scan that isn't an IF but matches a
+  // known PO is treated as PO-level custody — those labels work without reprint.
+  const raw = String(docNumber || '').trim()
+  let dcTok = parseDcToken(raw)
+  if (!dcTok && raw && !/^IF/i.test(raw)) {
+    const { rows: m } = await pool.query(`SELECT 1 FROM orders WHERE po_number = $1 LIMIT 1`, [raw])
+    if (m.length) dcTok = { poNumber: raw, dc: null }
+  }
   if (dcTok) {
     const po = dcTok.poNumber
     const doc = `${po}:${dcTok.dc || ''}`
