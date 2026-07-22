@@ -7,8 +7,9 @@
 // Open (pre-fulfillment) SOs show only the store, no DC, so parseDc returns
 // null there; the DC is assigned when the Item Fulfillment is created.
 
-// Nima's warehouse abbreviations (2026-07-21). Hayward has no code yet — add it
-// here when Nima gives one; until then it falls back to a derived short code.
+// Nima's warehouse abbreviations (2026-07-21). Bloomingdale's DCs get 2-letter
+// codes; Nordstrom DCs are already numeric (DC 584 → "584", FC 569 → "569") so
+// they abbreviate to the number itself — no map entry needed.
 export const DC_ABBREV = {
   'Secaucus': 'SC',
   'Stone Mountain': 'ST',
@@ -16,21 +17,28 @@ export const DC_ABBREV = {
   'Los Angeles': 'CI',
   'Minooka': 'LC',
   'China Grove DC': 'CG',
+  'Hayward': 'HA',
 }
 
-// Pull the DC name out of a Bloomingdale's ship-to string ("… DC - Secaucus : …").
+// Pull the DC out of a ship-to string. Bloomingdale's names it "… DC - Secaucus
+// : …"; Nordstrom uses a numeric "… - DC 584 - …" or "… - FC 569 - …".
 export function parseDc(customer) {
-  const m = (customer || '').match(/\bDC\s*-\s*([^:]+?)\s*:/i)
-  return m ? m[1].trim() : null
+  const c = customer || ''
+  const bloom = c.match(/\bDC\s*-\s*([^:]+?)\s*:/i)
+  if (bloom) return bloom[1].trim()
+  const nord = c.match(/\b((?:DC|FC)\s*\d+)\b/i)
+  if (nord) return nord[1].replace(/\s+/g, ' ').trim()
+  return null
 }
 
-// Abbreviate a DC name; unmapped names derive a 2-letter code so a label never
-// breaks (flagged to Nima for a real code).
+// Abbreviate a DC: mapped Bloomingdale's name → code; Nordstrom "DC 584"/"FC
+// 569" → the number ("584"/"569"); anything else → a derived 2-letter code.
 export function dcAbbrev(name) {
   if (!name) return null
   if (DC_ABBREV[name]) return DC_ABBREV[name]
-  const bare = name.replace(/\bDC\b/i, '').trim()
-  return bare.slice(0, 2).toUpperCase()
+  const num = name.match(/(?:DC|FC)\s*(\d+)/i)
+  if (num) return num[1]
+  return name.replace(/\bDC\b/i, '').trim().slice(0, 2).toUpperCase()
 }
 
 // Group a PO group's members by DC → [{ dc, abbrev, stores }], sorted biggest
