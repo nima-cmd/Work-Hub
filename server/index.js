@@ -17,6 +17,7 @@ import {
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive,
+  getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -368,6 +369,28 @@ app.delete('/api/routing/hold/:po/:dc', async (req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Email → document links (reusable across docs)
+app.get('/api/email-links', async (req, res) => {
+  try {
+    res.json(await getEmailLinks(req.query.docType, req.query.docNumber))
+  } catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
+})
+app.get('/api/email-links/search', async (req, res) => {
+  try {
+    res.json(await searchLinkableEmails(req.query.q || ''))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+app.post('/api/email-links', async (req, res) => {
+  try {
+    res.json(await addEmailLinkFor(req.body || {}))
+  } catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
+})
+app.delete('/api/email-links/:id', async (req, res) => {
+  try {
+    res.json(await removeEmailLink(req.params.id, req.query.docType, req.query.docNumber))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // Phase 3 — VICS BOL PDF (inline download) + Drive filing

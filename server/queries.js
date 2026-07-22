@@ -32,6 +32,7 @@ import {
   fetchRoutingShipmentById,
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
   ensureMasterBol,
+  fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
 } from '../src/ingest/loadToDb.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
@@ -932,6 +933,30 @@ export async function holdRoutingPo({ po, dc, note }) {
 export async function releaseRoutingPo({ po, dc }) {
   await removeRoutingHold(po, dc)
   return getRouting()
+}
+
+// ── Email → document links (reusable) ────────────────────────────────────────
+const GMAIL_BASE = 'https://mail.google.com/mail/u/0/#all/'
+export async function getEmailLinks(docType, docNumber) {
+  if (!docType || !docNumber) throw new Error('docType and docNumber are required')
+  return fetchEmailLinks(docType, String(docNumber))
+}
+export async function addEmailLinkFor(body = {}) {
+  const { docType, docNumber, subject, gmailId, threadId, fromAddr } = body
+  if (!docType || !docNumber) throw new Error('docType and docNumber are required')
+  // Prefer a real Gmail deep link built from the message/thread id; otherwise
+  // accept a pasted URL (for mail that isn't synced into the app).
+  const gmailUrl = (gmailId || threadId) ? `${GMAIL_BASE}${threadId || gmailId}` : (body.gmailUrl || '')
+  if (!gmailUrl) throw new Error('need a Gmail message/thread id or a pasted URL')
+  await addEmailLink({ docType, docNumber: String(docNumber), subject, gmailUrl, gmailId, threadId, fromAddr })
+  return getEmailLinks(docType, String(docNumber))
+}
+export async function removeEmailLink(id, docType, docNumber) {
+  await deleteEmailLink(id)
+  return (docType && docNumber) ? getEmailLinks(docType, String(docNumber)) : { ok: true }
+}
+export async function searchLinkableEmails(q) {
+  return searchEmailsForLink(q)
 }
 
 // The Scan Bay ↔ Routing bridge (Nima, 2026-07-22): a DC carton we've scanned

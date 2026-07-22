@@ -6,6 +6,7 @@ import {
   masterBolPdfUrl, fileMasterToDrive,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
+import EmailLinks from '../EmailLinks.jsx'
 
 // EDI Routing (Nima, 2026-07-22) — replaces the NetSuite routing_helper.js
 // Suitelet + Google Sheet. Pick which POs are shipping, consolidate into ONE
@@ -245,13 +246,16 @@ function AuthPanel({ auths, shipments, busy, onSave, onDelete }) {
               const n = countFor(a.authNumber)
               return (
                 <div key={a.authNumber} className="rt-authChip">
-                  <b>{a.authNumber}</b>
-                  <span className="muted"> · {a.partner || '—'}</span>
-                  {a.carrier && <span className="muted"> · {a.carrier}</span>}
-                  {a.scac && <span className="rt-scac">{a.scac}</span>}
-                  <span className="muted"> · {n} shipment{n === 1 ? '' : 's'}</span>
-                  {n >= 2 && a.partner !== 'Nordstrom' && <MasterActions auth={a} />}
-                  <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
+                  <div className="rt-authChipTop">
+                    <b>{a.authNumber}</b>
+                    <span className="muted"> · {a.partner || '—'}</span>
+                    {a.carrier && <span className="muted"> · {a.carrier}</span>}
+                    {a.scac && <span className="rt-scac">{a.scac}</span>}
+                    <span className="muted"> · {n} shipment{n === 1 ? '' : 's'}</span>
+                    {n >= 2 && a.partner !== 'Nordstrom' && <MasterActions auth={a} />}
+                    <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
+                  </div>
+                  <EmailLinks docType="AUTH" docNumber={a.authNumber} compact />
                 </div>
               )
             })}
@@ -326,6 +330,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, de
 
           <BolActions s={s} />
           <RefSummary s={s} />
+          <EmailLinks docType="ROUTING_SHIPMENT" docNumber={s.id} compact />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
             {editing ? '▾ Route info' : '✎ Route info'}
           </button>

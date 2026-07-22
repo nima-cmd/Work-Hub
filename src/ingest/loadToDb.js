@@ -895,6 +895,43 @@ export async function fetchQuestEmailById(id, db = pool) {
 }
 
 // Every quest_emails row regardless of dismissed/unread state, for search.
+// ── Email → document links ───────────────────────────────────────────────────
+export async function fetchEmailLinks(docType, docNumber, db = pool) {
+  const { rows } = await db.query(
+    `SELECT id, doc_type AS "docType", doc_number AS "docNumber", subject,
+            gmail_url AS "gmailUrl", gmail_id AS "gmailId", thread_id AS "threadId",
+            from_addr AS "fromAddr", created_at AS "createdAt"
+     FROM email_links WHERE doc_type = $1 AND doc_number = $2 ORDER BY created_at`,
+    [docType, String(docNumber)],
+  )
+  return rows
+}
+export async function addEmailLink({ docType, docNumber, subject, gmailUrl, gmailId, threadId, fromAddr }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO email_links (doc_type, doc_number, subject, gmail_url, gmail_id, thread_id, from_addr)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [docType, String(docNumber), subject || null, gmailUrl, gmailId || null, threadId || null, fromAddr || null],
+  )
+  return rows[0]
+}
+export async function deleteEmailLink(id, db = pool) {
+  const { rowCount } = await db.query('DELETE FROM email_links WHERE id = $1', [id])
+  return rowCount
+}
+// Search synced Gmail for the "attach an email" picker (subject/sender/snippet).
+export async function searchEmailsForLink(q, db = pool) {
+  if (!q || !q.trim()) return []
+  const { rows } = await db.query(
+    `SELECT id, thread_id AS "threadId", subject, from_name AS "fromName", from_address AS "fromAddress",
+            received_at AS "receivedAt"
+     FROM quest_emails
+     WHERE subject ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1 OR snippet ILIKE $1
+     ORDER BY received_at DESC LIMIT 20`,
+    [`%${q.trim()}%`],
+  )
+  return rows
+}
+
 export async function searchQuestEmails(q, db = pool) {
   const { rows } = await db.query(
     `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet, note,

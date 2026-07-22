@@ -712,6 +712,24 @@ CREATE TABLE IF NOT EXISTS routing_hold (
   PRIMARY KEY (po, dc)
 );
 
+-- email_links (Nima, 2026-07-22): attach a Gmail message to any document (a
+-- routing shipment/BOL, an authorization, an order, a task…). Lightweight — we
+-- store only a deep link to the Gmail version + the subject (the link label),
+-- never the body. doc_type + doc_number is the natural key it hangs off; the
+-- same reusable widget drops onto anything.
+CREATE TABLE IF NOT EXISTS email_links (
+  id           SERIAL PRIMARY KEY,
+  doc_type     TEXT NOT NULL,   -- 'ROUTING_SHIPMENT' | 'AUTH' | 'SO' | 'PO' | 'IF' | 'INV' | 'EDI_PO' | 'TASK'
+  doc_number   TEXT NOT NULL,
+  subject      TEXT,            -- shown as the clickable link's label
+  gmail_url    TEXT NOT NULL,   -- deep link to the Gmail message/thread
+  gmail_id     TEXT,            -- Gmail message id (when picked from synced mail)
+  thread_id    TEXT,
+  from_addr    TEXT,
+  created_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_links_doc ON email_links(doc_type, doc_number);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);

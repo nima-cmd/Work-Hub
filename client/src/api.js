@@ -664,3 +664,27 @@ export async function fileMasterToDrive(authNumber) {
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
 }
+
+// Email → document links (reusable across docs)
+export async function fetchEmailLinks(docType, docNumber) {
+  const res = await fetch(`/api/email-links?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+export async function searchLinkableEmails(q) {
+  const res = await fetch(`/api/email-links/search?q=${encodeURIComponent(q)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+export async function addEmailLink(body) {
+  const res = await fetch('/api/email-links', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+export async function deleteEmailLink(id, docType, docNumber) {
+  const res = await fetch(`/api/email-links/${id}?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
