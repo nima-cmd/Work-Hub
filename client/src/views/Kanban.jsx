@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk } from '../api.js'
 
@@ -163,7 +163,8 @@ export default function Kanban({ orders, tasks = [], onRefresh }) {
                   {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                     <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
                   ))}
-                  {o.isGroup && <GroupLabelButtons group={o} />}
+                  {o.isGroup && o.source === 'edi' && <><DcBreakdown group={o} /><DcTagButtons group={o} /></>}
+                  {o.isGroup && o.source !== 'edi' && <GroupLabelButtons group={o} />}
                 </div>
               )
             })}

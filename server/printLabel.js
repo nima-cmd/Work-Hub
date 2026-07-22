@@ -105,6 +105,46 @@ function buildEdiPdf(path, cfg, { poNumber, partner, storeCount, supplyPo, fromS
   })
 }
 
+// Per-DC consolidation tag (Nima, 2026-07-21): one label per distribution
+// center per customer PO — PO number, the DC abbreviation, and how many stores
+// route through that DC. References the PO only (no IF); QR encodes the PO.
+function buildDcPdf(path, cfg, { poNumber, dc, storeCount }) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
+    const out = createWriteStream(path)
+    out.on('finish', resolve)
+    out.on('error', reject)
+    doc.pipe(out)
+    if (cfg.wash) doc.rect(0, 0, cfg.w, cfg.h).fill(cfg.wash)
+    doc.fillColor('black')
+
+    const PO = String(poNumber || '')
+    const stores = Number(storeCount) || 0
+    const storeLine = `${stores} ${stores === 1 ? 'STORE' : 'STORES'}`
+
+    if (cfg.layout === 'compact') {
+      const qrSize = cfg.h - MARGIN * 2
+      drawQr(doc, PO, MARGIN, MARGIN, qrSize)
+      const tx = MARGIN + qrSize + 8
+      const tw = cfg.w - tx - MARGIN
+      doc.font('Helvetica-Bold').fontSize(6).text('◆ NAGHEDI · EDI OUT', tx, MARGIN, { width: tw })
+      doc.font('Helvetica-Bold').fontSize(11).text(`PO ${PO}`, tx, MARGIN + 9, { width: tw, lineBreak: false })
+      if (dc) doc.font('Helvetica-Bold').fontSize(26).text(dc, tx, MARGIN + 22, { width: tw, lineBreak: false })
+      doc.font('Helvetica').fontSize(8).text(storeLine, tx, MARGIN + (dc ? 52 : 26), { width: tw })
+    } else {
+      const cx = cfg.w / 2
+      doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 26, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica').fontSize(9).text('EDI OUTBOUND · BY DC', 0, 50, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      const qrSize = 168
+      drawQr(doc, PO, cx - qrSize / 2, 74, qrSize)
+      doc.font('Helvetica-Bold').fontSize(26).text(`PO ${PO}`, 0, 256, { width: cfg.w, align: 'center' })
+      if (dc) doc.font('Helvetica-Bold').fontSize(72).text(dc, 0, 292, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 320, { width: cfg.w, align: 'center', characterSpacing: 2 })
+    }
+    doc.end()
+  })
+}
+
 function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
@@ -154,12 +194,17 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
 export async function printCargoTag(info, size = '2.25x1.25') {
   const cfg = LABELS[size]
   if (!cfg) throw new Error(`unknown label size: ${size}`)
-  const isEdi = info?.kind === 'edi'
-  if (isEdi ? !info?.poNumber : !info?.ifNumber) throw new Error(isEdi ? 'poNumber required' : 'ifNumber required')
+  const kind = info?.kind === 'edi' ? 'edi' : info?.kind === 'dc' ? 'dc' : 'if'
+  if (kind === 'if' ? !info?.ifNumber : !info?.poNumber) throw new Error(kind === 'if' ? 'ifNumber required' : 'poNumber required')
   const dir = mkdtempSync(join(tmpdir(), 'cargo-tag-'))
-  const stem = String(isEdi ? `edi-${info.poNumber}` : info.ifNumber).replace(/[^\w-]/g, '_')
+  const stem = String(
+    kind === 'edi' ? `edi-${info.poNumber}` :
+    kind === 'dc' ? `dc-${info.poNumber}-${info.dc || 'all'}` :
+    info.ifNumber,
+  ).replace(/[^\w-]/g, '_')
   const path = join(dir, `${stem}-${size}.pdf`)
-  await (isEdi ? buildEdiPdf : buildPdf)(path, cfg, info)
+  const builder = kind === 'edi' ? buildEdiPdf : kind === 'dc' ? buildDcPdf : buildPdf
+  await builder(path, cfg, info)
   return new Promise((resolve, reject) => {
     execFile('lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {
       if (error) return reject(new Error(stderr || error.message))

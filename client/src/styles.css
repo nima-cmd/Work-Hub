@@ -1734,3 +1734,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   padding: 3px 8px; border-radius: 4px; border: 1px solid rgba(92, 216, 255, 0.35); color: #bfe9ff;
   background: rgba(92, 216, 255, 0.08); cursor: pointer; text-decoration: none; }
 .fdMiniBtn:hover { background: rgba(92, 216, 255, 0.16); }
+
+/* DC breakdown chips on EDI PO group rows/cards */
+.dcBreakdown { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.dcChip { font-family: var(--mono, ui-monospace); font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(182, 120, 255, 0.14); border: 1px solid rgba(182, 120, 255, 0.4); color: #d9b8ff; }

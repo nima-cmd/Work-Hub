@@ -5,6 +5,7 @@ import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuite
 import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
 import { imagesFor } from './data/characterImages.js'
+import { dcBreakdown } from '../../src/model/dc.js'
 
 // Channel tag + colored customer name (Nima, 2026-07-20) — one consistent
 // color per account across every view, so Nordstrom/Bloomingdale's/Shopbop/
@@ -616,6 +617,55 @@ export function TaskLink({ docType, docNumber, index, onCreated, onNavigate, lab
   if (status === 'open') return <button className="linkBtn taskLinkBtn open" title="A task is open for this doc" onClick={(e) => { e.stopPropagation(); onNavigate?.('tasks') }}>◉ Task</button>
   if (status === 'done') return <button className="linkBtn taskLinkBtn done" title="This doc's task was completed" onClick={(e) => { e.stopPropagation(); onNavigate?.('tasks') }}>✓ Task</button>
   return <button className="linkBtn taskLinkBtn" disabled={busy} onClick={create} title="Create a task for this doc">＋ Task</button>
+}
+
+// The DC split of a PO group, shown inline: "SC×10 · ST×5 · JP×4 · CI×4".
+export function DcBreakdown({ group }) {
+  const rows = dcBreakdown(group?.members || []).filter((r) => r.abbrev)
+  if (!rows.length) return null
+  return (
+    <span className="dcBreakdown" title="Distribution centers on this PO">
+      {rows.map((r) => <span key={r.dc} className="dcChip">{r.abbrev}×{r.stores}</span>)}
+    </span>
+  )
+}
+
+// Print one consolidation cargo tag PER DC for a PO group (Nima, 2026-07-21):
+// each label carries the PO, the DC abbreviation, and that DC's store count —
+// PO-referenced, no IF. A PO with no DC yet (unfulfilled / non-Bloomingdale's)
+// prints a single PO-level tag.
+export function DcTagButtons({ group }) {
+  const [sizes, setSizes] = useState({})
+  const [busy, setBusy] = useState(null)
+  useEffect(() => {
+    if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
+    _labelSizes.then(setSizes)
+  }, [])
+  const breakdown = dcBreakdown(group?.members || [])
+  const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
+  if (!available.length || !breakdown.length) return null
+  const n = breakdown.length
+
+  async function printAll(size) {
+    if (n > 1 && !window.confirm(`Print ${n} DC tags for PO ${group.poNumber}?`)) return
+    setBusy(size)
+    try {
+      for (const r of breakdown) {
+        await printCargoTag({ kind: 'dc', poNumber: group.poNumber, dc: r.abbrev, storeCount: r.stores }, size)
+      }
+    } finally { setBusy(null) }
+  }
+  return (
+    <span className="tagBtns">
+      {available.map((s) => (
+        <button key={s} className="linkBtn" disabled={busy === s}
+                title={`Print ${n} per-DC cargo tag${n === 1 ? '' : 's'} for PO ${group.poNumber} (${SIZE_LABEL[s]})`}
+                onClick={() => printAll(s)}>
+          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${n} DC tag${n === 1 ? '' : 's'} (${SIZE_LABEL[s]})`}
+        </button>
+      ))}
+    </span>
+  )
 }
 
 // Human-friendly age from hours.
