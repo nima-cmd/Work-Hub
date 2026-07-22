@@ -11,7 +11,10 @@
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync } from 'node:fs'
 
-const PORT = 51776
+// 51776 is the port registered as an Authorized redirect URI on the Google
+// OAuth client — keep it unless you also add the new port there, or Google
+// returns redirect_uri_mismatch. OAUTH_PORT lets you override for a one-off.
+const PORT = Number(process.env.OAUTH_PORT) || 51776
 const REDIRECT_URI = `http://localhost:${PORT}`
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET
@@ -37,10 +40,6 @@ authUrl.searchParams.set('scope', [
 ].join(' '))
 authUrl.searchParams.set('access_type', 'offline') // required to get a refresh token
 authUrl.searchParams.set('prompt', 'consent') // forces a refresh token even on repeat runs
-
-console.log('\n1. Open this URL in your browser and click Allow:\n')
-console.log(authUrl.toString())
-console.log('\n2. Waiting for you to finish in the browser...\n')
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, REDIRECT_URI)
@@ -86,8 +85,29 @@ const server = createServer(async (req, res) => {
     : `${current}\nGOOGLE_REFRESH_TOKEN="${tokens.refresh_token}"\n`
   writeFileSync(envPath, updated)
 
-  console.log('✅ Saved GOOGLE_REFRESH_TOKEN to .env.local — Gmail access is now set up.')
+  console.log('✅ Saved GOOGLE_REFRESH_TOKEN to .env.local — Gmail/Calendar/Drive access is now set up.')
   process.exit(0)
 })
 
-server.listen(PORT)
+// Fail loudly and usefully if the port can't be bound (the usual "it didn't
+// work" cause: a previous run of this script is still holding 51776, or the
+// dev server grabbed it). Without this, listen() throws an unhandled error and
+// the flow dies silently.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use — likely a previous run of this script still bound to it.`)
+    console.error(`   Free it:   lsof -ti tcp:${PORT} | xargs kill`)
+    console.error(`   Then re-run this script.\n`)
+  } else {
+    console.error(`\n❌ Could not start the local callback server on ${PORT}:`, err.message, '\n')
+  }
+  process.exit(1)
+})
+
+server.listen(PORT, () => {
+  console.log(`\n✓ Listening for Google's redirect on ${REDIRECT_URI}`)
+  console.log(`  (this exact URI must be an Authorized redirect URI on the OAuth client)`)
+  console.log('\n1. Open this URL in your browser and click Allow:\n')
+  console.log(authUrl.toString())
+  console.log('\n2. Waiting for you to finish in the browser...\n')
+})
