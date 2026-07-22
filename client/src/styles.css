@@ -1741,3 +1741,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   background: rgba(182, 120, 255, 0.14); border: 1px solid rgba(182, 120, 255, 0.4); color: #d9b8ff; }
 
 .tagErr { color: var(--hi, #f85149); font-size: 10px; margin-left: 4px; }
+
+/* Custody state badge on Mission Quests cards */
+.custodyBadge { display: inline-block; margin: 4px 0 0; font-family: var(--mono, ui-monospace); font-size: 10px;
+  padding: 1px 7px; border-radius: 4px; border: 1px solid; }
+.cb-warehouse { color: var(--warn, #e0912f); border-color: rgba(224, 145, 47, 0.5); background: rgba(224, 145, 47, 0.1); }
+.cb-returned { color: var(--good, #4fd18a); border-color: rgba(79, 209, 138, 0.5); background: rgba(79, 209, 138, 0.1); }
+.cb-idle { color: #8fa4b8; border-color: #33414f; background: rgba(140, 164, 184, 0.08); }

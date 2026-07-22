@@ -649,12 +649,17 @@ export function DcTagButtons({ group }) {
   if (!available.length || !breakdown.length) return null
   const n = breakdown.length
 
+  // EDI labels carry the warehouse location as the customer (Nima, 2026-07-22)
+  // — the trailing segment of "Warehouse Bulk : Bloomingdale's" reads as the
+  // partner and is cleaner than the long per-store ship-to name.
+  const customer = (group.location || '').split(':').pop().trim() || undefined
+
   async function printAll(size) {
     if (n > 1 && !window.confirm(`Print ${n} DC tags for PO ${group.poNumber}?`)) return
     setBusy(size); setErr(null)
     try {
       for (const r of breakdown) {
-        await printCargoTag({ kind: 'dc', poNumber: group.poNumber, dc: r.abbrev, storeCount: r.stores }, size)
+        await printCargoTag({ kind: 'dc', poNumber: group.poNumber, dc: r.abbrev, storeCount: r.stores, customer }, size)
       }
     } catch (e) { setErr(e.message) } finally { setBusy(null) }
   }
@@ -670,6 +675,35 @@ export function DcTagButtons({ group }) {
       {err && <span className="tagErr">⚠ {err}</span>}
     </span>
   )
+}
+
+// Physical custody of a pipeline card from the scan ledger (Nima, 2026-07-22):
+// is it with the warehouse (scanned OUT, not back), back with us (scanned IN),
+// or still with us / not shipped (an Item Fulfillment that's printed but hasn't
+// started its journey). EDI cards track their per-DC cartons; others track IFs.
+export function cardCustody(card, events = []) {
+  const docs = card?.isGroup && card.source === 'edi'
+    ? dcBreakdown(card.members || []).filter((r) => r.abbrev).map((r) => ({ type: 'DC', num: `${card.poNumber}:${r.abbrev}` }))
+    : (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
+  if (!docs.length) return null
+  let out = 0, scanned = 0
+  for (const d of docs) {
+    const evs = events.filter((e) => e.docType === d.type && e.docNumber === d.num)
+    if (!evs.length) continue
+    const t = (type) => Math.max(0, ...evs.filter((e) => e.eventType === type).map((e) => +new Date(e.occurredAt)))
+    const outT = t('CUSTODY_OUT'), inT = t('CUSTODY_IN')
+    if (outT || inT) scanned++
+    if (outT > inT) out++
+  }
+  if (out > 0) return { state: 'warehouse', label: `◫ With warehouse${docs.length > 1 ? ` ${out}/${docs.length}` : ''}` }
+  if (scanned > 0) return { state: 'returned', label: '✓ Back with us' }
+  return { state: 'idle', label: '🏷 With us · not shipped' }
+}
+
+export function CustodyBadge({ card, events }) {
+  const c = cardCustody(card, events)
+  if (!c) return null
+  return <span className={'custodyBadge cb-' + c.state}>{c.label}</span>
 }
 
 // Human-friendly age from hours.

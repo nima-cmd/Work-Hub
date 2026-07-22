@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk } from '../api.js'
 
@@ -13,7 +13,7 @@ import { createTasksBulk } from '../api.js'
 // consolidated by PO number first (groupOrdersByPo) — one card per PO — and any
 // card (group or single) can be selected and turned into a task, in bulk, with
 // the same completion-requirement + doc-number options the task editor uses.
-export default function Kanban({ orders, tasks = [], onRefresh }) {
+export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const [selected, setSelected] = useState(() => new Set()) // keyed by soNumber (groups use poNumber as soNumber)
   const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState({ needsType: 'none', netsuiteDocType: 'SO', netsuiteDocNumber: '', urgency: '' })
@@ -149,6 +149,7 @@ export default function Kanban({ orders, tasks = [], onRefresh }) {
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
                   <div className="cust"><ChannelTag order={o} /> <CustomerName order={o} /></div>
+                  <CustodyBadge card={o} events={events} />
                   {o.isGroup
                     ? <div className="ifs">{o.soNumbers.slice(0, 4).join(', ')}{o.soNumbers.length > 4 ? ` +${o.soNumbers.length - 4}` : ''}</div>
                     : docRef(o) && (

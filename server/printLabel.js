@@ -108,7 +108,7 @@ function buildEdiPdf(path, cfg, { poNumber, partner, storeCount, supplyPo, fromS
 // Per-DC consolidation tag (Nima, 2026-07-21): one label per distribution
 // center per customer PO — PO number, the DC abbreviation, and how many stores
 // route through that DC. References the PO only (no IF); QR encodes the PO.
-function buildDcPdf(path, cfg, { poNumber, dc, storeCount }) {
+function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
     const out = createWriteStream(path)
@@ -130,18 +130,20 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount }) {
       const tx = MARGIN + qrSize + 8
       const tw = cfg.w - tx - MARGIN
       doc.font('Helvetica-Bold').fontSize(6).text('◆ NAGHEDI · EDI OUT', tx, MARGIN, { width: tw })
-      doc.font('Helvetica-Bold').fontSize(11).text(`PO ${PO}`, tx, MARGIN + 9, { width: tw, lineBreak: false })
-      if (dc) doc.font('Helvetica-Bold').fontSize(26).text(dc, tx, MARGIN + 22, { width: tw, lineBreak: false })
-      doc.font('Helvetica').fontSize(8).text(storeLine, tx, MARGIN + (dc ? 52 : 26), { width: tw })
+      if (customer) doc.font('Helvetica-Bold').fontSize(7).text(customer, tx, MARGIN + 8, { width: tw, lineBreak: false })
+      doc.font('Helvetica-Bold').fontSize(11).text(`PO ${PO}`, tx, MARGIN + 17, { width: tw, lineBreak: false })
+      if (dc) doc.font('Helvetica-Bold').fontSize(24).text(dc, tx, MARGIN + 30, { width: tw, lineBreak: false })
+      doc.font('Helvetica').fontSize(8).text(storeLine, tx, MARGIN + (dc ? 58 : 32), { width: tw })
     } else {
       const cx = cfg.w / 2
       doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 26, { width: cfg.w, align: 'center' })
       doc.font('Helvetica').fontSize(9).text('EDI OUTBOUND · BY DC', 0, 50, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      if (customer) doc.font('Helvetica-Bold').fontSize(13).text(customer, 0, 62, { width: cfg.w, align: 'center' })
       const qrSize = 168
-      drawQr(doc, qrData, cx - qrSize / 2, 74, qrSize)
-      doc.font('Helvetica-Bold').fontSize(26).text(`PO ${PO}`, 0, 256, { width: cfg.w, align: 'center' })
-      if (dc) doc.font('Helvetica-Bold').fontSize(72).text(dc, 0, 292, { width: cfg.w, align: 'center' })
-      doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 320, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      drawQr(doc, qrData, cx - qrSize / 2, 82, qrSize)
+      doc.font('Helvetica-Bold').fontSize(26).text(`PO ${PO}`, 0, 262, { width: cfg.w, align: 'center' })
+      if (dc) doc.font('Helvetica-Bold').fontSize(68).text(dc, 0, 296, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 324, { width: cfg.w, align: 'center', characterSpacing: 2 })
     }
     doc.end()
   })

@@ -15,7 +15,7 @@ export const DC_ABBREV = {
   'Stone Mountain': 'ST',
   'Joppa': 'JP',
   'Los Angeles': 'CI',
-  'Minooka': 'LC',
+  'Minooka': 'CL',
   'China Grove DC': 'CG',
   'Hayward': 'HA',
 }
