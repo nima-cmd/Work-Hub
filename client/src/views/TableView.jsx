@@ -39,7 +39,7 @@ export default function TableView({ orders, tasks = [], onNavigate = () => {}, o
             onClick={o.isGroup ? () => toggleRow(o.poNumber) : undefined}>
           <td className="mono">
             {o.isGroup
-              ? <>{isOpen ? '▾' : '▸'} PO {o.poNumber} <span className="badge edi" style={{ marginLeft: 4 }}>{o.memberCount} SOs</span></>
+              ? <>{isOpen ? '▾' : '▸'} PO {o.poNumber} <span className="badge edi" style={{ marginLeft: 4 }}>{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span></>
               : <>{o.soNumber} <SourceBadge source={o.source} /></>}
           </td>
           <td><CustomerName order={o} /></td>

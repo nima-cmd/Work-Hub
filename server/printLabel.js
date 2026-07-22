@@ -116,6 +116,12 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
     doc.fillColor('black')
 
     const IF = String(ifNumber || '')
+    // EDI cargo tags reference the customer PO, never the sales order (Nima,
+    // 2026-07-21); boutique/ecom tags keep the SO. The QR always encodes the
+    // IF — that's the custody scan identity regardless.
+    const refLines = (info.refByPo && poNumber
+      ? [`PO ${poNumber}`, customer]
+      : [soNumber, customer, poNumber ? `PO ${poNumber}` : '']).filter(Boolean)
     if (cfg.layout === 'compact') {
       // 2.25×1.25: QR left, text column right.
       const qrSize = cfg.h - MARGIN * 2
@@ -125,8 +131,7 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
       doc.font('Helvetica-Bold').fontSize(7).text('◆ NAGHEDI', tx, MARGIN, { width: tw })
       doc.font('Helvetica-Bold').fontSize(18).text(IF, tx, MARGIN + 10, { width: tw })
       doc.font('Helvetica').fontSize(8)
-        .text([soNumber, customer, poNumber ? `PO ${poNumber}` : ''].filter(Boolean).join('\n'),
-          tx, MARGIN + 32, { width: tw, lineGap: 1 })
+        .text(refLines.join('\n'), tx, MARGIN + 32, { width: tw, lineGap: 1 })
     } else {
       // 4×6: centred, big QR — the full cargo tag.
       const cx = cfg.w / 2
@@ -136,8 +141,7 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
       drawQr(doc, IF, cx - qrSize / 2, 78, qrSize)
       doc.font('Helvetica-Bold').fontSize(34).text(IF, 0, 292, { width: cfg.w, align: 'center' })
       doc.font('Helvetica').fontSize(13)
-        .text([soNumber, customer, poNumber ? `PO ${poNumber}` : ''].filter(Boolean).join('\n'),
-          0, 336, { width: cfg.w, align: 'center', lineGap: 3 })
+        .text(refLines.join('\n'), 0, 336, { width: cfg.w, align: 'center', lineGap: 3 })
       doc.moveTo(24, cfg.h - 34).lineTo(cfg.w - 24, cfg.h - 34).lineWidth(2).stroke()
       doc.font('Helvetica').fontSize(8)
         .text('SCAN OUT → WAREHOUSE', 24, cfg.h - 26, { width: cfg.w - 48, align: 'left', characterSpacing: 1, continued: false })

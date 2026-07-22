@@ -330,12 +330,14 @@ export function GroupLabelButtons({ group }) {
     if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
     _labelSizes.then(setSizes)
   }, [])
+  const refByPo = group?.source === 'edi'
   const tags = (group?.members || []).flatMap((m) =>
     (m.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({
-      ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber,
+      ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber, refByPo,
     })))
   const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
   if (!available.length || !tags.length) return null
+  const noun = tags.length === 1 ? 'tag' : 'tags'
 
   async function printAll(size) {
     if (tags.length > 1 && !window.confirm(`Print ${tags.length} cargo tags for PO ${group.poNumber}?`)) return
@@ -346,9 +348,9 @@ export function GroupLabelButtons({ group }) {
     <span className="tagBtns">
       {available.map((s) => (
         <button key={s} className="linkBtn" disabled={busy === s}
-                title={`Print all ${tags.length} ${SIZE_LABEL[s]} cargo tags for this PO`}
+                title={`Print all ${tags.length} ${SIZE_LABEL[s]} cargo ${noun} for PO ${group.poNumber}`}
                 onClick={() => printAll(s)}>
-          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${tags.length} tags (${SIZE_LABEL[s]})`}
+          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${tags.length} ${noun} (${SIZE_LABEL[s]})`}
         </button>
       ))}
     </span>

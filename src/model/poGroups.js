@@ -60,8 +60,11 @@ function mergeGroup(poNumber, members) {
   }
 }
 
-// Returns a flat list: single orders (no PO, or a PO with one SO) pass through
-// unchanged; POs with >1 SO become one group row carrying `members`.
+// Returns a flat list: orders with no PO pass through unchanged; POs with >1 SO
+// become one group row carrying `members`. EDI orders (Nima, 2026-07-21) are
+// ALWAYS referenced by their customer PO — never the sales order — so a
+// single-SO EDI PO still becomes a (one-member) PO group rather than showing
+// its SO number. Non-EDI single-SO POs keep passing through as their SO row.
 export function groupOrdersByPo(orders = []) {
   const byPo = new Map()
   const out = []
@@ -72,7 +75,8 @@ export function groupOrdersByPo(orders = []) {
     byPo.get(po).push(o)
   }
   for (const [po, members] of byPo) {
-    out.push(members.length === 1 ? members[0] : mergeGroup(po, members))
+    const forcePo = members.some((m) => m.source === 'edi')
+    out.push(members.length === 1 && !forcePo ? members[0] : mergeGroup(po, members))
   }
   return out
 }
