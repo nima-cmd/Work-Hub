@@ -13,6 +13,7 @@ import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
 import Datapad from './views/Datapad.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
+import ScanBay from './views/ScanBay.jsx'
 import CustodyRegister from './views/CustodyRegister.jsx'
 import LaunchBay3D from './views/LaunchBay3D.jsx'
 
@@ -97,8 +98,7 @@ const VIEWS = [
   // (views/LaunchBay.jsx) stays on disk if it's ever wanted back.
   { key: 'launch', label: 'Launch Bay', C: LaunchBay3D },
   { key: 'ship', label: 'Ship Departures', C: ShipDepartures },
-  // Scan Bay retired from nav (Nima, 2026-07-22) — custody-by-scan didn't fit
-  // the routing flow. views/ScanBay.jsx stays on disk if it's ever wanted back.
+  { key: 'scan', label: 'Scan Bay', C: ScanBay },
   { key: 'custody', label: 'Custody', C: CustodyRegister },
 ]
 
