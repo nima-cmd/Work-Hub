@@ -20,7 +20,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
-  recordFulfillmentBox, getCustodyRegister,
+  recordFulfillmentBox, getCustodyRegister, clearCustodyItem,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
@@ -151,13 +151,23 @@ app.post('/api/custody/box', async (req, res) => {
   }
 })
 
-// Custody register — IFs in the custody gap (scanned, not yet departed)
+// Custody register — IFs + DC cartons in the custody gap (scanned, not departed)
 app.get('/api/custody/register', async (_req, res) => {
   try {
     res.json(await getCustodyRegister())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Manually clear a custody item off the register (departed / stale orphan)
+app.post('/api/custody/clear', async (req, res) => {
+  try {
+    res.json(await clearCustodyItem(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 

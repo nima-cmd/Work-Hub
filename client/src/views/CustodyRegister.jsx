@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchCustodyRegister, recordFulfillmentBox } from '../api.js'
-import { SourceBadge, LabelButtons } from '../lib.jsx'
+import { fetchCustodyRegister, recordFulfillmentBox, clearCustodyItem } from '../api.js'
+import { SourceBadge, LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 
 // Custody Register (Nima, 2026-07-17) — every IF that entered the custody gap
 // (scanned OUT/IN) and hasn't departed yet. This is the physical-cargo mirror
@@ -83,6 +83,13 @@ export default function CustodyRegister() {
   }
   useEffect(refresh, [])
 
+  async function clear(r) {
+    const label = r.isDc ? r.label : r.ifNumber
+    if (!window.confirm(`Clear ${label} off the register? (departed or no longer tracked)`)) return
+    try { setRows(await clearCustodyItem({ docType: r.isDc ? 'DC' : 'IF', docNumber: r.isDc ? r.docNumber : r.ifNumber })) }
+    catch (e) { setErr(e.message) }
+  }
+
   if (err) return <div className="banner error">⚠ Couldn’t load the custody register: {err}</div>
   if (!rows) return <div className="banner">Loading custody register…</div>
 
@@ -105,28 +112,33 @@ export default function CustodyRegister() {
               </div>
               <p className="hint" style={{ marginTop: -4 }}>{hint}</p>
               {items.map((r) => (
-                <div key={r.ifNumber} className={'kcard' + (r.stale ? ' stale' : '')}>
+                <div key={r.isDc ? r.docNumber : r.ifNumber} className={'kcard' + (r.stale ? ' stale' : '')}>
                   <div className="krow">
-                    <span className="so">{r.ifNumber}</span>
-                    {r.source && <SourceBadge source={r.source} />}
+                    <span className="so">{r.isDc ? r.label : r.ifNumber}</span>
+                    {r.isDc ? <ChannelTag order={r} /> : (r.source && <SourceBadge source={r.source} />)}
+                    <button className="linkBtn custodyClear" title="Clear off the register" onClick={() => clear(r)}>✕ clear</button>
                   </div>
                   <div className="cust">
-                    {r.inData
-                      ? `${r.customer || 'unknown customer'}${r.poNumber ? ` · PO ${r.poNumber}` : ''}`
-                      : 'Not in imported data yet'}
+                    {r.isDc
+                      ? <CustomerName order={r} />
+                      : r.inData
+                        ? `${r.customer || 'unknown customer'}${r.poNumber ? ` · PO ${r.poNumber}` : ''}`
+                        : 'Not in imported data yet'}
                   </div>
-                  <div className="ifs">
-                    {r.soNumber || '—'}
-                    {r.packedStatus && <span className="docdate"> · {r.packedStatus}</span>}
-                  </div>
+                  {!r.isDc && (
+                    <div className="ifs">
+                      {r.soNumber || '—'}
+                      {r.packedStatus && <span className="docdate"> · {r.packedStatus}</span>}
+                    </div>
+                  )}
                   <div className="custodyMeta">
                     <span className={'pill ' + (r.stale ? 'warn' : 'fresh')}>
                       {state === 'with_warehouse' ? 'out' : 'in'} {ago(r.lastScan)}
                     </span>
-                    {r.boxes > 0 && <span className="boxTag">📦 {r.boxes} · {r.boxWeight} lb</span>}
-                    <LabelButtons info={{ ifNumber: r.ifNumber, soNumber: r.soNumber, customer: r.customer, poNumber: r.poNumber }} />
+                    {!r.isDc && r.boxes > 0 && <span className="boxTag">📦 {r.boxes} · {r.boxWeight} lb</span>}
+                    {!r.isDc && <LabelButtons info={{ ifNumber: r.ifNumber, soNumber: r.soNumber, customer: r.customer, poNumber: r.poNumber }} />}
                   </div>
-                  <Boxes r={r} onSaved={refresh} />
+                  {!r.isDc && <Boxes r={r} onSaved={refresh} />}
                 </div>
               ))}
               {!items.length && <div className="empty">Nothing here.</div>}

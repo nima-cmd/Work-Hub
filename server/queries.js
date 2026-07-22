@@ -282,27 +282,68 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
     ORDER BY c.first_scan ASC
   `)
 
+  // DC-carton custody (Nima, 2026-07-22): per-DC labels scan as doc_type='DC'
+  // (doc_number '<po>:<abbrev>'), so they were invisible to the IF-only query
+  // above. Pull them in too, resolving the partner from the PO.
+  const { rows: dcRows } = await pool.query(`
+    SELECT c.doc_number AS "docNumber",
+           c.custody_out AS "custodyOut", c.custody_in AS "custodyIn", c.first_scan AS "firstScan",
+           (SELECT customer FROM orders WHERE po_number = split_part(c.doc_number, ':', 1) LIMIT 1) AS customer,
+           (SELECT location FROM orders WHERE po_number = split_part(c.doc_number, ':', 1) LIMIT 1) AS location
+    FROM (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_OUT') AS custody_out,
+             MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_IN')  AS custody_in,
+             MIN(occurred_at) AS first_scan,
+             bool_or(event_type='CUSTODY_CLEARED') AS cleared
+      FROM order_events
+      WHERE doc_type='DC' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED')
+      GROUP BY doc_number
+      HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN'))
+    ) c
+    WHERE NOT c.cleared
+  `)
+
   const now = today.getTime()
-  return rows.map((r) => {
-    const lastScan = new Date(Math.max(
-      r.custodyOut ? new Date(r.custodyOut).getTime() : 0,
-      r.custodyIn ? new Date(r.custodyIn).getTime() : 0,
-    ))
+  const shape = (r, extra) => {
     const outT = r.custodyOut ? new Date(r.custodyOut).getTime() : 0
     const inT = r.custodyIn ? new Date(r.custodyIn).getTime() : 0
-    const state = inT >= outT && inT > 0 ? 'returned' : 'with_warehouse'
+    const lastScan = new Date(Math.max(outT, inT))
     const ageDays = Math.max(0, Math.floor((now - lastScan.getTime()) / 86_400_000))
     return {
-      ...r,
-      boxes: Number(r.boxes),
-      boxWeight: Number(r.boxWeight),
-      state,
+      ...r, ...extra,
+      state: inT >= outT && inT > 0 ? 'returned' : 'with_warehouse',
       lastScan: lastScan.toISOString(),
       ageDays,
       stale: ageDays >= 3, // physically in-house 3+ days with no movement → chase it
-      inData: !!r.soNumber,
     }
+  }
+
+  const ifResults = rows.map((r) => shape(r, {
+    boxes: Number(r.boxes), boxWeight: Number(r.boxWeight), inData: !!r.soNumber,
+  }))
+  const dcResults = dcRows.map((r) => {
+    const [po, abbrev] = String(r.docNumber).split(':')
+    return shape(r, {
+      isDc: true, poNumber: po, dc: abbrev || null,
+      label: `PO ${po}${abbrev ? ` · ${abbrev}` : ''}`,
+      boxes: 0, boxList: [], inData: !!r.customer,
+    })
   })
+  return [...ifResults, ...dcResults].sort((a, b) => new Date(a.firstScan) - new Date(b.firstScan))
+}
+
+// Manually clear a custody item off the register (Nima, 2026-07-22) — writes a
+// CUSTODY_CLEARED marker so a departed carton or a stale/orphaned scan drops
+// off, the same signal ingest uses at departure. Works for IF and DC docs.
+export async function clearCustodyItem({ docType, docNumber }) {
+  const dt = docType === 'DC' ? 'DC' : 'IF'
+  if (!docNumber) throw new Error('docNumber required')
+  await insertOrderEvent({
+    eventType: 'CUSTODY_CLEARED', docType: dt, docNumber: String(docNumber),
+    soNumber: null, note: 'Manually cleared from the register', source: 'manual',
+  })
+  return getCustodyRegister()
 }
 
 // ── Ship departures (Nima, 2026-07-16) — every packed IF, grouped by its

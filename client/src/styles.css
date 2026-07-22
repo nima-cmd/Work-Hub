@@ -1748,3 +1748,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cb-warehouse { color: var(--warn, #e0912f); border-color: rgba(224, 145, 47, 0.5); background: rgba(224, 145, 47, 0.1); }
 .cb-returned { color: var(--good, #4fd18a); border-color: rgba(79, 209, 138, 0.5); background: rgba(79, 209, 138, 0.1); }
 .cb-idle { color: #8fa4b8; border-color: #33414f; background: rgba(140, 164, 184, 0.08); }
+
+.custodyClear { margin-left: auto; font-size: 10px; color: #7e8a96; }
+.custodyClear:hover { color: var(--hi, #f85149); }

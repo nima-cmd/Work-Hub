@@ -521,6 +521,17 @@ export async function fetchCustodyRegister() {
   return res.json()
 }
 
+// Clear a custody item off the register (departed, or a stale/orphaned scan).
+export async function clearCustodyItem({ docType, docNumber }) {
+  const res = await fetch('/api/custody/clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docType, docNumber }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 // Order-events ledger feed. opts: { date, docNumber, soNumber } (all optional)
 export async function fetchOrderEvents(opts = {}) {
   const params = new URLSearchParams(Object.entries(opts).filter(([, v]) => v))
