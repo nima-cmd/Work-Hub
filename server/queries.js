@@ -38,6 +38,7 @@ import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfil
 import { fetchCalendarEvents } from '../src/ingest/googleCalendar.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../src/model/netsuiteDocs.js'
+import { parseDcToken, parseDc, dcAbbrev } from '../src/model/dc.js'
 
 export async function getOrders() {
   // Subqueries (not joins+GROUP BY) for fulfillments and invoices: both are
@@ -120,9 +121,38 @@ const num = (v) => (v == null ? null : Number(v))
 export async function recordCustodyScan({ docNumber, direction, note, confirm = false }) {
   const dir = String(direction || '').toUpperCase()
   if (dir !== 'OUT' && dir !== 'IN') throw new Error(`direction must be OUT or IN, got: ${direction}`)
+  const eventType = dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN'
+
+  // Per-DC cargo tags (Nima, 2026-07-21) encode a `DC:<po>:<abbrev>` token, not
+  // an IF. Resolve the customer/partner from the PO so the scan shows it's
+  // Bloomingdale's + which DC, and log custody keyed by the PO+DC carton.
+  const dcTok = parseDcToken(docNumber)
+  if (dcTok) {
+    const po = dcTok.poNumber
+    const doc = `${po}:${dcTok.dc || ''}`
+    // Count the scanned DC's stores specifically (match the label), and grab a
+    // sample customer for that DC so the channel tag reads right.
+    const { rows: poRows } = await pool.query(
+      `SELECT customer, location FROM orders WHERE po_number = $1 ORDER BY so_number`, [po])
+    const inDc = dcTok.dc ? poRows.filter((r) => dcAbbrev(parseDc(r.customer)) === dcTok.dc) : poRows
+    const sample = (inDc[0] || poRows[0]) || null
+    const cnt = [{ n: inDc.length }]
+    const { rows: prior } = await pool.query(
+      `SELECT count(*)::int AS n, MAX(occurred_at) AS last
+       FROM order_events WHERE doc_type='DC' AND doc_number=$1 AND event_type=$2`, [doc, eventType])
+    if (prior[0].n > 0 && !confirm) {
+      return { needsConfirm: true, isDc: true, direction: dir, docNumber: doc,
+        poNumber: po, dc: dcTok.dc, customer: sample?.customer || null, location: sample?.location || null,
+        storeCount: cnt[0].n, priorSameDir: prior[0].n, lastSameDirAt: prior[0].last, found: !!sample }
+    }
+    const event = await insertOrderEvent({ eventType, docType: 'DC', docNumber: doc, soNumber: null, note, source: 'scan' })
+    return { ok: true, isDc: true, direction: dir, docNumber: doc, poNumber: po, dc: dcTok.dc,
+      customer: sample?.customer || null, location: sample?.location || null, storeCount: cnt[0].n,
+      occurredAt: event.occurredAt, repeat: prior[0].n > 0, found: !!sample }
+  }
+
   const doc = normalizeDocNumber('IF', String(docNumber || '').trim())
   if (!doc || doc === 'IF') throw new Error('no document number scanned')
-  const eventType = dir === 'OUT' ? 'CUSTODY_OUT' : 'CUSTODY_IN'
 
   const { rows } = await pool.query(
     `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.status, f.packed_status AS "packedStatus",

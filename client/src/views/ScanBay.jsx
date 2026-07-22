@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
 import { recordCustodyScan, fetchOrderEvents, recordFulfillmentBox } from '../api.js'
-import { LabelButtons } from '../lib.jsx'
+import { LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 
 // Scan Bay (Nima, 2026-07-17) — the custody checkpoint. Every IF's cargo tag
 // is scanned OUT when handed to the warehouse and IN when
@@ -205,7 +205,7 @@ export default function ScanBay() {
         {pending && (
           <div className="scanResult warn scanConfirm">
             <div className="scanHead">
-              ⚠ {pending.docNumber} was already scanned {pending.direction}{' '}
+              ⚠ {pending.isDc ? `PO ${pending.poNumber}${pending.dc ? ` · DC ${pending.dc}` : ''}` : pending.docNumber} was already scanned {pending.direction}{' '}
               {pending.priorSameDir === 1 ? 'once' : `${pending.priorSameDir}×`}
               {pending.lastSameDirAt &&
                 ` · last ${new Date(pending.lastSameDirAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
@@ -237,9 +237,15 @@ export default function ScanBay() {
               <>
                 <div className="scanHead">
                   {result.direction === 'OUT' ? '⬆ OUT — with the warehouse' : '⬇ IN — back in our hands'}
-                  <b> · {result.docNumber}</b>
+                  <b> · {result.isDc ? `PO ${result.poNumber}${result.dc ? ` · DC ${result.dc}` : ''}` : result.docNumber}</b>
                 </div>
-                {result.fulfillment ? (
+                {result.isDc ? (
+                  <div className="scanMeta">
+                    {result.customer
+                      ? <><ChannelTag order={result} /> <CustomerName order={result} /> · {result.storeCount} {result.storeCount === 1 ? 'store' : 'stores'}</>
+                      : `PO ${result.poNumber} — not in the imported orders yet.`}
+                  </div>
+                ) : result.fulfillment ? (
                   <div className="scanMeta">
                     {result.fulfillment.soNumber} · {result.fulfillment.customer || 'unknown customer'}
                     {result.fulfillment.packedStatus ? ` · ${result.fulfillment.packedStatus}` : ''}
@@ -250,7 +256,7 @@ export default function ScanBay() {
                     Logged — but this IF isn’t in the imported data yet. It’ll connect on the next CSV import.
                   </div>
                 )}
-                {result.direction === 'IN' && (
+                {result.direction === 'IN' && !result.isDc && (
                   <BoxCapture key={result.docNumber + result.occurredAt} ifNumber={result.docNumber} />
                 )}
               </>

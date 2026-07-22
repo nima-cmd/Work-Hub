@@ -41,6 +41,17 @@ export function dcAbbrev(name) {
   return name.replace(/\bDC\b/i, '').trim().slice(0, 2).toUpperCase()
 }
 
+// The per-DC cargo tag's QR payload — carries the PO and DC so a Scan Bay scan
+// knows both (Nima, 2026-07-21). `DC:<po>:<abbrev>`; abbrev empty for a PO-level
+// (no-DC) tag. Distinct from an IF barcode so custody scanning can branch on it.
+export function dcToken(poNumber, abbrev) {
+  return `DC:${poNumber || ''}:${abbrev || ''}`
+}
+export function parseDcToken(s) {
+  const m = /^DC:([^:]+):(.*)$/.exec(String(s || '').trim())
+  return m ? { poNumber: m[1].trim(), dc: (m[2] || '').trim() || null } : null
+}
+
 // Group a PO group's members by DC → [{ dc, abbrev, stores }], sorted biggest
 // first. Members with no DC (unfulfilled, or non-Bloomingdale's) collapse into a
 // single { dc: null } bucket so the caller can still print one PO-level tag.

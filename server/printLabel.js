@@ -121,10 +121,12 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount }) {
     const PO = String(poNumber || '')
     const stores = Number(storeCount) || 0
     const storeLine = `${stores} ${stores === 1 ? 'STORE' : 'STORES'}`
+    // QR carries PO + DC so the Scan Bay resolves both (dcToken format).
+    const qrData = `DC:${PO}:${dc || ''}`
 
     if (cfg.layout === 'compact') {
       const qrSize = cfg.h - MARGIN * 2
-      drawQr(doc, PO, MARGIN, MARGIN, qrSize)
+      drawQr(doc, qrData, MARGIN, MARGIN, qrSize)
       const tx = MARGIN + qrSize + 8
       const tw = cfg.w - tx - MARGIN
       doc.font('Helvetica-Bold').fontSize(6).text('◆ NAGHEDI · EDI OUT', tx, MARGIN, { width: tw })
@@ -136,7 +138,7 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount }) {
       doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 26, { width: cfg.w, align: 'center' })
       doc.font('Helvetica').fontSize(9).text('EDI OUTBOUND · BY DC', 0, 50, { width: cfg.w, align: 'center', characterSpacing: 2 })
       const qrSize = 168
-      drawQr(doc, PO, cx - qrSize / 2, 74, qrSize)
+      drawQr(doc, qrData, cx - qrSize / 2, 74, qrSize)
       doc.font('Helvetica-Bold').fontSize(26).text(`PO ${PO}`, 0, 256, { width: cfg.w, align: 'center' })
       if (dc) doc.font('Helvetica-Bold').fontSize(72).text(dc, 0, 292, { width: cfg.w, align: 'center' })
       doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 320, { width: cfg.w, align: 'center', characterSpacing: 2 })
