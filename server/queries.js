@@ -28,6 +28,7 @@ import {
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment,
+  updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
 } from '../src/ingest/loadToDb.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import {
@@ -835,7 +836,9 @@ export async function unresolveEdiPo(businessNumber) {
 // in the feed (already routed/exported away) surface separately so a minted BOL
 // is never lost from view.
 export async function getRouting() {
-  const [packages, shipments] = await Promise.all([fetchEdiPackages(), fetchRoutingShipments()])
+  const [packages, shipments, auths] = await Promise.all([
+    fetchEdiPackages(), fetchRoutingShipments(), fetchRoutingAuths(),
+  ])
   const groups = consolidateRouting(packages)
 
   const byKey = new Map()
@@ -851,7 +854,26 @@ export async function getRouting() {
 
   // packages returned raw too, so the view can re-consolidate over a PO subset
   // (the "consolidate by DC across selected POs" interaction) client-side.
-  return { packages, consolidated, shipments, detached, packageCount: packages.length }
+  return { packages, consolidated, shipments, detached, auths, packageCount: packages.length }
+}
+
+export async function setShipmentRefs(id, fields) {
+  await updateShipmentRefs(id, fields || {})
+  return getRouting()
+}
+
+export async function saveRoutingAuth(body = {}) {
+  if (!body.authNumber?.trim()) throw new Error('authNumber is required')
+  await upsertRoutingAuth({ ...body, authNumber: body.authNumber.trim() })
+  if (Array.isArray(body.shipmentIds) && body.shipmentIds.length) {
+    await assignAuthToShipments({ authNumber: body.authNumber.trim(), shipmentIds: body.shipmentIds })
+  }
+  return getRouting()
+}
+
+export async function removeRoutingAuth(authNumber) {
+  await deleteRoutingAuth(authNumber)
+  return getRouting()
 }
 
 export async function assignRoutingBol(body = {}) {

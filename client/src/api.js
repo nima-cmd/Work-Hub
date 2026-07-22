@@ -602,3 +602,28 @@ export async function voidRoutingShipment(id) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Phase 2 — reference capture
+export async function setShipmentRefs(id, fields) {
+  const res = await fetch(`/api/routing/shipment/${id}/refs`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function saveRoutingAuth(body) {
+  const res = await fetch('/api/routing/auth', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function deleteRoutingAuth(authNumber) {
+  const res = await fetch(`/api/routing/auth/${encodeURIComponent(authNumber)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

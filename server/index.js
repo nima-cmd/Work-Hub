@@ -14,7 +14,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo,
-  getRouting, assignRoutingBol, voidRouting,
+  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -315,6 +315,34 @@ app.post('/api/routing/assign-bol', async (req, res) => {
 app.delete('/api/routing/shipment/:id', async (req, res) => {
   try {
     res.json(await voidRouting(req.params.id))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Phase 2 — reference capture
+app.post('/api/routing/shipment/:id/refs', async (req, res) => {
+  try {
+    res.json(await setShipmentRefs(req.params.id, req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/routing/auth', async (req, res) => {
+  try {
+    res.json(await saveRoutingAuth(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/routing/auth/:authNumber', async (req, res) => {
+  try {
+    res.json(await removeRoutingAuth(req.params.authNumber))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

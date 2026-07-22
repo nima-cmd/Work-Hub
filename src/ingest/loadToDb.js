@@ -450,6 +450,88 @@ export async function voidRoutingShipment(id, db = pool) {
   return rowCount
 }
 
+// Phase 2 — per-shipment routing references (portal Project#/Shipment#, carrier,
+// SCAC, ship date, status). Only the fields present in `fields` are written, so
+// a partial edit never clobbers the others. `status` moves the shipment along
+// the pipeline (bol_assigned → submitted → authorized → routed).
+const SHIPMENT_REF_COLS = {
+  projectNumber: 'project_number',
+  shipmentNumber: 'shipment_number',
+  authNumber: 'auth_number',
+  carrier: 'carrier',
+  scac: 'scac',
+  shipDate: 'ship_date',
+  status: 'status',
+}
+export async function updateShipmentRefs(id, fields = {}, db = pool) {
+  const sets = []
+  const vals = []
+  for (const [k, col] of Object.entries(SHIPMENT_REF_COLS)) {
+    if (k in fields) {
+      vals.push(fields[k] === '' ? null : fields[k])
+      sets.push(`${col} = $${vals.length}`)
+    }
+  }
+  if (!sets.length) return null
+  vals.push(id)
+  const { rows } = await db.query(
+    `UPDATE routing_shipment SET ${sets.join(', ')}, updated_at = now() WHERE id = $${vals.length} RETURNING id`,
+    vals,
+  )
+  return rows[0] || null
+}
+
+// Routing auth entity + assignment to a set of shipments.
+export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, note }, db = pool) {
+  await db.query(
+    `INSERT INTO routing_auth (auth_number, partner, carrier, scac, note, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (auth_number) DO UPDATE SET
+       partner = COALESCE(EXCLUDED.partner, routing_auth.partner),
+       carrier = COALESCE(EXCLUDED.carrier, routing_auth.carrier),
+       scac    = COALESCE(EXCLUDED.scac, routing_auth.scac),
+       note    = COALESCE(EXCLUDED.note, routing_auth.note),
+       updated_at = now()`,
+    [authNumber, partner || null, carrier || null, scac || null, note || null],
+  )
+}
+
+export async function fetchRoutingAuths(db = pool) {
+  const { rows } = await db.query(
+    `SELECT auth_number AS "authNumber", partner, carrier, scac, note,
+            created_at AS "createdAt", updated_at AS "updatedAt"
+     FROM routing_auth ORDER BY created_at DESC`,
+  )
+  return rows
+}
+
+// Assign an auth to N shipments at once. Stamps the auth's carrier/SCAC onto
+// each shipment (the routing email delivers auth + carrier + SCAC together) and
+// advances any still at bol_assigned/submitted to 'authorized'.
+export async function assignAuthToShipments({ authNumber, shipmentIds }, db = pool) {
+  if (!authNumber || !Array.isArray(shipmentIds) || !shipmentIds.length) return 0
+  const auth = await db.query('SELECT carrier, scac FROM routing_auth WHERE auth_number = $1', [authNumber])
+  const a = auth.rows[0] || {}
+  const { rowCount } = await db.query(
+    `UPDATE routing_shipment
+        SET auth_number = $1,
+            carrier = COALESCE($2, carrier),
+            scac    = COALESCE($3, scac),
+            status  = CASE WHEN status IN ('bol_assigned','submitted') THEN 'authorized' ELSE status END,
+            updated_at = now()
+      WHERE id = ANY($4::int[])`,
+    [authNumber, a.carrier || null, a.scac || null, shipmentIds.map(Number)],
+  )
+  return rowCount
+}
+
+export async function deleteRoutingAuth(authNumber, db = pool) {
+  // Detach the auth from any shipments referencing it, then drop the auth row.
+  await db.query('UPDATE routing_shipment SET auth_number = NULL WHERE auth_number = $1', [authNumber])
+  const { rowCount } = await db.query('DELETE FROM routing_auth WHERE auth_number = $1', [authNumber])
+  return rowCount
+}
+
 export async function fetchEdiFulfillments(db = pool) {
   const { rows } = await db.query(
     `SELECT po_dc_identifier AS "poDcIdentifier", po_number AS "poNumber", dc, bol,

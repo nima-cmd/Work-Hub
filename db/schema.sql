@@ -667,6 +667,24 @@ CREATE TABLE IF NOT EXISTS routing_shipment (
 );
 CREATE INDEX IF NOT EXISTS idx_routing_shipment_partner ON routing_shipment(partner);
 
+-- routing_auth: a routing authorization is its OWN entity, not a per-shipment
+-- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
+-- cover everything routed in one go, or there can be several auths each
+-- covering a subset — so shipments point at an auth (routing_shipment.auth_number
+-- is the soft FK), not the reverse. Bloomingdale's provides the auth# + carrier
+-- + SCAC together in the routing email; assigning the auth to shipments stamps
+-- their carrier/SCAC from here. Nordstrom is always CTE/CAIE with no auth email,
+-- so its shipments can carry carrier/SCAC without an auth row.
+CREATE TABLE IF NOT EXISTS routing_auth (
+  auth_number  TEXT PRIMARY KEY,
+  partner      TEXT,
+  carrier      TEXT,
+  scac         TEXT,
+  note         TEXT,
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  updated_at   TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);

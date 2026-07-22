@@ -1791,3 +1791,31 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-bol.assigned .rt-bolLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .rt-bolNum { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; color: #7ee787; }
 .rt-detached .rt-card { opacity: 0.85; }
+
+/* ── EDI Routing phase 2: refs + auth ────────────────────────────────────── */
+.rt-status { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.rt-status.st-sub { color: var(--holo); border-color: rgba(79,209,255,0.4); }
+.rt-status.st-auth { color: var(--accent); border-color: rgba(217,164,65,0.5); }
+.rt-status.st-routed { color: #7ee787; border-color: rgba(126,231,135,0.45); }
+
+.rt-auths { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 18px; }
+.rt-authsToggle { width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 10px 14px; font-size: 13px; cursor: pointer; }
+.rt-authsBody { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.rt-authsHint { font-size: 12px; line-height: 1.4; max-width: 640px; }
+.rt-authList { display: flex; flex-wrap: wrap; gap: 8px; }
+.rt-authChip { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.rt-authChip .rt-scac { margin-left: 4px; font-size: 10px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+.rt-x { background: transparent; border: none; color: var(--muted); cursor: pointer; margin-left: 6px; font-size: 12px; }
+.rt-x:hover { color: var(--hi); }
+.rt-authForm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rt-authForm input, .rt-authForm select { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.rt-authForm input { width: 130px; }
+
+.rt-refSummary { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.rt-refBit { white-space: nowrap; }
+.rt-editToggle { align-self: flex-start; background: transparent; border: none; color: var(--holo); font-size: 12px; cursor: pointer; padding: 2px 0; }
+.rt-editor { display: flex; flex-direction: column; gap: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.rt-editor label { display: flex; flex-direction: column; gap: 3px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+.rt-editor input, .rt-editor select { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+.rt-editRow { display: flex; gap: 8px; }
+.rt-editRow label { flex: 1; }

@@ -1,13 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchRouting, assignRoutingBol, voidRoutingShipment } from '../api.js'
+import {
+  fetchRouting, assignRoutingBol, voidRoutingShipment,
+  setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
+} from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 
 // EDI Routing (Nima, 2026-07-22) — replaces the NetSuite routing_helper.js
-// Suitelet + Google Sheet. Takes the packed-carton feed (EDIPackagesVolume),
-// lets you pick which POs are shipping, consolidates them into ONE shipment per
-// DC, and shows the exact whole-number portal entries (cartons / weight /
-// rounded cubic feet, + units for Nordstrom). Assign a guaranteed-unique BOL
-// per DC; the DC is shown big since the number itself is just a unique serial.
+// Suitelet + Google Sheet. Pick which POs are shipping, consolidate into ONE
+// shipment per DC, show the exact whole-number portal entries (cartons /
+// weight / rounded cubic feet, + units for Nordstrom), assign a guaranteed-
+// unique BOL per DC, then capture the routing references (portal Project# /
+// Shipment#, authorization, carrier / SCAC) as they come back.
+const STATUS = {
+  bol_assigned: { label: 'BOL assigned', cls: '' },
+  submitted: { label: 'Submitted', cls: 'st-sub' },
+  authorized: { label: 'Authorized', cls: 'st-auth' },
+  routed: { label: 'Routed', cls: 'st-routed' },
+}
+const STATUS_ORDER = ['bol_assigned', 'submitted', 'authorized', 'routed']
+
 export default function Routing() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
@@ -19,14 +30,11 @@ export default function Routing() {
   }
   useEffect(load, [])
 
-  // All PO numbers present in the feed, sorted.
   const allPos = useMemo(() => {
     if (!data) return []
     return [...new Set((data.packages || []).map((p) => p.poNumber).filter(Boolean))].sort()
   }, [data])
 
-  // Default: every PO selected. (null means "all", so a re-import that adds a
-  // PO shows it selected without us having to reconcile the set.)
   const isSelected = (po) => (selected ? selected.has(po) : true)
   function togglePo(po) {
     setSelected((prev) => {
@@ -35,8 +43,6 @@ export default function Routing() {
       return next
     })
   }
-  const selectAll = () => setSelected(null)
-  const selectNone = () => setSelected(new Set())
 
   // Re-consolidate client-side over the selected POs (same pure model the
   // server uses), then re-attach any already-assigned shipment by its key.
@@ -59,29 +65,25 @@ export default function Routing() {
     return [...m.entries()]
   }, [groups])
 
-  async function onAssign(g) {
-    setBusy(g.dcPoKey)
-    setErr(null)
-    try {
-      setData(await assignRoutingBol({
-        partner: g.partner, dc: g.dc, memberPos: g.memberPos,
-        cartons: g.cartons, units: g.units, weightLb: g.weightLb, cubicFeet: g.cubicFeet,
-      }))
-    } catch (e) { setErr(e.message) } finally { setBusy(null) }
+  async function run(key, fn) {
+    setBusy(key); setErr(null)
+    try { setData(await fn()) } catch (e) { setErr(e.message) } finally { setBusy(null) }
   }
 
-  async function onVoid(shipment) {
-    if (!confirm(`Void BOL ${shipment.bolNumber}? The number stays retired and is never reused.`)) return
-    setBusy('void' + shipment.id)
-    setErr(null)
-    try {
-      setData(await voidRoutingShipment(shipment.id))
-    } catch (e) { setErr(e.message) } finally { setBusy(null) }
+  const onAssign = (g) => run(g.dcPoKey, () => assignRoutingBol({
+    partner: g.partner, dc: g.dc, memberPos: g.memberPos,
+    cartons: g.cartons, units: g.units, weightLb: g.weightLb, cubicFeet: g.cubicFeet,
+  }))
+  const onVoid = (s) => {
+    if (!confirm(`Void BOL ${s.bolNumber}? The number stays retired and is never reused.`)) return
+    run('void' + s.id, () => voidRoutingShipment(s.id))
   }
+  const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
 
   if (err && !data) return <div className="banner error">⚠ {err}</div>
   if (!data) return <div className="banner">Loading routing feed…</div>
 
+  const auths = data.auths || []
   const detached = data.detached || []
 
   return (
@@ -109,28 +111,23 @@ export default function Routing() {
           <div className="rt-pos">
             <span className="muted">POs in feed ({allPos.length}):</span>
             {allPos.map((po) => (
-              <button
-                key={po}
-                className={'rt-poChip' + (isSelected(po) ? ' on' : '')}
-                onClick={() => togglePo(po)}
-              >{po}</button>
+              <button key={po} className={'rt-poChip' + (isSelected(po) ? ' on' : '')} onClick={() => togglePo(po)}>{po}</button>
             ))}
-            <button className="btnGhost" onClick={selectAll}>All</button>
-            <button className="btnGhost" onClick={selectNone}>None</button>
+            <button className="btnGhost" onClick={() => setSelected(null)}>All</button>
+            <button className="btnGhost" onClick={() => setSelected(new Set())}>None</button>
           </div>
+
+          <AuthPanel auths={auths} busy={busy}
+            onSave={(b) => run('auth', () => saveRoutingAuth(b))}
+            onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
 
           {byPartner.map(([partner, list]) => (
             <section key={partner} className="rt-partner">
               <h3>{partner} <span className="muted">· {list.length} DC{list.length === 1 ? '' : 's'}</span></h3>
               <div className="rt-cards">
                 {list.map((g) => (
-                  <ShipmentCard
-                    key={g.dcPoKey}
-                    g={g}
-                    busy={busy}
-                    onAssign={() => onAssign(g)}
-                    onVoid={onVoid}
-                  />
+                  <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
+                    onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} />
                 ))}
               </div>
             </section>
@@ -141,23 +138,8 @@ export default function Routing() {
               <h3>Assigned BOLs no longer in the feed <span className="muted">· already routed / re-exported away</span></h3>
               <div className="rt-cards">
                 {detached.map((s) => (
-                  <div key={s.id} className="rt-card">
-                    <div className="rt-dc">
-                      <span className="rt-dcCode">{s.dc}</span>
-                      <span className="muted">{s.partner}</span>
-                    </div>
-                    <div className="rt-bol assigned">
-                      <span className="rt-bolLabel">BOL</span>
-                      <span className="rt-bolNum">{s.bolNumber}</span>
-                    </div>
-                    <div className="muted rt-memberPos">PO {(s.memberPos || []).join(', ')}</div>
-                    <div className="rt-portal">
-                      <Cell label="Cartons" v={s.cartons} />
-                      <Cell label="Weight (lb)" v={s.weightLb} />
-                      <Cell label="Cubic ft" v={s.cubicFeet} />
-                    </div>
-                    <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
-                  </div>
+                  <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
+                    auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} detached />
                 ))}
               </div>
             </section>
@@ -168,16 +150,67 @@ export default function Routing() {
   )
 }
 
-function ShipmentCard({ g, busy, onAssign, onVoid }) {
+function AuthPanel({ auths, busy, onSave, onDelete }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
+  function add() {
+    if (!draft.authNumber.trim()) return
+    onSave(draft)
+    setDraft({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
+  }
+  return (
+    <div className="rt-auths">
+      <button className="rt-authsToggle" onClick={() => setOpen((o) => !o)}>
+        {open ? '▾' : '▸'} Routing authorizations <span className="muted">({auths.length})</span>
+      </button>
+      {open && (
+        <div className="rt-authsBody">
+          <div className="muted rt-authsHint">
+            One auth number covers a set of shipments (from the routing email). Create it here, then
+            select it on each shipment it covers — that stamps the carrier / SCAC.
+          </div>
+          <div className="rt-authList">
+            {auths.map((a) => (
+              <div key={a.authNumber} className="rt-authChip">
+                <b>{a.authNumber}</b>
+                <span className="muted"> · {a.partner || '—'}</span>
+                {a.carrier && <span className="muted"> · {a.carrier}</span>}
+                {a.scac && <span className="rt-scac">{a.scac}</span>}
+                <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
+              </div>
+            ))}
+            {!auths.length && <span className="muted">No authorizations yet.</span>}
+          </div>
+          <div className="rt-authForm">
+            <input placeholder="Auth #" value={draft.authNumber} onChange={(e) => setDraft({ ...draft, authNumber: e.target.value })} />
+            <select value={draft.partner} onChange={(e) => setDraft({ ...draft, partner: e.target.value })}>
+              <option>Bloomingdale's</option>
+              <option>Nordstrom</option>
+            </select>
+            <input placeholder="Carrier" value={draft.carrier} onChange={(e) => setDraft({ ...draft, carrier: e.target.value })} />
+            <input placeholder="SCAC" value={draft.scac} onChange={(e) => setDraft({ ...draft, scac: e.target.value })} />
+            <button className="btn" disabled={busy === 'auth' || !draft.authNumber.trim()} onClick={add}>Add auth</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, detached }) {
   const s = g.shipment
+  const [editing, setEditing] = useState(false)
+  const st = s ? (STATUS[s.status] || STATUS.bol_assigned) : null
+
   return (
     <div className={'rt-card' + (s ? ' has-bol' : '')}>
       <div className="rt-dc">
         <span className="rt-dcCode">{g.dc}</span>
         <span className="rt-dcName">{g.dcLabel}</span>
+        {st && <span className={'rt-status ' + st.cls}>{st.label}</span>}
       </div>
       <div className="muted rt-memberPos">
-        {g.poCount} PO{g.poCount === 1 ? '' : 's'}: {g.memberPos.join(', ')}
+        {g.poCount} PO{g.poCount === 1 ? '' : 's'}: {(g.memberPos || []).join(', ')}
       </div>
 
       <div className="rt-portal">
@@ -193,17 +226,96 @@ function ShipmentCard({ g, busy, onAssign, onVoid }) {
         </div>
       )}
 
-      {s ? (
-        <div className="rt-bol assigned">
-          <span className="rt-bolLabel">BOL</span>
-          <span className="rt-bolNum">{s.bolNumber}</span>
-          <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
-        </div>
-      ) : (
+      {!s ? (
         <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}>
           {busy === g.dcPoKey ? 'Assigning…' : 'Assign BOL'}
         </button>
+      ) : (
+        <>
+          <div className="rt-bol assigned">
+            <span className="rt-bolLabel">BOL</span>
+            <span className="rt-bolNum">{s.bolNumber}</span>
+            <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
+          </div>
+
+          <RefSummary s={s} />
+          <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
+            {editing ? '▾ Route info' : '✎ Route info'}
+          </button>
+          {editing && (
+            <RefEditor s={s} auths={auths} busy={busy === 'refs' + s.id}
+              onSave={(fields) => { onSaveRefs(s.id, fields); setEditing(false) }} />
+          )}
+        </>
       )}
+    </div>
+  )
+}
+
+// Compact read-only summary of whatever references are set.
+function RefSummary({ s }) {
+  const bits = []
+  if (s.authNumber) bits.push(['Auth', s.authNumber])
+  if (s.carrier) bits.push(['Carrier', s.carrier + (s.scac ? ` (${s.scac})` : '')])
+  if (s.projectNumber) bits.push(['Project', s.projectNumber])
+  if (s.shipmentNumber) bits.push(['Shipment', s.shipmentNumber])
+  if (s.shipDate) bits.push(['Ship', String(s.shipDate).slice(0, 10)])
+  if (!bits.length) return null
+  return (
+    <div className="rt-refSummary">
+      {bits.map(([k, v]) => <span key={k} className="rt-refBit"><span className="muted">{k}</span> {v}</span>)}
+    </div>
+  )
+}
+
+function RefEditor({ s, auths, busy, onSave }) {
+  const [d, setD] = useState({
+    status: s.status || 'bol_assigned',
+    authNumber: s.authNumber || '',
+    carrier: s.carrier || '',
+    scac: s.scac || '',
+    projectNumber: s.projectNumber || '',
+    shipmentNumber: s.shipmentNumber || '',
+    shipDate: s.shipDate ? String(s.shipDate).slice(0, 10) : '',
+  })
+  const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
+
+  // Picking an existing auth fills carrier/SCAC from it (the routing email
+  // delivers them together) — still editable afterwards.
+  function pickAuth(e) {
+    const authNumber = e.target.value
+    const a = auths.find((x) => x.authNumber === authNumber)
+    setD((prev) => ({
+      ...prev, authNumber,
+      carrier: a?.carrier || prev.carrier,
+      scac: a?.scac || prev.scac,
+      status: prev.status === 'bol_assigned' || prev.status === 'submitted' ? 'authorized' : prev.status,
+    }))
+  }
+
+  return (
+    <div className="rt-editor">
+      <label>Status
+        <select value={d.status} onChange={set('status')}>
+          {STATUS_ORDER.map((k) => <option key={k} value={k}>{STATUS[k].label}</option>)}
+        </select>
+      </label>
+      <label>Authorization
+        <select value={d.authNumber} onChange={pickAuth}>
+          <option value="">— none —</option>
+          {auths.map((a) => <option key={a.authNumber} value={a.authNumber}>{a.authNumber}{a.carrier ? ` · ${a.carrier}` : ''}</option>)}
+        </select>
+      </label>
+      <div className="rt-editRow">
+        <label>Project #<input value={d.projectNumber} onChange={set('projectNumber')} placeholder="Bloomingdale's" /></label>
+        <label>Shipment #<input value={d.shipmentNumber} onChange={set('shipmentNumber')} /></label>
+      </div>
+      <div className="rt-editRow">
+        <label>Carrier<input value={d.carrier} onChange={set('carrier')} /></label>
+        <label>SCAC<input value={d.scac} onChange={set('scac')} /></label>
+      </div>
+      <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
+      <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>
     </div>
   )
 }
