@@ -319,6 +319,42 @@ export function LabelButtons({ info }) {
   )
 }
 
+// Print every cargo tag for a PO group at once (Nima, 2026-07-21) — a collapsed
+// PO group fans out into one Item Fulfillment per store, each needing its own
+// tag; this prints them all without expanding the group. One button per label
+// size; confirms first since it's a bulk physical print.
+export function GroupLabelButtons({ group }) {
+  const [sizes, setSizes] = useState({})
+  const [busy, setBusy] = useState(null)
+  useEffect(() => {
+    if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
+    _labelSizes.then(setSizes)
+  }, [])
+  const tags = (group?.members || []).flatMap((m) =>
+    (m.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({
+      ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber,
+    })))
+  const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
+  if (!available.length || !tags.length) return null
+
+  async function printAll(size) {
+    if (tags.length > 1 && !window.confirm(`Print ${tags.length} cargo tags for PO ${group.poNumber}?`)) return
+    setBusy(size)
+    try { for (const info of tags) await printCargoTag(info, size) } finally { setBusy(null) }
+  }
+  return (
+    <span className="tagBtns">
+      {available.map((s) => (
+        <button key={s} className="linkBtn" disabled={busy === s}
+                title={`Print all ${tags.length} ${SIZE_LABEL[s]} cargo tags for this PO`}
+                onClick={() => printAll(s)}>
+          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${tags.length} tags (${SIZE_LABEL[s]})`}
+        </button>
+      ))}
+    </span>
+  )
+}
+
 
 export const STAGE_ORDER = [
   'ON_HOLD_APPROVAL',

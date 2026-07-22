@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks, TaskLink, buildTaskDocIndex } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, GroupLabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks, TaskLink, buildTaskDocIndex } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
@@ -54,6 +54,7 @@ export default function TableView({ orders, tasks = [], onNavigate = () => {}, o
                 <LabelButtons info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
               </div>
             ))}
+            {o.isGroup && <GroupLabelButtons group={o} />}
             {!o.isGroup && <TaskLink docType="SO" docNumber={o.soNumber} label={o.customer} index={taskIndex} onCreated={onRefresh} onNavigate={onNavigate} />}
             {!o.isGroup && <NoteWidget docType="SO" docNumber={o.soNumber} />}
             {!o.isGroup && <DocLinks docType="SO" docNumber={o.soNumber} selfLabel={o.customer} />}
