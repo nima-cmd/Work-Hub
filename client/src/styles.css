@@ -1870,3 +1870,5 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-masterMsg { font-size: 11px; }
 .rt-masterMsg.ok { color: #7ee787; }
 .rt-masterMsg.err { color: var(--mid); }
+
+.rt-editor label .rt-fieldHint { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }

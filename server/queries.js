@@ -976,8 +976,22 @@ async function computeRoutingGaps({ packages, shipments }) {
   return { items: gaps, feedImportedAt: feedAt ? new Date(feedAt).toISOString() : null }
 }
 
-export async function setShipmentRefs(id, fields) {
-  await updateShipmentRefs(id, fields || {})
+export async function setShipmentRefs(id, fields = {}) {
+  await updateShipmentRefs(id, fields)
+  // The Bloomingdale's authorization comes from the routing email and is typed
+  // straight onto the shipment. If it's a number we haven't seen, register it as
+  // a routing_auth (partner from the shipment, carrier/SCAC from what's being
+  // saved) so it's a first-class auth — reusable on other DCs and eligible for a
+  // Master BOL. COALESCE in the upsert means this never clobbers existing data.
+  if (fields.authNumber && String(fields.authNumber).trim()) {
+    const s = await fetchRoutingShipmentById(id)
+    await upsertRoutingAuth({
+      authNumber: String(fields.authNumber).trim(),
+      partner: s?.partner || null,
+      carrier: fields.carrier || s?.carrier || null,
+      scac: fields.scac || s?.scac || null,
+    })
+  }
   return getRouting()
 }
 

@@ -424,16 +424,17 @@ function RefEditor({ s, auths, busy, onSave }) {
   const isBloomies = s.partner === "Bloomingdale's"
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
 
-  // Picking an existing auth fills carrier/SCAC from it (the routing email
-  // delivers them together) — still editable afterwards.
-  function pickAuth(e) {
+  // The Bloomingdale's auth # comes from the routing email — typed in directly.
+  // If what's typed matches an auth we already have, fill carrier/SCAC from it
+  // and advance the status; otherwise it registers as a new auth on save.
+  function onAuthType(e) {
     const authNumber = e.target.value
     const a = auths.find((x) => x.authNumber === authNumber)
     setD((prev) => ({
       ...prev, authNumber,
       carrier: a?.carrier || prev.carrier,
       scac: a?.scac || prev.scac,
-      status: prev.status === 'bol_assigned' || prev.status === 'submitted' ? 'authorized' : prev.status,
+      status: a && (prev.status === 'needs_routing' || prev.status === 'submitted') ? 'authorized' : prev.status,
     }))
   }
 
@@ -444,11 +445,11 @@ function RefEditor({ s, auths, busy, onSave }) {
           {STATUS_ORDER.map((k) => <option key={k} value={k}>{STATUS[k].label}</option>)}
         </select>
       </label>
-      <label>Authorization
-        <select value={d.authNumber} onChange={pickAuth}>
-          <option value="">— none —</option>
-          {auths.map((a) => <option key={a.authNumber} value={a.authNumber}>{a.authNumber}{a.carrier ? ` · ${a.carrier}` : ''}</option>)}
-        </select>
+      <label>Authorization # <span className="rt-fieldHint">— from the Bloomingdale's routing email</span>
+        <input list="rt-auth-list" value={d.authNumber} onChange={onAuthType} placeholder="type the auth # from the email" />
+        <datalist id="rt-auth-list">
+          {auths.map((a) => <option key={a.authNumber} value={a.authNumber}>{a.carrier ? `${a.carrier}${a.scac ? ` (${a.scac})` : ''}` : ''}</option>)}
+        </datalist>
       </label>
       <div className="rt-editRow">
         <label>Project #<input value={d.projectNumber} onChange={set('projectNumber')} placeholder="Bloomingdale's" /></label>
