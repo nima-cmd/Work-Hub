@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs } from '../api.js'
 
@@ -27,11 +27,28 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const grouped = groupOrdersByPo(orders)
   const cardKey = (o) => o.soNumber // group rows set soNumber = poNumber
   const byKey = new Map(grouped.map((o) => [cardKey(o), o]))
+  const bySev = (a, b) => b.severity - a.severity
 
-  const cols = STAGE_ORDER.map((s) => ({
-    s,
-    items: grouped.filter((o) => o.stage === s).sort((a, b) => b.severity - a.severity),
-  })).filter((c) => c.items.length)
+  // Custody scan states become their own columns so the board shows the physical
+  // flow (Nima, 2026-07-22): scanned OUT → "With Nestor"; scanned back IN →
+  // "Ball's in our court". A scanned card leaves its stage column for the custody
+  // column. Shipped/departed cards stay put (their scans are historical).
+  const custodyOf = (o) => (o.stage === 'SHIPPED' ? null : cardCustody(o, events, poDcs[o.poNumber]))
+  const withNestor = grouped.filter((o) => custodyOf(o)?.state === 'warehouse').sort(bySev)
+  const ballsInCourt = grouped.filter((o) => custodyOf(o)?.state === 'returned').sort(bySev)
+  const inCustody = new Set([...withNestor, ...ballsInCourt].map(cardKey))
+
+  // Build the columns in flow order; drop the two custody columns in right after
+  // Packed. Cards routed into a custody column are excluded from their stage.
+  const columns = []
+  for (const s of STAGE_ORDER) {
+    const items = grouped.filter((o) => o.stage === s && !inCustody.has(cardKey(o))).sort(bySev)
+    if (items.length) columns.push({ key: s, label: STAGE_SHORT[s], items })
+    if (s === 'PACKED_PENDING_NEXT') {
+      if (withNestor.length) columns.push({ key: 'with_nestor', label: 'With Nestor', items: withNestor, custody: true })
+      if (ballsInCourt.length) columns.push({ key: 'balls_in_court', label: "Ball's in Our Court", items: ballsInCourt, custody: true })
+    }
+  }
 
   const openTasks = tasks
     .filter((t) => t.status === 'open')
@@ -134,10 +151,10 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
       )}
 
       <div className="kanban">
-        {cols.map(({ s, items }) => (
-          <div className="col" key={s}>
+        {columns.map(({ key: colKey, label, items, custody }) => (
+          <div className={'col' + (custody ? ' col-custody col-' + colKey : '')} key={colKey}>
             <div className="colHead">
-              {STAGE_SHORT[s]} <span className="count">{items.length}</span>
+              {label} <span className="count">{items.length}</span>
             </div>
             {items.map((o) => {
               const key = cardKey(o)
@@ -153,7 +170,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
                   <div className="cust"><ChannelTag order={o} /> <CustomerName order={o} /></div>
-                  <CustodyBadge card={o} events={events} />
+                  <CustodyBadge card={o} events={events} dcList={poDcs[o.poNumber]} />
                   {o.isGroup
                     ? <div className="ifs">{o.soNumbers.slice(0, 4).join(', ')}{o.soNumbers.length > 4 ? ` +${o.soNumbers.length - 4}` : ''}</div>
                     : docRef(o) && (

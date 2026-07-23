@@ -1937,3 +1937,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   /* Comfortable tap targets for the common controls. */
   .btn, .btnGhost, .importBtn { min-height: 34px; }
 }
+
+/* ── Kanban custody columns (Nima, 2026-07-22): scan-state flow ──────────── */
+.col-custody .colHead { padding-bottom: 6px; }
+.col-with_nestor { border-color: rgba(217,130,43,0.4); }
+.col-with_nestor .colHead { color: var(--mid); border-bottom: 2px solid rgba(217,130,43,0.5); }
+.col-balls_in_court { border-color: rgba(126,231,135,0.4); }
+.col-balls_in_court .colHead { color: #7ee787; border-bottom: 2px solid rgba(126,231,135,0.5); }

@@ -692,9 +692,13 @@ export function DcTagButtons({ group, dcList }) {
 // is it with the warehouse (scanned OUT, not back), back with us (scanned IN),
 // or still with us / not shipped (an Item Fulfillment that's printed but hasn't
 // started its journey). EDI cards track their per-DC cartons; others track IFs.
-export function cardCustody(card, events = []) {
+// dcList (routing feed ∪ custody scans, [{ dc }]) is preferred for EDI groups —
+// the DC isn't in the order ship-to, so parsing members finds none. Falls back
+// to the member parse when no dcList is supplied.
+export function cardCustody(card, events = [], dcList) {
+  const ediDcs = (dcList && dcList.length ? dcList.map((d) => d.dc) : dcBreakdown(card?.members || []).filter((r) => r.abbrev).map((r) => r.abbrev))
   const docs = card?.isGroup && card.source === 'edi'
-    ? dcBreakdown(card.members || []).filter((r) => r.abbrev).map((r) => ({ type: 'DC', num: `${card.poNumber}:${r.abbrev}` }))
+    ? ediDcs.map((dc) => ({ type: 'DC', num: `${card.poNumber}:${dc}` }))
     : (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
   if (!docs.length) return null
   let out = 0, scanned = 0
@@ -706,13 +710,15 @@ export function cardCustody(card, events = []) {
     if (outT || inT) scanned++
     if (outT > inT) out++
   }
-  if (out > 0) return { state: 'warehouse', label: `◫ With warehouse${docs.length > 1 ? ` ${out}/${docs.length}` : ''}` }
-  if (scanned > 0) return { state: 'returned', label: '✓ Back with us' }
+  // Terminology (Nima, 2026-07-22): scanned OUT → "With Nestor"; scanned back
+  // IN → "Ball's in our court".
+  if (out > 0) return { state: 'warehouse', label: `◫ With Nestor${docs.length > 1 ? ` ${out}/${docs.length}` : ''}` }
+  if (scanned > 0) return { state: 'returned', label: "✓ Ball's in our court" }
   return { state: 'idle', label: '🏷 With us · not shipped' }
 }
 
-export function CustodyBadge({ card, events }) {
-  const c = cardCustody(card, events)
+export function CustodyBadge({ card, events, dcList }) {
+  const c = cardCustody(card, events, dcList)
   if (!c) return null
   return <span className={'custodyBadge cb-' + c.state}>{c.label}</span>
 }
