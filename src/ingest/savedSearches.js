@@ -7,6 +7,7 @@
 // update only the relevant mapper here.
 
 import { STAGE } from '../model/stages.js'
+import { parseDc, dcAbbrev } from '../model/dc.js'
 
 // ── small shared helpers ──────────────────────────────────────────────────
 
@@ -74,11 +75,22 @@ export function fromOpenSalesOrders(rows) {
       if (hasInvoice) stage = STAGE.INVOICED
       else if (/hold/i.test(approvalStatus)) stage = STAGE.ON_HOLD
 
+      // DC + store (Nima, 2026-07-22): fold the 856-ASN search's per-SO "DC Code"
+      // + "Store Number" into the Order Pipeline so the DC lives on the order —
+      // no separate CSV. Tolerant: use the explicit columns if present, else
+      // parse the DC out of the full ship-to name ("… DC - Secaucus : …") when
+      // the search returns the hierarchy path; null when neither is available.
+      const rawName = r['Maximum of Name'] || r['Maximum of Company Name'] || r['Company Name'] || ''
+      const dcCode = (r['DC Code'] || r['Maximum of DC Code'] || '').trim() || dcAbbrev(parseDc(rawName)) || null
+      const storeNumber = (r['Store Number'] || r['Maximum of Store Number'] || '').trim() || null
+
       return {
         source: 'WarehouseOrderPipeline',
         stage,
         soNumber: refNumber(r['Document Number']),
-        customer: r['Maximum of Name'] || r['Maximum of Company Name'] || r['Company Name'] || '',
+        customer: rawName,
+        dc: dcCode,
+        storeNumber,
         location: r['Maximum of Location'] || r['Location'] || '',
         poNumber: r['Maximum of PO/Check Number'] || r['PO/Check Number'] || '',
         soStatus: r['Maximum of Status'] || r['Status'] || '',

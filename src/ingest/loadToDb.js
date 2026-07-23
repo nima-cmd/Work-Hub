@@ -17,12 +17,15 @@ export async function loadOrders(orders, db = pool) {
          (so_number, customer, location, po_number, is_ats, source, stage, so_status,
           qty_ordered, qty_allocated, qty_fulfilled, amount_paid, shipping_status,
           start_date, ship_date, cancel_date, notes, approval_status, billing_status,
+          dc, store_number,
           last_seen, last_movement, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now(), now(), now())
        ON CONFLICT (so_number) DO UPDATE SET
          customer        = COALESCE(EXCLUDED.customer, orders.customer),
          location        = COALESCE(EXCLUDED.location, orders.location),
          po_number       = COALESCE(EXCLUDED.po_number, orders.po_number),
+         dc              = COALESCE(EXCLUDED.dc, orders.dc),
+         store_number    = COALESCE(EXCLUDED.store_number, orders.store_number),
          is_ats          = EXCLUDED.is_ats,
          source          = COALESCE(EXCLUDED.source, orders.source),
          so_status       = COALESCE(EXCLUDED.so_status, orders.so_status),
@@ -48,6 +51,7 @@ export async function loadOrders(orders, db = pool) {
         o.qtyAllocated ?? null, o.qtyFulfilled ?? null, o.amountPaid ?? null,
         o.shippingStatus || null, o.startDate || null, o.shipDate || null,
         o.cancelDate || null, o.notes || null, o.approvalStatus || null, o.billingStatus || null,
+        o.dc || null, o.storeNumber || null,
       ],
     )
     n++

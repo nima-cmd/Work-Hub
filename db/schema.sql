@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS orders (
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS location TEXT; -- NetSuite Location, e.g. 'Warehouse Bulk : Nordstrom'
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS approval_status TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS billing_status TEXT;
+-- Per-SO DC + store (Nima, 2026-07-22): these live on the Sales Order (the
+-- store is the SO's customer; its DC is the customer's parent in the hierarchy).
+-- Folding the 856-ASN search's "DC Code" + "Store Number" columns into the Order
+-- Pipeline export makes the DC available per SO — no separate CSV — which is the
+-- reliable source for DC breakdown / tags / custody. Nullable: populated only
+-- once those columns are added to the Order Pipeline search and re-imported.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS dc TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_number TEXT;
 
 -- ── Item Fulfillments linked to an order ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS fulfillments (

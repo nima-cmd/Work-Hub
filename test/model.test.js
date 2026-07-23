@@ -706,3 +706,27 @@ test('consolidateRouting shows units for Nordstrom and splits by partner', () =>
   // sorted Bloomingdale's before Nordstrom
   assert.deepEqual(groups.map((g) => g.partner), ["Bloomingdale's", 'Nordstrom'])
 })
+
+// ── Order Pipeline: DC/store folded in (Nima, 2026-07-22) ──────────────────
+test('fromOpenSalesOrders reads DC Code / Store Number columns when present', () => {
+  const [r] = fromOpenSalesOrders([{
+    'Document Number': 'SO12222', 'Maximum of Name': "Bloomingdale's - 0011 Chestnut Hill",
+    'Maximum of PO/Check Number': '7527086', 'DC Code': 'SC', 'Store Number': '0011',
+  }])
+  assert.equal(r.dc, 'SC')
+  assert.equal(r.storeNumber, '0011')
+})
+
+test('fromOpenSalesOrders derives DC from the full ship-to name when no DC Code column', () => {
+  const [r] = fromOpenSalesOrders([{
+    'Document Number': 'SO12223',
+    'Maximum of Name': "Macy's Inc. : Bloomingdale's DC - Secaucus : Bloomingdale's - 0006 Short Hills",
+    'Maximum of PO/Check Number': '7527086',
+  }])
+  assert.equal(r.dc, 'SC') // parsed "DC - Secaucus" → dcAbbrev → SC
+})
+
+test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', () => {
+  const [r] = fromOpenSalesOrders([{ 'Document Number': 'SO1', 'Maximum of Name': 'Level Shoes' }])
+  assert.equal(r.dc, null)
+})

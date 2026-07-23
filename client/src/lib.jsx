@@ -626,9 +626,9 @@ export function TaskLink({ docType, docNumber, index, onCreated, onNavigate, lab
 // parsing group members collapses everything into one bucket. Fall back to the
 // member parse only when we have no feed/scan data for this PO.
 function dcRowsFor(group, dcList) {
-  // Feed/scan DCs give cartons, not store counts — carry cartons separately so
-  // the tag never mislabels them as "stores"; stores stays 0 (unknown here).
-  if (dcList && dcList.length) return dcList.map((d) => ({ dc: d.dc, abbrev: d.dc, stores: 0, cartons: d.cartons || 0 }))
+  // dcList (from getPoDcs) carries a real store count once the order-level DC is
+  // available, plus feed cartons. Prefer stores; fall back to the member parse.
+  if (dcList && dcList.length) return dcList.map((d) => ({ dc: d.dc, abbrev: d.dc, stores: d.stores || 0, cartons: d.cartons || 0 }))
   return dcBreakdown(group?.members || []).filter((r) => r.abbrev)
 }
 

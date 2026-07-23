@@ -966,21 +966,27 @@ export async function searchLinkableEmails(q) {
 // scanned has no DCs here, so the button correctly stays a single PO-level tag.
 export async function getPoDcs() {
   const map = {}
-  const add = (po, dc, cartons) => {
-    if (!po || !dc) return
+  const ensure = (po, dc) => {
+    if (!po || !dc) return null
     const m = (map[po] ||= {})
-    const e = (m[dc] ||= { dc, cartons: 0 })
-    e.cartons += cartons || 0
+    return (m[dc] ||= { dc, cartons: 0, stores: 0 })
   }
-  for (const p of await fetchEdiPackages()) add(String(p.poNumber), String(p.dc), Number(p.cartons) || 0)
-  const { rows } = await pool.query(
-    `SELECT DISTINCT doc_number FROM order_events WHERE doc_type='DC' AND doc_number LIKE '%:%'`,
+  // Primary + best source: per-SO DC on the order (each EDI SO is one store, so
+  // grouping by DC gives the real store count). Populated once the Order
+  // Pipeline export carries the DC Code / Store Number columns.
+  const ord = await pool.query(
+    `SELECT po_number AS po, dc, COUNT(*)::int AS stores
+     FROM orders WHERE po_number IS NOT NULL AND dc IS NOT NULL AND dc <> '' GROUP BY po_number, dc`,
   )
-  for (const r of rows) { const [po, dc] = String(r.doc_number).split(':'); if (dc) add(po, dc, 0) }
+  for (const r of ord.rows) { const e = ensure(String(r.po), String(r.dc)); if (e) e.stores += r.stores }
+  // Augment with the routing feed (authoritative carton counts) …
+  for (const p of await fetchEdiPackages()) { const e = ensure(String(p.poNumber), String(p.dc)); if (e) e.cartons += Number(p.cartons) || 0 }
+  // … and any per-DC custody scans (covers DCs seen physically but not yet fed).
+  const scans = await pool.query(`SELECT DISTINCT doc_number FROM order_events WHERE doc_type='DC' AND doc_number LIKE '%:%'`)
+  for (const r of scans.rows) { const [po, dc] = String(r.doc_number).split(':'); ensure(po, dc) }
+
   const out = {}
-  for (const [po, dcs] of Object.entries(map)) {
-    out[po] = Object.values(dcs).sort((a, b) => (a.dc < b.dc ? -1 : 1))
-  }
+  for (const [po, dcs] of Object.entries(map)) out[po] = Object.values(dcs).sort((a, b) => (a.dc < b.dc ? -1 : 1))
   return out
 }
 
