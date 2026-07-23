@@ -621,13 +621,24 @@ export function TaskLink({ docType, docNumber, index, onCreated, onNavigate, lab
   return <button className="linkBtn taskLinkBtn" disabled={busy} onClick={create} title="Create a task for this doc">＋ Task</button>
 }
 
-// The DC split of a PO group, shown inline: "SC×10 · ST×5 · JP×4 · CI×4".
-export function DcBreakdown({ group }) {
-  const rows = dcBreakdown(group?.members || []).filter((r) => r.abbrev)
+// A PO's DC split. Prefer the real breakdown from the routing feed / custody
+// scans (dcList: [{ dc, cartons }]) — the DC isn't in the order ship-to, so
+// parsing group members collapses everything into one bucket. Fall back to the
+// member parse only when we have no feed/scan data for this PO.
+function dcRowsFor(group, dcList) {
+  // Feed/scan DCs give cartons, not store counts — carry cartons separately so
+  // the tag never mislabels them as "stores"; stores stays 0 (unknown here).
+  if (dcList && dcList.length) return dcList.map((d) => ({ dc: d.dc, abbrev: d.dc, stores: 0, cartons: d.cartons || 0 }))
+  return dcBreakdown(group?.members || []).filter((r) => r.abbrev)
+}
+
+// The DC split of a PO group, shown inline: "SC · ST · JP · CI".
+export function DcBreakdown({ group, dcList }) {
+  const rows = dcRowsFor(group, dcList)
   if (!rows.length) return null
   return (
     <span className="dcBreakdown" title="Distribution centers on this PO">
-      {rows.map((r) => <span key={r.dc} className="dcChip">{r.abbrev}×{r.stores}</span>)}
+      {rows.map((r) => <span key={r.dc} className="dcChip">{r.abbrev}{r.stores ? `×${r.stores}` : ''}</span>)}
     </span>
   )
 }
@@ -636,7 +647,7 @@ export function DcBreakdown({ group }) {
 // each label carries the PO, the DC abbreviation, and that DC's store count —
 // PO-referenced, no IF. A PO with no DC yet (unfulfilled / non-Bloomingdale's)
 // prints a single PO-level tag.
-export function DcTagButtons({ group }) {
+export function DcTagButtons({ group, dcList }) {
   const [sizes, setSizes] = useState({})
   const [busy, setBusy] = useState(null)
   const [err, setErr] = useState(null)
@@ -644,7 +655,7 @@ export function DcTagButtons({ group }) {
     if (!_labelSizes) _labelSizes = fetchLabelSizes().catch(() => ({}))
     _labelSizes.then(setSizes)
   }, [])
-  const breakdown = dcBreakdown(group?.members || [])
+  const breakdown = dcRowsFor(group, dcList)
   const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
   if (!available.length || !breakdown.length) return null
   const n = breakdown.length

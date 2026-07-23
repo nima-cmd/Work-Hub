@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
-import { createTasksBulk } from '../api.js'
+import { createTasksBulk, fetchPoDcs } from '../api.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -19,6 +19,10 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const [draft, setDraft] = useState({ needsType: 'none', netsuiteDocType: 'SO', netsuiteDocNumber: '', urgency: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
+  // Real per-PO DC breakdown (routing feed ∪ custody scans) — the DC isn't in
+  // the order ship-to, so the DC-tag button gets it from here instead.
+  const [poDcs, setPoDcs] = useState({})
+  useEffect(() => { fetchPoDcs().then(setPoDcs).catch(() => {}) }, [])
 
   const grouped = groupOrdersByPo(orders)
   const cardKey = (o) => o.soNumber // group rows set soNumber = poNumber
@@ -164,7 +168,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                   {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                     <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
                   ))}
-                  {o.isGroup && o.source === 'edi' && <><DcBreakdown group={o} /><DcTagButtons group={o} /></>}
+                  {o.isGroup && o.source === 'edi' && <><DcBreakdown group={o} dcList={poDcs[o.poNumber]} /><DcTagButtons group={o} dcList={poDcs[o.poNumber]} /></>}
                   {o.isGroup && o.source !== 'edi' && <GroupLabelButtons group={o} />}
                 </div>
               )

@@ -17,7 +17,7 @@ import {
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive,
-  getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails,
+  getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -369,6 +369,13 @@ app.delete('/api/routing/hold/:po/:dc', async (req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Per-PO DC breakdown (routing feed ∪ custody scans) for the DC-tag button
+app.get('/api/po-dcs', async (_req, res) => {
+  try {
+    res.json(await getPoDcs())
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // Email → document links (reusable across docs)

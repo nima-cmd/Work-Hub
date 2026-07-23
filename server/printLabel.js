@@ -120,7 +120,10 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
 
     const PO = String(poNumber || '')
     const stores = Number(storeCount) || 0
-    const storeLine = `${stores} ${stores === 1 ? 'STORE' : 'STORES'}`
+    // Store count is only shown when we actually know it (member-parsed tags);
+    // routing-feed/scan-derived DCs have no store count, so the line is omitted
+    // rather than printing a misleading "0 STORES".
+    const storeLine = stores > 0 ? `${stores} ${stores === 1 ? 'STORE' : 'STORES'}` : ''
     // QR carries PO + DC so the Scan Bay resolves both (dcToken format).
     const qrData = `DC:${PO}:${dc || ''}`
 
@@ -133,7 +136,7 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
       if (customer) doc.font('Helvetica-Bold').fontSize(7).text(customer, tx, MARGIN + 8, { width: tw, lineBreak: false })
       doc.font('Helvetica-Bold').fontSize(11).text(`PO ${PO}`, tx, MARGIN + 17, { width: tw, lineBreak: false })
       if (dc) doc.font('Helvetica-Bold').fontSize(24).text(dc, tx, MARGIN + 30, { width: tw, lineBreak: false })
-      doc.font('Helvetica').fontSize(8).text(storeLine, tx, MARGIN + (dc ? 58 : 32), { width: tw })
+      if (storeLine) doc.font('Helvetica').fontSize(8).text(storeLine, tx, MARGIN + (dc ? 58 : 32), { width: tw })
     } else {
       const cx = cfg.w / 2
       doc.font('Helvetica-Bold').fontSize(18).text('◆ NAGHEDI', 0, 26, { width: cfg.w, align: 'center' })
@@ -143,13 +146,13 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
       drawQr(doc, qrData, cx - qrSize / 2, 82, qrSize)
       doc.font('Helvetica-Bold').fontSize(26).text(`PO ${PO}`, 0, 262, { width: cfg.w, align: 'center' })
       if (dc) doc.font('Helvetica-Bold').fontSize(68).text(dc, 0, 296, { width: cfg.w, align: 'center' })
-      doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 324, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      if (storeLine) doc.font('Helvetica-Bold').fontSize(20).text(storeLine, 0, dc ? 392 : 324, { width: cfg.w, align: 'center', characterSpacing: 2 })
     }
     doc.end()
   })
 }
 
-function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
+function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber, refByPo }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
     const out = createWriteStream(path)
@@ -163,7 +166,7 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber }) {
     // EDI cargo tags reference the customer PO, never the sales order (Nima,
     // 2026-07-21); boutique/ecom tags keep the SO. The QR always encodes the
     // IF — that's the custody scan identity regardless.
-    const refLines = (info.refByPo && poNumber
+    const refLines = (refByPo && poNumber
       ? [`PO ${poNumber}`, customer]
       : [soNumber, customer, poNumber ? `PO ${poNumber}` : '']).filter(Boolean)
     if (cfg.layout === 'compact') {

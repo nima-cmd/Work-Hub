@@ -688,3 +688,10 @@ export async function deleteEmailLink(id, docType, docNumber) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Per-PO DC breakdown (routing feed ∪ custody scans) for the DC-tag button.
+export async function fetchPoDcs() {
+  const res = await fetch('/api/po-dcs')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

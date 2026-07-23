@@ -959,6 +959,31 @@ export async function searchLinkableEmails(q) {
   return searchEmailsForLink(q)
 }
 
+// Per-PO DC breakdown for the Kanban's "N DC tags" button. The DC assignment is
+// NOT in the order/fulfillment ship-to (that's just the store) — it lives in the
+// routing feed (edi_packages, authoritative w/ cartons) and the per-DC custody
+// scans. Union both → { [poNumber]: [{ dc, cartons }] }. A PO not yet packed/
+// scanned has no DCs here, so the button correctly stays a single PO-level tag.
+export async function getPoDcs() {
+  const map = {}
+  const add = (po, dc, cartons) => {
+    if (!po || !dc) return
+    const m = (map[po] ||= {})
+    const e = (m[dc] ||= { dc, cartons: 0 })
+    e.cartons += cartons || 0
+  }
+  for (const p of await fetchEdiPackages()) add(String(p.poNumber), String(p.dc), Number(p.cartons) || 0)
+  const { rows } = await pool.query(
+    `SELECT DISTINCT doc_number FROM order_events WHERE doc_type='DC' AND doc_number LIKE '%:%'`,
+  )
+  for (const r of rows) { const [po, dc] = String(r.doc_number).split(':'); if (dc) add(po, dc, 0) }
+  const out = {}
+  for (const [po, dcs] of Object.entries(map)) {
+    out[po] = Object.values(dcs).sort((a, b) => (a.dc < b.dc ? -1 : 1))
+  }
+  return out
+}
+
 // The Scan Bay ↔ Routing bridge (Nima, 2026-07-22): a DC carton we've scanned
 // back into our possession but that ISN'T in the current routing feed means we
 // can't route it yet — and the Scan Bay knows exactly which PO-DC and why.
