@@ -2,8 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Naghedi · Warehouse Tracker</title>
+
+    <!-- Installable phone app (PWA). Add to Home Screen → opens fullscreen. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0e1116" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <!-- iOS home-screen app -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Work-Hub" />
     <!-- Orbitron: open-licensed (OFL) sci-fi display face for the Star Wars
          console theme. Loads async; everything falls back to ui-monospace if
          the network's unavailable, so nothing breaks offline. -->

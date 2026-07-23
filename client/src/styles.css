@@ -1899,3 +1899,41 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .elErr { color: var(--hi); font-size: 11px; margin-top: 4px; }
 .rt-authChip { flex-direction: column; align-items: stretch; gap: 5px; }
 .rt-authChipTop { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+/* ── Phone / PWA layout (Nima, 2026-07-22) ───────────────────────────────── */
+@media (max-width: 760px) {
+  /* Header: brand on top, tabs become a single swipeable strip, meta wraps. */
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 12px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+    padding-left: calc(12px + env(safe-area-inset-left));
+    padding-right: calc(12px + env(safe-area-inset-right));
+  }
+  .brand { font-size: 15px; }
+  .brand .sub { display: none; }
+  .tabs {
+    order: 3;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; padding: 8px 14px; font-size: 14px; }
+  .topmeta { margin-left: auto; flex-wrap: wrap; gap: 6px; }
+
+  /* Main content: full-bleed-ish with breathing room + safe areas. */
+  main { padding: 12px calc(12px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+
+  /* Grids collapse to one column so cards aren't crushed. */
+  .rt-cards, .grid { grid-template-columns: 1fr !important; }
+  .scanbay { flex-direction: column; }
+
+  /* Comfortable tap targets for the common controls. */
+  .btn, .btnGhost, .importBtn { min-height: 34px; }
+}
