@@ -33,7 +33,9 @@ import {
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
   ensureMasterBol,
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
+  fetchCatalogueSkus,
 } from '../src/ingest/loadToDb.js'
+import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
@@ -900,6 +902,78 @@ export async function getRouting() {
     packages, consolidated, shipments, detached, auths, gaps,
     held, heldKeys: [...heldSet], packageCount: packages.length,
   }
+}
+
+// ── Catalogue upload tracking ────────────────────────────────────────────────
+// Partners whose open-PO SKUs must exist in the (one master) catalogue. Nordstrom
+// only for now — add 'shopbop' etc. here when confirmed.
+const CATALOGUE_PARTNERS = ['nordstrom']
+
+// Shared reader: catalogue master + open PO lines for the tracked partners,
+// each line flagged uploaded vs not (matched on ProductID+color = UPC grain).
+async function readCatalogueGaps() {
+  const cat = await fetchCatalogueSkus()
+  const uploaded = new Set(cat.map((c) => c.skuKey))
+  // prefill maps from the catalogue's own data (color→code, productId→desc)
+  const colorCode = {}, pidDesc = {}
+  for (const c of cat) {
+    if (c.color && c.colorCode) colorCode[skuColorNorm(c.color)] ??= c.colorCode
+    if (c.productId && c.description) pidDesc[c.productId] ??= c.description
+  }
+  const destClause = CATALOGUE_PARTNERS.map((_, i) => `destination ILIKE $${i + 1}`).join(' OR ')
+  const { rows } = await pool.query(
+    `SELECT po_number AS "poNumber", item, qty_ordered AS "qtyOrdered"
+     FROM purchase_orders
+     WHERE NOT COALESCE(dismissed,false) AND item ILIKE 'SN%' AND (${destClause})
+     ORDER BY item, po_number`,
+    CATALOGUE_PARTNERS.map((p) => `%${p}%`),
+  )
+  const bySku = new Map()
+  for (const r of rows) {
+    const s = String(r.item).trim()
+    const d = s.indexOf('-')
+    if (d < 0) continue
+    const productId = s.slice(0, d).toUpperCase()
+    const color = s.slice(d + 1)
+    const key = skuKeyOf(productId, color)
+    let e = bySku.get(key)
+    if (!e) { e = { key, item: s, productId, color, pos: new Set(), qty: 0, uploaded: uploaded.has(key) }; bySku.set(key, e) }
+    e.pos.add(r.poNumber); e.qty += Number(r.qtyOrdered) || 0
+  }
+  const skus = [...bySku.values()]
+  return { cat, uploaded, colorCode, pidDesc, skus }
+}
+
+export async function getCatalogueGaps() {
+  const { cat, colorCode, pidDesc, skus } = await readCatalogueGaps()
+  const snap = await pool.query(`SELECT MAX(file_modified) AS m, MAX(imported_at) AS i FROM import_snapshots WHERE source='catalogue'`)
+  const missing = skus.filter((s) => !s.uploaded).map((s) => ({
+    item: s.item, productId: s.productId, color: s.color, pos: [...s.pos].sort(), qty: s.qty,
+    colorCode: colorCode[skuColorNorm(s.color)] || null, description: pidDesc[s.productId] || null,
+  }))
+  return {
+    partners: CATALOGUE_PARTNERS,
+    catalogueCount: cat.length,
+    lastImport: snap.rows[0].m || snap.rows[0].i || null,
+    totalSkus: skus.length,
+    uploaded: skus.filter((s) => s.uploaded).length,
+    missingCount: missing.length,
+    missing,
+  }
+}
+
+// The prefilled catalogue add-file (catalogue column order + everything we have;
+// GTIN/description left blank to fill). One row per missing SKU.
+export async function buildCatalogueAddCsv() {
+  const { missing } = { missing: (await getCatalogueGaps()).missing }
+  const today = new Date().toISOString().slice(0, 10).split('-')
+  const mdy = `${today[1]}/${today[2]}/${today[0]}`
+  const H = ['SelectionCode', 'SelectionCodeDesc', 'ProductID', 'ProductIDDescEnglish', 'GTIN', 'GTINType', 'ChangeDate', 'GS1USColorCode', 'ShortColorDescEnglish', 'GS1USSizeCode', 'ShortSizeDescEnglish', 'ExtProductIDDescEnglish', '__Item(SKU)', '__OpenPOs', '__TotalQtyOrdered']
+  const rows = [H]
+  for (const m of missing) {
+    rows.push(['001', 'Handbags', m.productId, m.description || '', '', 'UP', mdy, m.colorCode || '', m.color.replace(/-/g, ' '), '00000', 'No Size', '', m.item, m.pos.join(' '), m.qty])
+  }
+  return rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')
 }
 
 // Hold a PO-DC out of routing. If it's already on a BOL, restructure that

@@ -18,6 +18,7 @@ import {
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
+  getCatalogueGaps, buildCatalogueAddCsv,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -369,6 +370,21 @@ app.delete('/api/routing/hold/:po/:dc', async (req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Catalogue upload tracking — open PO SKUs uploaded vs not (Nordstrom master)
+app.get('/api/catalogue/gaps', async (_req, res) => {
+  try {
+    res.json(await getCatalogueGaps())
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+app.get('/api/catalogue/add-file.csv', async (_req, res) => {
+  try {
+    const csv = await buildCatalogueAddCsv()
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="catalogue_to_add.csv"')
+    res.send(csv)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // Per-PO DC breakdown (routing feed ∪ custody scans) for the DC-tag button

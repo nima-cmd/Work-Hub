@@ -1944,3 +1944,20 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .col-with_nestor .colHead { color: var(--mid); border-bottom: 2px solid rgba(217,130,43,0.5); }
 .col-balls_in_court { border-color: rgba(126,231,135,0.4); }
 .col-balls_in_court .colHead { color: #7ee787; border-bottom: 2px solid rgba(126,231,135,0.5); }
+
+/* ── Catalogue tracking (Nima, 2026-07-27) ───────────────────────────────── */
+.catalogue { padding: 4px 2px 40px; }
+.cat-stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 6px; }
+.cat-stat { flex: 1 1 auto; min-width: 110px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; text-align: center; }
+.cat-stat.ok { border-color: rgba(126,231,135,0.4); }
+.cat-stat.bad { border-color: rgba(248,81,73,0.45); }
+.cat-statN { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.cat-stat.ok .cat-statN { color: #7ee787; }
+.cat-stat.bad .cat-statN { color: var(--hi); }
+.cat-statL { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 3px; }
+.cat-imported { font-size: 11px; margin-bottom: 10px; }
+.cat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cat-table th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); padding: 6px 8px; }
+.cat-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.cat-table .mono, .cat-table .num { font-variant-numeric: tabular-nums; }
+.cat-table .mono { font-family: ui-monospace, monospace; font-size: 12px; }

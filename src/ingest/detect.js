@@ -40,6 +40,11 @@ export function detectSource(headers) {
   // Keyed on its two signature columns; "PO Number - DC" is unique to it.
   if (has('PO Number - DC', 'Cubic Feet (Rounded)')) return 'ediPackagesVolume'
 
+  // Product catalogue export (GS1/GTIN master) — the "uploaded" SKU set. Keyed
+  // on ProductID + GTIN + a GS1/color column. The FileFormat directive line is
+  // stripped before this runs (see importer.js).
+  if (has('ProductID', 'GTIN') && (H.has('GS1USColorCode') || H.has('ShortColorDescEnglish'))) return 'catalogue'
+
   return null // unrecognized — the UI will report this back
 }
 
@@ -50,6 +55,7 @@ export const SOURCE_LABELS = {
   ocPipeline: 'Warehouse OC Pipeline',
   ediFulfillments: 'EDI 856 ASN / BOL search',
   ediPackagesVolume: 'EDI Packages Volume (routing feed)',
+  catalogue: 'Product Catalogue (GTIN/UPC master)',
   // The "Waiting to Ship" search — the ONLY source of IF-Packed-Status
   // (Approved to Ship / FOB / Waiting On Payment / Pending Invoice), which the
   // Launch Bay + Ship Departures depend on. Formerly treated as legacy; promoted

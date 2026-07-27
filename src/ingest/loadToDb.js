@@ -376,6 +376,40 @@ export async function loadEdiPackages(rows, db = pool) {
   return n
 }
 
+// ── Product catalogue (uploaded SKU master) ─────────────────────────────────
+export async function loadCatalogueSkus(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    if (!r.skuKey) continue
+    await db.query(
+      `INSERT INTO catalogue_skus (sku_key, upc, product_id, color, color_code, description, size_code, size_desc, change_date, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       ON CONFLICT (sku_key) DO UPDATE SET
+         upc         = COALESCE(EXCLUDED.upc, catalogue_skus.upc),
+         product_id  = EXCLUDED.product_id,
+         color       = EXCLUDED.color,
+         color_code  = COALESCE(EXCLUDED.color_code, catalogue_skus.color_code),
+         description = COALESCE(EXCLUDED.description, catalogue_skus.description),
+         size_code   = COALESCE(EXCLUDED.size_code, catalogue_skus.size_code),
+         size_desc   = COALESCE(EXCLUDED.size_desc, catalogue_skus.size_desc),
+         change_date = COALESCE(EXCLUDED.change_date, catalogue_skus.change_date),
+         updated_at  = now()`,
+      [r.skuKey, r.upc, r.productId, r.color, r.colorCode, r.description, r.sizeCode, r.sizeDesc, r.changeDate],
+    )
+    n++
+  }
+  return n
+}
+
+export async function fetchCatalogueSkus(db = pool) {
+  const { rows } = await db.query(
+    `SELECT sku_key AS "skuKey", upc, product_id AS "productId", color, color_code AS "colorCode",
+            description, size_code AS "sizeCode", size_desc AS "sizeDesc"
+     FROM catalogue_skus`,
+  )
+  return rows
+}
+
 export async function fetchEdiPackages(db = pool) {
   const { rows } = await db.query(
     `SELECT po_dc AS "poDc", po_number AS "poNumber", dc,

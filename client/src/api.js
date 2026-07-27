@@ -695,3 +695,11 @@ export async function fetchPoDcs() {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Catalogue upload tracking (Nima, 2026-07-27)
+export async function fetchCatalogueGaps() {
+  const res = await fetch('/api/catalogue/gaps')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+export const catalogueAddFileUrl = () => '/api/catalogue/add-file.csv'

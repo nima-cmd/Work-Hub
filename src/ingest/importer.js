@@ -17,6 +17,7 @@ import {
   fromPoReceiving,
   fromOcPipeline,
   fromEdiPackagesVolume,
+  fromCatalogue,
 } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
 import { deriveSource } from '../model/source.js'
@@ -24,7 +25,7 @@ import {
   loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
   pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
-  loadEdiPackages,
+  loadEdiPackages, loadCatalogueSkus,
 } from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
@@ -52,6 +53,9 @@ const LINE_LEVEL_MAPPERS = {
   // export but its numbers don't change, and the shipment rows are the durable
   // record (see edi_packages comment in schema.sql).
   ediPackagesVolume: { map: fromEdiPackagesVolume, load: loadEdiPackages },
+  // Product catalogue master (uploaded SKUs). No prune — an export may be a
+  // subset (some styles), so we only ever add/update the uploaded set.
+  catalogue: { map: fromCatalogue, load: loadCatalogueSkus },
 }
 
 // files: [{ name, text, lastModified }]
@@ -62,7 +66,11 @@ export async function importBatch(files) {
 
   const snapshots = []
   for (const f of files) {
-    const rows = parseCsv(f.text)
+    // The catalogue export leads with a "FileFormat=TXT,ActionType=…" directive
+    // line before the real column headers — strip it so the headers parse right.
+    let text = f.text
+    if (/^\s*FileFormat\s*=/i.test(text)) text = text.replace(/^[^\r\n]*\r?\n/, '')
+    const rows = parseCsv(text)
     const headers = rows.length ? Object.keys(rows[0]) : []
     const key = detectSource(headers)
     if (!key) {

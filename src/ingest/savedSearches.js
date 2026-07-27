@@ -288,6 +288,33 @@ export function fromInvoicedPending(rows) {
     }))
 }
 
+// ── Product catalogue (GS1/GTIN master) — the "uploaded" SKU set ──────────────
+// One row per color-level SKU. sku_key = "<PRODUCTID>|<COLORNORM>" is the match
+// key against PO lines (which carry the same style+color but no raw UPC). The
+// export's leading "FileFormat=…" directive line is stripped in importer.js.
+export const skuColorNorm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+export const skuKeyOf = (productId, color) => `${String(productId || '').trim().toUpperCase()}|${skuColorNorm(color)}`
+
+export function fromCatalogue(rows) {
+  return rows
+    .filter((r) => (r['ProductID'] || '').trim())
+    .map((r) => {
+      const productId = String(r['ProductID']).trim().toUpperCase()
+      const color = (r['ShortColorDescEnglish'] || '').trim()
+      return {
+        skuKey: skuKeyOf(productId, color),
+        upc: (r['GTIN'] || '').trim() || null,
+        productId,
+        color,
+        colorCode: (r['GS1USColorCode'] || '').toString().trim() || null,
+        description: (r['ProductIDDescEnglish'] || '').trim() || null,
+        sizeCode: (r['GS1USSizeCode'] || '').toString().trim() || null,
+        sizeDesc: (r['ShortSizeDescEnglish'] || '').trim() || null,
+        changeDate: (r['ChangeDate'] || '').trim() || null,
+      }
+    })
+}
+
 // ── EDIPackagesVolume.csv — the routing feed (searchid=3947, Nima 2026-07-22) ─
 // Pre-aggregated per PO-DC (one row per "<PO>-<DCcode>"), from the packing done
 // in NetSuite's Orderful tab (customrecord_hb_edi_packages). Feeds the Routing

@@ -738,6 +738,26 @@ CREATE TABLE IF NOT EXISTS email_links (
 );
 CREATE INDEX IF NOT EXISTS idx_email_links_doc ON email_links(doc_type, doc_number);
 
+-- catalogue_skus (Nima, 2026-07-27): the product SKUs uploaded to the GS1/GTIN
+-- catalogue (the "uploaded" set). One row per color-level SKU. Imported from the
+-- catalogue export; sku_key = "<PRODUCTID>|<COLORNORM>" is how we match a PO
+-- line (which carries no raw UPC) to its catalogue entry. Currently one master
+-- list applied to Nordstrom; extensible to more partners later.
+CREATE TABLE IF NOT EXISTS catalogue_skus (
+  sku_key      TEXT PRIMARY KEY,   -- '<PRODUCTID>|<COLORNORM>'
+  upc          TEXT,               -- GTIN
+  product_id   TEXT,
+  color        TEXT,
+  color_code   TEXT,               -- GS1USColorCode (≈ NRF color code)
+  description  TEXT,
+  size_code    TEXT,
+  size_desc    TEXT,
+  change_date  TEXT,
+  updated_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_catalogue_upc ON catalogue_skus(upc);
+CREATE INDEX IF NOT EXISTS idx_catalogue_pid ON catalogue_skus(product_id);
+
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_so        ON invoices(so_number);
