@@ -18,6 +18,12 @@ import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 
 const M = 24
 const RED = '#c00'
+// Handling units: goods palletize at ~45 lb per pallet, so the pallet (H.U.)
+// count is the total weight over 45, rounded UP (Nima, 2026-07-28 — same
+// always-round-up rule as the portal numbers). On the Master BOL the weight is
+// the aggregate across every underlying DC, so this is the grand-total pallets.
+const PALLET_LB = 45
+const palletsFor = (weightLb) => (weightLb ? Math.ceil(Number(weightLb) / PALLET_LB) : '')
 
 // Postgres DATE columns come back as JS Date objects (local midnight), so a
 // plain String(d).slice(0,10) yields "Tue Jul 28". Format to YYYY-MM-DD from
@@ -165,8 +171,9 @@ function render(doc, shipment, kind) {
   const kCols = [W * 0.08, W * 0.08, W * 0.08, W * 0.09, W * 0.10, W * 0.07, W * 0.34, W * 0.16]
   gridHeader(doc, M, y + 11, kCols, ['H.U. QTY', 'TYPE', 'PKG QTY', 'TYPE', 'WEIGHT', 'H.M.(X)', 'COMMODITY DESCRIPTION', 'LTL ONLY  NMFC# / CLASS'])
   const kr = y + 11 + 15
-  gridRow(doc, M, kr, kCols, ['', '', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
-  gridRow(doc, M, kr + 15, kCols, ['', '', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}`, ''], true, RED)
+  const pallets = String(palletsFor(shipment.weightLb))
+  gridRow(doc, M, kr, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
+  gridRow(doc, M, kr + 15, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  ${PALLET_LB} lb/plt`, ''], true, RED)
   y = kr + 30 + 3
 
   // ── Value / COD ───────────────────────────────────────────────────────────
