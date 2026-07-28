@@ -28,7 +28,13 @@ const MIN = 60000
 
 // items: [{ id, label, kind, deadline (ms epoch | null), durationMin (number),
 //           priority (0 = highest) }]
-// opts:  { now (ms), dayStartHour = 9, dayEndHour = 17 }
+// opts:  { now (ms), dayStartHour = 9, dayEndHour = 17,
+//          preserveOrder = false }
+//
+// preserveOrder: when the plan is in MANUAL mode (the operator reordered it by
+// hand), we keep the given order and only project clock times + at-risk onto
+// it, instead of re-sorting by EDF. Times/slack/at-risk are still computed the
+// same way, so a hand-sequenced plan honestly shows the cutoffs it now misses.
 export function computeRoute(items = [], opts = {}) {
   const now = opts.now ?? Date.now()
   const dayStartHour = opts.dayStartHour ?? 9
@@ -36,13 +42,15 @@ export function computeRoute(items = [], opts = {}) {
   const dayStart = new Date(now); dayStart.setHours(dayStartHour, 0, 0, 0)
   const startFloor = Math.max(now, dayStart.getTime())
 
-  const ordered = [...items].sort((a, b) => {
-    const da = a.deadline ?? Infinity, db = b.deadline ?? Infinity
-    if (da !== db) return da - db
-    const pa = a.priority ?? 5, pb = b.priority ?? 5
-    if (pa !== pb) return pa - pb
-    return (a.durationMin ?? 10) - (b.durationMin ?? 10)
-  })
+  const ordered = opts.preserveOrder
+    ? [...items]
+    : [...items].sort((a, b) => {
+        const da = a.deadline ?? Infinity, db = b.deadline ?? Infinity
+        if (da !== db) return da - db
+        const pa = a.priority ?? 5, pb = b.priority ?? 5
+        if (pa !== pb) return pa - pb
+        return (a.durationMin ?? 10) - (b.durationMin ?? 10)
+      })
 
   let cursor = startFloor
   let maxLatenessMin = 0

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fetchAffection, fetchQuestEmails, importCsv, completeQuestTask } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
-import { computeRoute, DEFAULT_DURATIONS_MIN } from '../../../src/model/routePlan.js'
-import { channelKey } from '../../../src/model/channels.js'
+import { computeRoute } from '../../../src/model/routePlan.js'
+import { buildRouteItems } from '../../../src/model/routeItems.js'
 import { imagesFor } from '../data/characterImages.js'
 
 // Flight Deck v6 (Nima, 2026-07-21) — the settled composition:
@@ -351,59 +351,8 @@ const ageOf = (iso) => {
   return `${Math.floor(m / 1440)}d`
 }
 
-// ── route planning: the demo script's deadline rules on live data ────────────
-// (scripts/plan-route-demo.js is the reference; keep the rules in sync)
-function taskKind(t) {
-  const k = (t.recurringKey || '') + ' ' + (t.subject || '')
-  if (/weaver/i.test(k)) return 'weaver_sync'
-  if (/csv|upload/i.test(k)) return 'csv_upload'
-  if (String(t.instanceKey || '').startsWith('edi:')) return 'edi_route'
-  return 'email_reply'
-}
-
-function buildRouteItems(orders, tasks, ediWork) {
-  const now = Date.now()
-  const at = (h) => { const d = new Date(now); d.setHours(h, 0, 0, 0); return d.getTime() }
-  const NOON = at(12), THREE = at(15)
-  const dur = (k) => DEFAULT_DURATIONS_MIN[k] ?? DEFAULT_DURATIONS_MIN.default
-  const items = []
-
-  for (const t of tasks.filter((t) => t.status === 'open')) {
-    const kind = taskKind(t)
-    items.push({
-      id: 'task-' + t.id, taskId: t.id, label: (t.subject || 'task').slice(0, 46), kind,
-      deadline: t.urgency === 'hi' ? THREE : null,
-      durationMin: dur(kind), priority: t.urgency === 'hi' ? 0 : t.urgency === 'mid' ? 2 : 4,
-    })
-  }
-
-  for (const o of (ediWork?.orders || []).filter((o) => !o.work.closed)) {
-    const partner = (o.tradingPartner || '').toLowerCase()
-    const short = (o.tradingPartner || '').replace(/\s*\(.*$/, '')
-    let deadline = null, priority = 3
-    if (partner.includes('nordstrom') && o.stageRank < 3) { deadline = NOON; priority = 1 }
-    else if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
-    else if (o.work.cancelState === 'soon') { deadline = THREE; priority = 1 }
-    else continue
-    items.push({
-      id: 'edi-' + o.businessNumber, label: `${short} routing · PO ${o.businessNumber}`.slice(0, 46),
-      group: `${short} routing`,
-      kind: 'edi_route', deadline, durationMin: dur('edi_route'), priority,
-    })
-  }
-
-  for (const o of orders) {
-    const needsInvoice = o.stage && !['SHIPPED', 'INVOICED', 'APPROVED_FOR_SHIPPING'].includes(o.stage)
-    if (channelKey(o) === 'boutique' && needsInvoice && o.severity > 0) {
-      items.push({
-        id: 'inv-' + o.soNumber, label: `Invoice ${o.customer} · ${o.soNumber}`.slice(0, 46),
-        group: 'Boutique invoicing',
-        kind: 'invoice', deadline: NOON, durationMin: dur('invoice'), priority: 2,
-      })
-    }
-  }
-  return items
-}
+// route planning uses the shared adapter (src/model/routeItems.js) so the deck
+// HUD and the Daily Flight Plan view plot the exact same route.
 
 // consecutive same-group waypoints collapse into one leg ("Nordstrom routing ×26")
 function routeLegs(route) {

@@ -465,6 +465,38 @@ export async function setTaskChecklistItem(id, itemKey, done) {
   return res.json()
 }
 
+// ── Daily Flight Plan (Nima, 2026-07-28) ─────────────────────────────────────
+const jsonPost = async (url, body, method = 'POST') => {
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+// Set a task's real due time (ISO string | null) and/or estimate (min | null).
+export async function setTaskSchedule(id, { dueAt, durationMin } = {}) {
+  return jsonPost(`/api/quest-tasks/${id}/schedule`, { dueAt, durationMin })
+}
+
+// The day's persisted overrides (manual order + non-task check-offs).
+export async function fetchDayPlan(date) {
+  const res = await fetch(`/api/plan/${date}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+export async function reorderDayPlan(date, order) {
+  return jsonPost(`/api/plan/${date}/reorder`, { order })
+}
+export async function resetDayPlan(date) {
+  return jsonPost(`/api/plan/${date}/order`, undefined, 'DELETE')
+}
+export async function setPlanItemDone(date, itemId, done, label) {
+  return jsonPost(`/api/plan/${date}/item/${encodeURIComponent(itemId)}/done`, { done, label })
+}
+
 // On-demand thread context — fetched only when a transmission is expanded.
 export async function fetchQuestEmailThread(id) {
   const res = await fetch(`/api/quest-emails/${id}/thread`)

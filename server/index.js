@@ -23,7 +23,8 @@ import {
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
-  setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, searchQuestArchive, getTaskActivity,
+  setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
+  getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
@@ -872,6 +873,46 @@ app.post('/api/quest-tasks/:id/checklist', async (req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Daily Flight Plan scheduling — body: { dueAt?, durationMin? }. Omit a field
+// to leave it; pass null to clear it back to the urgency/kind fallback.
+app.post('/api/quest-tasks/:id/schedule', async (req, res) => {
+  try {
+    const { dueAt, durationMin } = req.body || {}
+    res.json(await setTaskSchedule(Number(req.params.id), { dueAt, durationMin }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Daily Flight Plan persistence ────────────────────────────────────────────
+// The plan is recomputed client-side; these store only the day's overrides.
+app.get('/api/plan/:date', async (req, res) => {
+  try {
+    res.json(await getDayPlan(req.params.date))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+// body: { order: [itemId, ...] } — writes a manual sequence (manual mode)
+app.post('/api/plan/:date/reorder', async (req, res) => {
+  try {
+    const order = Array.isArray(req.body?.order) ? req.body.order : []
+    res.json(await reorderDayPlan(req.params.date, order))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+// reset to auto (EDF) — drops the day's manual sort
+app.delete('/api/plan/:date/order', async (req, res) => {
+  try {
+    res.json(await resetDayPlan(req.params.date))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+// body: { done, label? } — check-off for a non-task leg
+app.post('/api/plan/:date/item/:itemId/done', async (req, res) => {
+  try {
+    const { done, label } = req.body || {}
+    res.json(await setPlanItemDone(req.params.date, req.params.itemId, !!done, label || null))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // Journal — ?date=YYYY-MM-DD scopes to one day (Transmissions' Activity

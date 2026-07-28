@@ -21,6 +21,7 @@ import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
 import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
+import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
@@ -719,6 +720,67 @@ test('computeRoute flags an item that cannot make its cutoff', () => {
   assert.ok(route[0].slackMin < 0)
   assert.equal(summary.atRisk, 1)
   assert.ok(summary.maxLatenessMin >= 15)
+})
+
+test('computeRoute preserveOrder keeps a hand-set sequence but still flags cutoffs', () => {
+  const T0 = new Date('2026-07-21T09:00:00').getTime()
+  const at = (h) => { const d = new Date(T0); d.setHours(h, 0, 0, 0); return d.getTime() }
+  const items = [
+    { id: 'long', label: 'long', kind: 'planning', deadline: null, durationMin: 240, priority: 5 },
+    { id: 'tight', label: 'tight', kind: 'edi_route', deadline: at(12), durationMin: 10, priority: 1 },
+  ]
+  const { route } = computeRoute(items, { now: T0, preserveOrder: true })
+  // order is preserved (not re-sorted by EDF), so the noon item is pushed past noon
+  assert.deepEqual(route.map((r) => r.id), ['long', 'tight'])
+  assert.equal(route[1].atRisk, true) // 9:00 + 240m = 13:00, then +10m > noon
+})
+
+// ── routeItems: the live-data → route adapter (Nima, 2026-07-28) ─────────────
+test('buildRouteItems draws tasks, EDI actions and shippable orders', () => {
+  const T0 = new Date('2026-07-28T09:00:00').getTime()
+  const noon = (() => { const d = new Date(T0); d.setHours(12, 0, 0, 0); return d.getTime() })()
+  const tasks = [
+    { id: 1, subject: 'reply to buyer', status: 'open', urgency: 'hi' },
+    { id: 2, subject: 'measured task', status: 'open', urgency: 'lo', durationMin: 25, dueAt: new Date(noon).toISOString() },
+    { id: 3, subject: 'done already', status: 'done', urgency: 'hi' },
+  ]
+  const orders = [
+    { soNumber: 'SO9', customer: 'Boutique X', stage: STAGE.APPROVED, severity: 2, cancelDate: null },
+    { soNumber: 'SO8', customer: 'Shop Y', stage: STAGE.PACKED, severity: 1, location: 'Boutique' },
+  ]
+  const ediWork = { orders: [
+    { businessNumber: 'PO7', tradingPartner: 'Nordstrom (EDI)', stageRank: 1, work: { closed: false, cancelState: 'ok' } },
+  ] }
+  const items = buildRouteItems(orders, tasks, ediWork, { now: T0 })
+  const ids = items.map((i) => i.id)
+  assert.ok(ids.includes('task-1'))
+  assert.ok(!ids.includes('task-3'))            // done tasks excluded
+  assert.ok(ids.includes('edi-PO7'))            // Nordstrom early-stage → routing leg
+  assert.ok(ids.includes('ship-SO9'))           // approved-for-shipping → ship leg
+  const measured = items.find((i) => i.id === 'task-2')
+  assert.equal(measured.durationMin, 25)        // real duration_min wins
+  assert.equal(measured.deadline, noon)         // real due_at wins
+  assert.equal(measured.scheduled, true)
+})
+
+test('applyDayPlan merges done + switches to manual order when a sortIndex exists', () => {
+  const items = [
+    { id: 'edi-PO7', label: 'route', deadline: 1 },
+    { id: 'task-1', label: 'reply', deadline: 2 },
+    { id: 'ship-SO9', label: 'ship', deadline: 3 },
+  ]
+  const rows = [
+    { itemId: 'ship-SO9', sortIndex: 0, done: false },
+    { itemId: 'edi-PO7', sortIndex: 1, done: true },
+    { itemId: 'task-1', sortIndex: 2, done: false },
+  ]
+  const { items: merged, manualMode } = applyDayPlan(items, rows)
+  assert.equal(manualMode, true)
+  assert.deepEqual(merged.map((i) => i.id), ['ship-SO9', 'edi-PO7', 'task-1'])
+  assert.equal(merged.find((i) => i.id === 'edi-PO7').done, true)
+
+  const auto = applyDayPlan(items, [])
+  assert.equal(auto.manualMode, false)          // no sortIndex → EDF stays in charge
 })
 
 // ── EDI routing + BOL rollup (Nima, 2026-07-22) ────────────────────────────

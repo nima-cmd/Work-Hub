@@ -477,6 +477,12 @@ ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS instance_key TEXT;
 ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS completion_mode TEXT DEFAULT 'standard';
 ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS verify_key TEXT;
 ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS checklist JSONB;
+-- Daily Flight Plan scheduling (Nima, 2026-07-28) — a real due time and a
+-- measured/estimated duration per task. Both nullable: the planner falls back
+-- to an urgency-derived deadline and a per-kind default duration when unset
+-- (see src/model/routeItems.js), so existing tasks keep working untouched.
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS duration_min INTEGER;
 -- Plain (non-partial) unique index — NULLs never conflict with each other in
 -- Postgres uniqueness checks, so this is already safe for transmission-
 -- derived tasks (instance_key NULL) while still deduping recurring instances,
@@ -791,6 +797,29 @@ CREATE TABLE IF NOT EXISTS shipcentral_queue (
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_shipcentral_status ON shipcentral_queue(status);
+
+-- day_plan_item (Nima, 2026-07-28) — persisted per-day state for the Daily
+-- Flight Plan. The plan itself is recomputed on every load from live
+-- orders/tasks/EDI via computeRoute (EDF), so this table stores ONLY the human
+-- overrides for a given day:
+--   • sort_index — a manual sequence. If ANY row for a date has a non-null
+--     sort_index, that whole day is in MANUAL mode (the planner preserves the
+--     order and just recomputes clock times + at-risk); otherwise it's auto
+--     (EDF). "Reset to auto" nulls the day's sort_index.
+--   • done/done_at — check-off for the NON-task legs (EDI routing, shippable
+--     orders) whose completion has no home in quest_tasks. Task legs use
+--     quest_tasks.status as their source of truth.
+-- Keyed by the synthetic route-item id ('task-<id>', 'edi-<po>', 'ship-<so>',
+-- 'inv-<so>'). label is a snapshot for a future completed-work ledger.
+CREATE TABLE IF NOT EXISTS day_plan_item (
+  plan_date   DATE NOT NULL,
+  item_id     TEXT NOT NULL,
+  sort_index  INTEGER,
+  done        BOOLEAN DEFAULT false,
+  done_at     TIMESTAMPTZ,
+  label       TEXT,
+  PRIMARY KEY (plan_date, item_id)
+);
 
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);

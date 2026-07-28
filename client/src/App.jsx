@@ -3,6 +3,7 @@ import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActi
 import { fmtAge } from './lib.jsx'
 import CommandCenter from './views/CommandCenter.jsx'
 import FlightDeck from './views/FlightDeck.jsx'
+import FlightPlan from './views/FlightPlan.jsx'
 import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
@@ -82,6 +83,10 @@ function CreditsCounter({ credits }) {
 
 const VIEWS = [
   { key: 'command', label: 'Command', C: CommandCenter },
+  // The daily "flight route" (Nima, 2026-07-28) — the top need: everything to
+  // do today laid across the day with times, ordered by deadline, so nothing
+  // gets ignored. Sits front-and-centre right after Command.
+  { key: 'plan', label: "Today's Plan", C: FlightPlan },
   // Second, switchable HUD (Nima, 2026-07-21) — the Falcon-cockpit hub.
   // Command stays untouched; the two coexist as separate tabs.
   { key: 'flight', label: 'Flight Deck', C: FlightDeck },
