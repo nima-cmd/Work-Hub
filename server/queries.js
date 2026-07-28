@@ -1018,9 +1018,11 @@ export async function getEmailLinks(docType, docNumber) {
 export async function addEmailLinkFor(body = {}) {
   const { docType, docNumber, subject, gmailId, threadId, fromAddr } = body
   if (!docType || !docNumber) throw new Error('docType and docNumber are required')
-  // Prefer a real Gmail deep link built from the message/thread id; otherwise
-  // accept a pasted URL (for mail that isn't synced into the app).
-  const gmailUrl = (gmailId || threadId) ? `${GMAIL_BASE}${threadId || gmailId}` : (body.gmailUrl || '')
+  // Prefer a real Gmail deep link built from the MESSAGE id (anchors Gmail to
+  // that specific message in the thread); fall back to the thread id, then to a
+  // pasted URL (for mail that isn't synced into the app). Using the thread id
+  // opened the conversation at its newest message, not the linked one.
+  const gmailUrl = (gmailId || threadId) ? `${GMAIL_BASE}${gmailId || threadId}` : (body.gmailUrl || '')
   if (!gmailUrl) throw new Error('need a Gmail message/thread id or a pasted URL')
   await addEmailLink({ docType, docNumber: String(docNumber), subject, gmailUrl, gmailId, threadId, fromAddr })
   return getEmailLinks(docType, String(docNumber))

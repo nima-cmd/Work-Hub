@@ -565,7 +565,7 @@ export function TaskItem({ t, expanded, onToggle, onRefresh, onNavigate, showOpe
             <div className="tiActions">
               {t.status === 'open' && <button className="btn" disabled={busy} onClick={markDone}>✓ Mark done</button>}
               {t.threadId && (
-                <a className="btnGhost" href={`https://mail.google.com/mail/u/0/#all/${t.threadId}`}
+                <a className="btnGhost" href={`https://mail.google.com/mail/u/0/#all/${t.emailId || t.threadId}`}
                    target="_blank" rel="noreferrer">↗ Gmail</a>
               )}
               {t.netsuiteDocNumber && DOC_VIEW[t.netsuiteDocType] && (

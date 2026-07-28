@@ -17,7 +17,9 @@ function initials(name) {
 }
 
 const isUrl = (s) => /^https?:\/\//i.test((s || '').trim())
-const gmailLink = (threadId, id) => `https://mail.google.com/mail/u/0/#all/${threadId || id}`
+// Anchor on the MESSAGE id when we have it — #all/<messageId> opens the thread
+// scrolled to that specific message; #all/<threadId> lands on the newest one.
+const gmailLink = (threadId, id) => `https://mail.google.com/mail/u/0/#all/${id || threadId}`
 const todayStr = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in local time
 
 // Mirrors src/model/netsuiteDocs.js — PO/SO/IF/TO prefixes are confirmed
@@ -778,7 +780,7 @@ export default function Transmissions({ onNavigate } = {}) {
                       {t.urgency && <span className={'flag ' + URGENCY_SEV[t.urgency]}>{t.urgency}</span>}
                       <span className={'flag ' + (t.status === 'done' ? 'sev-lo' : 'sev-mid')}>{t.status === 'done' ? 'done' : 'open'}</span>
                       {t.threadId && (
-                        <a className="linkBtn" href={gmailLink(t.threadId)} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>↗ Gmail</a>
+                        <a className="linkBtn" href={gmailLink(t.threadId, t.emailId)} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>↗ Gmail</a>
                       )}
                       <span className="cust">{new Date(t.createdAt).toLocaleString()}</span>
                     </div>
