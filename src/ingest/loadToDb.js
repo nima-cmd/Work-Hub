@@ -1118,7 +1118,8 @@ const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", charact
   needs_type AS "needsType", needs_note AS "needsNote",
   netsuite_doc_type AS "netsuiteDocType", netsuite_doc_number AS "netsuiteDocNumber",
   urgency, recurring_key AS "recurringKey", instance_key AS "instanceKey", completion_mode AS "completionMode",
-  verify_key AS "verifyKey", checklist, created_at AS "createdAt", completed_at AS "completedAt"`
+  verify_key AS "verifyKey", checklist, due_at AS "dueAt", duration_min AS "durationMin",
+  created_at AS "createdAt", completed_at AS "completedAt"`
 
 export async function fetchQuestTasks(db = pool) {
   const { rows } = await db.query(
@@ -1203,6 +1204,64 @@ export async function updateTaskNeeds({ id, needsType, needsNote, netsuiteDocTyp
 // urgency: 'hi' | 'mid' | 'lo' | null
 export async function updateTaskUrgency(id, urgency, db = pool) {
   await db.query('UPDATE quest_tasks SET urgency = $2 WHERE id = $1', [id, urgency || null])
+}
+
+// Daily Flight Plan scheduling (Nima, 2026-07-28). Either field may be passed
+// independently; passing null clears it (back to the urgency/kind fallback).
+// `undefined` leaves a field untouched (COALESCE keeps the current value only
+// when we don't want to clear — so we distinguish with an explicit sentinel).
+export async function updateTaskSchedule(id, { dueAt, durationMin } = {}, db = pool) {
+  await db.query(
+    `UPDATE quest_tasks
+        SET due_at       = CASE WHEN $2::boolean THEN $3::timestamptz ELSE due_at END,
+            duration_min = CASE WHEN $4::boolean THEN $5::integer     ELSE duration_min END
+      WHERE id = $1`,
+    [id, dueAt !== undefined, dueAt ?? null, durationMin !== undefined, durationMin ?? null],
+  )
+}
+
+// ── day_plan_item (Nima, 2026-07-28) — persisted per-day plan overrides ───────
+export async function fetchDayPlan(date, db = pool) {
+  const { rows } = await db.query(
+    `SELECT item_id AS "itemId", sort_index AS "sortIndex", done,
+            done_at AS "doneAt", label
+       FROM day_plan_item WHERE plan_date = $1`,
+    [date],
+  )
+  return rows
+}
+
+// Write a manual sequence for the day: each listed id gets its ordinal as
+// sort_index (upserting a row if needed). Puts the day into manual mode. One
+// batched statement (unnest) — a per-id loop was ~72 Neon round-trips.
+export async function setDayPlanOrder(date, orderedIds = [], db = pool) {
+  if (!orderedIds.length) return
+  await db.query(
+    `INSERT INTO day_plan_item (plan_date, item_id, sort_index)
+     SELECT $1, item_id, ord - 1
+       FROM unnest($2::text[]) WITH ORDINALITY AS t(item_id, ord)
+     ON CONFLICT (plan_date, item_id) DO UPDATE SET sort_index = EXCLUDED.sort_index`,
+    [date, orderedIds],
+  )
+}
+
+// Reset the day to auto (EDF): drop every manual sort_index. Keeps done rows.
+export async function resetDayPlanOrder(date, db = pool) {
+  await db.query('UPDATE day_plan_item SET sort_index = NULL WHERE plan_date = $1', [date])
+}
+
+// Check-off for a NON-task leg (EDI/ship/invoice). label is snapshotted for a
+// future completed-work ledger.
+export async function setDayPlanItemDone(date, itemId, done, label = null, db = pool) {
+  await db.query(
+    `INSERT INTO day_plan_item (plan_date, item_id, done, done_at, label)
+     VALUES ($1, $2, $3, CASE WHEN $3 THEN now() ELSE NULL END, $4)
+     ON CONFLICT (plan_date, item_id)
+       DO UPDATE SET done = EXCLUDED.done,
+                     done_at = EXCLUDED.done_at,
+                     label = COALESCE(EXCLUDED.label, day_plan_item.label)`,
+    [date, itemId, !!done, label],
+  )
 }
 
 // Every quest_tasks row regardless of status, for search.

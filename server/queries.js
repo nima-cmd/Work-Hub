@@ -42,7 +42,8 @@ import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
-  updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
+  updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, updateTaskSchedule, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
+  fetchDayPlan, setDayPlanOrder, resetDayPlanOrder, setDayPlanItemDone,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
   fetchOpenRecurringInstances, escalateRecurringTask, deleteQuestTask,
   createEdiTask, fetchEdiTaskStates, closeEdiTask,
@@ -1762,6 +1763,36 @@ export async function setTaskCharacter(id, characterId) {
   await updateTaskCharacter(id, characterId)
   await logTaskActivity({ taskId: id, kind: 'character_set', note: `Reassigned to ${character.name}` })
   return getQuestTasks()
+}
+
+// Daily Flight Plan: set a task's real due time and/or estimated duration.
+export async function setTaskSchedule(id, { dueAt, durationMin }) {
+  await updateTaskSchedule(id, { dueAt, durationMin })
+  const bits = []
+  if (dueAt !== undefined) bits.push(dueAt ? `due ${new Date(dueAt).toLocaleString()}` : 'due time cleared')
+  if (durationMin !== undefined) bits.push(durationMin ? `${durationMin}m estimate` : 'duration cleared')
+  await logTaskActivity({ taskId: id, kind: 'scheduled', note: `Plan: ${bits.join(', ') || 'updated'}` })
+  return getQuestTasks()
+}
+
+// ── Daily Flight Plan persistence (Nima, 2026-07-28) ─────────────────────────
+// The plan is recomputed client-side each load from live orders/tasks/EDI; the
+// server only stores the day's manual order + non-task check-offs. Date is a
+// 'YYYY-MM-DD' string (the client's local day).
+export async function getDayPlan(date) {
+  return fetchDayPlan(date)
+}
+export async function reorderDayPlan(date, orderedIds) {
+  await setDayPlanOrder(date, orderedIds)
+  return fetchDayPlan(date)
+}
+export async function resetDayPlan(date) {
+  await resetDayPlanOrder(date)
+  return fetchDayPlan(date)
+}
+export async function setPlanItemDone(date, itemId, done, label) {
+  await setDayPlanItemDone(date, itemId, done, label)
+  return fetchDayPlan(date)
 }
 
 export async function getTaskActivity(date) {

@@ -1961,3 +1961,79 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cat-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .cat-table .mono, .cat-table .num { font-variant-numeric: tabular-nums; }
 .cat-table .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+
+/* ── Daily Flight Plan (Nima, 2026-07-28) ───────────────────────────────── */
+.fpView { max-width: 860px; margin: 0 auto; padding: 14px 16px 60px; }
+.fpHead { position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.fpTitle { display: flex; align-items: baseline; gap: 12px; }
+.fpTitle h2 { font-family: var(--display); font-size: 20px; margin: 0; letter-spacing: 0.02em; }
+.fpDate { color: var(--muted); font-size: 13px; }
+.fpSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; font-size: 13px; }
+.fpStat { color: var(--muted); }
+.fpStat b { color: var(--text); font-variant-numeric: tabular-nums; }
+.fpStat.good { color: #3fb950; }
+.fpStat.risk b { color: var(--hi); }
+.fpMode { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line);
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.fpMode.auto { color: var(--lo); border-color: rgba(59,130,246,0.4); }
+.fpMode.manual { color: var(--accent); border-color: rgba(217,164,65,0.5); }
+.fpBtnGhost { background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.fpBtnGhost:hover { color: var(--text); border-color: var(--muted); }
+
+.fpEmpty { color: var(--muted); text-align: center; padding: 48px 0; font-size: 14px; }
+
+.fpTimeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fpLeg { display: grid; grid-template-columns: 58px 26px 1fr auto auto; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 9px; padding: 9px 12px; position: relative; }
+.fpLeg.now { border-left-color: var(--accent); background: var(--panel2); }
+.fpLeg.risk { border-left-color: var(--hi); }
+.fpLeg.past { opacity: 0.55; }
+.fpTime { display: flex; flex-direction: column; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.fpTime b { font-size: 14px; }
+.fpTime span { font-size: 11px; color: var(--muted); }
+.fpCheck { width: 24px; height: 24px; border-radius: 999px; border: 1.5px solid var(--muted);
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; }
+.fpCheck:hover { border-color: #3fb950; color: #3fb950; }
+.fpCheck.done { border-color: #3fb950; color: #3fb950; }
+.fpBody { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.fpGlyph { color: var(--accent); font-size: 15px; width: 18px; text-align: center; flex: none; }
+.fpLabel { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpPin { color: var(--accent); margin-left: 6px; font-size: 12px; }
+.fpDeadline { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.fpDeadline em { font-style: normal; color: var(--muted); font-size: 12px; }
+.fpDeadline em.risk { color: var(--hi); }
+.fpSlack { font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 6px; border-radius: 999px; }
+.fpSlack.ok { color: #3fb950; background: rgba(63,185,80,0.1); }
+.fpSlack.bad { color: var(--hi); background: rgba(248,81,73,0.12); }
+.fpReorder { display: flex; flex-direction: column; gap: 2px; }
+.fpReorder button, .fpGo { background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 5px; width: 24px; height: 17px; font-size: 11px; cursor: pointer; line-height: 1; padding: 0; }
+.fpReorder button:hover:not(:disabled), .fpGo:hover { color: var(--text); border-color: var(--muted); }
+.fpReorder button:disabled { opacity: 0.3; cursor: default; }
+.fpGo { height: 24px; width: 26px; }
+
+.fpExpand { grid-column: 1 / -1; margin-top: 8px; padding-top: 9px; border-top: 1px dashed var(--line); }
+.fpSnippet { color: var(--muted); font-size: 12.5px; margin: 0 0 9px; line-height: 1.45; }
+.fpEditRow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.fpEditRow label { display: flex; flex-direction: column; gap: 3px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.fpEditRow input { background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 8px; font-size: 13px; width: 130px; }
+.fpEditRow input[type=number] { width: 80px; }
+
+.fpDone { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.fpDoneHead { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
+.fpDoneHead span { color: #3fb950; margin-left: 6px; }
+.fpDoneRow { display: flex; align-items: center; gap: 10px; padding: 5px 12px; opacity: 0.7; }
+.fpDoneRow .fpLabel { text-decoration: line-through; color: var(--muted); }
+
+@media (max-width: 560px) {
+  .fpLeg { grid-template-columns: 48px 24px 1fr auto; }
+  .fpDeadline { grid-column: 3; margin-top: 2px; }
+  .fpReorder { grid-column: 4; }
+}
+
