@@ -1074,6 +1074,20 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .poCard.po-review { border-left-color: var(--accent); background: rgba(217,164,65,0.04); }
 .po-review .neededLine { color: var(--accent); }
 
+/* ── verify & close (Phase C) ──────────────────────────────────────────────── */
+.readyBox { margin-bottom: 18px; }
+.poCard.po-ready { border-left-color: var(--ok, #3fb950); background: rgba(63,185,80,0.04); }
+.verifyDocs { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 10px; }
+.verifyRow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.verifyRow .verifyIcon { width: 16px; text-align: center; font-weight: 700; }
+.verifyRow.ok { color: var(--ok, #3fb950); }
+.verifyRow.ok .verifyIcon { color: var(--ok, #3fb950); }
+.verifyRow.warn { color: var(--mid, #d9a441); }
+.verifyRow.warn .verifyIcon { color: var(--mid, #d9a441); }
+.verifyRow.bad { color: var(--hi, #f85149); }
+.verifyRow.bad .verifyIcon { color: var(--hi, #f85149); }
+.verifyRow .cust { color: inherit; opacity: 0.85; }
+
 /* ── core panel v2: corner readouts, partner scan, crew clear of the ring ──── */
 .tacticalCore { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; padding: 12px; }
 .coreCenter { position: relative; flex: 1; min-height: 330px; display: flex; align-items: center; justify-content: center; }

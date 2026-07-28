@@ -24,6 +24,63 @@ function daysSince(dateish, today) {
   return Math.floor((today - new Date(dateish).getTime()) / DAY)
 }
 
+// ── verify-&-close (Nima, 2026-07-28, Phase C) ───────────────────────────────
+// A PO is only genuinely done when BOTH the 856 (ASN) and the 810 (invoice) we
+// sent actually landed and were accepted at the partner. Orderful already tells
+// us that per transaction — deliveryStatus + acknowledgmentStatus — so we don't
+// trust "an 810 row exists" (the old silent auto-close) as proof they arrived.
+// Confirmed value vocabulary from live data:
+//   deliveryStatus:       DELIVERED (good) · PENDING (in flight) · FAILED (bad)
+//   acknowledgmentStatus: ACCEPTED / ACCEPTED_WITH_ERRORS (good) ·
+//                         NOT_ACKNOWLEDGED (awaiting) · OVERDUE / REJECTED (bad)
+const POSITIVE_ACK = new Set(['ACCEPTED', 'ACCEPTED_WITH_ERRORS'])
+const DOC_LABEL = { '856_SHIP_NOTICE_MANIFEST': '856', '810_INVOICE': '810' }
+
+// Classify the one outbound document of a type (856 or 810) for close-readiness.
+// Picks a DELIVERED+accepted transaction if any exists (a resent/valid copy
+// wins over an earlier bad one); otherwise describes why it isn't confirmed.
+// Human-acked issues (edi_ack) are treated as resolved, so a rejected-then-
+// resent doc doesn't read as a blocker once its good copy is present.
+function classifyDoc(type, transactions) {
+  const label = DOC_LABEL[type] || type
+  const txns = transactions.filter((t) => t.type === type && t.direction === 'OUT')
+  if (!txns.length) return { label, sent: false, confirmed: false, status: 'not sent', blocker: `no ${label} sent` }
+
+  const good = txns.find((t) => t.deliveryStatus === 'DELIVERED' && POSITIVE_ACK.has(t.acknowledgmentStatus))
+  if (good) {
+    const withErrors = good.acknowledgmentStatus === 'ACCEPTED_WITH_ERRORS'
+    return {
+      label, sent: true, confirmed: true, txn: good,
+      status: withErrors ? 'delivered · accepted with errors' : 'delivered & accepted',
+      blocker: null,
+    }
+  }
+  // Not confirmed — surface the most-progressed non-resolved copy's problem:
+  // prefer a delivered-but-unacked one, else the most recent attempt.
+  const live = txns.filter((t) => !t.ack)
+  const pool = live.length ? live : txns
+  const best = pool.find((t) => t.deliveryStatus === 'DELIVERED') ||
+    pool.reduce((a, b) => (new Date(b.createdAt || 0) >= new Date(a.createdAt || 0) ? b : a))
+  const delivered = best.deliveryStatus === 'DELIVERED'
+  const status = delivered
+    ? `delivered · ack ${String(best.acknowledgmentStatus || 'pending').toLowerCase().replace(/_/g, ' ')}`
+    : `delivery ${String(best.deliveryStatus || 'pending').toLowerCase()}`
+  const blocker = delivered
+    ? `${label} delivered but acknowledgment ${String(best.acknowledgmentStatus || 'pending').toLowerCase().replace(/_/g, ' ')}`
+    : `${label} ${String(best.deliveryStatus || 'pending').toLowerCase()} — not delivered yet`
+  return { label, sent: true, confirmed: false, txn: best, status, blocker }
+}
+
+// The per-PO verify summary the "Verify & close" action reads: are both the
+// 856 and 810 confirmed delivered+accepted in Orderful, and if not, exactly
+// what's missing. Pure — computed from transactions already on the order.
+export function verifyDocs(order) {
+  const ship = classifyDoc('856_SHIP_NOTICE_MANIFEST', order.transactions || [])
+  const invoice = classifyDoc('810_INVOICE', order.transactions || [])
+  const blockers = [ship.blocker, invoice.blocker].filter(Boolean)
+  return { ship, invoice, canClose: ship.confirmed && invoice.confirmed, blockers }
+}
+
 // One order from computeEdiPipeline + its resolution → work status.
 export function deriveWork(order, resolution = null, today = Date.now()) {
   const r = resolution || null
@@ -32,12 +89,16 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   )
 
   // ── closed? ────────────────────────────────────────────────────────────────
-  // Manual close always wins. Otherwise docs-complete (810 sent) with nothing
-  // broken counts as closed automatically.
+  // Manual close always wins. Nothing closes silently anymore (Nima, 2026-07-28,
+  // Phase C): the old `autoClosed = stageRank>=4 && !hasIssue` trusted "an 810
+  // row exists" as proof of completion, which let POs with an undelivered
+  // (PENDING) or unacked 856/810 vanish into Closed. That auto-close is now a
+  // non-terminal `readyToClose` holding state (below) that must be confirmed
+  // via an explicit Verify & close — the close still flows through the manual
+  // resolution path, so `closedBy` is 'manual' for a verified close.
   const manuallyCancelled = r?.cancelled === true
   const manuallyClosed = !manuallyCancelled && r?.closed === true
-  const autoClosed = order.stageRank >= 4 && !order.hasIssue && !(order.linkGaps?.length)
-  const closed = manuallyCancelled || manuallyClosed || autoClosed
+  const closed = manuallyCancelled || manuallyClosed
 
   // ── review gate (Nima, 2026-07-28) ──────────────────────────────────────────
   // Old/uncertain POs get parked "in review". While parked we STOP chasing the
@@ -46,6 +107,15 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   const reviewState = r?.reviewState || null
   const underReview = !closed && reviewState === 'in_review'
   const validated = reviewState === 'validated'
+
+  // ── ready to close (Phase C) ────────────────────────────────────────────────
+  // Docs-complete (810 exists) with nothing broken and no link gaps — the old
+  // auto-close condition. No longer closes; it parks here for an explicit
+  // Verify & close. `verify` says whether the 856 + 810 actually landed.
+  const readyToClose =
+    !closed && !underReview && order.bucket !== 'NO_850_FOUND' &&
+    order.stageRank >= 4 && !order.hasIssue && !(order.linkGaps?.length)
+  const verify = readyToClose ? verifyDocs(order) : null
 
   // ── missed-850 detection ───────────────────────────────────────────────────
   // A PO that landed, has no NetSuite order, no resolution, and hasn't shipped:
@@ -77,6 +147,10 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     needed = (order.netsuiteOrder || r?.netsuiteRef)
       ? 'Validate this PO — confirm it to release from review'
       : 'Validate this PO — confirm its NetSuite order (parked for review)'
+  } else if (readyToClose) {
+    needed = verify.canClose
+      ? 'Verify & close — 856 + 810 delivered & accepted'
+      : `Verify before closing — ${verify.blockers.join('; ')}`
   } else if (order.bucket === 'NO_850_FOUND') {
     needed = 'Orphan document — find and link its 850 (no PO on file)'
   } else if (order.hasIssue) {
@@ -109,7 +183,7 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
 
   return {
     closed,
-    closedBy: manuallyCancelled ? 'cancelled' : manuallyClosed ? 'manual' : autoClosed ? 'docs' : null,
+    closedBy: manuallyCancelled ? 'cancelled' : manuallyClosed ? 'manual' : null,
     resolution: r,
     needed,
     missed850,
@@ -119,6 +193,8 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     reviewState,
     underReview,
     validated,
+    readyToClose,
+    verify,
     needs856,
     needs810,
   }
@@ -134,7 +210,7 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
   for (const o of withWork) {
     const key = o.tradingPartner || '(unknown partner)'
     if (!partners.has(key)) {
-      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, needs856: 0, needs810: 0 })
+      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, readyToClose: 0, needs856: 0, needs810: 0 })
     }
     const p = partners.get(key)
     if (o.work.closed) p.closed++
@@ -143,6 +219,7 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     if (o.work.cancelState) p.cancelDanger++
     if (o.hasIssue && !o.work.closed) p.issues++
     if (o.work.underReview) p.inReview++
+    if (o.work.readyToClose) p.readyToClose++
     if (o.work.needs856) p.needs856++
     if (o.work.needs810) p.needs810++
   }
@@ -154,9 +231,10 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     (t, p) => ({
       open: t.open + p.open, closed: t.closed + p.closed, missed: t.missed + p.missed,
       cancelDanger: t.cancelDanger + p.cancelDanger, inReview: t.inReview + p.inReview,
+      readyToClose: t.readyToClose + p.readyToClose,
       needs856: t.needs856 + p.needs856, needs810: t.needs810 + p.needs810,
     }),
-    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, needs856: 0, needs810: 0 },
+    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, readyToClose: 0, needs856: 0, needs810: 0 },
   )
 
   return { orders: withWork, partners: partnerList, totals }
