@@ -203,12 +203,19 @@ CREATE TABLE IF NOT EXISTS edi_transactions (
   -- be several — see edi_document_po_refs below). This flag just means "we
   -- already checked", so re-syncs don't refetch a message with genuinely no PO ref.
   po_refs_checked        BOOLEAN DEFAULT false,
+  -- 850s only: "we already pulled this 850's /message and extracted its ship-
+  -- window dates". Gates backfillPoDates so partners that carry only one of the
+  -- two dates (Nordstrom: cancel but no start; Shopbop: start but no cancel)
+  -- still get fetched exactly once instead of being skipped by a "both NULL"
+  -- test. Same idempotency idiom as po_refs_checked. (Phase D, 2026-07-28.)
+  po_dates_checked       BOOLEAN DEFAULT false,
   synced_at              TIMESTAMPTZ DEFAULT now()
 );
 
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS ship_not_before DATE;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS cancel_after DATE;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_refs_checked BOOLEAN DEFAULT false;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_dates_checked BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_edi_business_number ON edi_transactions(business_number);
 CREATE INDEX IF NOT EXISTS idx_edi_partner         ON edi_transactions(trading_partner);
