@@ -39,6 +39,14 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   const autoClosed = order.stageRank >= 4 && !order.hasIssue && !(order.linkGaps?.length)
   const closed = manuallyCancelled || manuallyClosed || autoClosed
 
+  // ── review gate (Nima, 2026-07-28) ──────────────────────────────────────────
+  // Old/uncertain POs get parked "in review". While parked we STOP chasing the
+  // 856/810 — no point until the PO is confirmed real. Validating = tying it to
+  // its NetSuite order releases it back to the normal flow.
+  const reviewState = r?.reviewState || null
+  const underReview = !closed && reviewState === 'in_review'
+  const validated = reviewState === 'validated'
+
   // ── missed-850 detection ───────────────────────────────────────────────────
   // A PO that landed, has no NetSuite order, no resolution, and hasn't shipped:
   // after MISSED_AFTER_DAYS that's "nobody entered this" — the failure Nima
@@ -61,8 +69,14 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
 
   // ── what's needed next (first thing that blocks progress) ─────────────────
   let needed = null
+  let needs856 = false, needs810 = false
   if (closed) {
     needed = null
+  } else if (underReview) {
+    // parked — the only thing to do is validate it (confirm its NetSuite order)
+    needed = (order.netsuiteOrder || r?.netsuiteRef)
+      ? 'Validate this PO — confirm it to release from review'
+      : 'Validate this PO — confirm its NetSuite order (parked for review)'
   } else if (order.bucket === 'NO_850_FOUND') {
     needed = 'Orphan document — find and link its 850 (no PO on file)'
   } else if (order.hasIssue) {
@@ -83,9 +97,9 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   } else if (order.stageRank <= 2 && order.netsuiteOrder && order.netsuiteOrder.stage !== 'SHIPPED') {
     needed = `Fulfill & ship — ${order.netsuiteOrder.soNumber} ${order.netsuiteOrder.nextAction ? '· ' + order.netsuiteOrder.nextAction : ''}`.trim()
   } else if (order.netsuiteOrder?.stage === 'SHIPPED' && order.stageRank < 3) {
-    needed = 'Send the 856 ASN — NetSuite shows it shipped'
+    needed = 'Send the 856 ASN — NetSuite shows it shipped'; needs856 = true
   } else if (order.stageRank === 3) {
-    needed = 'Send the 810 invoice'
+    needed = 'Send the 810 invoice'; needs810 = true
   } else if (order.linkGaps?.length) {
     needed = order.linkGaps[0]
   } else {
@@ -102,6 +116,11 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     age850,
     cancelState,
     cancelDays,
+    reviewState,
+    underReview,
+    validated,
+    needs856,
+    needs810,
   }
 }
 
@@ -115,7 +134,7 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
   for (const o of withWork) {
     const key = o.tradingPartner || '(unknown partner)'
     if (!partners.has(key)) {
-      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0 })
+      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, needs856: 0, needs810: 0 })
     }
     const p = partners.get(key)
     if (o.work.closed) p.closed++
@@ -123,14 +142,21 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     if (o.work.missed850) p.missed++
     if (o.work.cancelState) p.cancelDanger++
     if (o.hasIssue && !o.work.closed) p.issues++
+    if (o.work.underReview) p.inReview++
+    if (o.work.needs856) p.needs856++
+    if (o.work.needs810) p.needs810++
   }
   const partnerList = [...partners.values()]
     .map((p) => ({ ...p, total: p.open + p.closed, closedRatio: p.open + p.closed ? p.closed / (p.open + p.closed) : 0 }))
     .sort((a, b) => b.open - a.open || b.total - a.total)
 
   const totals = partnerList.reduce(
-    (t, p) => ({ open: t.open + p.open, closed: t.closed + p.closed, missed: t.missed + p.missed, cancelDanger: t.cancelDanger + p.cancelDanger }),
-    { open: 0, closed: 0, missed: 0, cancelDanger: 0 },
+    (t, p) => ({
+      open: t.open + p.open, closed: t.closed + p.closed, missed: t.missed + p.missed,
+      cancelDanger: t.cancelDanger + p.cancelDanger, inReview: t.inReview + p.inReview,
+      needs856: t.needs856 + p.needs856, needs810: t.needs810 + p.needs810,
+    }),
+    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, needs856: 0, needs810: 0 },
   )
 
   return { orders: withWork, partners: partnerList, totals }

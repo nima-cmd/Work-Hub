@@ -396,6 +396,37 @@ test('ediWork: passed cancel date on an unshipped PO screams in the needed line'
   assert.match(w.needed, /Cancel date passed 3d ago/)
 })
 
+test('ediWork: an in-review PO is parked — 856/810 chase is suppressed until validated (Nima, 2026-07-28)', () => {
+  // shipped in NetSuite → would normally scream "send the 856", but it's parked
+  const base = edi850(10, { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } })
+  const parked = deriveWork(base, { businessNumber: 'PO1', reviewState: 'in_review' }, T0)
+  assert.equal(parked.underReview, true)
+  assert.equal(parked.needs856, false)             // gate holds the 856 back
+  assert.match(parked.needed, /Validate this PO/)
+
+  // validate it (confirm the NS order) → the normal 856 need resumes
+  const validated = deriveWork(base, { businessNumber: 'PO1', reviewState: 'validated' }, T0)
+  assert.equal(validated.underReview, false)
+  assert.equal(validated.validated, true)
+  assert.equal(validated.needs856, true)
+  assert.match(validated.needed, /856 ASN/)
+})
+
+test('computeEdiWork: rollup counts in-review and needs-856/810 per partner (Nima, 2026-07-28)', () => {
+  const shipped = { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } }
+  const orders = [
+    edi850(2, { businessNumber: 'PO1', ...shipped }),                 // needs 856
+    edi850(2, { businessNumber: 'PO2', stageRank: 3 }),               // needs 810
+    edi850(2, { businessNumber: 'PO3', ...shipped }),                 // in review → suppressed
+  ]
+  const res = [{ businessNumber: 'PO3', reviewState: 'in_review' }]
+  const { partners, totals } = computeEdiWork(orders, res, T0)
+  assert.equal(partners[0].needs856, 1)   // PO3's 856 is NOT counted (parked)
+  assert.equal(partners[0].needs810, 1)
+  assert.equal(partners[0].inReview, 1)
+  assert.equal(totals.inReview, 1)
+})
+
 test('computeEdiWork: partner rollup counts open/closed and the ratio', () => {
   const orders = [
     edi850(30),                                              // open + missed

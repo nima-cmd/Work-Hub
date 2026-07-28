@@ -1068,6 +1068,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .ediCalDay { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
 .orphanBox { margin-bottom: 18px; }
 .poQuickClose { margin-left: 8px; font-size: 11px; }
+/* In-Review (Nima, 2026-07-28): parked POs — amber accent, distinct from the
+   red danger / orange warn cards so a parked PO reads as "held", not "on fire". */
+.reviewBox { margin-bottom: 18px; }
+.poCard.po-review { border-left-color: var(--accent); background: rgba(217,164,65,0.04); }
+.po-review .neededLine { color: var(--accent); }
 
 /* ── core panel v2: corner readouts, partner scan, crew clear of the ring ──── */
 .tacticalCore { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; padding: 12px; }
