@@ -15,6 +15,12 @@ export function detectSource(headers) {
   // link) without order-level quantity columns.
   if (H.has('Maximum of Created From') && !H.has('Sum of Quantity')) return 'fulfillmentPipeline'
 
+  // ShipCentral SO queue (Nima, 2026-07-27): the native pack-station queue.
+  // Signature = Order + Status + both ship-date columns together, which no other
+  // export carries. Checked high so its generic "Order"/"Status" columns can't
+  // be mistaken for another shape.
+  if (has('Order', 'Status', 'Ship Date', 'Actual Ship Date')) return 'shipCentralQueue'
+
   // Legacy fulfillment shapes (check before openSalesOrders — some share columns)
   if (has('Days Pending', 'IF-Packed-Status')) return 'pendingOrders'
   if (H.has('Memo (IF)') || has('Created From', 'Actual Ship Date')) return 'unpackedFulfillments'
@@ -56,6 +62,7 @@ export const SOURCE_LABELS = {
   ediFulfillments: 'EDI 856 ASN / BOL search',
   ediPackagesVolume: 'EDI Packages Volume (routing feed)',
   catalogue: 'Product Catalogue (GTIN/UPC master)',
+  shipCentralQueue: 'ShipCentral SO Queue (pack-ready)',
   // The "Waiting to Ship" search — the ONLY source of IF-Packed-Status
   // (Approved to Ship / FOB / Waiting On Payment / Pending Invoice), which the
   // Launch Bay + Ship Departures depend on. Formerly treated as legacy; promoted

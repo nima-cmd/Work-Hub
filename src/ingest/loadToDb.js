@@ -410,6 +410,56 @@ export async function fetchCatalogueSkus(db = pool) {
   return rows
 }
 
+// ── ShipCentral SO queue (Nima, 2026-07-27) ─────────────────────────────────
+// Upsert one row per SO in the pack-station queue. Natural key so_number →
+// re-import updates in place.
+export async function loadShipCentralQueue(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    if (!r.soNumber) continue
+    await db.query(
+      `INSERT INTO shipcentral_queue (so_number, location, status, ship_date, actual_ship_date, updated_at)
+       VALUES ($1,$2,$3,$4,$5, now())
+       ON CONFLICT (so_number) DO UPDATE SET
+         location         = EXCLUDED.location,
+         status           = EXCLUDED.status,
+         ship_date        = EXCLUDED.ship_date,
+         actual_ship_date = EXCLUDED.actual_ship_date,
+         updated_at       = now()`,
+      [r.soNumber, r.location || null, r.status || null, r.shipDate || null, r.actualShipDate || null],
+    )
+    n++
+  }
+  return n
+}
+
+// The export is the COMPLETE current queue, so an SO that's no longer in it has
+// been packed (or cancelled) and left the station — drop it so its "pack queue"
+// badge disappears. Only ever called when this file was part of the upload.
+export async function pruneShipCentralQueue(rows, db = pool) {
+  const keep = [...new Set(rows.map((r) => r.soNumber).filter(Boolean))]
+  if (!keep.length) {
+    // An empty queue export means nothing is staged — clear the table.
+    const { rowCount } = await db.query('DELETE FROM shipcentral_queue')
+    return rowCount
+  }
+  const { rowCount } = await db.query(
+    'DELETE FROM shipcentral_queue WHERE so_number <> ALL($1::text[])',
+    [keep],
+  )
+  return rowCount
+}
+
+export async function fetchShipCentralQueue(db = pool) {
+  const { rows } = await db.query(
+    `SELECT so_number AS "soNumber", location, status,
+            ship_date AS "shipDate", actual_ship_date AS "actualShipDate"
+     FROM shipcentral_queue
+     ORDER BY so_number`,
+  )
+  return rows
+}
+
 export async function fetchEdiPackages(db = pool) {
   const { rows } = await db.query(
     `SELECT po_dc AS "poDc", po_number AS "poNumber", dc,
@@ -481,6 +531,7 @@ export async function fetchRoutingShipments(db = pool) {
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
+            fedex_pickup_number AS "fedexPickupNumber",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
@@ -495,7 +546,8 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             bol_number AS "bolNumber", status,
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
-            merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber"
+            merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
+            fedex_pickup_number AS "fedexPickupNumber"
      FROM routing_shipment WHERE id = $1`,
     [id],
   )
@@ -570,6 +622,7 @@ const SHIPMENT_REF_COLS = {
   mergeCenter: 'merge_center',
   trailerNumber: 'trailer_number',
   sealNumber: 'seal_number',
+  fedexPickupNumber: 'fedex_pickup_number',
 }
 export async function updateShipmentRefs(id, fields = {}, db = pool) {
   const sets = []
@@ -590,17 +643,19 @@ export async function updateShipmentRefs(id, fields = {}, db = pool) {
 }
 
 // Routing auth entity + assignment to a set of shipments.
-export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, note }, db = pool) {
+export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, note, shipDate, fedexPickupNumber }, db = pool) {
   await db.query(
-    `INSERT INTO routing_auth (auth_number, partner, carrier, scac, note, updated_at)
-     VALUES ($1,$2,$3,$4,$5, now())
+    `INSERT INTO routing_auth (auth_number, partner, carrier, scac, note, ship_date, fedex_pickup_number, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
      ON CONFLICT (auth_number) DO UPDATE SET
        partner = COALESCE(EXCLUDED.partner, routing_auth.partner),
        carrier = COALESCE(EXCLUDED.carrier, routing_auth.carrier),
        scac    = COALESCE(EXCLUDED.scac, routing_auth.scac),
        note    = COALESCE(EXCLUDED.note, routing_auth.note),
+       ship_date = COALESCE(EXCLUDED.ship_date, routing_auth.ship_date),
+       fedex_pickup_number = COALESCE(EXCLUDED.fedex_pickup_number, routing_auth.fedex_pickup_number),
        updated_at = now()`,
-    [authNumber, partner || null, carrier || null, scac || null, note || null],
+    [authNumber, partner || null, carrier || null, scac || null, note || null, shipDate || null, fedexPickupNumber || null],
   )
 }
 
@@ -608,6 +663,7 @@ export async function fetchRoutingAuths(db = pool) {
   const { rows } = await db.query(
     `SELECT auth_number AS "authNumber", partner, carrier, scac, note,
             master_bol_number AS "masterBolNumber", merge_center AS "mergeCenter",
+            ship_date AS "shipDate", fedex_pickup_number AS "fedexPickupNumber",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_auth ORDER BY created_at DESC`,
   )
@@ -631,19 +687,22 @@ export async function ensureMasterBol(authNumber, db = pool) {
 // Assign an auth to N shipments at once. Stamps the auth's carrier/SCAC onto
 // each shipment (the routing email delivers auth + carrier + SCAC together) and
 // advances any still at bol_assigned/submitted to 'authorized'.
-export async function assignAuthToShipments({ authNumber, shipmentIds }, db = pool) {
+export async function assignAuthToShipments({ authNumber, shipmentIds, shipDate }, db = pool) {
   if (!authNumber || !Array.isArray(shipmentIds) || !shipmentIds.length) return 0
   const auth = await db.query('SELECT carrier, scac FROM routing_auth WHERE auth_number = $1', [authNumber])
   const a = auth.rows[0] || {}
+  // shipDate (from a group action) stamps the ship date onto each grouped BOL too,
+  // so the child BOLs carry the same date as the master.
   const { rowCount } = await db.query(
     `UPDATE routing_shipment
         SET auth_number = $1,
             carrier = COALESCE($2, carrier),
             scac    = COALESCE($3, scac),
+            ship_date = COALESCE($5, ship_date),
             status  = CASE WHEN status IN ('needs_routing','submitted') THEN 'authorized' ELSE status END,
             updated_at = now()
       WHERE id = ANY($4::int[])`,
-    [authNumber, a.carrier || null, a.scac || null, shipmentIds.map(Number)],
+    [authNumber, a.carrier || null, a.scac || null, shipmentIds.map(Number), shipDate || null],
   )
   return rowCount
 }

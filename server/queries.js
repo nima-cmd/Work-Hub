@@ -268,6 +268,7 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
            c.custody_out AS "custodyOut", c.custody_in AS "custodyIn", c.first_scan AS "firstScan",
            f.so_number AS "soNumber", f.packed_status AS "packedStatus", f.status,
            o.customer, o.source, o.po_number AS "poNumber",
+           sc.status AS "shipCentralStatus",
            COALESCE(b.boxes, 0) AS boxes, COALESCE(b.weight, 0) AS "boxWeight",
            COALESCE(bl.list, '[]'::json) AS "boxList"
     FROM (
@@ -286,6 +287,7 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
     ) c
     LEFT JOIN fulfillments f ON f.if_number = c.if_number
     LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN shipcentral_queue sc ON sc.so_number = f.so_number
     LEFT JOIN (
       SELECT if_number, COUNT(*)::int AS boxes, COALESCE(SUM(weight_lb),0) AS weight
       FROM fulfillment_boxes GROUP BY if_number
@@ -495,10 +497,12 @@ export async function getLaunchBay({ today = new Date() } = {}) {
            o.billing_status AS "billingStatus",
            i.shipping_status AS "invShip", i.status AS "invStatus",
            a.approved_since AS "approvedSince",
-           c.custody_out AS "custodyOut", c.custody_in AS "custodyIn"
+           c.custody_out AS "custodyOut", c.custody_in AS "custodyIn",
+           sc.status AS "shipCentralStatus"
     FROM fulfillments f
     LEFT JOIN orders o ON o.so_number = f.so_number
     LEFT JOIN invoices i ON i.inv_number = f.invoice_number
+    LEFT JOIN shipcentral_queue sc ON sc.so_number = f.so_number
     LEFT JOIN (
       SELECT doc_number, MIN(occurred_at) AS approved_since
       FROM order_events
@@ -1129,7 +1133,7 @@ export async function saveRoutingAuth(body = {}) {
   if (!body.authNumber?.trim()) throw new Error('authNumber is required')
   await upsertRoutingAuth({ ...body, authNumber: body.authNumber.trim() })
   if (Array.isArray(body.shipmentIds) && body.shipmentIds.length) {
-    await assignAuthToShipments({ authNumber: body.authNumber.trim(), shipmentIds: body.shipmentIds })
+    await assignAuthToShipments({ authNumber: body.authNumber.trim(), shipmentIds: body.shipmentIds, shipDate: body.shipDate || null })
   }
   return getRouting()
 }
@@ -1199,6 +1203,10 @@ async function buildMasterShipment(authNumber) {
     kind: 'master', isMaster: true, partner: auth.partner || members[0].partner,
     dc: 'MERGE', mergeCenter: auth.mergeCenter || members[0].mergeCenter || 'CA',
     bolNumber, authNumber, carrier: auth.carrier, scac: auth.scac,
+    // Master ship date + FedEx pickup number (Nima, 2026-07-27) — printed on the
+    // master BOL. Fall back to a member's ship date if the auth has none set.
+    shipDate: auth.shipDate || members.find((m) => m.shipDate)?.shipDate || null,
+    fedexPickupNumber: auth.fedexPickupNumber || null,
     memberPos: [...perPo.keys()], lineItems: [...perPo.values()],
     cartons, units, weightLb: weight, cubicFeet: cubic,
   }

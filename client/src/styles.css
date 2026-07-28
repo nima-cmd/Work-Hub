@@ -1810,6 +1810,24 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-authForm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .rt-authForm input, .rt-authForm select { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
 .rt-authForm input { width: 130px; }
+.rt-authChipEdit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rt-authChipEdit input { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.rt-authChipEdit .rt-authCarrier { width: 130px; }
+.rt-authChipEdit .rt-authScac { width: 80px; }
+.rt-authChipEdit .rt-authPickup { width: 120px; }
+.rt-authChipEdit .btn { padding: 4px 10px; font-size: 12px; }
+.rt-authDate, .rt-groupDate { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
+.rt-authDate input, .rt-groupDate input { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
+
+/* Master-BOL grouping: per-BOL checkbox + the sticky group action bar */
+.rt-groupCheck { display: inline-flex; align-items: center; margin-right: 4px; cursor: pointer; }
+.rt-groupCheck input { width: 15px; height: 15px; cursor: pointer; }
+.rt-groupBar { position: sticky; top: 4px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  background: var(--panel2); border: 1px solid var(--accent, #4aa3ff); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.rt-groupCount { font-weight: 600; }
+.rt-groupDcs { font-size: 12px; }
+.rt-groupBar .rt-groupAuth { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 12px; width: 180px; }
+.rt-groupHint { font-size: 11px; }
 
 .rt-refSummary { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .rt-refBit { white-space: nowrap; }

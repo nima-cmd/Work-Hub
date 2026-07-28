@@ -91,6 +91,9 @@ function SceneShip({ s }) {
         <div className={`tagStatus st-${cls}`}>
           {s.delayed ? `Overdue ${s.floatingDays}d — mark shipped` : STATE_LABEL[s.state]}
         </div>
+        {s.shipCentralStatus && (
+          <div className="tagWhy" title="This SO is staged in the NetSuite ShipCentral pack queue">📦 In ShipCentral pack queue</div>
+        )}
         {!s.floating && <div className="tagWhy">{WHY[s.state] || WHY.other}</div>}
         <LabelButtons info={s} />
       </div>

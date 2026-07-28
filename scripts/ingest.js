@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import { parseCsv } from '../src/ingest/csv.js'
-import { fromOpenSalesOrders, fromFulfillmentPipeline, fromPoReceiving, fromOcPipeline } from '../src/ingest/savedSearches.js'
+import { fromOpenSalesOrders, fromFulfillmentPipeline, fromPoReceiving, fromOcPipeline, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { buildPipeline } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import {
@@ -19,6 +19,7 @@ import {
   loadOrderConfirmations, pruneOrderConfirmations,
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
   stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+  loadShipCentralQueue, pruneShipCentralQueue,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { pool, withTransaction } from '../src/db.js'
@@ -84,10 +85,11 @@ function readLineLevelSource(file, key, mapper) {
 
 const poRows = readLineLevelSource('WarehousePOReceivingPipeline.csv', 'poReceiving', fromPoReceiving)
 const ocRows = readLineLevelSource('WarehouseOCPipeline.csv', 'ocPipeline', fromOcPipeline)
+const scqRows = readLineLevelSource('ShipCentralSOQueue.csv', 'shipCentralQueue', fromShipCentralQueue)
 
 // All writes in ONE transaction — a crash partway (e.g. a bad row) rolls the
 // whole import back rather than stranding orders at a half-updated stage.
-const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedMatches, candidates } = await withTransaction(async (db) => {
+const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, suggestedMatches, candidates } = await withTransaction(async (db) => {
   for (const [key, count, mtime] of snapshots) await recordSnapshot(key, count, mtime, db)
   const nOrders = await loadOrders(orders, db)
   const nFul = await loadFulfillments(records, db)
@@ -100,6 +102,8 @@ const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedM
   const nPoPruned = poRows.length ? await prunePurchaseOrders(poRows, db) : 0
   const nOc = await loadOrderConfirmations(ocRows, db)
   const nOcPruned = ocRows.length ? await pruneOrderConfirmations(ocRows, db) : 0
+  const nScq = await loadShipCentralQueue(scqRows, db)
+  const nScqPruned = scqRows.length ? await pruneShipCentralQueue(scqRows, db) : 0
 
   // OC↔PO allocation matching: kept ENTIRELY MANUAL (Nima, 2026-07-09) — this
   // only computes and reports suggestions; nothing writes to oc_po_links here.
@@ -110,13 +114,14 @@ const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedM
   const links = await fetchOcPoLinks(db)
   const { suggestedMatches, candidates } = computeOcPoMatches({ ocs, pos: openPos, links })
 
-  return { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, suggestedMatches, candidates }
+  return { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, suggestedMatches, candidates }
 })
 
 console.log(`\n✅ Ingested: ${nOrders} orders · ${nFul} fulfillments · ${nInv} invoices · ${nPo} PO lines · ${nOc} OC lines`)
 if (nPruned) console.log(`   pruned ${nPruned} order(s) no longer in the open pipeline`)
 if (nPoPruned) console.log(`   pruned ${nPoPruned} PO line(s) no longer in the open PO receiving export`)
 if (nOcPruned) console.log(`   pruned ${nOcPruned} OC line(s) no longer in the open OC export`)
+if (nScq) console.log(`   ShipCentral queue: ${nScq} SO(s) staged to pack${nScqPruned ? `, pruned ${nScqPruned} no longer queued` : ''}`)
 if (suggestedMatches.length || candidates.length) {
   console.log(`   OC↔PO matching (not written — review manually): ${suggestedMatches.length} unambiguous suggestion(s), ${candidates.length} group(s) need a decision (contention/shortage)`)
   console.log('   run `npm run match:review` to see them')

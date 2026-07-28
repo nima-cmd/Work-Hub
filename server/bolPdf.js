@@ -19,6 +19,16 @@ import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 const M = 24
 const RED = '#c00'
 
+// Postgres DATE columns come back as JS Date objects (local midnight), so a
+// plain String(d).slice(0,10) yields "Tue Jul 28". Format to YYYY-MM-DD from
+// local parts (no UTC shift); pass strings through untouched.
+function fmtDate(d) {
+  if (!d) return ''
+  if (d instanceof Date)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return String(d).slice(0, 10)
+}
+
 const L = {
   liability: 'NOTE: Liability Limitation for loss or damage in this shipment may be applicable. See 49 U.S.C. 14706(c)(1)(A) and (B).',
   received: 'RECEIVED, subject to individually determined rates or contracts that have been agreed upon in writing between the carrier and shipper, if applicable, otherwise to the rates, classifications and rules that have been established by the carrier and are available to the shipper, on request, and to all applicable state and federal regulations.',
@@ -67,7 +77,7 @@ function render(doc, shipment, kind) {
 
   // ── Header ──────────────────────────────────────────────────────────────
   doc.font('Helvetica').fontSize(7).fillColor('#000')
-    .text(shipment.shipDate ? `Date: ${String(shipment.shipDate).slice(0, 10)}` : 'Date:', M, y + 3)
+    .text(shipment.shipDate ? `Date: ${fmtDate(shipment.shipDate)}` : 'Date:', M, y + 3)
   doc.font('Helvetica-Bold').fontSize(9).text('Page ______', rX, y + 3, { width: half, align: 'right' })
   y += 16
 
@@ -92,12 +102,12 @@ function render(doc, shipment, kind) {
   fob(doc, M + half - 42, y + midH - 12)
   doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
   boxOutline(doc, rX, y + 11, half, midH - 11)
-  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', '']]
-  let cy = y + 14
+  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
+  let cy = y + 13
   for (const [lab, val, red] of carr) {
     doc.font('Helvetica').fontSize(6.5).fillColor('#000').text(lab, rX + 4, cy, { continued: true })
     doc.font('Helvetica-Bold').fontSize(8).fillColor(red && val ? RED : '#000').text('  ' + (val || ''))
-    cy += 12
+    cy += 11
   }
   y += midH + 3
 
