@@ -25,6 +25,7 @@ import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
+import { extractPoDates } from '../src/ingest/orderfulDates.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -894,4 +895,42 @@ test('fromOpenSalesOrders derives DC from the full ship-to name when no DC Code 
 test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', () => {
   const [r] = fromOpenSalesOrders([{ 'Document Number': 'SO1', 'Maximum of Name': 'Level Shoes' }])
   assert.equal(r.dc, null)
+})
+
+// ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────
+// Real qualifiers verified against live Orderful 850 bodies (2+ each partner):
+// which X12 DTM code carries start/cancel is partner-dependent, all at the same
+// header dateTimeReference. extractPoDates picks the first present per family.
+const msg850 = (dtms) => ({ transactionSets: [{ dateTimeReference: dtms }] })
+const dtm = (q, date) => ({ dateTimeQualifier: q, date })
+
+test('extractPoDates: Bloomingdale\'s 064/001 (the original defaults still work)', () => {
+  const r = extractPoDates(msg850([dtm('001', '20260817'), dtm('064', '20260722')]))
+  assert.deepEqual(r, { shipNotBefore: '2026-07-22', cancelAfter: '2026-08-17' })
+})
+
+test('extractPoDates: Nordstrom carries start under 037 (Ship-Not-Before), not 064', () => {
+  const r = extractPoDates(msg850([dtm('001', '20260527'), dtm('037', '20260520')]))
+  assert.deepEqual(r, { shipNotBefore: '2026-05-20', cancelAfter: '2026-05-27' })
+})
+
+test('extractPoDates: Shopbop carries cancel under 063 (Do-Not-Deliver-After), not 001', () => {
+  const r = extractPoDates(msg850([dtm('064', '20260828'), dtm('063', '20260910')]))
+  assert.deepEqual(r, { shipNotBefore: '2026-08-28', cancelAfter: '2026-09-10' })
+})
+
+test('extractPoDates: Saks 010/001 and Neiman 037/063 both resolve via the families', () => {
+  assert.deepEqual(extractPoDates(msg850([dtm('010', '20260603'), dtm('001', '20260620')])),
+    { shipNotBefore: '2026-06-03', cancelAfter: '2026-06-20' })
+  assert.deepEqual(extractPoDates(msg850([dtm('037', '20250515'), dtm('063', '20250615')])),
+    { shipNotBefore: '2025-05-15', cancelAfter: '2025-06-15' })
+})
+
+test('extractPoDates: a partial 850 (only a cancel qualifier) fills one date, leaves the other null', () => {
+  const r = extractPoDates(msg850([dtm('001', '20260527')]))
+  assert.deepEqual(r, { shipNotBefore: null, cancelAfter: '2026-05-27' })
+})
+
+test('extractPoDates: no DTM segments → both null, no throw', () => {
+  assert.deepEqual(extractPoDates({}), { shipNotBefore: null, cancelAfter: null })
 })

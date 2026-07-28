@@ -5,6 +5,9 @@
 // cursor-based, newest first, 100 per page (see List Transactions docs).
 
 import { pool } from '../db.js'
+import { extractPoDates } from './orderfulDates.js'
+
+export { extractPoDates } from './orderfulDates.js'
 
 const API_BASE = 'https://api.orderful.com/v3/transactions'
 
@@ -88,34 +91,27 @@ async function fetchTransactionMessage(apiKey, id) {
   return res.json()
 }
 
-const ediDate = (yyyymmdd) => (yyyymmdd ? `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}` : null)
-
-// The ship-window dates live in the DTM (date/time reference) segment of the
-// 850's own transaction set, not on the list endpoint — confirmed against
-// real X12 850 content 2026-07-10. 064 = "Do Not Deliver Before", 001 = "Cancel After".
-function extractPoDates(message) {
-  const dtms = message?.transactionSets?.[0]?.dateTimeReference || []
-  const find = (q) => dtms.find((d) => d.dateTimeQualifier === q)?.date
-  return { shipNotBefore: ediDate(find('064')), cancelAfter: ediDate(find('001')) }
-}
 
 // Only 850s carry these dates, and the message body is a second API call per
-// transaction — so this only ever fetches ones we haven't already resolved,
-// not the full history on every sync.
+// transaction. We gate on po_dates_checked (not "both dates still NULL") so a
+// partner that carries only ONE of the two dates — e.g. Nordstrom has a cancel
+// but no start, Shopbop the reverse — still gets its message fetched exactly
+// once. The old "both NULL" gate skipped those partials entirely, so their
+// missing date could never fill. Mirrors the po_refs_checked pattern below.
 export async function backfillPoDates(apiKey, db = pool) {
   const { rows } = await db.query(
-    `SELECT id FROM edi_transactions WHERE type = '850_PURCHASE_ORDER' AND ship_not_before IS NULL AND cancel_after IS NULL`,
+    `SELECT id FROM edi_transactions WHERE type = '850_PURCHASE_ORDER' AND po_dates_checked = false`,
   )
   let n = 0
   for (const { id } of rows) {
     const message = await fetchTransactionMessage(apiKey, id)
     const { shipNotBefore, cancelAfter } = extractPoDates(message)
-    if (!shipNotBefore && !cancelAfter) continue // nothing found — leave NULL, don't re-fetch forever
+    // Stamp checked regardless, so a genuinely date-less 850 isn't re-fetched forever.
     await db.query(
-      `UPDATE edi_transactions SET ship_not_before = $2, cancel_after = $3 WHERE id = $1`,
+      `UPDATE edi_transactions SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true WHERE id = $1`,
       [id, shipNotBefore, cancelAfter],
     )
-    n++
+    if (shipNotBefore || cancelAfter) n++
   }
   return { checked: rows.length, updated: n }
 }
