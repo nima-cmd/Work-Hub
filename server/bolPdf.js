@@ -18,6 +18,22 @@ import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 
 const M = 24
 const RED = '#c00'
+// Handling units: goods palletize at ~45 lb per pallet, so the pallet (H.U.)
+// count is the total weight over 45, rounded UP (Nima, 2026-07-28 — same
+// always-round-up rule as the portal numbers). On the Master BOL the weight is
+// the aggregate across every underlying DC, so this is the grand-total pallets.
+const PALLET_LB = 45
+const palletsFor = (weightLb) => (weightLb ? Math.ceil(Number(weightLb) / PALLET_LB) : '')
+
+// Postgres DATE columns come back as JS Date objects (local midnight), so a
+// plain String(d).slice(0,10) yields "Tue Jul 28". Format to YYYY-MM-DD from
+// local parts (no UTC shift); pass strings through untouched.
+function fmtDate(d) {
+  if (!d) return ''
+  if (d instanceof Date)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return String(d).slice(0, 10)
+}
 
 const L = {
   liability: 'NOTE: Liability Limitation for loss or damage in this shipment may be applicable. See 49 U.S.C. 14706(c)(1)(A) and (B).',
@@ -67,7 +83,7 @@ function render(doc, shipment, kind) {
 
   // ── Header ──────────────────────────────────────────────────────────────
   doc.font('Helvetica').fontSize(7).fillColor('#000')
-    .text(shipment.shipDate ? `Date: ${String(shipment.shipDate).slice(0, 10)}` : 'Date:', M, y + 3)
+    .text(shipment.shipDate ? `Date: ${fmtDate(shipment.shipDate)}` : 'Date:', M, y + 3)
   doc.font('Helvetica-Bold').fontSize(9).text('Page ______', rX, y + 3, { width: half, align: 'right' })
   y += 16
 
@@ -92,12 +108,12 @@ function render(doc, shipment, kind) {
   fob(doc, M + half - 42, y + midH - 12)
   doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
   boxOutline(doc, rX, y + 11, half, midH - 11)
-  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', '']]
-  let cy = y + 14
+  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
+  let cy = y + 13
   for (const [lab, val, red] of carr) {
     doc.font('Helvetica').fontSize(6.5).fillColor('#000').text(lab, rX + 4, cy, { continued: true })
     doc.font('Helvetica-Bold').fontSize(8).fillColor(red && val ? RED : '#000').text('  ' + (val || ''))
-    cy += 12
+    cy += 11
   }
   y += midH + 3
 
@@ -155,8 +171,9 @@ function render(doc, shipment, kind) {
   const kCols = [W * 0.08, W * 0.08, W * 0.08, W * 0.09, W * 0.10, W * 0.07, W * 0.34, W * 0.16]
   gridHeader(doc, M, y + 11, kCols, ['H.U. QTY', 'TYPE', 'PKG QTY', 'TYPE', 'WEIGHT', 'H.M.(X)', 'COMMODITY DESCRIPTION', 'LTL ONLY  NMFC# / CLASS'])
   const kr = y + 11 + 15
-  gridRow(doc, M, kr, kCols, ['', '', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
-  gridRow(doc, M, kr + 15, kCols, ['', '', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}`, ''], true, RED)
+  const pallets = String(palletsFor(shipment.weightLb))
+  gridRow(doc, M, kr, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
+  gridRow(doc, M, kr + 15, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  ${PALLET_LB} lb/plt`, ''], true, RED)
   y = kr + 30 + 3
 
   // ── Value / COD ───────────────────────────────────────────────────────────

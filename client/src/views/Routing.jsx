@@ -24,11 +24,20 @@ const STATUS = {
 }
 const STATUS_ORDER = ['needs_routing', 'submitted', 'authorized', 'routed']
 
+// Local-time YYYY-MM-DD (not toISOString, which is UTC and can roll a day).
+function todayStr() {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
 export default function Routing() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(null)
   const [selected, setSelected] = useState(null) // Set<poNumber> | null (=all)
+  const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
 
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
@@ -86,6 +95,16 @@ export default function Routing() {
     run('void' + s.id, () => voidRoutingShipment(s.id))
   }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
+  function toggleGroup(id) {
+    setGroupSel((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+  }
+  // Group the checkbox-selected BOLs under one dated Master BOL: assign them the
+  // auth (created if new), stamp the ship date, mint the master.
+  async function onGroup({ authNumber, shipDate }) {
+    const ids = [...groupSel]
+    await run('group', () => saveRoutingAuth({ authNumber, partner: "Bloomingdale's", shipDate, shipmentIds: ids }))
+    setGroupSel(new Set())
+  }
   function onHold(po, dc) {
     const note = window.prompt(`Hold PO ${po} · DC ${dc} out of routing (packed, can’t ship yet). Reason (optional):`, '')
     if (note === null) return // cancelled
@@ -138,13 +157,19 @@ export default function Routing() {
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
 
+          <GroupBar groups={groups} groupSel={groupSel} auths={auths} busy={busy}
+            onGroup={onGroup} onClear={() => setGroupSel(new Set())} />
+
           {byPartner.map(([partner, list]) => (
             <section key={partner} className="rt-partner">
               <h3>{partner} <span className="muted">· {list.length} DC{list.length === 1 ? '' : 's'}</span></h3>
               <div className="rt-cards">
                 {list.map((g) => (
                   <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
-                    onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold} />
+                    onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
+                    groupable={partner === "Bloomingdale's"}
+                    groupChecked={g.shipment ? groupSel.has(g.shipment.id) : false}
+                    onToggleGroup={g.shipment ? () => toggleGroup(g.shipment.id) : null} />
                 ))}
               </div>
             </section>
@@ -228,7 +253,6 @@ function AuthPanel({ auths, shipments, busy, onSave, onDelete }) {
     onSave(draft)
     setDraft({ authNumber: '', partner: "Bloomingdale's", carrier: '', scac: '' })
   }
-  const countFor = (n) => shipments.filter((s) => s.authNumber === n).length
   return (
     <div className="rt-auths">
       <button className="rt-authsToggle" onClick={() => setOpen((o) => !o)}>
@@ -237,28 +261,14 @@ function AuthPanel({ auths, shipments, busy, onSave, onDelete }) {
       {open && (
         <div className="rt-authsBody">
           <div className="muted rt-authsHint">
-            One auth number covers a set of shipments (from the routing email). Create it here, then
-            select it on each shipment it covers — that stamps the carrier / SCAC. When an auth covers
-            multiple final DCs, generate ONE Master BOL for the merge center (not sent on the 856).
+            One auth number covers a set of shipments (from the routing email). Set its carrier / SCAC
+            once and hit <b>Apply to all shipments</b> to stamp them across every DC on the auth in one go.
+            When an auth covers multiple final DCs, generate ONE Master BOL for the merge center (not sent on the 856).
           </div>
           <div className="rt-authList">
-            {auths.map((a) => {
-              const n = countFor(a.authNumber)
-              return (
-                <div key={a.authNumber} className="rt-authChip">
-                  <div className="rt-authChipTop">
-                    <b>{a.authNumber}</b>
-                    <span className="muted"> · {a.partner || '—'}</span>
-                    {a.carrier && <span className="muted"> · {a.carrier}</span>}
-                    {a.scac && <span className="rt-scac">{a.scac}</span>}
-                    <span className="muted"> · {n} shipment{n === 1 ? '' : 's'}</span>
-                    {n >= 2 && a.partner !== 'Nordstrom' && <MasterActions auth={a} />}
-                    <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
-                  </div>
-                  <EmailLinks docType="AUTH" docNumber={a.authNumber} compact />
-                </div>
-              )
-            })}
+            {auths.map((a) => (
+              <AuthChip key={a.authNumber} a={a} shipments={shipments} busy={busy} onSave={onSave} onDelete={onDelete} />
+            ))}
             {!auths.length && <span className="muted">No authorizations yet.</span>}
           </div>
           <div className="rt-authForm">
@@ -277,7 +287,59 @@ function AuthPanel({ auths, shipments, busy, onSave, onDelete }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, detached }) {
+// One authorization chip: edit its carrier/SCAC inline, then bulk-stamp them
+// (plus the auth #) onto every shipment the auth covers in a single click
+// (Nima, 2026-07-27). "Applicable" = same-partner shipments not already tied to
+// a DIFFERENT auth, so this never steals a DC from another authorization. The
+// backend (assignAuthToShipments via saveRoutingAuth) upserts the carrier/SCAC
+// on the auth first, then stamps them + advances status to Authorized.
+function AuthChip({ a, shipments, busy, onSave, onDelete }) {
+  const [carrier, setCarrier] = useState(a.carrier || '')
+  const [scac, setScac] = useState(a.scac || '')
+  const [shipDate, setShipDate] = useState(a.shipDate ? String(a.shipDate).slice(0, 10) : todayStr())
+  const [pickup, setPickup] = useState(a.fedexPickupNumber || '')
+  const assignable = shipments.filter(
+    (s) => s.partner === a.partner && (!s.authNumber || s.authNumber === a.authNumber),
+  )
+  const n = shipments.filter((s) => s.authNumber === a.authNumber).length
+  function apply() {
+    onSave({
+      authNumber: a.authNumber,
+      partner: a.partner,
+      carrier: carrier.trim(),
+      scac: scac.trim(),
+      shipDate: shipDate || null,
+      fedexPickupNumber: pickup.trim(),
+      shipmentIds: assignable.map((s) => s.id),
+    })
+  }
+  return (
+    <div className="rt-authChip">
+      <div className="rt-authChipTop">
+        <b>{a.authNumber}</b>
+        <span className="muted"> · {a.partner || '—'}</span>
+        <span className="muted"> · {n} shipment{n === 1 ? '' : 's'}</span>
+        {n >= 2 && a.partner !== 'Nordstrom' && <MasterActions auth={a} />}
+        <button className="rt-x" disabled={busy === 'authdel' + a.authNumber} onClick={() => onDelete(a.authNumber)} title="Delete auth">✕</button>
+      </div>
+      <div className="rt-authChipEdit">
+        <input className="rt-authCarrier" placeholder="Carrier" value={carrier} onChange={(e) => setCarrier(e.target.value)} />
+        <input className="rt-authScac" placeholder="SCAC" value={scac} onChange={(e) => setScac(e.target.value)} />
+        <label className="rt-authDate" title="Master BOL ship date">📅<input type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} /></label>
+        <input className="rt-authPickup" placeholder="FedEx pickup #" value={pickup} onChange={(e) => setPickup(e.target.value)} />
+        <button className="btn" disabled={busy === 'auth'} onClick={apply}
+          title="Save carrier / SCAC / date / pickup # on the auth and stamp them onto all its shipments at once">
+          {assignable.length
+            ? `Apply to ${assignable.length} shipment${assignable.length === 1 ? '' : 's'}`
+            : 'Save details'}
+        </button>
+      </div>
+      <EmailLinks docType="AUTH" docNumber={a.authNumber} compact />
+    </div>
+  )
+}
+
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -323,6 +385,11 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, de
       ) : (
         <>
           <div className="rt-bol assigned">
+            {groupable && onToggleGroup && (
+              <label className="rt-groupCheck" title="Select this BOL to group into a Master BOL">
+                <input type="checkbox" checked={groupChecked} onChange={onToggleGroup} />
+              </label>
+            )}
             <span className="rt-bolLabel">BOL</span>
             <span className="rt-bolNum">{s.bolNumber}</span>
             <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
@@ -340,6 +407,37 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, de
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// Sticky action bar for grouping checkbox-selected BOLs into one dated Master
+// BOL (Nima, 2026-07-27). Records the group under an authorization (the master's
+// key) + stamps the ship date; the shared auth of the selection pre-fills.
+function GroupBar({ groups, groupSel, auths, busy, onGroup, onClear }) {
+  const [authNumber, setAuthNumber] = useState('')
+  const [shipDate, setShipDate] = useState(todayStr())
+  if (!groupSel.size) return null
+  const selShips = groups.map((g) => g.shipment).filter((s) => s && groupSel.has(s.id))
+  const dcs = selShips.map((s) => s.dc)
+  const authSet = new Set(selShips.map((s) => s.authNumber || ''))
+  const sharedAuth = authSet.size === 1 ? [...authSet][0] : ''
+  const auth = (authNumber || sharedAuth).trim()
+  const canGroup = selShips.length >= 1 && auth
+  return (
+    <div className="rt-groupBar">
+      <span className="rt-groupCount">{selShips.length} BOL{selShips.length === 1 ? '' : 's'} selected</span>
+      <span className="muted rt-groupDcs">{dcs.join(' · ')}</span>
+      <input list="rt-group-auth-list" className="rt-groupAuth"
+        placeholder={sharedAuth ? `auth ${sharedAuth}` : 'auth # (from routing email)'}
+        value={authNumber} onChange={(e) => setAuthNumber(e.target.value)} />
+      <datalist id="rt-group-auth-list">{auths.map((a) => <option key={a.authNumber} value={a.authNumber} />)}</datalist>
+      <label className="rt-groupDate" title="Master BOL ship date">📅<input type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} /></label>
+      <button className="btn" disabled={!canGroup || busy === 'group'} onClick={() => onGroup({ authNumber: auth, shipDate })}>
+        {busy === 'group' ? 'Grouping…' : 'Group into Master BOL'}
+      </button>
+      <button className="btnGhost" onClick={onClear}>clear</button>
+      {!auth && <span className="muted rt-groupHint">enter the auth # to group these under</span>}
     </div>
   )
 }
@@ -421,10 +519,13 @@ function RefEditor({ s, auths, busy, onSave }) {
     scac: s.scac || '',
     projectNumber: s.projectNumber || '',
     shipmentNumber: s.shipmentNumber || '',
-    shipDate: s.shipDate ? String(s.shipDate).slice(0, 10) : '',
+    // Default to today so the date picker opens on the current date ready to
+    // pick (Nima, 2026-07-27) — they can still calendar-pick any other day.
+    shipDate: s.shipDate ? String(s.shipDate).slice(0, 10) : todayStr(),
     mergeCenter: s.mergeCenter || 'CA',
     trailerNumber: s.trailerNumber || '',
     sealNumber: s.sealNumber || '',
+    fedexPickupNumber: s.fedexPickupNumber || '',
   })
   const isBloomies = s.partner === "Bloomingdale's"
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
@@ -477,6 +578,7 @@ function RefEditor({ s, auths, busy, onSave }) {
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>
         <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>
       </div>
+      <label>FedEx pickup #<input value={d.fedexPickupNumber} onChange={set('fedexPickupNumber')} placeholder="pickup confirmation #" /></label>
       <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
       <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>
     </div>

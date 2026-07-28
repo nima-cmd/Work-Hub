@@ -353,3 +353,25 @@ export function fromEdiPackagesVolume(rows) {
       }
     })
 }
+
+// ── ShipCentral SO queue (Nima, 2026-07-27) ─────────────────────────────────
+// The native NetSuite pack/ship station's queue — SOs staged to pack. One row
+// per SO; columns: Order, Location, Status ("pendingFulfillment"), Ship Date,
+// Actual Ship Date. Read tolerantly by name; skip the trailing Total row and
+// any row missing an order number. refNumber normalizes "SO12375" (and copes
+// with the "Sales Order #SO12375" form if the column ever carries the label).
+export function fromShipCentralQueue(rows) {
+  return rows
+    .filter((r) => {
+      const o = (r['Order'] || '').trim()
+      return o && o.toLowerCase() !== 'total'
+    })
+    .map((r) => ({
+      soNumber: refNumber(r['Order']),
+      location: (r['Location'] || '').trim(),
+      status: (r['Status'] || '').trim(),
+      shipDate: toDate(r['Ship Date']),
+      actualShipDate: toDate(r['Actual Ship Date']),
+    }))
+    .filter((r) => r.soNumber)
+}

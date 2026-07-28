@@ -21,7 +21,7 @@ import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
 import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
-import { fromEdiPackagesVolume } from '../src/ingest/savedSearches.js'
+import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 
@@ -658,6 +658,27 @@ test('fromEdiPackagesVolume parses PO-DC and drops the Total row', () => {
     { po: rows[0].poNumber, dc: rows[0].dc, w: rows[0].weight, raw: rows[0].cubicFeetRaw },
     { po: '7527064', dc: 'CG', w: 26, raw: 2.7 },
   )
+})
+
+const SHIPCENTRAL_CSV =
+  'Order,Location,Status,Ship Date,Actual Ship Date\n' +
+  'SO12375,7,pendingFulfillment,8/21/2026,\n' +
+  'SO12388,2,pendingFulfillment,8/24/2026,\n'
+
+test('detectSource recognizes the ShipCentral SO queue (not the order pipeline)', () => {
+  const rows = parseCsv(SHIPCENTRAL_CSV)
+  assert.equal(detectSource(Object.keys(rows[0])), 'shipCentralQueue')
+})
+
+test('fromShipCentralQueue normalizes SO#, status and dates; skips blank/Total', () => {
+  const withTotal = SHIPCENTRAL_CSV + 'Total,,,,\n'
+  const rows = fromShipCentralQueue(parseCsv(withTotal))
+  assert.equal(rows.length, 2) // Total row dropped
+  assert.equal(rows[0].soNumber, 'SO12375')
+  assert.equal(rows[0].status, 'pendingFulfillment')
+  assert.equal(rows[0].location, '7')
+  assert.ok(rows[0].shipDate instanceof Date)
+  assert.equal(rows[0].actualShipDate, null)
 })
 
 test('dc helpers classify partner and label by code', () => {

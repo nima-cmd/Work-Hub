@@ -18,6 +18,7 @@ import {
   fromOcPipeline,
   fromEdiPackagesVolume,
   fromCatalogue,
+  fromShipCentralQueue,
 } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
 import { deriveSource } from '../model/source.js'
@@ -26,6 +27,7 @@ import {
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
   pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
   loadEdiPackages, loadCatalogueSkus,
+  loadShipCentralQueue, pruneShipCentralQueue,
 } from './loadToDb.js'
 import { withTransaction } from '../db.js'
 
@@ -56,6 +58,10 @@ const LINE_LEVEL_MAPPERS = {
   // Product catalogue master (uploaded SKUs). No prune — an export may be a
   // subset (some styles), so we only ever add/update the uploaded set.
   catalogue: { map: fromCatalogue, load: loadCatalogueSkus },
+  // ShipCentral pack-station queue. Prune: the export is the complete current
+  // queue, so an SO that's dropped off has been packed/left — clear it so the
+  // "pack queue" badge is never stale.
+  shipCentralQueue: { map: fromShipCentralQueue, load: loadShipCentralQueue, prune: pruneShipCentralQueue },
 }
 
 // files: [{ name, text, lastModified }]

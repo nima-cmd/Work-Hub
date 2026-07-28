@@ -156,6 +156,9 @@ export default function CustodyRegister() {
                       {state === 'with_warehouse' ? 'out' : 'in'} {ago(r.lastScan)}
                     </span>
                     {!r.isDc && r.boxes > 0 && <span className="boxTag">📦 {r.boxes} · {r.boxWeight} lb</span>}
+                    {!r.isDc && r.shipCentralStatus && (
+                      <span className="pill fresh" title="Staged in the NetSuite ShipCentral pack queue (pending fulfillment)">📦 pack queue</span>
+                    )}
                     {r.isDc && <RoutingTag routing={r.routing} />}
                     {!r.isDc && <LabelButtons info={{ ifNumber: r.ifNumber, soNumber: r.soNumber, customer: r.customer, poNumber: r.poNumber }} />}
                   </div>

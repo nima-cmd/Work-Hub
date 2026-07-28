@@ -682,6 +682,9 @@ CREATE INDEX IF NOT EXISTS idx_routing_shipment_partner ON routing_shipment(part
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS merge_center   TEXT DEFAULT 'CA';
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS trailer_number TEXT;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS seal_number    TEXT;
+-- FedEx pickup confirmation number (Nima, 2026-07-27): goes on the routing guide
+-- / BOL. Per-shipment; the master carries its own on the auth (below).
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
@@ -706,6 +709,11 @@ CREATE TABLE IF NOT EXISTS routing_auth (
 -- NOT transmitted on the 856; the underlying per-DC BOLs are.
 ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS master_bol_number TEXT UNIQUE;
 ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS merge_center TEXT DEFAULT 'CA';
+-- Master BOL ship date + FedEx pickup number (Nima, 2026-07-27): when BOLs are
+-- grouped into one master shipment, the master gets its own date (printed on the
+-- master BOL) and a FedEx pickup number.
+ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS ship_date DATE;
+ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
 
 -- routing_hold (Nima, 2026-07-22): a PO-DC deliberately pulled OUT of routing —
 -- packed but can't ship yet, so it must NOT be consolidated onto another PO's
@@ -757,6 +765,23 @@ CREATE TABLE IF NOT EXISTS catalogue_skus (
 );
 CREATE INDEX IF NOT EXISTS idx_catalogue_upc ON catalogue_skus(upc);
 CREATE INDEX IF NOT EXISTS idx_catalogue_pid ON catalogue_skus(product_id);
+
+-- ShipCentral SO queue (Nima, 2026-07-27) — the pack-readiness signal from the
+-- native NetSuite pack/ship station. One row per Sales Order sitting in the
+-- ShipCentral queue at pendingFulfillment (staged to pack, not yet fulfilled).
+-- Source: CSV export of saved search customsearch_shipcentralsalesordersearch.
+-- SO-keyed, so it joins the orders/fulfillments tables directly. Pruned on
+-- re-import: a SO that's been packed drops off the queue, so its "pack queue"
+-- badge should disappear — the current export IS the complete live queue.
+CREATE TABLE IF NOT EXISTS shipcentral_queue (
+  so_number        TEXT PRIMARY KEY,   -- "SO12375"
+  location         TEXT,               -- station location id (e.g. "7")
+  status           TEXT,               -- "pendingFulfillment"
+  ship_date        DATE,
+  actual_ship_date DATE,
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_shipcentral_status ON shipcentral_queue(status);
 
 CREATE INDEX IF NOT EXISTS idx_orders_stage       ON orders(stage);
 CREATE INDEX IF NOT EXISTS idx_fulfillments_so    ON fulfillments(so_number);
