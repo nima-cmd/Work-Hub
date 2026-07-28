@@ -153,10 +153,10 @@ export async function syncEdi() {
 }
 
 // Manual PO resolution — connect a PO to its NetSuite ref and/or mark closed.
-export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note }) {
+export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note, reviewState }) {
   const res = await fetch('/api/edi/resolution', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ businessNumber, closed, cancelled, netsuiteRef, note }),
+    body: JSON.stringify({ businessNumber, closed, cancelled, netsuiteRef, note, reviewState }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
@@ -703,3 +703,4 @@ export async function fetchCatalogueGaps() {
   return res.json()
 }
 export const catalogueAddFileUrl = () => '/api/catalogue/add-file.csv'
+

@@ -347,6 +347,15 @@ CREATE TABLE IF NOT EXISTS edi_po_resolutions (
 -- are ever coming. Off the open queue like closed, but recorded distinctly so
 -- a cancelled PO can't be mistaken for completed work.
 ALTER TABLE edi_po_resolutions ADD COLUMN IF NOT EXISTS cancelled BOOLEAN DEFAULT false;
+-- review_state (Nima, 2026-07-28): a human-driven gate for old/uncertain POs.
+--   'in_review'  — parked: someone flagged it for review; the app STOPS looking
+--                  for its 856/810 (no point chasing docs on a PO we haven't
+--                  confirmed is real). Sits in the per-partner In-Review tab.
+--   'validated'  — confirmed real by tying it to its NetSuite order; the normal
+--                  856/810 flow resumes. (Nima's "review to park, validate by
+--                  confirming the NS order" model.)
+--   null         — never touched; automatic tracking as before.
+ALTER TABLE edi_po_resolutions ADD COLUMN IF NOT EXISTS review_state TEXT;
 
 -- ── NetSuite Fulfillments (856 ASN search) — the BOL join key ────────────────
 -- One row per PO DC Identifier, from the NetSuite saved search Nima already

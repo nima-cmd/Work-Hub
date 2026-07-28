@@ -116,6 +116,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   const [taskBusy, setTaskBusy] = useState(null)
   const [supplyDrafts, setSupplyDrafts] = useState({}) // bn -> {poNumber, note}
   const [supplyBusy, setSupplyBusy] = useState(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
@@ -225,20 +226,76 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
 
   // Manual resolution: save a NetSuite connection (stays open), close the PO,
   // or mark it CANCELLED (buyer killed it — no further documents ever coming).
+  // kind: 'link' | 'close' | 'cancel' | 'review' | 'validate'.
+  //   review   — park it in the per-partner In-Review tab (stops 856/810 chase)
+  //   validate — confirm it real by tying to its NetSuite order → back to flow
+  // review_state is preserved across the other kinds so closing/linking a PO
+  // never silently un-parks or un-validates it.
   async function submitResolution(o, kind) {
     const d = resolveDrafts[o.businessNumber] || {}
     const existing = o.work.resolution
+    const netsuiteRef = d.netsuiteRef ?? existing?.netsuiteRef ?? ''
+    let reviewState = existing?.reviewState ?? null
+    if (kind === 'review') reviewState = 'in_review'
+    if (kind === 'validate') {
+      if (!netsuiteRef.trim()) { setErr(`Enter ${o.businessNumber}'s NetSuite order (SO/IF/INV#) to validate it.`); return }
+      reviewState = 'validated'
+    }
     setResolveBusy(o.businessNumber); setErr(null)
     try {
       setReview(await resolveEdiPo({
         businessNumber: o.businessNumber,
         closed: kind === 'close',
         cancelled: kind === 'cancel',
-        netsuiteRef: d.netsuiteRef ?? existing?.netsuiteRef ?? '',
+        netsuiteRef,
         note: d.note ?? existing?.note ?? '',
+        reviewState,
       }))
       setResolveDrafts((s) => { const n = { ...s }; delete n[o.businessNumber]; return n })
     } catch (e) { setErr(e.message) } finally { setResolveBusy(null) }
+  }
+
+  // Verify & close (Phase C, Nima 2026-07-28): the explicit replacement for
+  // the old silent auto-close. Snapshots the 856/810 delivery/ack state into
+  // the resolution note so the Closed tab shows WHY it was closed. `force` lets
+  // Nima close a PO whose docs aren't both confirmed (he may know it's fine),
+  // after an explicit confirm.
+  async function verifyAndClose(o, { force = false } = {}) {
+    const v = o.work.verify || {}
+    if (force && !window.confirm(
+      `${o.businessNumber} isn't fully verified:\n· ${v.blockers?.join('\n· ') || 'unknown'}\n\nClose it anyway?`)) return
+    const note = v.canClose
+      ? `Verified & closed — 856 ${v.ship.status}, 810 ${v.invoice.status}`
+      : `Closed (unverified) — ${v.blockers?.join('; ') || ''}`
+    setResolveBusy(o.businessNumber); setErr(null)
+    try {
+      setReview(await resolveEdiPo({
+        businessNumber: o.businessNumber, closed: true, cancelled: false,
+        netsuiteRef: o.work.resolution?.netsuiteRef || '', note,
+        reviewState: o.work.resolution?.reviewState ?? null,
+      }))
+    } catch (e) { setErr(e.message) } finally { setResolveBusy(null) }
+  }
+
+  // One-click clear of the fully-verified backlog — every Ready-to-close PO
+  // whose 856 + 810 are both delivered & accepted.
+  async function closeAllVerified(list) {
+    if (!list.length) return
+    if (!window.confirm(`Close ${list.length} fully-verified PO(s)? Each has its 856 + 810 delivered & accepted in Orderful.`)) return
+    setBulkBusy(true); setErr(null)
+    try {
+      let latest = review
+      for (const o of list) {
+        const v = o.work.verify || {}
+        latest = await resolveEdiPo({
+          businessNumber: o.businessNumber, closed: true, cancelled: false,
+          netsuiteRef: o.work.resolution?.netsuiteRef || '',
+          note: `Verified & closed — 856 ${v.ship.status}, 810 ${v.invoice.status}`,
+          reviewState: o.work.resolution?.reviewState ?? null,
+        })
+      }
+      setReview(latest)
+    } catch (e) { setErr(e.message) } finally { setBulkBusy(false) }
   }
 
   async function removeResolution(bn) {
@@ -277,8 +334,16 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   // Orphans get their OWN section (Nima, 2026-07-20): every 856/810 with no
   // 850 anywhere is un-tracked work — impossible to miss up top, linkable
   // right there (works for 856s and 810s alike).
-  const orphans = allOpen.filter((o) => o.bucket === 'NO_850_FOUND')
-  const openPos = allOpen.filter((o) => o.bucket !== 'NO_850_FOUND')
+  // Parked-for-review POs pull OUT of Open/orphans into their own tab (Nima,
+  // 2026-07-28) so they stop cluttering the live queue until validated.
+  const reviewPos = allOpen.filter((o) => o.work.underReview)
+  const orphans = allOpen.filter((o) => o.bucket === 'NO_850_FOUND' && !o.work.underReview)
+  // Docs-complete POs pull OUT of Open into "Ready to close" (Nima, 2026-07-28,
+  // Phase C): they no longer auto-close — each needs an explicit Verify & close
+  // once the 856 + 810 show delivered/accepted in Orderful.
+  const readyPos = allOpen.filter((o) => o.work.readyToClose)
+  const openPos = allOpen.filter((o) => o.bucket !== 'NO_850_FOUND' && !o.work.underReview && !o.work.readyToClose)
+  const readyVerified = readyPos.filter((o) => o.work.verify?.canClose)
   const cancelledPos = scope.filter((o) => o.work.closedBy === 'cancelled')
   const closedPos = scope.filter((o) => o.work.closed && o.work.closedBy !== 'cancelled')
 
@@ -294,6 +359,8 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
         <span className="opStat"><b>{ratio}%</b> completion</span>
         {totals.missed > 0 && <span className="opStat bad"><b>{totals.missed}</b> possibly missed 850s</span>}
         {totals.cancelDanger > 0 && <span className="opStat bad"><b>{totals.cancelDanger}</b> cancel-date danger</span>}
+        {totals.inReview > 0 && <span className="opStat"><b>{totals.inReview}</b> in review</span>}
+        {totals.readyToClose > 0 && <span className="opStat"><b>{totals.readyToClose}</b> ready to close</span>}
         <button className="btnGhost" disabled={syncing} onClick={onSync} style={{ marginLeft: 'auto' }}>
           {syncing ? 'Syncing…' : '↻ Sync from Orderful'}
         </button>
@@ -328,7 +395,11 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                 {p.missed > 0 && <span className="flag sev-hi">{p.missed} missed?</span>}
                 {p.cancelDanger > 0 && <span className="flag sev-hi">{p.cancelDanger} cancel ⚠</span>}
                 {p.issues > 0 && <span className="flag sev-mid">{p.issues} EDI errors</span>}
-                {!p.missed && !p.cancelDanger && !p.issues && <span className="flag sev-lo">clean</span>}
+                {p.inReview > 0 && <span className="flag sev-mid">{p.inReview} in review</span>}
+                {p.needs856 > 0 && <span className="flag sev-lo">{p.needs856} need 856</span>}
+                {p.needs810 > 0 && <span className="flag sev-lo">{p.needs810} need 810</span>}
+                {p.readyToClose > 0 && <span className="flag sev-lo">{p.readyToClose} to close</span>}
+                {!p.missed && !p.cancelDanger && !p.issues && !p.inReview && !p.needs856 && !p.needs810 && !p.readyToClose && <span className="flag sev-lo">clean</span>}
               </div>
             </div>
           )})}
@@ -341,6 +412,8 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
           {/* partner-level tabs, right below the calendar (Nima, 2026-07-20) */}
           <div className="tabs" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
             <button className={'tab' + (ediTab === 'open' ? ' active' : '')} onClick={() => setEdiTab('open')}>Open <span className="count">{openPos.length}</span></button>
+            <button className={'tab' + (ediTab === 'review' ? ' active' : '')} onClick={() => setEdiTab('review')}>In Review <span className="count">{reviewPos.length}</span></button>
+            <button className={'tab' + (ediTab === 'ready' ? ' active' : '')} onClick={() => setEdiTab('ready')}>Ready to close <span className="count">{readyPos.length}</span></button>
             <button className={'tab' + (ediTab === 'orphans' ? ' active' : '')} onClick={() => setEdiTab('orphans')}>Unassigned 856/810 <span className="count">{orphans.length}</span></button>
             <button className={'tab' + (ediTab === 'cancelled' ? ' active' : '')} onClick={() => setEdiTab('cancelled')}>Cancelled <span className="count">{cancelledPos.length}</span></button>
             <button className={'tab' + (ediTab === 'closed' ? ' active' : '')} onClick={() => setEdiTab('closed')}>Closed <span className="count">{closedPos.length}</span></button>
@@ -384,7 +457,92 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
             </div>
           )}
 
-          {ediTab === 'open' && !openPos.length && <div className="empty">No open POs here — everything’s closed out. 🎉</div>}
+          {ediTab === 'review' && reviewPos.length === 0 && <div className="empty">No POs in review{selectedPartner ? ' for this partner' : ''}. Hit ⏸ Review on any open PO to park it here.</div>}
+          {ediTab === 'review' && reviewPos.length > 0 && (
+            <div className="reviewBox">
+              <p className="hint">Parked for review — the app is NOT chasing their 856/810. Validate one by confirming its NetSuite order and it rejoins the live queue.</p>
+              {reviewPos.map((o) => {
+                const rd = resolveDrafts[o.businessNumber]
+                return (
+                  <div key={o.businessNumber} className="poCard po-review">
+                    <div className="poHead">
+                      <span className="miniSo">{o.businessNumber}</span>
+                      {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
+                      <span className="flag sev-mid">IN REVIEW</span>
+                      {o.work.missed850 && <span className="flag sev-hi">MISSED? {o.work.age850}d old</span>}
+                      {o.work.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {o.work.cancelDays}d</span>}
+                      <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
+                    </div>
+                    <div className="neededLine">→ {o.work.needed}</div>
+                    {o.netsuiteOrder && <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
+                    <div className="resolveRow">
+                      <input className="qtyInput" style={{ width: 170 }} placeholder="NetSuite order to confirm (SO/IF/INV#)"
+                             value={rd?.netsuiteRef ?? o.work.resolution?.netsuiteRef ?? ''}
+                             onChange={(e) => setRDraft(o.businessNumber, { netsuiteRef: e.target.value })} />
+                      <button className="btn" disabled={resolveBusy === o.businessNumber}
+                              onClick={() => submitResolution(o, 'validate')}>✓ Validate & release</button>
+                      <button className="linkBtn" disabled={resolveBusy === o.businessNumber}
+                              onClick={() => removeResolution(o.businessNumber)}>un-review</button>
+                    </div>
+                    <NoteWidget docType="EDI_PO" docNumber={o.businessNumber} />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {ediTab === 'ready' && readyPos.length === 0 && <div className="empty">Nothing waiting to close{selectedPartner ? ' for this partner' : ''} — no PO has both its 856 and 810 in yet.</div>}
+          {ediTab === 'ready' && readyPos.length > 0 && (
+            <div className="readyBox">
+              <div className="taskGroupHead" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>Ready to close <span className="count">{readyPos.length}</span></span>
+                {readyVerified.length > 0 && (
+                  <button className="btn" disabled={bulkBusy} onClick={() => closeAllVerified(readyVerified)}>
+                    {bulkBusy ? 'Closing…' : `✓ Close all verified (${readyVerified.length})`}
+                  </button>
+                )}
+              </div>
+              <p className="hint">Docs-complete POs — nothing closes on its own. Each is checked against Orderful: the 856 (ASN) and 810 (invoice) must both show <b>delivered &amp; accepted</b>. Confirm to close; anything short of that is shown so you can chase it or close anyway.</p>
+              {readyPos.map((o) => {
+                const v = o.work.verify || {}
+                const DocRow = ({ d }) => (
+                  <div className={'verifyRow ' + (d.confirmed ? 'ok' : d.sent ? 'warn' : 'bad')}>
+                    <span className="verifyIcon">{d.confirmed ? '✓' : d.sent ? '◔' : '✗'}</span>
+                    <span className="mono" style={{ minWidth: 34 }}>{d.label}</span>
+                    <span className="cust">{d.status}</span>
+                  </div>
+                )
+                return (
+                  <div key={o.businessNumber} className={'poCard' + (v.canClose ? ' po-ready' : ' po-warn')}>
+                    <div className="poHead">
+                      <span className="miniSo">{o.businessNumber}</span>
+                      {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
+                      <span className={'flag ' + (v.canClose ? 'sev-lo' : 'sev-mid')}>{v.canClose ? 'VERIFIED' : 'NEEDS CHECK'}</span>
+                      {o.work.resolution?.netsuiteRef && <span className="flag sev-mid">manual: {o.work.resolution.netsuiteRef}</span>}
+                      <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
+                    </div>
+                    {o.netsuiteOrder && <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
+                    <div className="verifyDocs">
+                      <DocRow d={v.ship} />
+                      <DocRow d={v.invoice} />
+                    </div>
+                    <div className="resolveRow">
+                      {v.canClose
+                        ? <button className="btn" disabled={resolveBusy === o.businessNumber} onClick={() => verifyAndClose(o)}>✓ Verify &amp; close</button>
+                        : <button className="btnGhost" disabled={resolveBusy === o.businessNumber} onClick={() => verifyAndClose(o, { force: true })}>Close anyway…</button>}
+                      <button className="btnGhost" disabled={resolveBusy === o.businessNumber}
+                              onClick={() => { if (window.confirm(`Mark ${o.businessNumber} CANCELLED — no further documents coming?`)) submitResolution(o, 'cancel') }}>⊘ Cancelled</button>
+                      <button className="btnGhost" title="Park for review — stops chasing until you validate it"
+                              disabled={resolveBusy === o.businessNumber} onClick={() => submitResolution(o, 'review')}>⏸ Review</button>
+                    </div>
+                    <NoteWidget docType="EDI_PO" docNumber={o.businessNumber} />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {ediTab === 'open' && !openPos.length && <div className="empty">No open POs here — everything’s closed out or waiting to close. 🎉</div>}
           {ediTab === 'open' && openPos.map((o) => {
             const isOpen = expanded.has(o.businessNumber)
             const w = o.work
@@ -413,6 +571,11 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                   <button className="btnGhost poQuickClose" disabled={resolveBusy === o.businessNumber}
                           onClick={(ev) => { ev.stopPropagation(); if (window.confirm(`Mark ${o.businessNumber} CANCELLED — no further documents coming?`)) submitResolution(o, 'cancel') }}>
                     ⊘ Cancelled
+                  </button>
+                  <button className="btnGhost poQuickClose" title="Park for review — stops chasing its 856/810 until you validate it"
+                          disabled={resolveBusy === o.businessNumber}
+                          onClick={(ev) => { ev.stopPropagation(); submitResolution(o, 'review') }}>
+                    ⏸ Review
                   </button>
                   {review.ediTasks?.[o.businessNumber] === 'open'
                     ? <button className="btnGhost poQuickClose" title="A task is open for this PO — open Tasks"
@@ -675,3 +838,4 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
     </div>
   )
 }
+

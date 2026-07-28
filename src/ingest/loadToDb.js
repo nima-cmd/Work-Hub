@@ -730,20 +730,20 @@ export async function fetchEdiFulfillments(db = pool) {
 export async function fetchEdiPoResolutions(db = pool) {
   const { rows } = await db.query(
     `SELECT business_number AS "businessNumber", closed, cancelled, netsuite_ref AS "netsuiteRef", note,
-            updated_at AS "updatedAt"
+            review_state AS "reviewState", updated_at AS "updatedAt"
      FROM edi_po_resolutions`,
   )
   return rows
 }
 
-export async function upsertEdiPoResolution({ businessNumber, closed = false, cancelled = false, netsuiteRef, note }, db = pool) {
+export async function upsertEdiPoResolution({ businessNumber, closed = false, cancelled = false, netsuiteRef, note, reviewState = null }, db = pool) {
   await db.query(
-    `INSERT INTO edi_po_resolutions (business_number, closed, cancelled, netsuite_ref, note, updated_at)
-     VALUES ($1,$2,$3,$4,$5, now())
+    `INSERT INTO edi_po_resolutions (business_number, closed, cancelled, netsuite_ref, note, review_state, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6, now())
      ON CONFLICT (business_number) DO UPDATE SET
        closed = EXCLUDED.closed, cancelled = EXCLUDED.cancelled, netsuite_ref = EXCLUDED.netsuite_ref,
-       note = EXCLUDED.note, updated_at = now()`,
-    [businessNumber, !!closed, !!cancelled, netsuiteRef || null, note || null],
+       note = EXCLUDED.note, review_state = EXCLUDED.review_state, updated_at = now()`,
+    [businessNumber, !!closed, !!cancelled, netsuiteRef || null, note || null, reviewState || null],
   )
 }
 

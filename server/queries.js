@@ -852,9 +852,9 @@ export async function setSeason({ docType, docNumber, season }) {
 
 // Manual PO resolution (Nima, 2026-07-18): connect a PO to its NetSuite ref
 // and/or mark it closed. Empty businessNumber is a caller bug, reject loudly.
-export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note }) {
+export async function resolveEdiPo({ businessNumber, closed, cancelled, netsuiteRef, note, reviewState }) {
   if (!businessNumber?.trim()) throw new Error('businessNumber is required')
-  await upsertEdiPoResolution({ businessNumber: businessNumber.trim(), closed, cancelled, netsuiteRef, note })
+  await upsertEdiPoResolution({ businessNumber: businessNumber.trim(), closed, cancelled, netsuiteRef, note, reviewState })
   return getEdiReview()
 }
 

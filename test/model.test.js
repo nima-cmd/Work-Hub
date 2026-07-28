@@ -381,13 +381,57 @@ test('ediWork: a cancelled PO closes with its own closedBy so it can never read 
   assert.equal(w.missed850, false)
 })
 
-test('ediWork: 810-complete auto-closes; shipped-in-NetSuite needs the ASN', () => {
-  const done = deriveWork(edi850(10, { stageRank: 4 }), null, T0)
-  assert.equal(done.closed, true)
-  assert.equal(done.closedBy, 'docs')
+test('ediWork: shipped-in-NetSuite needs the ASN', () => {
   const needsAsn = deriveWork(
     edi850(10, { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } }), null, T0)
   assert.match(needsAsn.needed, /856 ASN/)
+})
+
+// ── verify-&-close (Phase C, Nima 2026-07-28) ────────────────────────────────
+const doc = (type, delivery, ack, extra = {}) => ({
+  id: `${type}-${delivery}-${ack}`, type, direction: 'OUT',
+  deliveryStatus: delivery, acknowledgmentStatus: ack, ack: null, ...extra,
+})
+const complete850 = (docs) => edi850(10, { stageRank: 4, transactions: [
+  { id: 't1', type: '850_PURCHASE_ORDER', createdAt: new Date(T0 - 10 * DAY_MS).toISOString() }, ...docs,
+] })
+
+test('ediWork: an 810-complete PO no longer auto-closes — it parks in Ready-to-close (Nima, 2026-07-28)', () => {
+  const w = deriveWork(complete850([
+    doc('856_SHIP_NOTICE_MANIFEST', 'DELIVERED', 'ACCEPTED'),
+    doc('810_INVOICE', 'DELIVERED', 'ACCEPTED'),
+  ]), null, T0)
+  assert.equal(w.closed, false)              // nothing closes silently anymore
+  assert.equal(w.readyToClose, true)
+  assert.equal(w.verify.canClose, true)
+  assert.equal(w.verify.blockers.length, 0)
+  assert.match(w.needed, /Verify & close/)
+})
+
+test('ediWork: Verify surfaces exactly what is missing when 856/810 are not both delivered+accepted', () => {
+  // 856 delivered but never acknowledged, 810 not sent at all
+  const w = deriveWork(complete850([
+    doc('856_SHIP_NOTICE_MANIFEST', 'DELIVERED', 'NOT_ACKNOWLEDGED'),
+  ]), null, T0)
+  assert.equal(w.readyToClose, true)
+  assert.equal(w.verify.canClose, false)
+  assert.equal(w.verify.ship.confirmed, false)
+  assert.equal(w.verify.invoice.sent, false)
+  assert.match(w.verify.blockers.join(' '), /856 delivered but acknowledgment/)
+  assert.match(w.verify.blockers.join(' '), /no 810 sent/)
+  assert.match(w.needed, /Verify before closing/)
+})
+
+test('ediWork: ACCEPTED_WITH_ERRORS still counts as confirmed; a manual close is the only way to terminal (closedBy manual)', () => {
+  const ready = deriveWork(complete850([
+    doc('856_SHIP_NOTICE_MANIFEST', 'DELIVERED', 'ACCEPTED_WITH_ERRORS'),
+    doc('810_INVOICE', 'DELIVERED', 'ACCEPTED'),
+  ]), null, T0)
+  assert.equal(ready.verify.canClose, true)
+  const closed = deriveWork(complete850([]), { businessNumber: 'PO1', closed: true, note: 'Verified & closed' }, T0)
+  assert.equal(closed.closed, true)
+  assert.equal(closed.closedBy, 'manual')
+  assert.equal(closed.readyToClose, false)
 })
 
 test('ediWork: passed cancel date on an unshipped PO screams in the needed line', () => {
@@ -396,19 +440,57 @@ test('ediWork: passed cancel date on an unshipped PO screams in the needed line'
   assert.match(w.needed, /Cancel date passed 3d ago/)
 })
 
+test('ediWork: an in-review PO is parked — 856/810 chase is suppressed until validated (Nima, 2026-07-28)', () => {
+  // shipped in NetSuite → would normally scream "send the 856", but it's parked
+  const base = edi850(10, { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } })
+  const parked = deriveWork(base, { businessNumber: 'PO1', reviewState: 'in_review' }, T0)
+  assert.equal(parked.underReview, true)
+  assert.equal(parked.needs856, false)             // gate holds the 856 back
+  assert.match(parked.needed, /Validate this PO/)
+
+  // validate it (confirm the NS order) → the normal 856 need resumes
+  const validated = deriveWork(base, { businessNumber: 'PO1', reviewState: 'validated' }, T0)
+  assert.equal(validated.underReview, false)
+  assert.equal(validated.validated, true)
+  assert.equal(validated.needs856, true)
+  assert.match(validated.needed, /856 ASN/)
+})
+
+test('computeEdiWork: rollup counts in-review and needs-856/810 per partner (Nima, 2026-07-28)', () => {
+  const shipped = { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } }
+  const orders = [
+    edi850(2, { businessNumber: 'PO1', ...shipped }),                 // needs 856
+    edi850(2, { businessNumber: 'PO2', stageRank: 3 }),               // needs 810
+    edi850(2, { businessNumber: 'PO3', ...shipped }),                 // in review → suppressed
+  ]
+  const res = [{ businessNumber: 'PO3', reviewState: 'in_review' }]
+  const { partners, totals } = computeEdiWork(orders, res, T0)
+  assert.equal(partners[0].needs856, 1)   // PO3's 856 is NOT counted (parked)
+  assert.equal(partners[0].needs810, 1)
+  assert.equal(partners[0].inReview, 1)
+  assert.equal(totals.inReview, 1)
+})
+
 test('computeEdiWork: partner rollup counts open/closed and the ratio', () => {
   const orders = [
     edi850(30),                                              // open + missed
-    edi850(2, { businessNumber: 'PO2', stageRank: 4 }),      // auto-closed
+    edi850(2, { businessNumber: 'PO2', stageRank: 4 }),      // ready to close (open, no longer auto-closed)
     edi850(2, { businessNumber: 'PO3' }),                    // open
   ]
-  const { partners, totals } = computeEdiWork(orders, [], T0)
+  // PO2 is only terminal once explicitly closed
+  const resolutions = [{ businessNumber: 'PO2', closed: true, note: 'Verified & closed' }]
+  const { partners, totals } = computeEdiWork(orders, resolutions, T0)
   assert.equal(partners.length, 1)
   assert.equal(partners[0].open, 2)
   assert.equal(partners[0].closed, 1)
   assert.equal(partners[0].missed, 1)
   assert.ok(Math.abs(partners[0].closedRatio - 1 / 3) < 1e-9)
   assert.deepEqual({ open: totals.open, closed: totals.closed }, { open: 2, closed: 1 })
+
+  // and without the manual close, PO2 sits in Ready-to-close (open, not closed)
+  const auto = computeEdiWork(orders, [], T0)
+  assert.equal(auto.totals.readyToClose, 1)
+  assert.equal(auto.totals.closed, 0)
 })
 
 test('every roster character has a dialogue voice (catches drift when adding characters)', () => {
