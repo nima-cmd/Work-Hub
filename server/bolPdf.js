@@ -18,24 +18,24 @@ import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 
 const M = 24
 const RED = '#c00'
-// Per-DC child BOLs estimate the H.U. (pallet) count as freight weight / 45
-// rounded up — this is only an estimate, not a tare.
-const PALLET_EST_LB = 45
-const palletsFor = (weightLb) => (weightLb ? Math.ceil(Number(weightLb) / PALLET_EST_LB) : '')
 
-// Empty-pallet tare weight (Nima, 2026-07-28). On the Master BOL the pallet
-// count is MANUALLY assigned (the real number isn't known until the shipment is
-// physically built), and each pallet's tare is ADDED to the freight weight —
-// e.g. 411 lb freight + 1 pallet → 454 lb.
+// Empty-pallet tare weight (Nima, 2026-07-28). Pallets are counted ONLY on the
+// Master BOL (Nima, 2026-07-29) — the count is MANUALLY assigned there (the real
+// number isn't known until the consolidated shipment is physically built), and
+// each pallet's tare is ADDED to the freight weight — e.g. 411 lb freight + 1
+// pallet → 454 lb. Per-DC child BOLs never show pallets: they're the underlying
+// breakdown, and palletization happens at the merge center / master level.
 const PALLET_TARE_LB = 43
 
-// The number of pallets to print (manual count on a master BOL, else the
-// estimate) and the carrier weight (freight + tare per manually-counted pallet).
+// What to print in the H.U. (pallet) columns and the carrier weight. Only a
+// Master BOL with a manually-set count shows pallets (freight + tare per
+// pallet). Everything else — every per-DC child BOL, and a master before its
+// count is entered — shows NO pallet count and plain freight weight.
 export function palletWeight(shipment) {
   const freight = Number(shipment.weightLb) || 0
   const manual = shipment.isMaster && shipment.palletCount != null ? Number(shipment.palletCount) : null
   if (manual != null) return { hu: String(manual), weight: freight + manual * PALLET_TARE_LB, manual: true }
-  return { hu: String(palletsFor(shipment.weightLb)), weight: shipment.weightLb, manual: false }
+  return { hu: '', weight: freight, manual: false }
 }
 
 // Postgres DATE columns come back as JS Date objects (local midnight), so a
@@ -186,13 +186,14 @@ function render(doc, shipment, kind) {
   const kr = y + 11 + 15
   const { hu: pallets, weight: carrierWeight, manual: palletsManual } = palletWeight(shipment)
   const wStr = String(carrierWeight ?? '')
-  // When the pallet count is manually set, the printed weight is freight + tare,
-  // so note the make-up in the description; otherwise keep the estimate note.
+  const huType = pallets ? 'PLT' : '' // no pallet count → no PLT type label
+  // Only the manually-counted master notes the pallet/tare make-up; child BOLs
+  // (no pallets) just carry cubic ft + units.
   const totalNote = palletsManual
     ? `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  incl. ${pallets} plt @ ${PALLET_TARE_LB} lb (freight ${shipment.weightLb ?? '—'})`
-    : `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  ${PALLET_EST_LB} lb/plt`
-  gridRow(doc, M, kr, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), 'Cartons', wStr, '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
-  gridRow(doc, M, kr + 15, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), '', wStr, 'GRAND TOTAL', totalNote, ''], true, RED)
+    : `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}`
+  gridRow(doc, M, kr, kCols, [pallets, huType, String(shipment.cartons ?? ''), 'Cartons', wStr, '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
+  gridRow(doc, M, kr + 15, kCols, [pallets, huType, String(shipment.cartons ?? ''), '', wStr, 'GRAND TOTAL', totalNote, ''], true, RED)
   y = kr + 30 + 3
 
   // ── Value / COD ───────────────────────────────────────────────────────────

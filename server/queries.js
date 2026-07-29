@@ -1156,7 +1156,21 @@ async function withLineItems(shipment) {
     const row = pkgs.find((p) => String(p.poNumber) === String(po) && String(p.dc) === String(shipment.dc))
     return { po, cartons: row?.cartons ?? '', weight: row ? Math.ceil(Number(row.weight) || 0) : '' }
   })
-  return { ...shipment, lineItems }
+  // Totals track the LIVE feed, not the snapshot frozen when the BOL was
+  // assigned: a re-imported EDIPackagesVolume can correct the numbers (e.g. SC
+  // 19→18), and the child BOL must print the truth — exactly as the Master BOL
+  // already recomputes from the current feed. Re-run the SAME consolidation the
+  // Routing view uses so the two always agree; stored refs (BOL#/carrier/auth/
+  // dates/pallets) are untouched. Fall back to the snapshot only if the DC has
+  // vanished from the feed entirely.
+  const rows = pkgs.filter(
+    (p) => String(p.dc) === String(shipment.dc) && (shipment.memberPos || []).map(String).includes(String(p.poNumber)),
+  )
+  const [g] = consolidateRouting(rows)
+  const totals = g
+    ? { cartons: g.cartons, units: g.units, weightLb: g.weightLb, cubicFeet: g.cubicFeet }
+    : {}
+  return { ...shipment, ...totals, lineItems }
 }
 
 export async function streamShipmentBol(res, id) {
