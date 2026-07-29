@@ -933,17 +933,41 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   grid-template-columns: minmax(320px, 1fr) minmax(380px, 480px) minmax(320px, 1fr);
   grid-template-areas:
     "attn core tasks"
+    "comms core tasks"
     "launch custody edi"
     "pipe pipe pipe";
   align-items: stretch;
 }
 .sectorGrid.radial .sector { grid-column: unset; } /* areas own placement now */
 @media (max-width: 1100px) {
-  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "attn" "pipe" "launch" "custody" "edi" "tasks"; }
+  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "attn" "comms" "tasks" "pipe" "launch" "custody" "edi"; }
 }
 @media (min-width: 1800px) {
   .sectorGrid.radial { grid-template-columns: minmax(380px, 1fr) minmax(460px, 560px) minmax(380px, 1fr); }
 }
+
+/* Transmissions sector — compact unread-comm rows */
+.commRow {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; border-bottom: 1px solid rgba(255,255,255,0.05);
+  padding: 5px 2px; cursor: pointer; color: inherit; font: inherit;
+}
+.commRow:hover { background: rgba(79,209,255,0.06); }
+.commFrom { flex: 0 0 34%; font-weight: 600; color: #cfe3ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commSubj { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Ledger — chronological archive of completed work, grouped by day */
+.ledgerView { max-width: 980px; }
+.ledgerDay { margin: 14px 0; }
+.ledgerDayHead {
+  display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 1;
+  padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: var(--bg, #0a0e16);
+}
+.ledgerDayLabel { font-weight: 700; letter-spacing: 0.02em; color: #cfe3ff; }
+.ledgerRow { display: flex; align-items: flex-start; gap: 10px; }
+.ledgerTime { flex: 0 0 52px; padding-top: 12px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ledgerEntry { flex: 1; min-width: 0; }
 
 /* the tactical core — concentric rings, tick marks, radar sweep */
 .tacticalCore {
