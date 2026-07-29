@@ -22,12 +22,13 @@ const dpiToScale = (dpi) => dpi / 72
 
 // Render every page of a PDF to an ImageData (RGBA) at the given DPI.
 // Returns [{ pageNum, imageData, width, height }].
-export async function rasterizePages(pdfBytes, { dpi = 200 } = {}) {
+export async function rasterizePages(pdfBytes, { dpi = 200, onProgress } = {}) {
   const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice(0) })
   const pdf = await loadingTask.promise
   const out = []
   const scale = dpiToScale(dpi)
   for (let n = 1; n <= pdf.numPages; n++) {
+    onProgress?.(n, pdf.numPages)
     const page = await pdf.getPage(n)
     const viewport = page.getViewport({ scale })
     const canvas = document.createElement('canvas')
@@ -44,6 +45,43 @@ export async function rasterizePages(pdfBytes, { dpi = 200 } = {}) {
   }
   await loadingTask.destroy()
   return out
+}
+
+// Render + decode each page one at a time, discarding the pixels before moving
+// on. A 50-page scan at 150 DPI is ~8MB of RGBA per page — holding them all
+// (as rasterizePages does) is ~400MB and thrashes the tab, so processScan
+// streams instead. Returns [{ pageNum, qr }].
+export async function decodePages(pdfBytes, { dpi = 200, onProgress } = {}) {
+  const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice(0) })
+  const pdf = await loadingTask.promise
+  const scale = dpiToScale(dpi)
+  const detector = 'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  const results = []
+  for (let n = 1; n <= pdf.numPages; n++) {
+    onProgress?.(n, pdf.numPages)
+    const page = await pdf.getPage(n)
+    const viewport = page.getViewport({ scale })
+    canvas.width = Math.ceil(viewport.width)
+    canvas.height = Math.ceil(viewport.height)
+    await page.render({ canvasContext: ctx, viewport }).promise
+    // Trust BarcodeDetector when present (15/15 on the real scan, and the live
+    // Scan Bay camera relies on it too) — running a full-page jsQR pass on every
+    // QR-less continuation page as well roughly doubles the time for no gain.
+    // jsQR is the fallback only where BarcodeDetector isn't available.
+    let qr = null
+    if (detector) {
+      try { qr = (await detector.detect(canvas))[0]?.rawValue || null } catch { /* skip page */ }
+    } else {
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      qr = jsQR(img.data, img.width, img.height)?.data || null
+    }
+    results.push({ pageNum: n, qr })
+    page.cleanup?.()
+  }
+  await loadingTask.destroy()
+  return results
 }
 
 // Decode a single QR from an ImageData. Prefers the native BarcodeDetector
@@ -104,25 +142,58 @@ export function segmentPages(pageResults, { knownPos } = {}) {
   return { documents, orphanPages }
 }
 
-// Split the original PDF into a new PDF containing only the given 1-based pages.
-// Returns Uint8Array bytes ready to upload.
-export async function splitPdf(pdfBytes, pageNums) {
-  const src = await PDFDocument.load(pdfBytes)
+// Copy the given 1-based pages out of an already-loaded PDFDocument into fresh
+// PDF bytes. Reuse one loaded source across many splits — loading a large
+// scanned PDF is the expensive part.
+async function copyPagesOut(srcDoc, pageNums) {
   const dst = await PDFDocument.create()
-  const copied = await dst.copyPages(src, pageNums.map((n) => n - 1))
+  const copied = await dst.copyPages(srcDoc, pageNums.map((n) => n - 1))
   copied.forEach((p) => dst.addPage(p))
   return dst.save()
 }
 
-// End-to-end: bytes → per-document splits, decoded + classified.
-// Returns { documents:[{ qr, classify, pageNums, bytes }], orphanPages, pageResults }.
-export async function processScan(pdfBytes, { dpi = 200, knownPos } = {}) {
-  const pages = await rasterizePages(pdfBytes, { dpi })
-  const pageResults = []
-  for (const p of pages) {
-    pageResults.push({ pageNum: p.pageNum, qr: await decodeQr(p.imageData) })
+// Split the original PDF into a new PDF containing only the given 1-based pages.
+// Convenience for one-off callers; processScan loads the source once instead.
+export async function splitPdf(pdfBytes, pageNums) {
+  return copyPagesOut(await PDFDocument.load(pdfBytes), pageNums)
+}
+
+// Base64-encode bytes in chunks (String.fromCharCode on the whole array blows
+// the call stack for multi-MB splits).
+export function bytesToBase64(bytes) {
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
   }
+  return btoa(bin)
+}
+
+// End-to-end: bytes → per-document splits, decoded + classified. onProgress is
+// called with { phase:'raster'|'split', page, total } so the UI can show both
+// the (slow) rasterize pass and the split pass.
+// Returns { documents:[{ qr, classify, pageNums, bytes }], orphanPages,
+// orphanBytes, pageResults }. orphanBytes = the leading QR-less pages (the
+// signed Master BOL) already split, or null.
+export async function processScan(pdfBytes, { dpi = 200, knownPos, onProgress } = {}) {
+  const pageResults = await decodePages(pdfBytes, {
+    dpi,
+    onProgress: (page, total) => onProgress?.({ phase: 'raster', page, total }),
+  })
   const { documents, orphanPages } = segmentPages(pageResults, { knownPos })
-  for (const doc of documents) doc.bytes = await splitPdf(pdfBytes, doc.pageNums)
-  return { documents, orphanPages, pageResults }
+
+  // Load the (large) source ONCE and copy pages out of it for every split.
+  const srcDoc = await PDFDocument.load(pdfBytes)
+  const total = documents.length + (orphanPages.length ? 1 : 0)
+  let done = 0
+  for (const doc of documents) {
+    onProgress?.({ phase: 'split', page: ++done, total })
+    doc.bytes = await copyPagesOut(srcDoc, doc.pageNums)
+  }
+  let orphanBytes = null
+  if (orphanPages.length) {
+    onProgress?.({ phase: 'split', page: ++done, total })
+    orphanBytes = await copyPagesOut(srcDoc, orphanPages)
+  }
+  return { documents, orphanPages, orphanBytes, pageResults }
 }

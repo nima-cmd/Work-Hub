@@ -29,6 +29,7 @@ import {
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
+import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
@@ -472,6 +473,27 @@ app.post('/api/routing/auth/:authNumber/master-to-drive', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Scanner → Drive (Nima, 2026-07-29). The client rasters+decodes+segments a
+// multi-page scan; /plan resolves the filing targets (classify, partner, master
+// BOL#) for confirmation; /file-to-drive uploads one split at a time.
+app.post('/api/scan/plan', async (req, res) => {
+  try {
+    res.json(await planScanFiling(req.body?.segments || []))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/scan/file-to-drive', async (req, res) => {
+  try {
+    res.json(await fileScannedDoc(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 
