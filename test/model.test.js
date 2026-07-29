@@ -897,11 +897,12 @@ test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', ()
   assert.equal(r.dc, null)
 })
 
-// ── Master BOL manual pallet count + tare weight (Nima, 2026-07-28) ──────────
+// ── Master BOL manual pallet count + tare weight (Nima, 2026-07-28/29) ───────
 // The real pallet count isn't known until the shipment is physically built, so
 // a master BOL uses a MANUALLY-assigned count and adds 43 lb tare per pallet to
-// the freight weight (411 freight + 1 pallet = 454). Per-DC child BOLs keep the
-// old weight/45 estimate and print the freight weight unchanged.
+// the freight weight (411 freight + 1 pallet = 454). Pallets are counted ONLY
+// on the master (Nima, 2026-07-29): per-DC child BOLs — and a master before its
+// count is entered — show NO pallet count and plain freight weight.
 import { palletWeight } from '../server/bolPdf.js'
 
 test('palletWeight: master BOL uses the manual count and adds 43 lb tare per pallet', () => {
@@ -916,18 +917,15 @@ test('palletWeight: master with count 0 adds no tare (freight weight unchanged)'
     { hu: '0', weight: 411, manual: true })
 })
 
-test('palletWeight: master with no manual count falls back to the weight/45 estimate', () => {
-  const r = palletWeight({ isMaster: true, palletCount: null, weightLb: 411 })
-  assert.equal(r.manual, false)
-  assert.equal(r.hu, '10')          // ceil(411/45)
-  assert.equal(r.weight, 411)       // freight weight, no tare added
+test('palletWeight: master with no manual count shows NO pallets (blank) + plain freight', () => {
+  assert.deepEqual(palletWeight({ isMaster: true, palletCount: null, weightLb: 411 }),
+    { hu: '', weight: 411, manual: false })
 })
 
-test('palletWeight: a per-DC child BOL is never manual — estimate + plain freight weight', () => {
-  const r = palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 })
-  assert.equal(r.manual, false)     // manual count ignored off the master
-  assert.equal(r.hu, '2')           // ceil(90/45)
-  assert.equal(r.weight, 90)
+test('palletWeight: a per-DC child BOL never shows pallets — blank H.U. + plain freight weight', () => {
+  // Even a stray palletCount off the master is ignored — pallets are master-only.
+  assert.deepEqual(palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 }),
+    { hu: '', weight: 90, manual: false })
 })
 
 // ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────
