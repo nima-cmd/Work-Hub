@@ -1210,6 +1210,10 @@ async function buildMasterShipment(authNumber) {
     // master BOL. Fall back to a member's ship date if the auth has none set.
     shipDate: auth.shipDate || members.find((m) => m.shipDate)?.shipDate || null,
     fedexPickupNumber: auth.fedexPickupNumber || null,
+    // Manually-assigned pallet count (Nima, 2026-07-28) — the real number isn't
+    // known until the shipment is physically built, so the master BOL uses this
+    // instead of an estimate, and adds PALLET_LB per pallet to the freight weight.
+    palletCount: auth.palletCount ?? null,
     memberPos: [...perPo.keys()], lineItems: [...perPo.values()],
     cartons, units, weightLb: weight, cubicFeet: cubic,
   }

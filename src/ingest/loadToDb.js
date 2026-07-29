@@ -643,10 +643,14 @@ export async function updateShipmentRefs(id, fields = {}, db = pool) {
 }
 
 // Routing auth entity + assignment to a set of shipments.
-export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, note, shipDate, fedexPickupNumber }, db = pool) {
+export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, note, shipDate, fedexPickupNumber, palletCount }, db = pool) {
+  // Manually-assigned master-BOL pallet count — '' / null / non-numeric means
+  // "not provided", so COALESCE preserves the stored value (same idiom as the
+  // other fields; a real number overwrites, which is how you change it).
+  const pallets = palletCount === '' || palletCount == null || Number.isNaN(Number(palletCount)) ? null : Number(palletCount)
   await db.query(
-    `INSERT INTO routing_auth (auth_number, partner, carrier, scac, note, ship_date, fedex_pickup_number, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+    `INSERT INTO routing_auth (auth_number, partner, carrier, scac, note, ship_date, fedex_pickup_number, pallet_count, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
      ON CONFLICT (auth_number) DO UPDATE SET
        partner = COALESCE(EXCLUDED.partner, routing_auth.partner),
        carrier = COALESCE(EXCLUDED.carrier, routing_auth.carrier),
@@ -654,8 +658,9 @@ export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, no
        note    = COALESCE(EXCLUDED.note, routing_auth.note),
        ship_date = COALESCE(EXCLUDED.ship_date, routing_auth.ship_date),
        fedex_pickup_number = COALESCE(EXCLUDED.fedex_pickup_number, routing_auth.fedex_pickup_number),
+       pallet_count = COALESCE(EXCLUDED.pallet_count, routing_auth.pallet_count),
        updated_at = now()`,
-    [authNumber, partner || null, carrier || null, scac || null, note || null, shipDate || null, fedexPickupNumber || null],
+    [authNumber, partner || null, carrier || null, scac || null, note || null, shipDate || null, fedexPickupNumber || null, pallets],
   )
 }
 
@@ -664,6 +669,7 @@ export async function fetchRoutingAuths(db = pool) {
     `SELECT auth_number AS "authNumber", partner, carrier, scac, note,
             master_bol_number AS "masterBolNumber", merge_center AS "mergeCenter",
             ship_date AS "shipDate", fedex_pickup_number AS "fedexPickupNumber",
+            pallet_count AS "palletCount",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_auth ORDER BY created_at DESC`,
   )

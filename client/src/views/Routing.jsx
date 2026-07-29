@@ -23,6 +23,9 @@ const STATUS = {
   bol_assigned: { label: 'Needs routing', cls: 'st-need' },
 }
 const STATUS_ORDER = ['needs_routing', 'submitted', 'authorized', 'routed']
+// Per-pallet tare added to the freight weight on a master BOL (mirrors PALLET_LB
+// in server/bolPdf.js) — for the tooltip only; the server does the real math.
+const PALLET_TARE_LB = 43
 
 // Local-time YYYY-MM-DD (not toISOString, which is UTC and can roll a day).
 function todayStr() {
@@ -298,6 +301,7 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
   const [scac, setScac] = useState(a.scac || '')
   const [shipDate, setShipDate] = useState(a.shipDate ? String(a.shipDate).slice(0, 10) : todayStr())
   const [pickup, setPickup] = useState(a.fedexPickupNumber || '')
+  const [pallets, setPallets] = useState(a.palletCount ?? '')
   const assignable = shipments.filter(
     (s) => s.partner === a.partner && (!s.authNumber || s.authNumber === a.authNumber),
   )
@@ -310,6 +314,7 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
       scac: scac.trim(),
       shipDate: shipDate || null,
       fedexPickupNumber: pickup.trim(),
+      palletCount: pallets === '' ? null : Number(pallets),
       shipmentIds: assignable.map((s) => s.id),
     })
   }
@@ -327,6 +332,9 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
         <input className="rt-authScac" placeholder="SCAC" value={scac} onChange={(e) => setScac(e.target.value)} />
         <label className="rt-authDate" title="Master BOL ship date">📅<input type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} /></label>
         <input className="rt-authPickup" placeholder="FedEx pickup #" value={pickup} onChange={(e) => setPickup(e.target.value)} />
+        <label className="rt-authPallets" title={`Master BOL pallet count (manual) — adds ${PALLET_TARE_LB} lb per pallet to the freight weight`}>
+          🟫<input type="number" min="0" step="1" placeholder="pallets" value={pallets} onChange={(e) => setPallets(e.target.value)} />
+        </label>
         <button className="btn" disabled={busy === 'auth'} onClick={apply}
           title="Save carrier / SCAC / date / pickup # on the auth and stamp them onto all its shipments at once">
           {assignable.length

@@ -18,12 +18,25 @@ import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
 
 const M = 24
 const RED = '#c00'
-// Handling units: goods palletize at ~45 lb per pallet, so the pallet (H.U.)
-// count is the total weight over 45, rounded UP (Nima, 2026-07-28 — same
-// always-round-up rule as the portal numbers). On the Master BOL the weight is
-// the aggregate across every underlying DC, so this is the grand-total pallets.
-const PALLET_LB = 45
-const palletsFor = (weightLb) => (weightLb ? Math.ceil(Number(weightLb) / PALLET_LB) : '')
+// Per-DC child BOLs estimate the H.U. (pallet) count as freight weight / 45
+// rounded up — this is only an estimate, not a tare.
+const PALLET_EST_LB = 45
+const palletsFor = (weightLb) => (weightLb ? Math.ceil(Number(weightLb) / PALLET_EST_LB) : '')
+
+// Empty-pallet tare weight (Nima, 2026-07-28). On the Master BOL the pallet
+// count is MANUALLY assigned (the real number isn't known until the shipment is
+// physically built), and each pallet's tare is ADDED to the freight weight —
+// e.g. 411 lb freight + 1 pallet → 454 lb.
+const PALLET_TARE_LB = 43
+
+// The number of pallets to print (manual count on a master BOL, else the
+// estimate) and the carrier weight (freight + tare per manually-counted pallet).
+export function palletWeight(shipment) {
+  const freight = Number(shipment.weightLb) || 0
+  const manual = shipment.isMaster && shipment.palletCount != null ? Number(shipment.palletCount) : null
+  if (manual != null) return { hu: String(manual), weight: freight + manual * PALLET_TARE_LB, manual: true }
+  return { hu: String(palletsFor(shipment.weightLb)), weight: shipment.weightLb, manual: false }
+}
 
 // Postgres DATE columns come back as JS Date objects (local midnight), so a
 // plain String(d).slice(0,10) yields "Tue Jul 28". Format to YYYY-MM-DD from
@@ -171,9 +184,15 @@ function render(doc, shipment, kind) {
   const kCols = [W * 0.08, W * 0.08, W * 0.08, W * 0.09, W * 0.10, W * 0.07, W * 0.34, W * 0.16]
   gridHeader(doc, M, y + 11, kCols, ['H.U. QTY', 'TYPE', 'PKG QTY', 'TYPE', 'WEIGHT', 'H.M.(X)', 'COMMODITY DESCRIPTION', 'LTL ONLY  NMFC# / CLASS'])
   const kr = y + 11 + 15
-  const pallets = String(palletsFor(shipment.weightLb))
-  gridRow(doc, M, kr, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), 'Cartons', String(shipment.weightLb ?? ''), '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
-  gridRow(doc, M, kr + 15, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), '', String(shipment.weightLb ?? ''), 'GRAND TOTAL', `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  ${PALLET_LB} lb/plt`, ''], true, RED)
+  const { hu: pallets, weight: carrierWeight, manual: palletsManual } = palletWeight(shipment)
+  const wStr = String(carrierWeight ?? '')
+  // When the pallet count is manually set, the printed weight is freight + tare,
+  // so note the make-up in the description; otherwise keep the estimate note.
+  const totalNote = palletsManual
+    ? `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  incl. ${pallets} plt @ ${PALLET_TARE_LB} lb (freight ${shipment.weightLb ?? '—'})`
+    : `Cubic ft ${shipment.cubicFeet ?? '—'}  ·  Units ${shipment.units ?? '—'}  ·  ${PALLET_EST_LB} lb/plt`
+  gridRow(doc, M, kr, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), 'Cartons', wStr, '', COMMODITY.description, `${COMMODITY.nmfc || ''} / ${COMMODITY.class}`], false, RED)
+  gridRow(doc, M, kr + 15, kCols, [pallets, 'PLT', String(shipment.cartons ?? ''), '', wStr, 'GRAND TOTAL', totalNote, ''], true, RED)
   y = kr + 30 + 3
 
   // ── Value / COD ───────────────────────────────────────────────────────────
