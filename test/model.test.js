@@ -897,6 +897,39 @@ test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', ()
   assert.equal(r.dc, null)
 })
 
+// ── Master BOL manual pallet count + tare weight (Nima, 2026-07-28) ──────────
+// The real pallet count isn't known until the shipment is physically built, so
+// a master BOL uses a MANUALLY-assigned count and adds 43 lb tare per pallet to
+// the freight weight (411 freight + 1 pallet = 454). Per-DC child BOLs keep the
+// old weight/45 estimate and print the freight weight unchanged.
+import { palletWeight } from '../server/bolPdf.js'
+
+test('palletWeight: master BOL uses the manual count and adds 43 lb tare per pallet', () => {
+  assert.deepEqual(palletWeight({ isMaster: true, palletCount: 1, weightLb: 411 }),
+    { hu: '1', weight: 454, manual: true })
+  assert.deepEqual(palletWeight({ isMaster: true, palletCount: 3, weightLb: 411 }),
+    { hu: '3', weight: 411 + 129, manual: true })
+})
+
+test('palletWeight: master with count 0 adds no tare (freight weight unchanged)', () => {
+  assert.deepEqual(palletWeight({ isMaster: true, palletCount: 0, weightLb: 411 }),
+    { hu: '0', weight: 411, manual: true })
+})
+
+test('palletWeight: master with no manual count falls back to the weight/45 estimate', () => {
+  const r = palletWeight({ isMaster: true, palletCount: null, weightLb: 411 })
+  assert.equal(r.manual, false)
+  assert.equal(r.hu, '10')          // ceil(411/45)
+  assert.equal(r.weight, 411)       // freight weight, no tare added
+})
+
+test('palletWeight: a per-DC child BOL is never manual — estimate + plain freight weight', () => {
+  const r = palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 })
+  assert.equal(r.manual, false)     // manual count ignored off the master
+  assert.equal(r.hu, '2')           // ceil(90/45)
+  assert.equal(r.weight, 90)
+})
+
 // ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────
 // Real qualifiers verified against live Orderful 850 bodies (2+ each partner):
 // which X12 DTM code carries start/cancel is partner-dependent, all at the same

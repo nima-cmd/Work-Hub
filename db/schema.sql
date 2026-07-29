@@ -736,6 +736,11 @@ ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS merge_center TEXT DEFAULT 'CA'
 -- master BOL) and a FedEx pickup number.
 ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS ship_date DATE;
 ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
+-- Master BOL pallet count (Nima, 2026-07-28): the real number of pallets isn't
+-- known until the shipment is physically built, so it's MANUALLY assigned per
+-- master BOL (not the old ceil(weight/45) estimate). Drives the master BOL's
+-- H.U. QTY and adds PALLET_LB per pallet to the printed carrier weight.
+ALTER TABLE routing_auth ADD COLUMN IF NOT EXISTS pallet_count INTEGER;
 
 -- routing_hold (Nima, 2026-07-22): a PO-DC deliberately pulled OUT of routing —
 -- packed but can't ship yet, so it must NOT be consolidated onto another PO's
