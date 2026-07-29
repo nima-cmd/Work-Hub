@@ -230,6 +230,29 @@ CREATE TABLE IF NOT EXISTS edi_document_po_refs (
 );
 CREATE INDEX IF NOT EXISTS idx_edi_po_refs_po ON edi_document_po_refs(po_number);
 
+-- ── New-850 arrival alerts (Nima, 2026-07-29) ────────────────────────────────
+-- The 10-min recurring-check cron now pulls Orderful (it used to only sync
+-- Gmail), so a fresh 850 with no matching NetSuite SO can't sit unseen until
+-- someone happens to click Sync on the EDI tab. One row per genuinely-NEW 850
+-- transaction — "new" = a fresh INSERT into edi_transactions (detected via the
+-- upsert's RETURNING (xmax=0)), NOT a re-sync of one we already had. That's why
+-- this is its own table and not a boolean on edi_transactions: a default-false
+-- column would flag the ENTIRE 850 history on first deploy; here only rows born
+-- from a real insert ever exist, so existing POs are never mistaken for new.
+-- Drives a dismissable banner (undismissed rows) and an auto-created quest_task
+-- (instance_key edi:<bn>, so it collapses with any later EDI task for that PO).
+-- Dismissing the banner does NOT close the task — banner = "heads-up since you
+-- last looked"; the task is the durable "this PO still needs handling".
+CREATE TABLE IF NOT EXISTS edi_arrivals (
+  transaction_id   TEXT PRIMARY KEY,       -- → edi_transactions.id
+  business_number  TEXT,                   -- the PO#
+  trading_partner  TEXT,
+  po_created_at    TIMESTAMPTZ,            -- the 850's own createdAt
+  detected_at      TIMESTAMPTZ DEFAULT now(),
+  dismissed        BOOLEAN DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS idx_edi_arrivals_open ON edi_arrivals(dismissed) WHERE dismissed = false;
+
 -- ── EDI manual links — the human override when an 856/810 can't auto-link to
 -- its 850 (Nima, 2026-07-10). The 850 is the master document everything else
 -- joins against; when businessNumber/BOL matching finds no 850 for a stray

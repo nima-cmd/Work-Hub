@@ -72,6 +72,24 @@ main { padding: 20px; }
 .banner { padding: 16px; color: var(--muted); }
 .banner.error { color: var(--hi); }
 .banner.ok { color: #7ee787; }
+/* New-850 arrival alert — a warm, attention-grabbing strip that can't be
+   missed but is one-click dismissable (dismiss keeps the underlying tasks). */
+.banner.arrival {
+  display: flex; align-items: center; gap: 10px;
+  margin: 8px 16px; padding: 10px 14px;
+  color: #ffd7a8; background: rgba(255, 160, 60, 0.12);
+  border: 1px solid rgba(255, 160, 60, 0.5); border-radius: 8px;
+}
+.arrivalGlyph { font-size: 18px; }
+.arrivalMsg { flex: 1; }
+.arrivalMsg strong { color: #ffcf99; }
+.arrivalGo, .arrivalX {
+  background: rgba(255, 160, 60, 0.18); color: #ffd7a8;
+  border: 1px solid rgba(255, 160, 60, 0.5); border-radius: 6px;
+  padding: 4px 10px; cursor: pointer; font: inherit;
+}
+.arrivalGo:hover, .arrivalX:hover { background: rgba(255, 160, 60, 0.3); }
+.arrivalX { padding: 4px 8px; }
 
 .importBtn { background: var(--accent); color: #1a1206; border: none; padding: 6px 13px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
 .importBtn:hover { filter: brightness(1.08); }

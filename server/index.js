@@ -13,7 +13,7 @@ import {
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
-  resolveEdiPo, unresolveEdiPo,
+  resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive,
@@ -295,6 +295,26 @@ app.delete('/api/edi/resolution/:businessNumber', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// New-850 arrival alerts — undismissed list drives the app-wide banner; the
+// cron's Orderful pull (recurring-check below) is what populates them.
+app.get('/api/edi/arrivals', async (_req, res) => {
+  try {
+    res.json(await getEdiArrivals())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/edi/arrivals/dismiss', async (req, res) => {
+  try {
+    res.json(await dismissEdiArrivals(req.body?.transactionId))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 
@@ -959,8 +979,21 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     } catch (e) {
       console.error('Gmail sync failed (recurring tasks still checked):', e.message)
     }
+    // Pull Orderful too (this used to only sync Gmail) so a fresh 850 with no
+    // NetSuite SO is detected within the 10-min cycle — surfaced as a banner +
+    // auto-task — instead of waiting for someone to click Sync on the EDI tab.
+    // Best-effort + gated on the key, exactly like the Gmail sync above.
+    let edi = null
+    if (process.env.ORDERFUL_API_KEY) {
+      try {
+        const r = await syncEdi()
+        edi = { fetched: r.fetched, upserted: r.upserted, newArrivals: r.newArrivals }
+      } catch (e) {
+        console.error('Orderful sync failed (recurring tasks still checked):', e.message)
+      }
+    }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, recurringCreated })
+    res.json({ ok: true, email, edi, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

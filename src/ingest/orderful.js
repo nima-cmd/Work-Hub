@@ -59,10 +59,17 @@ export async function fetchOrderfulTransactions(apiKey) {
   return all
 }
 
+// Returns { count, insertedIds }. insertedIds = the transaction ids that were
+// a genuine INSERT this call (not an UPDATE of one we already stored) — Postgres
+// reports this via RETURNING (xmax = 0): on a fresh insert the row has no prior
+// version so xmax is 0, whereas an ON CONFLICT UPDATE leaves xmax set. This is
+// the whole new-transaction dedupe — no separate "seen" set needed, and it
+// piggybacks on the upsert that already keeps re-syncs idempotent.
 export async function loadEdiTransactions(transactions, db = pool) {
   let n = 0
+  const insertedIds = []
   for (const t of transactions) {
-    await db.query(
+    const { rows } = await db.query(
       `INSERT INTO edi_transactions
          (id, type, direction, business_number, trading_partner, stream,
           validation_status, delivery_status, acknowledgment_status, created_at, last_updated_at, synced_at)
@@ -72,15 +79,17 @@ export async function loadEdiTransactions(transactions, db = pool) {
          delivery_status       = EXCLUDED.delivery_status,
          acknowledgment_status = EXCLUDED.acknowledgment_status,
          last_updated_at       = EXCLUDED.last_updated_at,
-         synced_at             = now()`,
+         synced_at             = now()
+       RETURNING (xmax = 0) AS inserted`,
       [
         t.id, t.type, t.direction, t.businessNumber, t.tradingPartner, t.stream,
         t.validationStatus, t.deliveryStatus, t.acknowledgmentStatus, t.createdAt, t.lastUpdatedAt,
       ],
     )
+    if (rows[0]?.inserted) insertedIds.push(t.id)
     n++
   }
-  return n
+  return { count: n, insertedIds }
 }
 
 async function fetchTransactionMessage(apiKey, id) {
@@ -177,10 +186,12 @@ export async function fetchEdiDocumentPoRefs(db = pool) {
 
 export async function syncOrderful(apiKey, db = pool) {
   const transactions = await fetchOrderfulTransactions(apiKey)
-  const count = await loadEdiTransactions(transactions, db)
+  const { count, insertedIds } = await loadEdiTransactions(transactions, db)
   const dates = await backfillPoDates(apiKey, db)
   const poRefs = await backfillDocumentPoRefs(apiKey, db)
-  return { fetched: transactions.length, upserted: count, poDates: dates, poRefs }
+  // insertedIds = transactions never stored before this sync — the caller
+  // (syncEdi) turns the new LIVE 850s among them into arrival alerts + tasks.
+  return { fetched: transactions.length, upserted: count, insertedIds, poDates: dates, poRefs }
 }
 
 export async function fetchEdiTransactions(db = pool) {

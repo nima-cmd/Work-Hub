@@ -1282,10 +1282,81 @@ export async function removeEdiManualOrder(id) {
 export async function syncEdi() {
   if (!process.env.ORDERFUL_API_KEY) throw new Error('ORDERFUL_API_KEY is not set in .env.local')
   const r = await syncOrderful(process.env.ORDERFUL_API_KEY)
+  // A genuinely-new 850 with no NetSuite SO yet would otherwise surface nowhere
+  // — ensureEdiTasks only auto-materializes SO-backed POs. Record the new
+  // arrivals FIRST (banner + a durable task) so the no-SO case can't sit
+  // ignored (best-effort; must not fail the sync).
+  let arrivals = { newArrivals: 0 }
+  try { arrivals = await recordEdiArrivals(r.insertedIds || []) }
+  catch (e) { console.error('New-850 arrival detection failed:', e.message) }
   // Fresh Orderful data can shift what's open — refresh the auto-generated
   // tasks right after (best-effort; a failure here mustn't fail the sync).
   try { await ensureEdiTasks() } catch (e) { console.error('EDI task generation after sync failed:', e.message) }
-  return r
+  return { ...r, ...arrivals }
+}
+
+// Turn the just-inserted transaction ids into new-850 arrival alerts. Filters
+// to LIVE 850s (a TEST 850 must not read as a real new PO — same rule
+// fetchEdiTransactions uses), records each in edi_arrivals (idempotent), and
+// creates a durable quest_task under the shared edi:<bn> instance_key so it
+// collapses with any auto/manual EDI task for the same PO. Ordinarily called
+// from syncEdi; the id list is the dedupe, so passing an empty array is a no-op.
+export async function recordEdiArrivals(insertedIds = []) {
+  if (!insertedIds.length) return { newArrivals: 0 }
+  const { rows } = await pool.query(
+    `SELECT id, business_number AS "businessNumber", trading_partner AS "tradingPartner", created_at AS "createdAt"
+     FROM edi_transactions
+     WHERE id = ANY($1) AND type = '850_PURCHASE_ORDER' AND stream = 'LIVE'`,
+    [insertedIds],
+  )
+  let newArrivals = 0
+  for (const t of rows) {
+    // ON CONFLICT DO NOTHING: a re-detected id (shouldn't happen — inserts are
+    // one-shot — but cheap insurance) never doubles up an alert.
+    const ins = await pool.query(
+      `INSERT INTO edi_arrivals (transaction_id, business_number, trading_partner, po_created_at)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (transaction_id) DO NOTHING RETURNING transaction_id`,
+      [t.id, t.businessNumber, t.tradingPartner, t.createdAt],
+    )
+    if (!ins.rows.length) continue
+    newArrivals++
+    const partner = (t.tradingPartner || 'EDI').trim()
+    if (t.businessNumber) {
+      const id = await createEdiTask({
+        businessNumber: t.businessNumber,
+        characterId: ediTaskCharacter(t.businessNumber),
+        fromName: partner,
+        subject: `🆕 New PO ${t.businessNumber} · ${partner}`,
+        snippet: `New 850 arrived from ${partner} — enter PO ${t.businessNumber} into NetSuite.`,
+        urgency: 'hi',
+      })
+      if (id) await logTaskActivity({ taskId: id, kind: 'created', note: `New 850 arrival · ${partner} PO ${t.businessNumber}` })
+    }
+  }
+  return { newArrivals }
+}
+
+// Undismissed new-850 arrivals, newest PO first — drives the app-wide banner.
+export async function getEdiArrivals() {
+  const { rows } = await pool.query(
+    `SELECT transaction_id AS "transactionId", business_number AS "businessNumber",
+            trading_partner AS "tradingPartner", po_created_at AS "poCreatedAt", detected_at AS "detectedAt"
+     FROM edi_arrivals WHERE dismissed = false
+     ORDER BY po_created_at DESC NULLS LAST, detected_at DESC`,
+  )
+  return rows
+}
+
+// Dismiss the banner (one arrival or all). Deliberately does NOT close the
+// task — the PO still needs handling; this just clears the "since you last
+// looked" heads-up.
+export async function dismissEdiArrivals(transactionId) {
+  if (transactionId) {
+    await pool.query(`UPDATE edi_arrivals SET dismissed = true WHERE transaction_id = $1`, [transactionId])
+  } else {
+    await pool.query(`UPDATE edi_arrivals SET dismissed = true WHERE dismissed = false`)
+  }
+  return { ok: true }
 }
 
 export async function commitOcPoLink(payload) {
