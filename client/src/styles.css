@@ -1853,6 +1853,15 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-bolNum { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; color: #7ee787; }
 .rt-detached .rt-card { opacity: 0.85; }
 
+/* shipped/unshipped split (2026-07-29) */
+.rt-tabs { display: flex; gap: 8px; margin: 4px 0 16px; }
+.rt-tabs .tab { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.rt-tabs .tab.active { border-color: var(--accent); color: var(--accent); }
+.rt-tabs .tab .count { margin-left: 6px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.rt-shipBtn { align-self: flex-start; }
+.rt-shipBtn.on { border-color: rgba(126,231,135,0.5); color: #7ee787; }
+.rt-shippedTag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(126,231,135,0.14); color: #7ee787; border: 1px solid rgba(126,231,135,0.4); }
+
 /* ── EDI Routing phase 2: refs + auth ────────────────────────────────────── */
 .rt-status { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .rt-status.st-sub { color: var(--holo); border-color: rgba(79,209,255,0.4); }
