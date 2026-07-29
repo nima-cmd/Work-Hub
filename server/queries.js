@@ -27,7 +27,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import {
-  fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment,
+  fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
   fetchRoutingShipmentById,
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
@@ -1111,6 +1111,11 @@ async function computeRoutingGaps({ packages, shipments }) {
   }
   gaps.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === 'missing' ? -1 : 1))
   return { items: gaps, feedImportedAt: feedAt ? new Date(feedAt).toISOString() : null }
+}
+
+export async function setShipmentShipped(id, shipped = true) {
+  await markShipmentShipped(id, shipped)
+  return getRouting()
 }
 
 export async function setShipmentRefs(id, fields = {}) {

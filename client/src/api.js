@@ -662,6 +662,15 @@ export async function setShipmentRefs(id, fields) {
   return res.json()
 }
 
+export async function setShipmentShipped(id, shipped = true) {
+  const res = await fetch(`/api/routing/shipment/${id}/shipped`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipped }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 export async function saveRoutingAuth(body) {
   const res = await fetch('/api/routing/auth', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

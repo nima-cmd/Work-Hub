@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  fetchRouting, assignRoutingBol, voidRoutingShipment,
+  fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive,
@@ -41,6 +41,7 @@ export default function Routing() {
   const [busy, setBusy] = useState(null)
   const [selected, setSelected] = useState(null) // Set<poNumber> | null (=all)
   const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
+  const [tab, setTab] = useState('active') // 'active' | 'shipped'
 
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
@@ -98,6 +99,7 @@ export default function Routing() {
     run('void' + s.id, () => voidRoutingShipment(s.id))
   }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
+  const onShip = (s) => run('ship' + s.id, () => setShipmentShipped(s.id, !s.shippedAt))
   function toggleGroup(id) {
     setGroupSel((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
@@ -120,6 +122,18 @@ export default function Routing() {
 
   const auths = data.auths || []
   const detached = data.detached || []
+  // Shipped shipments (physically left) move out of the active board into the
+  // Shipped archive tab. Active = everything not-yet-shipped.
+  const shippedShipments = (data.shipments || []).filter((s) => s.shippedAt)
+  const activeByPartner = byPartner
+    .map(([p, list]) => [p, list.filter((g) => !g.shipment?.shippedAt)])
+    .filter(([, list]) => list.length)
+  const activeDetached = detached.filter((s) => !s.shippedAt)
+  const shippedByPartner = [...shippedShipments.reduce((m, s) => {
+    if (!m.has(s.partner)) m.set(s.partner, [])
+    m.get(s.partner).push(s)
+    return m
+  }, new Map()).entries()]
 
   return (
     <div className="routing">
@@ -160,16 +174,27 @@ export default function Routing() {
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
 
+          <div className="rt-tabs">
+            <button className={'tab' + (tab === 'active' ? ' active' : '')} onClick={() => setTab('active')}>
+              Active <span className="count">{activeByPartner.reduce((n, [, l]) => n + l.length, 0) + activeDetached.length}</span>
+            </button>
+            <button className={'tab' + (tab === 'shipped' ? ' active' : '')} onClick={() => setTab('shipped')}>
+              Shipped <span className="count">{shippedShipments.length}</span>
+            </button>
+          </div>
+
+          {tab === 'active' && <>
           <GroupBar groups={groups} groupSel={groupSel} auths={auths} busy={busy}
             onGroup={onGroup} onClear={() => setGroupSel(new Set())} />
 
-          {byPartner.map(([partner, list]) => (
+          {activeByPartner.map(([partner, list]) => (
             <section key={partner} className="rt-partner">
               <h3>{partner} <span className="muted">· {list.length} DC{list.length === 1 ? '' : 's'}</span></h3>
               <div className="rt-cards">
                 {list.map((g) => (
                   <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
                     onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
+                    onShip={g.shipment ? onShip : null}
                     groupable={partner === "Bloomingdale's"}
                     groupChecked={g.shipment ? groupSel.has(g.shipment.id) : false}
                     onToggleGroup={g.shipment ? () => toggleGroup(g.shipment.id) : null} />
@@ -178,16 +203,33 @@ export default function Routing() {
             </section>
           ))}
 
-          {detached.length > 0 && (
+          {activeDetached.length > 0 && (
             <section className="rt-partner rt-detached">
               <h3>Assigned BOLs no longer in the feed <span className="muted">· already routed / re-exported away</span></h3>
               <div className="rt-cards">
-                {detached.map((s) => (
+                {activeDetached.map((s) => (
                   <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
-                    auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} detached />
+                    auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip} detached />
                 ))}
               </div>
             </section>
+          )}
+          </>}
+
+          {tab === 'shipped' && (
+            shippedShipments.length === 0
+              ? <div className="rt-empty">Nothing shipped yet. Hit <b>🚚 Mark shipped</b> on a routed BOL when the truck leaves — it moves here (record kept, BOL never reused).</div>
+              : shippedByPartner.map(([partner, list]) => (
+                <section key={partner} className="rt-partner">
+                  <h3>{partner} <span className="muted">· {list.length} shipped</span></h3>
+                  <div className="rt-cards">
+                    {list.map((s) => (
+                      <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
+                        auths={auths} busy={busy} onSaveRefs={onSaveRefs} onShip={onShip} detached />
+                    ))}
+                  </div>
+                </section>
+              ))
           )}
         </>
       )}
@@ -347,11 +389,11 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
-  const canHold = onHold && !detached
+  const canHold = onHold && !detached && !s?.shippedAt
 
   return (
     <div className={'rt-card' + (s ? ' has-bol' : '')}>
@@ -400,8 +442,17 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, de
             )}
             <span className="rt-bolLabel">BOL</span>
             <span className="rt-bolNum">{s.bolNumber}</span>
-            <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>
+            {s.shippedAt
+              ? <span className="rt-shippedTag" title={`Shipped ${new Date(s.shippedAt).toLocaleString()}`}>✓ shipped {new Date(s.shippedAt).toLocaleDateString()}</span>
+              : !detached && <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>}
           </div>
+          {onShip && (
+            <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '')} disabled={busy === 'ship' + s.id}
+              title={s.shippedAt ? 'Move back to the active queue' : 'Shipment has physically left — archive it to the Shipped tab (record kept)'}
+              onClick={() => onShip(s)}>
+              {s.shippedAt ? '↩ Un-ship' : '🚚 Mark shipped'}
+            </button>
+          )}
 
           <BolActions s={s} />
           <RefSummary s={s} />

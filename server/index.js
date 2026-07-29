@@ -14,7 +14,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
-  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, saveRoutingAuth, removeRoutingAuth,
+  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
@@ -350,6 +350,16 @@ app.delete('/api/routing/shipment/:id', async (req, res) => {
 app.post('/api/routing/shipment/:id/refs', async (req, res) => {
   try {
     res.json(await setShipmentRefs(req.params.id, req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Mark shipped / un-ship — moves a shipment to (or back from) the Shipped tab.
+app.post('/api/routing/shipment/:id/shipped', async (req, res) => {
+  try {
+    res.json(await setShipmentShipped(req.params.id, req.body?.shipped !== false))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

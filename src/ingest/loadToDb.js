@@ -531,12 +531,24 @@ export async function fetchRoutingShipments(db = pool) {
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
-            fedex_pickup_number AS "fedexPickupNumber",
+            fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
   )
   return rows
+}
+
+// Mark a shipment shipped (it physically left) or un-ship it. Sets/clears
+// shipped_at; the record itself is never removed — it just moves to the
+// Shipped archive tab in the Routing view.
+export async function markShipmentShipped(id, shipped = true, db = pool) {
+  const { rows } = await db.query(
+    `UPDATE routing_shipment SET shipped_at = ${shipped ? 'now()' : 'NULL'}, updated_at = now()
+     WHERE id = $1 RETURNING id`,
+    [id],
+  )
+  return rows[0] || null
 }
 
 export async function fetchRoutingShipmentById(id, db = pool) {

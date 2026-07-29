@@ -730,6 +730,11 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS seal_number    TEXT;
 -- FedEx pickup confirmation number (Nima, 2026-07-27): goes on the routing guide
 -- / BOL. Per-shipment; the master carries its own on the auth (below).
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
+-- shipped_at (Nima, 2026-07-29): stamped when the physical shipment leaves. The
+-- record is KEPT (BOL number never reused), but a shipped shipment moves out of
+-- the active Routing queue into a "Shipped" archive tab so gone BOLs stop
+-- cluttering the board. Explicit "Mark shipped" action — nothing auto-ships.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
