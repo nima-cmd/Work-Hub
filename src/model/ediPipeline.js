@@ -119,7 +119,11 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
     const tradingPartner = sorted.find((t) => t.tradingPartner)?.tradingPartner || null
     const netsuiteOrder = netsuiteByPoNumber.get(businessNumber) || null
     const netsuiteShipped = netsuiteOrder?.stage === 'SHIPPED'
-    const po850 = sorted.find((t) => t.type === '850_PURCHASE_ORDER')
+    // sorted is ascending by createdAt, so the LAST 850 is the current version.
+    // A re-sent PO's ship window/units come from the newest 850, not the first
+    // (partners re-transmit to change dates or units — 2026-07-29).
+    const po850s = sorted.filter((t) => t.type === '850_PURCHASE_ORDER')
+    const po850 = po850s[po850s.length - 1] || null
     const hasManualLinks = sorted.some((t) => manualLinkByTxnId.has(t.id))
 
     // Only meaningful when we DO have a currently-open NetSuite order to check

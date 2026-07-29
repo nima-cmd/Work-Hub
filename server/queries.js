@@ -46,8 +46,9 @@ import {
   fetchDayPlan, setDayPlanOrder, resetDayPlanOrder, setDayPlanItemDone,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
   fetchOpenRecurringInstances, escalateRecurringTask, deleteQuestTask,
-  createEdiTask, fetchEdiTaskStates, closeEdiTask,
+  createEdiTask, raiseEdiTask, fetchEdiTaskStates, closeEdiTask,
 } from '../src/ingest/loadToDb.js'
+import { diffPoVersions, summarizePoDiff } from '../src/model/ediPoDiff.js'
 import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile, listUserLabels, markMessageSpam } from '../src/ingest/gmail.js'
 import { fetchCalendarEvents } from '../src/ingest/googleCalendar.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
@@ -1310,18 +1311,34 @@ export async function recordEdiArrivals(insertedIds = []) {
     [insertedIds],
   )
   let newArrivals = 0
+  let rechecks = 0
   for (const t of rows) {
-    // ON CONFLICT DO NOTHING: a re-detected id (shouldn't happen — inserts are
-    // one-shot — but cheap insurance) never doubles up an alert.
-    const ins = await pool.query(
-      `INSERT INTO edi_arrivals (transaction_id, business_number, trading_partner, po_created_at)
-       VALUES ($1,$2,$3,$4) ON CONFLICT (transaction_id) DO NOTHING RETURNING transaction_id`,
-      [t.id, t.businessNumber, t.tradingPartner, t.createdAt],
-    )
-    if (!ins.rows.length) continue
-    newArrivals++
     const partner = (t.tradingPartner || 'EDI').trim()
-    if (t.businessNumber) {
+    if (!t.businessNumber) continue
+
+    // Is this a genuinely-new PO, or a RE-SEND of one we already have? Every 850
+    // for this PO#, oldest→newest, with the parsed line items the diff needs
+    // (backfillPo850Details ran earlier this sync, so the new one is parsed).
+    const { rows: v } = await pool.query(
+      `SELECT id, created_at AS "createdAt", ship_not_before AS "shipNotBefore",
+              cancel_after AS "cancelAfter", line_items AS "lineItems"
+       FROM edi_transactions
+       WHERE business_number = $1 AND type = '850_PURCHASE_ORDER' AND stream = 'LIVE'
+       ORDER BY created_at ASC`,
+      [t.businessNumber],
+    )
+    const idx = v.findIndex((x) => x.id === t.id)
+    const prior = idx > 0 ? v[idx - 1] : null
+
+    if (!prior) {
+      // ── genuinely new PO ── banner arrival + a durable "enter it" task.
+      const ins = await pool.query(
+        `INSERT INTO edi_arrivals (transaction_id, business_number, trading_partner, po_created_at)
+         VALUES ($1,$2,$3,$4) ON CONFLICT (transaction_id) DO NOTHING RETURNING transaction_id`,
+        [t.id, t.businessNumber, t.tradingPartner, t.createdAt],
+      )
+      if (!ins.rows.length) continue
+      newArrivals++
       const id = await createEdiTask({
         businessNumber: t.businessNumber,
         characterId: ediTaskCharacter(t.businessNumber),
@@ -1331,9 +1348,38 @@ export async function recordEdiArrivals(insertedIds = []) {
         urgency: 'hi',
       })
       if (id) await logTaskActivity({ taskId: id, kind: 'created', note: `New 850 arrival · ${partner} PO ${t.businessNumber}` })
+      continue
+    }
+
+    // ── a re-send ── only worth surfacing if something actually CHANGED (a
+    // routine re-transmit is noise). No new-PO banner here — the banner means
+    // "enter this into NetSuite"; a re-send re-raises the PO's own task instead.
+    const diff = diffPoVersions(prior, t)
+    if (!diff.changed) continue
+    const summary = summarizePoDiff(diff)
+    // If the user already parked/validated/closed it, frame it as a re-check.
+    const { rows: [res] } = await pool.query(
+      `SELECT review_state AS "reviewState", closed, cancelled FROM edi_po_resolutions WHERE business_number = $1`,
+      [t.businessNumber],
+    )
+    const acted = res && (res.reviewState || res.closed || res.cancelled)
+    const verb = acted ? 'Re-check' : 'Changed re-send'
+    const raised = await raiseEdiTask({
+      businessNumber: t.businessNumber,
+      characterId: ediTaskCharacter(t.businessNumber),
+      fromName: partner,
+      subject: `⟳ ${verb} — PO ${t.businessNumber} · ${partner} (sent ${idx + 1}×)`,
+      snippet: `${partner} re-sent PO ${t.businessNumber} with changes: ${summary.join('; ')}.` +
+        (res?.reviewState === 'unallocated' ? ' Re-check whether it can now be allocated + entered.' :
+         acted ? ' Re-check — it changed since you handled it.' : ''),
+      urgency: 'hi',
+    })
+    if (raised) {
+      rechecks++
+      await logTaskActivity({ taskId: raised.id, kind: raised.reopened ? 'reopened' : 'created', note: `850 re-send · ${partner} PO ${t.businessNumber} · ${summary.join('; ')}` })
     }
   }
-  return { newArrivals }
+  return { newArrivals, rechecks }
 }
 
 // Undismissed new-850 arrivals, newest PO first — drives the app-wide banner.

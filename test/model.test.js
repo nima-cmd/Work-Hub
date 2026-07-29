@@ -25,7 +25,8 @@ import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
-import { extractPoDates } from '../src/ingest/orderfulDates.js'
+import { extractPoDates, extractPoLines, summarizePoLines } from '../src/ingest/orderfulDates.js'
+import { diffPoVersions, poVersionInfo } from '../src/model/ediPoDiff.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -964,4 +965,63 @@ test('extractPoDates: a partial 850 (only a cancel qualifier) fills one date, le
 
 test('extractPoDates: no DTM segments → both null, no throw', () => {
   assert.deepEqual(extractPoDates({}), { shipNotBefore: null, cancelAfter: null })
+})
+
+// ── EDI 850 line parsing + version diff (re-sent PO detection) ───────────────
+const msgWithLines = (lines, dtms = []) => ({
+  transactionSets: [{
+    dateTimeReference: dtms,
+    PO1_loop: lines.map((l, i) => ({
+      baselineItemData: [{
+        assignedIdentification: String(i + 1),
+        quantity: String(l.qty),
+        unitPrice: l.price != null ? String(l.price) : undefined,
+        productServiceIDQualifier: 'UP', productServiceID: l.upc || '000',
+        productServiceIDQualifier1: 'VA', productServiceID1: l.style,
+      }],
+    })),
+  }],
+})
+
+test('extractPoLines reads qty/style/upc/price keyed by qualifier', () => {
+  const lines = extractPoLines(msgWithLines([{ style: 'SN04023LD', upc: '810077171882', qty: 65, price: 123.48 }]))
+  assert.equal(lines.length, 1)
+  assert.deepEqual(lines[0], { line: '1', sku: 'SN04023LD', style: 'SN04023LD', upc: '810077171882', qty: 65, unitPrice: 123.48 })
+  assert.deepEqual(summarizePoLines(lines), { totalUnits: 65, lineCount: 1 })
+})
+
+test('diffPoVersions spots a SKU swap and a moved ship window', () => {
+  const v1 = { shipNotBefore: '2025-08-15', cancelAfter: '2025-08-29', lineItems: extractPoLines(msgWithLines([{ style: 'SN0312FH', qty: 50 }, { style: 'SN04023LD', qty: 65 }])) }
+  const v6 = { shipNotBefore: '2025-08-01', cancelAfter: '2025-08-15', lineItems: extractPoLines(msgWithLines([{ style: 'SN03012FH', qty: 50 }, { style: 'SN04023LD', qty: 65 }])) }
+  const d = diffPoVersions(v1, v6)
+  assert.equal(d.changed, true)
+  assert.equal(d.added[0].style, 'SN03012FH')
+  assert.equal(d.removed[0].style, 'SN0312FH')
+  assert.ok(d.dates.shipNotBefore && d.dates.cancelAfter)
+  assert.equal(d.unitsFrom, 115); assert.equal(d.unitsTo, 115) // swap, same total
+})
+
+test('diffPoVersions: quantity change on the same SKU, no false diff on reorder', () => {
+  const a = { lineItems: extractPoLines(msgWithLines([{ style: 'A', qty: 10 }, { style: 'B', qty: 20 }])) }
+  const b = { lineItems: extractPoLines(msgWithLines([{ style: 'B', qty: 20 }, { style: 'A', qty: 12 }])) } // reordered + A changed
+  const d = diffPoVersions(a, b)
+  assert.equal(d.qtyChanges.length, 1)
+  assert.deepEqual({ style: d.qtyChanges[0].style, from: d.qtyChanges[0].from, to: d.qtyChanges[0].to }, { style: 'A', from: 10, to: 12 })
+  assert.equal(d.added.length, 0); assert.equal(d.removed.length, 0)
+})
+
+test('poVersionInfo re-checks only after a mark when a later send differs', () => {
+  const order = { transactions: [
+    { type: '850_PURCHASE_ORDER', createdAt: '2026-05-29T00:00:00Z', lineItems: extractPoLines(msgWithLines([{ style: 'A', qty: 10 }])) },
+    { type: '850_PURCHASE_ORDER', createdAt: '2026-07-24T00:00:00Z', lineItems: extractPoLines(msgWithLines([{ style: 'A', qty: 25 }])) },
+  ] }
+  // marked BEFORE the second send → re-check fires with the qty change
+  const after = poVersionInfo(order, '2026-06-01T00:00:00Z', true)
+  assert.equal(after.sendCount, 2)
+  assert.equal(after.needsRecheck, true)
+  assert.ok(after.recheckSummary.some((s) => /qty 10.*25/.test(s)))
+  // marked AFTER the latest send → nothing new to re-check
+  assert.equal(poVersionInfo(order, '2026-08-01T00:00:00Z', true).needsRecheck, false)
+  // no resolution → never a re-check, even with multiple versions
+  assert.equal(poVersionInfo(order, null, false).needsRecheck, false)
 })

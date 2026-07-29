@@ -1116,6 +1116,27 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .poCard.po-review { border-left-color: var(--accent); background: rgba(217,164,65,0.04); }
 .po-review .neededLine { color: var(--accent); }
 
+/* ── re-sent-PO diff + re-check (2026-07-29) ──────────────────────────────── */
+.recheckStrip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 6px 0 2px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.35);
+  font-size: 12.5px;
+}
+.recheckWhat { color: #ffb3ad; font-weight: 600; }
+.recheckDiff { color: var(--text); }
+.recheckStrip .btnGhost { margin-left: auto; }
+.poVersions {
+  margin: 8px 0; padding: 8px 10px; border-radius: 6px;
+  background: var(--panel2); border: 1px solid var(--line);
+}
+.verRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.verRow + .verRow { border-top: 1px dashed var(--line); }
+.verLatest { font-weight: 600; }
+.verNum { font-family: ui-monospace, Menlo, monospace; color: var(--accent); min-width: 26px; }
+.verMeta { color: var(--muted, #9aa4b2); }
+.verDiff { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+
 /* ── verify & close (Phase C) ──────────────────────────────────────────────── */
 .readyBox { margin-bottom: 18px; }
 .poCard.po-ready { border-left-color: var(--ok, #3fb950); background: rgba(63,185,80,0.04); }

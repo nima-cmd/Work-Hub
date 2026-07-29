@@ -1127,6 +1127,24 @@ export async function createEdiTask(
   return rows[0]?.id || null
 }
 
+// Like createEdiTask, but for a PO that RE-SENT with changes (Nima, 2026-07-29):
+// it must resurface even if its task was already completed, so this REOPENS +
+// refreshes the message on conflict rather than DO NOTHING. Returns { id,
+// reopened } — reopened=true when it revived/updated an existing task.
+export async function raiseEdiTask({ businessNumber, characterId, fromName, subject, snippet, urgency }, db = pool) {
+  const { rows } = await db.query(
+    `INSERT INTO quest_tasks
+       (instance_key, character_id, from_name, subject, snippet, urgency, needs_type)
+     VALUES ($1,$2,$3,$4,$5,$6,'none')
+     ON CONFLICT (instance_key) DO UPDATE SET
+       status = 'open', completed_at = NULL,
+       subject = EXCLUDED.subject, snippet = EXCLUDED.snippet, urgency = EXCLUDED.urgency
+     RETURNING id, (xmax <> 0) AS reopened`,
+    [`edi:${businessNumber}`, characterId || null, fromName || 'EDI Relay', subject || null, snippet || null, urgency || null],
+  )
+  return rows[0] ? { id: rows[0].id, reopened: rows[0].reopened } : null
+}
+
 // Current state of every EDI task (open|done), keyed by instance_key — lets the
 // EDI view show "task exists" vs offer a "make task" button, and lets the
 // reconcile below find EDI tasks whose PO is no longer open work.

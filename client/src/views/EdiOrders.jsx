@@ -6,6 +6,7 @@ import {
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
+import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
@@ -237,6 +238,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
     const netsuiteRef = d.netsuiteRef ?? existing?.netsuiteRef ?? ''
     let reviewState = existing?.reviewState ?? null
     if (kind === 'review') reviewState = 'in_review'
+    if (kind === 'unallocated') reviewState = 'unallocated'
     if (kind === 'validate') {
       if (!netsuiteRef.trim()) { setErr(`Enter ${o.businessNumber}'s NetSuite order (SO/IF/INV#) to validate it.`); return }
       reviewState = 'validated'
@@ -336,13 +338,18 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   // right there (works for 856s and 810s alike).
   // Parked-for-review POs pull OUT of Open/orphans into their own tab (Nima,
   // 2026-07-28) so they stop cluttering the live queue until validated.
-  const reviewPos = allOpen.filter((o) => o.work.underReview)
-  const orphans = allOpen.filter((o) => o.bucket === 'NO_850_FOUND' && !o.work.underReview)
+  // "Parked" = in_review OR unallocated (Nima, 2026-07-29) — both stop the
+  // 856/810 chase and sit out of the live Open queue until acted on.
+  const reviewPos = allOpen.filter((o) => o.work.parked)
+  const orphans = allOpen.filter((o) => o.bucket === 'NO_850_FOUND' && !o.work.parked)
+  // Re-sent-and-changed POs the user has already handled — the focused "look
+  // again" list (Nima, 2026-07-29). A PO here also still shows in its home tab.
+  const recheckPos = allOpen.filter((o) => o.work.needsRecheck)
   // Docs-complete POs pull OUT of Open into "Ready to close" (Nima, 2026-07-28,
   // Phase C): they no longer auto-close — each needs an explicit Verify & close
   // once the 856 + 810 show delivered/accepted in Orderful.
   const readyPos = allOpen.filter((o) => o.work.readyToClose)
-  const openPos = allOpen.filter((o) => o.bucket !== 'NO_850_FOUND' && !o.work.underReview && !o.work.readyToClose)
+  const openPos = allOpen.filter((o) => o.bucket !== 'NO_850_FOUND' && !o.work.parked && !o.work.readyToClose)
   const readyVerified = readyPos.filter((o) => o.work.verify?.canClose)
   const cancelledPos = scope.filter((o) => o.work.closedBy === 'cancelled')
   const closedPos = scope.filter((o) => o.work.closed && o.work.closedBy !== 'cancelled')
@@ -359,7 +366,9 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
         <span className="opStat"><b>{ratio}%</b> completion</span>
         {totals.missed > 0 && <span className="opStat bad"><b>{totals.missed}</b> possibly missed 850s</span>}
         {totals.cancelDanger > 0 && <span className="opStat bad"><b>{totals.cancelDanger}</b> cancel-date danger</span>}
+        {totals.recheck > 0 && <span className="opStat bad"><b>{totals.recheck}</b> to re-check</span>}
         {totals.inReview > 0 && <span className="opStat"><b>{totals.inReview}</b> in review</span>}
+        {totals.unallocated > 0 && <span className="opStat"><b>{totals.unallocated}</b> unallocated</span>}
         {totals.readyToClose > 0 && <span className="opStat"><b>{totals.readyToClose}</b> ready to close</span>}
         <button className="btnGhost" disabled={syncing} onClick={onSync} style={{ marginLeft: 'auto' }}>
           {syncing ? 'Syncing…' : '↻ Sync from Orderful'}
@@ -395,11 +404,13 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                 {p.missed > 0 && <span className="flag sev-hi">{p.missed} missed?</span>}
                 {p.cancelDanger > 0 && <span className="flag sev-hi">{p.cancelDanger} cancel ⚠</span>}
                 {p.issues > 0 && <span className="flag sev-mid">{p.issues} EDI errors</span>}
+                {p.recheck > 0 && <span className="flag sev-hi">{p.recheck} re-check</span>}
                 {p.inReview > 0 && <span className="flag sev-mid">{p.inReview} in review</span>}
+                {p.unallocated > 0 && <span className="flag sev-mid">{p.unallocated} unalloc.</span>}
                 {p.needs856 > 0 && <span className="flag sev-lo">{p.needs856} need 856</span>}
                 {p.needs810 > 0 && <span className="flag sev-lo">{p.needs810} need 810</span>}
                 {p.readyToClose > 0 && <span className="flag sev-lo">{p.readyToClose} to close</span>}
-                {!p.missed && !p.cancelDanger && !p.issues && !p.inReview && !p.needs856 && !p.needs810 && !p.readyToClose && <span className="flag sev-lo">clean</span>}
+                {!p.missed && !p.cancelDanger && !p.issues && !p.recheck && !p.inReview && !p.unallocated && !p.needs856 && !p.needs810 && !p.readyToClose && <span className="flag sev-lo">clean</span>}
               </div>
             </div>
           )})}
@@ -412,7 +423,10 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
           {/* partner-level tabs, right below the calendar (Nima, 2026-07-20) */}
           <div className="tabs" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
             <button className={'tab' + (ediTab === 'open' ? ' active' : '')} onClick={() => setEdiTab('open')}>Open <span className="count">{openPos.length}</span></button>
-            <button className={'tab' + (ediTab === 'review' ? ' active' : '')} onClick={() => setEdiTab('review')}>In Review <span className="count">{reviewPos.length}</span></button>
+            {recheckPos.length > 0 && (
+              <button className={'tab' + (ediTab === 'recheck' ? ' active' : '')} onClick={() => setEdiTab('recheck')}>⟳ Re-check <span className="count">{recheckPos.length}</span></button>
+            )}
+            <button className={'tab' + (ediTab === 'review' ? ' active' : '')} onClick={() => setEdiTab('review')}>Parked <span className="count">{reviewPos.length}</span></button>
             <button className={'tab' + (ediTab === 'ready' ? ' active' : '')} onClick={() => setEdiTab('ready')}>Ready to close <span className="count">{readyPos.length}</span></button>
             <button className={'tab' + (ediTab === 'orphans' ? ' active' : '')} onClick={() => setEdiTab('orphans')}>Unassigned 856/810 <span className="count">{orphans.length}</span></button>
             <button className={'tab' + (ediTab === 'cancelled' ? ' active' : '')} onClick={() => setEdiTab('cancelled')}>Cancelled <span className="count">{cancelledPos.length}</span></button>
@@ -457,18 +471,20 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
             </div>
           )}
 
-          {ediTab === 'review' && reviewPos.length === 0 && <div className="empty">No POs in review{selectedPartner ? ' for this partner' : ''}. Hit ⏸ Review on any open PO to park it here.</div>}
+          {ediTab === 'review' && reviewPos.length === 0 && <div className="empty">Nothing parked{selectedPartner ? ' for this partner' : ''}. Hit ⏸ Review or ⏸ Unallocated on any open PO to park it here.</div>}
           {ediTab === 'review' && reviewPos.length > 0 && (
             <div className="reviewBox">
-              <p className="hint">Parked for review — the app is NOT chasing their 856/810. Validate one by confirming its NetSuite order and it rejoins the live queue.</p>
+              <p className="hint">Parked — the app is NOT chasing their 856/810. <b>Unallocated</b> = waiting on allocation to enter NetSuite (re-flags on a changed re-send). <b>In review</b> = validate by confirming its NetSuite order to rejoin the live queue.</p>
               {reviewPos.map((o) => {
                 const rd = resolveDrafts[o.businessNumber]
                 return (
-                  <div key={o.businessNumber} className="poCard po-review">
+                  <div key={o.businessNumber} className={'poCard po-review' + (o.work.needsRecheck ? ' po-danger' : '')}>
                     <div className="poHead">
                       <span className="miniSo">{o.businessNumber}</span>
                       {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
-                      <span className="flag sev-mid">IN REVIEW</span>
+                      <span className="flag sev-mid">{o.work.unallocated ? 'UNALLOCATED' : 'IN REVIEW'}</span>
+                      {o.work.needsRecheck && <span className="flag sev-hi" title={o.work.recheckSummary.join('; ')}>⟳ RE-CHECK</span>}
+                      {o.work.sendCount > 1 && <span className="flag sev-mid">sent {o.work.sendCount}×</span>}
                       {o.work.missed850 && <span className="flag sev-hi">MISSED? {o.work.age850}d old</span>}
                       {o.work.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {o.work.cancelDays}d</span>}
                       <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
@@ -543,18 +559,22 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
           )}
 
           {ediTab === 'open' && !openPos.length && <div className="empty">No open POs here — everything’s closed out or waiting to close. 🎉</div>}
-          {ediTab === 'open' && openPos.map((o) => {
+          {ediTab === 'recheck' && !recheckPos.length && <div className="empty">Nothing to re-check{selectedPartner ? ' for this partner' : ''} — no handled PO has re-sent with changes.</div>}
+          {(ediTab === 'open' || ediTab === 'recheck') && (ediTab === 'recheck' ? recheckPos : openPos).map((o) => {
             const isOpen = expanded.has(o.businessNumber)
             const w = o.work
             const rd = resolveDrafts[o.businessNumber]
             return (
               <div key={o.businessNumber}
-                   className={'poCard' + (w.cancelState === 'passed' || w.missed850 ? ' po-danger' : w.cancelState === 'soon' ? ' po-warn' : '')}>
+                   className={'poCard' + (w.needsRecheck || w.cancelState === 'passed' || w.missed850 ? ' po-danger' : w.cancelState === 'soon' ? ' po-warn' : '')}>
                 <div className="poHead" onClick={() => toggle(o.businessNumber)}>
                   <span className="miniSo">{o.businessNumber}</span>
                   <SeasonBadge season={seasons[`EDI_PO|${o.businessNumber}`]} onSave={(s) => onSaveSeason(o.businessNumber, s)} highlightCore />
                   {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
                   <span className={'flag ' + (o.hasIssue ? 'sev-hi' : 'sev-lo')}>{o.stage}</span>
+                  {w.needsRecheck && <span className="flag sev-hi" title={w.recheckSummary.join('; ')}>⟳ RE-CHECK</span>}
+                  {w.sendCount > 1 && <span className="flag sev-mid" title={`Partner sent this PO's 850 ${w.sendCount} times`}>sent {w.sendCount}×</span>}
+                  {w.unallocated && <span className="flag sev-mid">unallocated</span>}
                   {w.missed850 && <span className="flag sev-hi">MISSED? {w.age850}d old</span>}
                   {w.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {w.cancelDays}d</span>}
                   {w.cancelState === 'soon' && <span className="flag sev-mid">cancel in {w.cancelDays}d</span>}
@@ -577,6 +597,11 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                           onClick={(ev) => { ev.stopPropagation(); submitResolution(o, 'review') }}>
                     ⏸ Review
                   </button>
+                  <button className="btnGhost poQuickClose" title="Park as UNALLOCATED — the 850 arrived but units aren't allocated, so it can't go into NetSuite yet. Flags for re-check if the partner re-sends it changed."
+                          disabled={resolveBusy === o.businessNumber}
+                          onClick={(ev) => { ev.stopPropagation(); submitResolution(o, 'unallocated') }}>
+                    ⏸ Unallocated
+                  </button>
                   {review.ediTasks?.[o.businessNumber] === 'open'
                     ? <button className="btnGhost poQuickClose" title="A task is open for this PO — open Tasks"
                               onClick={(ev) => { ev.stopPropagation(); onNavigate?.('tasks') }}>◉ Task</button>
@@ -595,6 +620,17 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                   <span className="cust">{isOpen ? '▾' : '▸'}</span>
                 </div>
                 <div className="neededLine">→ {w.needed}</div>
+                {w.needsRecheck && (
+                  <div className="recheckStrip">
+                    <span className="recheckWhat">⟳ Re-sent {w.sendCount}× · changed since you handled it{w.recheckSince ? ` (${fmtD(w.recheckSince)})` : ''}:</span>
+                    <span className="recheckDiff">{w.recheckSummary.join(' · ')}</span>
+                    <button className="btnGhost" disabled={resolveBusy === o.businessNumber}
+                            title="I've re-checked this — clear the flag until the next changed re-send"
+                            onClick={(ev) => { ev.stopPropagation(); submitResolution(o, 'link') }}>
+                      ✓ Re-checked
+                    </button>
+                  </div>
+                )}
                 {o.netsuiteOrder && (
                   <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>
                 )}
@@ -644,6 +680,28 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
 
                     <NoteWidget docType="EDI_PO" docNumber={o.businessNumber} />
                     <DocLinks docType="EDI_PO" docNumber={o.businessNumber} selfLabel={o.tradingPartner} />
+
+                    {/* 850 version history — every re-send of this PO, with what
+                        changed at each step (Nima, 2026-07-29). */}
+                    {w.sendCount > 1 && (
+                      <div className="poVersions">
+                        <div className="hint" style={{ margin: '4px 0' }}>850 version history — {w.sendCount} sends (partner re-transmitted this PO):</div>
+                        {w.versions.map((v, i) => {
+                          const step = i > 0 ? summarizePoDiff(w.versionSteps[i - 1].diff) : null
+                          const units = v.totalUnits ?? (v.lineItems || []).reduce((s, l) => s + (l.qty || 0), 0)
+                          return (
+                            <div key={v.id} className={'verRow' + (i === w.versions.length - 1 ? ' verLatest' : '')}>
+                              <span className="verNum">v{i + 1}</span>
+                              <span className="cust">{fmtD(v.createdAt)}</span>
+                              <span className="verMeta">ship {fmtD(v.shipNotBefore)} → cancel {fmtD(v.cancelAfter)} · {units} units · {v.lineCount ?? (v.lineItems || []).length} lines</span>
+                              {step && (step.length
+                                ? <span className="verDiff">{step.map((s, k) => <span key={k} className="flag sev-mid">{s}</span>)}</span>
+                                : <span className="verDiff cust">no change</span>)}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
 
                     {!!o.linkGaps.length && (
                       <div className="allocPos">{o.linkGaps.map((g, i) => <div key={i} className="sev-hi">⚠ {g}</div>)}</div>

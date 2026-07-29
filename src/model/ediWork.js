@@ -14,6 +14,8 @@
 // NetSuite ref while it stays open, or closing it out entirely (with a note).
 // A resolution always wins over inference, and is always visibly flagged.
 
+import { poVersionInfo } from './ediPoDiff.js'
+
 const DAY = 86400000
 
 export const MISSED_AFTER_DAYS = 7 // 850 with no NetSuite order after this = presumed missed
@@ -107,13 +109,27 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   const reviewState = r?.reviewState || null
   const underReview = !closed && reviewState === 'in_review'
   const validated = reviewState === 'validated'
+  // 'unallocated' (Nima, 2026-07-29): parked with a reason — the 850 landed but
+  // the units aren't allocated, so it can't be entered into NetSuite yet.
+  // Behaves like in_review for gating (stop chasing 856/810), but the partner
+  // re-sends the same PO# once allocatable, which the version diff watches.
+  const unallocated = !closed && reviewState === 'unallocated'
+  const parked = underReview || unallocated
+
+  // ── re-sent-PO version diff + re-check (Nima, 2026-07-29) ────────────────────
+  // A partner re-transmitting the same PO# (new 850, same business_number) is
+  // how units / the ship window change. After the user has acted on a PO (its
+  // resolution's updated_at), a LATER 850 that actually differs flips it to
+  // "re-check" — the answer to "will it tell me to look again when it comes
+  // back". A no-op re-send never triggers it.
+  const version = poVersionInfo(order, r?.updatedAt || null, !!r)
 
   // ── ready to close (Phase C) ────────────────────────────────────────────────
   // Docs-complete (810 exists) with nothing broken and no link gaps — the old
   // auto-close condition. No longer closes; it parks here for an explicit
   // Verify & close. `verify` says whether the 856 + 810 actually landed.
   const readyToClose =
-    !closed && !underReview && order.bucket !== 'NO_850_FOUND' &&
+    !closed && !parked && order.bucket !== 'NO_850_FOUND' &&
     order.stageRank >= 4 && !order.hasIssue && !(order.linkGaps?.length)
   const verify = readyToClose ? verifyDocs(order) : null
 
@@ -142,6 +158,12 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   let needs856 = false, needs810 = false
   if (closed) {
     needed = null
+  } else if (version.needsRecheck) {
+    // a later, CHANGED 850 arrived after the user parked/validated/closed it
+    needed = `⟳ Re-check — partner re-sent this PO (${version.sendCount}×) with changes since you handled it: ${version.recheckSummary.join('; ')}`
+  } else if (unallocated) {
+    // parked with a reason — nothing to do until it re-sends allocated
+    needed = 'Unallocated — parked until units allocate; will flag on a changed re-send'
   } else if (underReview) {
     // parked — the only thing to do is validate it (confirm its NetSuite order)
     needed = (order.netsuiteOrder || r?.netsuiteRef)
@@ -192,11 +214,20 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     cancelDays,
     reviewState,
     underReview,
+    unallocated,
+    parked,
     validated,
     readyToClose,
     verify,
     needs856,
     needs810,
+    // version diff (re-sent POs)
+    sendCount: version.sendCount,
+    versions: version.versions,
+    versionSteps: version.steps,
+    needsRecheck: version.needsRecheck,
+    recheckSummary: version.recheckSummary,
+    recheckSince: version.recheckSince,
   }
 }
 
@@ -210,7 +241,7 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
   for (const o of withWork) {
     const key = o.tradingPartner || '(unknown partner)'
     if (!partners.has(key)) {
-      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, readyToClose: 0, needs856: 0, needs810: 0 })
+      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0 })
     }
     const p = partners.get(key)
     if (o.work.closed) p.closed++
@@ -219,6 +250,8 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     if (o.work.cancelState) p.cancelDanger++
     if (o.hasIssue && !o.work.closed) p.issues++
     if (o.work.underReview) p.inReview++
+    if (o.work.unallocated) p.unallocated++
+    if (o.work.needsRecheck) p.recheck++
     if (o.work.readyToClose) p.readyToClose++
     if (o.work.needs856) p.needs856++
     if (o.work.needs810) p.needs810++
@@ -231,10 +264,11 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     (t, p) => ({
       open: t.open + p.open, closed: t.closed + p.closed, missed: t.missed + p.missed,
       cancelDanger: t.cancelDanger + p.cancelDanger, inReview: t.inReview + p.inReview,
+      unallocated: t.unallocated + p.unallocated, recheck: t.recheck + p.recheck,
       readyToClose: t.readyToClose + p.readyToClose,
       needs856: t.needs856 + p.needs856, needs810: t.needs810 + p.needs810,
     }),
-    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, readyToClose: 0, needs856: 0, needs810: 0 },
+    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0 },
   )
 
   return { orders: withWork, partners: partnerList, totals }

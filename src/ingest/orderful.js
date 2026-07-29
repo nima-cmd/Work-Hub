@@ -5,9 +5,9 @@
 // cursor-based, newest first, 100 per page (see List Transactions docs).
 
 import { pool } from '../db.js'
-import { extractPoDates } from './orderfulDates.js'
+import { extractPoDates, extractPoLines, summarizePoLines } from './orderfulDates.js'
 
-export { extractPoDates } from './orderfulDates.js'
+export { extractPoDates, extractPoLines } from './orderfulDates.js'
 
 const API_BASE = 'https://api.orderful.com/v3/transactions'
 
@@ -101,26 +101,32 @@ async function fetchTransactionMessage(apiKey, id) {
 }
 
 
-// Only 850s carry these dates, and the message body is a second API call per
-// transaction. We gate on po_dates_checked (not "both dates still NULL") so a
-// partner that carries only ONE of the two dates — e.g. Nordstrom has a cancel
-// but no start, Shopbop the reverse — still gets its message fetched exactly
-// once. The old "both NULL" gate skipped those partials entirely, so their
-// missing date could never fill. Mirrors the po_refs_checked pattern below.
-export async function backfillPoDates(apiKey, db = pool) {
+// Everything an 850 hides in its /message body — ship-window dates AND line
+// items (for version diffing) — pulled in ONE fetch per transaction. Gated on
+// po_dates_checked OR po_lines_checked so: a partner carrying only one of the
+// two dates still gets fetched once (Nordstrom cancel-only, Shopbop start-only
+// — the old "both NULL" gate skipped those), AND 850s stored before line
+// parsing existed get back-filled exactly once. Mirrors po_refs_checked.
+export async function backfillPo850Details(apiKey, db = pool) {
   const { rows } = await db.query(
-    `SELECT id FROM edi_transactions WHERE type = '850_PURCHASE_ORDER' AND po_dates_checked = false`,
+    `SELECT id FROM edi_transactions
+     WHERE type = '850_PURCHASE_ORDER' AND (po_dates_checked = false OR po_lines_checked = false)`,
   )
   let n = 0
   for (const { id } of rows) {
     const message = await fetchTransactionMessage(apiKey, id)
     const { shipNotBefore, cancelAfter } = extractPoDates(message)
-    // Stamp checked regardless, so a genuinely date-less 850 isn't re-fetched forever.
+    const lineItems = extractPoLines(message)
+    const { totalUnits, lineCount } = summarizePoLines(lineItems)
+    // Stamp both checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched forever.
     await db.query(
-      `UPDATE edi_transactions SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true WHERE id = $1`,
-      [id, shipNotBefore, cancelAfter],
+      `UPDATE edi_transactions
+       SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true,
+           line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true
+       WHERE id = $1`,
+      [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount],
     )
-    if (shipNotBefore || cancelAfter) n++
+    if (shipNotBefore || cancelAfter || lineItems.length) n++
   }
   return { checked: rows.length, updated: n }
 }
@@ -187,11 +193,11 @@ export async function fetchEdiDocumentPoRefs(db = pool) {
 export async function syncOrderful(apiKey, db = pool) {
   const transactions = await fetchOrderfulTransactions(apiKey)
   const { count, insertedIds } = await loadEdiTransactions(transactions, db)
-  const dates = await backfillPoDates(apiKey, db)
+  const po850 = await backfillPo850Details(apiKey, db)
   const poRefs = await backfillDocumentPoRefs(apiKey, db)
   // insertedIds = transactions never stored before this sync — the caller
   // (syncEdi) turns the new LIVE 850s among them into arrival alerts + tasks.
-  return { fetched: transactions.length, upserted: count, insertedIds, poDates: dates, poRefs }
+  return { fetched: transactions.length, upserted: count, insertedIds, po850, poRefs }
 }
 
 export async function fetchEdiTransactions(db = pool) {
@@ -199,7 +205,8 @@ export async function fetchEdiTransactions(db = pool) {
     `SELECT id, type, direction, business_number AS "businessNumber", trading_partner AS "tradingPartner",
             stream, validation_status AS "validationStatus", delivery_status AS "deliveryStatus",
             acknowledgment_status AS "acknowledgmentStatus", created_at AS "createdAt",
-            last_updated_at AS "lastUpdatedAt", ship_not_before AS "shipNotBefore", cancel_after AS "cancelAfter"
+            last_updated_at AS "lastUpdatedAt", ship_not_before AS "shipNotBefore", cancel_after AS "cancelAfter",
+            line_items AS "lineItems", total_units AS "totalUnits", line_count AS "lineCount"
      FROM edi_transactions
      WHERE stream = 'LIVE'   -- TEST-stream docs stay stored but never enter the
                              -- review: a test 850 must not read as a missed PO
