@@ -12,6 +12,25 @@ import stays as an always-available **fallback** — both paths feed the same
 > role**, so even a bug can't write. The only real considerations are API
 > governance (a few scheduled queries/day is trivial) and least-privilege auth.
 
+## Build status (2026-07-29)
+
+- ✅ **`src/ingest/netsuiteApi.js`** — the read-only SuiteQL client is built and
+  unit-tested (`test/netsuiteApi.test.js`, 8 tests): OAuth 1.0a TBA HMAC-SHA256
+  signing (signature-base construction verified against a hand-computed vector),
+  account→host/realm normalisation, RFC-3986 encoding, limit/offset pagination,
+  401→`needsAuth`, and **soft-disable** when the `NS_*` env vars are absent. No
+  live call happens until the creds land — safe to merge now.
+- ⏳ **Next (needs the creds, or MCP column-proofing first):** the SuiteQL query
+  strings + row→record mappers for SOs / IFs / invoices (matching the CSV
+  mappers' output shape so `buildPipeline`/`loadToDb` are untouched), the
+  `syncFromNetsuite()` orchestration + cron, and the freshness banner. The SO
+  *header* fields are proven; the extra joins (line-level location/qty, the DC /
+  store / ATS custom fields, the linked-invoice sub-fields) should each be proven
+  via a SuiteQL query before mapping — I didn't want to guess column names blind.
+- ⏳ **`closed / Fully-Billed = done + credit`** pipeline rule — pairs with the SO
+  pull; deferred so the shipped-$ credit logic is verified against real data
+  rather than built blind.
+
 ## Architecture
 
 ```
