@@ -176,6 +176,14 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .badge.transmission { background: rgba(59,130,246,0.18); color: var(--lo); border: 1px solid rgba(59,130,246,0.5); }
 .krow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 
+/* Gmail label chips on a transmission */
+.labelChips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 2px; }
+.labelChip {
+  font-size: 11px; padding: 2px 8px; border-radius: 11px;
+  background: rgba(88,166,255,0.12); color: #a9c8ff; border: 1px solid rgba(88,166,255,0.4);
+  white-space: nowrap;
+}
+
 /* calendar (agenda) */
 .calendar { max-width: 980px; }
 .calGroup { margin-bottom: 22px; }

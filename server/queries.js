@@ -40,7 +40,7 @@ import { consolidateRouting } from '../src/model/routing.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
-  fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, dismissQuestEmail, setQuestEmailNote,
+  fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, setQuestEmailLabelsLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, updateTaskSchedule, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchDayPlan, setDayPlanOrder, resetDayPlanOrder, setDayPlanItemDone,
@@ -1430,7 +1430,10 @@ export async function assignQuestEmail({ id, characterId, fromAddress }) {
 }
 
 export async function applyQuestEmailLabel({ id, label }) {
-  await applyLabel(id, label) // Gmail write — label_ids refresh on next sync
+  // Gmail write returns the message's updated label id set — persist it locally
+  // so the chip shows on this response, not only after the next full sync.
+  const { labelIds } = await applyLabel(id, label)
+  try { await setQuestEmailLabelsLocal(id, labelIds) } catch { /* next sync reconciles */ }
   return getQuestEmails()
 }
 
