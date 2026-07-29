@@ -168,6 +168,23 @@ export async function unresolveEdiPo(businessNumber) {
   return res.json()
 }
 
+// New-850 arrival alerts — undismissed POs the cron detected as freshly arrived.
+export async function fetchEdiArrivals() {
+  const res = await fetch('/api/edi/arrivals')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// transactionId omitted → dismiss all (clears the whole banner).
+export async function dismissEdiArrival(transactionId) {
+  const res = await fetch('/api/edi/arrivals/dismiss', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(transactionId ? { transactionId } : {}),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Manual override when an 856/810 can't auto-link to its 850.
 export async function linkEdiTransaction({ transactionId, businessNumber, note }) {
   const res = await fetch('/api/edi/link', {

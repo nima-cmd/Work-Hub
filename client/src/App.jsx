@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival } from './api.js'
 import { fmtAge } from './lib.jsx'
 import CommandCenter from './views/CommandCenter.jsx'
 import FlightDeck from './views/FlightDeck.jsx'
@@ -122,12 +122,16 @@ export default function App() {
   const [credits, setCredits] = useState(null)
   const [importing, setImporting] = useState(false)
   const [notice, setNotice] = useState(null)
+  const [arrivals, setArrivals] = useState([])
   const fileRef = useRef(null)
 
   function refresh() {
     fetchOrders().then(setOrders).catch((e) => setErr(e.message))
     fetchFreshness().then(setFresh).catch(() => {})
     fetchCredits().then(setCredits).catch(() => {})
+    // New-850 arrival alerts (the cron pulls Orderful and flags fresh POs) —
+    // best-effort; the banner just doesn't show if it can't load.
+    fetchEdiArrivals().then(setArrivals).catch(() => {})
     // Open quest_tasks merge into Dashboard/Kanban's attention view, and the
     // activity journal folds into Calendar (Nima, 2026-07-15) — both
     // best-effort: the app still works if either fails to load.
@@ -162,6 +166,12 @@ export default function App() {
     } finally {
       setImporting(false)
     }
+  }
+
+  async function onDismissArrivals() {
+    const prev = arrivals
+    setArrivals([]) // optimistic
+    try { await dismissEdiArrival() } catch { setArrivals(prev) }
   }
 
   const Active = VIEWS.find((v) => v.key === view).C
@@ -210,6 +220,25 @@ export default function App() {
           </div>
         )}
         {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
+        {arrivals.length > 0 && (
+          <div className="banner arrival">
+            <span className="arrivalGlyph">🆕</span>
+            <span className="arrivalMsg">
+              {arrivals.length} new EDI PO{arrivals.length === 1 ? '' : 's'} arrived:{' '}
+              {arrivals.slice(0, 4).map((a, i) => (
+                <span key={a.transactionId}>
+                  {i > 0 && ', '}
+                  <strong>{a.businessNumber || a.transactionId}</strong>
+                  {a.tradingPartner ? ` (${a.tradingPartner.trim()})` : ''}
+                </span>
+              ))}
+              {arrivals.length > 4 && ` +${arrivals.length - 4} more`}
+              {' — each has a task; enter into NetSuite.'}
+            </span>
+            <button className="arrivalGo" onClick={() => setView('edi')}>Open EDI →</button>
+            <button className="arrivalX" onClick={onDismissArrivals} title="Dismiss (keeps the tasks)">✕</button>
+          </div>
+        )}
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS} onNavigate={setView} onRefresh={refresh} />}
