@@ -1038,7 +1038,7 @@ export async function searchEmailsForLink(q, db = pool) {
 export async function searchQuestEmails(q, db = pool) {
   const { rows } = await db.query(
     `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet, note,
-            received_at AS "receivedAt", is_unread AS "isUnread", dismissed, character_id AS "characterId"
+            received_at AS "receivedAt", is_unread AS "isUnread", dismissed, label_ids AS "labelIds", character_id AS "characterId"
      FROM quest_emails
      WHERE subject ILIKE $1 OR snippet ILIKE $1 OR body ILIKE $1 OR note ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
      ORDER BY received_at DESC LIMIT 100`,
@@ -1071,6 +1071,12 @@ export async function assignQuestEmailCharacter({ id, characterId, fromAddress }
 // Called after a successful Gmail-side markMessageRead so local state mirrors it.
 export async function markQuestEmailReadLocal(id, db = pool) {
   await db.query('UPDATE quest_emails SET is_unread = false WHERE id = $1', [id])
+}
+
+// Overwrite the stored label_ids for a message — used right after an apply so
+// the new label is visible without waiting for the next full inbox sync.
+export async function setQuestEmailLabelsLocal(id, labelIds, db = pool) {
+  await db.query('UPDATE quest_emails SET label_ids = $2 WHERE id = $1', [id, labelIds || []])
 }
 
 // App-only hide — never touches Gmail. Mirrors dismissOrderConfirmation/dismissPurchaseOrder.

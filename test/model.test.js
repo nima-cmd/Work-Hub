@@ -26,6 +26,7 @@ import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/saved
 import { consolidateRouting } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
+import { resolveLabelChips } from '../src/model/gmailLabels.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
   const rows = parseCsv('a,b,b\n"x,y",2,3\n')
@@ -964,4 +965,23 @@ test('extractPoDates: a partial 850 (only a cancel qualifier) fills one date, le
 
 test('extractPoDates: no DTM segments → both null, no throw', () => {
   assert.deepEqual(extractPoDates({}), { shipNotBefore: null, cancelAfter: null })
+})
+
+test('resolveLabelChips: drops noise, names system + user labels, sorts', () => {
+  const nameById = { Label_7: 'Bloomingdale’s', Label_3: 'Nordstrom' }
+  const chips = resolveLabelChips(
+    ['INBOX', 'UNREAD', 'CATEGORY_UPDATES', 'IMPORTANT', 'Label_7', 'Label_3'],
+    nameById,
+  )
+  assert.deepEqual(chips, [
+    { id: 'Label_7', name: 'Bloomingdale’s' },
+    { id: 'IMPORTANT', name: 'Important' },
+    { id: 'Label_3', name: 'Nordstrom' },
+  ])
+})
+
+test('resolveLabelChips: skips an unresolvable user label, tolerates empty input', () => {
+  assert.deepEqual(resolveLabelChips(['Label_99'], {}), []) // unknown Label_* dropped, not shown as gibberish
+  assert.deepEqual(resolveLabelChips(), [])
+  assert.deepEqual(resolveLabelChips(['STARRED'], {}), [{ id: 'STARRED', name: 'Starred' }])
 })
