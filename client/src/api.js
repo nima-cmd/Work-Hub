@@ -762,3 +762,22 @@ export async function fetchCatalogueGaps() {
 }
 export const catalogueAddFileUrl = () => '/api/catalogue/add-file.csv'
 
+// Scanner → Drive (Nima, 2026-07-29). Segment the scan client-side, ask the
+// server for the filing plan, then upload each split.
+export async function planScanFiling(segments) {
+  const res = await fetch('/api/scan/plan', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segments }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
+  const res = await fetch('/api/scan/file-to-drive', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ partner, pos, filename, pdfBase64 }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+

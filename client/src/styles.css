@@ -2133,3 +2133,38 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .fpReorder { grid-column: 4; }
 }
 
+
+/* Scan Bay: mode toggle + Scan→Drive (Nima, 2026-07-29) */
+.bayModeToggle { display: flex; gap: 8px; margin-bottom: 14px; }
+.bayModeBtn {
+  background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.bayModeBtn.active { color: var(--text); background: var(--panel2); border-color: var(--accent); }
+
+.scanToDrive { max-width: 760px; }
+.s2dHead h3 { margin: 0 0 4px; }
+.s2dHead .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.s2dPick { display: inline-block; }
+.s2dFile { color: var(--muted); font-size: 13px; margin: 8px 0; }
+.s2dPlan { margin-top: 16px; }
+.s2dMaster {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.s2dRowHead { font-weight: 600; margin: 10px 0 6px; }
+.s2dRowHead .muted, .s2dPlan .muted, .s2dResult .muted { color: var(--muted); font-weight: 400; }
+.s2dBolInput { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); margin-top: 8px; max-width: 340px; }
+.s2dBolInput input {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  padding: 7px 10px; border-radius: 7px; font-size: 14px;
+}
+.s2dTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 14px; }
+.s2dTable th, .s2dTable td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.s2dTable th { color: var(--muted); font-weight: 500; }
+.s2dResults { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.s2dResult { font-size: 13px; padding: 6px 10px; border-radius: 7px; background: var(--panel); border: 1px solid var(--line); }
+.s2dResult.ok { border-color: #2ea04366; }
+.s2dResult.error { border-color: var(--hi); }
+.s2dResult.skipped { opacity: 0.7; }
+.s2dLink { color: var(--accent); margin-left: 6px; }
