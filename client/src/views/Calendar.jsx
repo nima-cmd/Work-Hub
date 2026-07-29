@@ -62,6 +62,9 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
         {cal.needsReauth && (
           <div className="calOverdueNote">📅 Connect Google Calendar — re-run <code>connect-gmail.js</code> to grant calendar access.</div>
         )}
+        {cal.apiDisabled && (
+          <div className="calOverdueNote">📅 Calendar access is granted, but the Google Calendar API is disabled for this project — enable it in the Google Cloud console (APIs &amp; Services → Library → Google Calendar API), wait a few minutes, then reload.</div>
+        )}
         {openTasks.map((t) => {
           const img = imagesFor(t.characterId)[0]
           return (
