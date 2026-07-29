@@ -3,7 +3,7 @@ import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fet
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
 import { spaceBackdrop } from '../data/spaceBackdrop.js'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, taskToCard, docRef, docDate, SourceBadge, Flags, LinkedText, ChannelTag, channelMeta } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, docRef, docDate, SourceBadge, Flags, LinkedText, ChannelTag, channelMeta } from '../lib.jsx'
 import { speakLine, taskContext } from '../../../src/model/dialogue.js'
 import { imagesFor } from '../data/characterImages.js'
 
@@ -284,7 +284,7 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
   const [edi, setEdi] = useState(null)
   const [credits, setCredits] = useState(null)
   const [crew, setCrew] = useState([])
-  const [unreadComms, setUnreadComms] = useState(null)
+  const [comms, setComms] = useState(null)
 
   useEffect(() => {
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
@@ -292,8 +292,11 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
     fetchEdiReview().then(setEdi).catch(() => setEdi(null))
     fetchCredits().then(setCredits).catch(() => {})
     fetchAffection().then(setCrew).catch(() => {})
-    fetchQuestEmails().then((r) => setUnreadComms((r.emails || []).filter((e) => e.isUnread).length)).catch(() => {})
+    // Keep the unread comms themselves (not just the count) — the Transmissions
+    // sector now lists them, and the core badge reads their length.
+    fetchQuestEmails().then((r) => setComms((r.emails || []).filter((e) => e.isUnread))).catch(() => setComms([]))
   }, [])
+  const unreadComms = comms?.length ?? null
 
   // ── orders by stage: the "status of all orders" answer ─────────────────────
   const byStage = STAGE_ORDER.map((s) => {
@@ -306,12 +309,13 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
     }
   }).filter((x) => x.n)
 
-  // ── attention queue (orders + tasks merged, worst first) ───────────────────
+  // ── attention queue: ORDERS only (Nima, 2026-07-28) ────────────────────────
+  // Tasks and transmissions used to be blended in here; they now have their own
+  // sectors below, so this stays a clean "orders needing attention" queue.
   const openTasks = tasks.filter((t) => t.status === 'open')
-  const attention = [
-    ...orders.filter((o) => o.severity > 0),
-    ...openTasks.map(taskToCard),
-  ].sort((a, b) => b.severity - a.severity || (b.daysPending || 0) - (a.daysPending || 0))
+  const attention = orders
+    .filter((o) => o.severity > 0)
+    .sort((a, b) => b.severity - a.severity || (b.daysPending || 0) - (a.daysPending || 0))
   const topAttention = attention.slice(0, 8)
 
   // ── task command: WHERE each task belongs (origin groups) ──────────────────
@@ -464,8 +468,8 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
           )}
         </Sector>
 
-        {/* ── task command: what belongs where ── */}
-        <Sector area="tasks" scroll={560} title="TASK COMMAND" count={openTasks.length} onOpen={() => onNavigate('transmissions')} openLabel="transmissions">
+        {/* ── tasks: open work, grouped by where it belongs ── */}
+        <Sector area="tasks" scroll={560} title="TASKS" count={openTasks.length} onOpen={() => onNavigate('tasks')} openLabel="tasks">
           {taskGroups.map((g) => (
             <div key={g.key} className="taskGroup">
               <div className="taskGroupHead">{g.label} <span className="sectorCount">{g.items.length}</span></div>
@@ -473,6 +477,21 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
             </div>
           ))}
           {!openTasks.length && <div className="empty">No open tasks — the crew is idle.</div>}
+        </Sector>
+
+        {/* ── transmissions: the raw comm relay (unread), its own sector now ── */}
+        <Sector area="comms" scroll={300} title="TRANSMISSIONS" count={unreadComms ?? undefined}
+                tone={unreadComms ? 'hot' : undefined} onOpen={() => onNavigate('transmissions')} openLabel="relay">
+          {comms == null && <div className="empty">Opening the relay…</div>}
+          {comms != null && !comms.length && <div className="empty">No unread transmissions — inbox clear 📡</div>}
+          {(comms || []).slice(0, 6).map((e) => (
+            <button key={e.id} className="commRow" onClick={() => onNavigate('transmissions')}
+                    title={e.subject || ''}>
+              <span className="commFrom">{e.fromName || e.fromAddress || 'Unknown'}</span>
+              <span className="commSubj">{e.subject || '(no subject)'}</span>
+            </button>
+          ))}
+          {(comms?.length || 0) > 6 && <div className="moreLine">+ {comms.length - 6} more in Transmissions</div>}
         </Sector>
       </div>
     </div>

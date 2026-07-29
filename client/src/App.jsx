@@ -15,6 +15,7 @@ import Tasks from './views/Tasks.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
 import Datapad from './views/Datapad.jsx'
+import Ledger from './views/Ledger.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
 import ScanBay from './views/ScanBay.jsx'
 import CustodyRegister from './views/CustodyRegister.jsx'
@@ -100,6 +101,8 @@ const VIEWS = [
   // Dedicated task list (Nima, 2026-07-21) — a peer to Transmissions/EDI; the
   // single home task clicks jump to and where SO/EDI "task exists" links land.
   { key: 'tasks', label: 'Tasks', C: Tasks },
+  // Chronicle of completed work — done tasks by completion day (Nima, 2026-07-28).
+  { key: 'ledger', label: 'Ledger', C: Ledger },
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
   { key: 'crew', label: 'Crew', C: Crew },
   { key: 'datapad', label: 'Datapad', C: Datapad },
