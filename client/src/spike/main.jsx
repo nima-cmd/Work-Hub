@@ -132,4 +132,8 @@ function mountControls() {
   }
 }
 
-runSynthetic()
+// ?noauto skips the synthetic auto-run so a manual/real-sample run has the main
+// thread to itself.
+window.processScan = processScan
+if (!location.search.includes('noauto')) runSynthetic()
+else { mountControls(); log('<p class="muted">Auto-run skipped (?noauto). Use the file input, or window.processScan(bytes,{dpi}).</p>') }

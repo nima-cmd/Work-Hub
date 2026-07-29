@@ -64,14 +64,21 @@ export async function decodeQr(imageData) {
 }
 
 // Classify a QR payload into a filing target.
-//   EDI      → `DC:<po>:<abbrev>`     → { kind:'edi', po, dc }
-//   boutique → (format TBD)           → { kind:'boutique', raw }
-// Unknown/empty payloads are passed through so the caller can surface them.
-export function classifyQr(raw) {
+//   EDI (per-DC)   → `DC:<po>:<abbrev>`  → { kind:'edi', po, dc }
+//   EDI (PO-level) → bare PO number      → { kind:'edi', po, dc:null }
+//   boutique       → (format TBD)        → { kind:'boutique', raw }
+// The old EDI labels encode just the PO number with no DC (seen live on the real
+// Bloomingdale's scan, pages 49-50: `7527064`, `7776929`) — same PO-level
+// fallback Scan Bay's server uses. `knownPos` (a Set of PO strings from the
+// loaded orders) disambiguates a bare number from a boutique QR when available;
+// without it, an all-digit payload is assumed to be a PO. Refine the boutique
+// branch once that QR's real format is known.
+export function classifyQr(raw, { knownPos } = {}) {
   const s = String(raw || '').trim()
   const dc = /^DC:([^:]+):(.*)$/.exec(s)
   if (dc) return { kind: 'edi', po: dc[1].trim(), dc: (dc[2] || '').trim() || null, raw: s }
   if (!s) return { kind: 'empty', raw: s }
+  if (knownPos ? knownPos.has(s) : /^\d{5,}$/.test(s)) return { kind: 'edi', po: s, dc: null, raw: s }
   return { kind: 'boutique', raw: s } // refine once the boutique format is known
 }
 
@@ -80,13 +87,13 @@ export function classifyQr(raw) {
 // returned as an `orphan` group so nothing is silently dropped.
 //   pageResults: [{ pageNum, qr }]  (qr = decoded string or null)
 // → { documents: [{ qr, classify, pageNums:[...] }], orphanPages:[...] }
-export function segmentPages(pageResults) {
+export function segmentPages(pageResults, { knownPos } = {}) {
   const documents = []
   const orphanPages = []
   let current = null
   for (const { pageNum, qr } of pageResults) {
     if (qr) {
-      current = { qr, classify: classifyQr(qr), pageNums: [pageNum] }
+      current = { qr, classify: classifyQr(qr, { knownPos }), pageNums: [pageNum] }
       documents.push(current)
     } else if (current) {
       current.pageNums.push(pageNum)
@@ -109,13 +116,13 @@ export async function splitPdf(pdfBytes, pageNums) {
 
 // End-to-end: bytes → per-document splits, decoded + classified.
 // Returns { documents:[{ qr, classify, pageNums, bytes }], orphanPages, pageResults }.
-export async function processScan(pdfBytes, { dpi = 200 } = {}) {
+export async function processScan(pdfBytes, { dpi = 200, knownPos } = {}) {
   const pages = await rasterizePages(pdfBytes, { dpi })
   const pageResults = []
   for (const p of pages) {
     pageResults.push({ pageNum: p.pageNum, qr: await decodeQr(p.imageData) })
   }
-  const { documents, orphanPages } = segmentPages(pageResults)
+  const { documents, orphanPages } = segmentPages(pageResults, { knownPos })
   for (const doc of documents) doc.bytes = await splitPdf(pdfBytes, doc.pageNums)
   return { documents, orphanPages, pageResults }
 }
