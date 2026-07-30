@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS invoices (
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
 
+-- Invoice TOTAL, distinct from amount_remaining (2026-07-30). The shipped-$
+-- credit (stampShippedValue) valued a shipment by what was still OWED at ship
+-- time — fine while Naghedi ships FOB/pre-payment and we observe it unpaid, but
+-- it credits $0 for any shipment we first see after payment landed (exactly the
+-- recently-closed orders the live NetSuite pull now surfaces). The total is the
+-- stable value, so it's the fallback. Populated from the live pull's
+-- `foreigntotal`; nullable for rows that predate this.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS amount_total NUMERIC;
+
 -- ── Purchase Orders (inbound supply) — from the PO-receiving saved search ─────
 CREATE TABLE IF NOT EXISTS purchase_orders (
   po_number        TEXT,
