@@ -38,6 +38,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
@@ -2035,3 +2036,12 @@ export async function getTaskActivity(date) {
 }
 
 export { NETSUITE_DOC_TYPES }
+
+// ── Did the document actually reach the partner? (Nima, 2026-08-01) ──────────
+// See src/model/ediDelivery.js. Reads the synced Orderful transactions and splits
+// the two silent failures — never delivered vs delivered-and-refused — keeping
+// ASNs apart from invoices.
+export async function getEdiDeliveryGaps() {
+  const txns = await fetchEdiTransactions()
+  return computeEdiDeliveryGaps(txns)
+}

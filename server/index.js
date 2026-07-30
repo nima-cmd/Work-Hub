@@ -18,7 +18,7 @@ import {
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive, getLabelGaps,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
-  getCatalogueGaps, buildCatalogueAddCsv,
+  getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -998,6 +998,18 @@ app.get('/api/quest-search', async (req, res) => {
     const q = (req.query.q || '').trim()
     if (!q) return res.json({ emails: [], tasks: [] })
     res.json(await searchQuestArchive(q))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Outbound EDI documents that never reached the partner (Nima, 2026-08-01) —
+// ASNs and invoices sitting undelivered in Orderful, plus any the partner
+// rejected. Silent in both NetSuite and Orderful until you go looking.
+app.get('/api/edi-delivery-gaps', async (_req, res) => {
+  try {
+    res.json(await getEdiDeliveryGaps())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

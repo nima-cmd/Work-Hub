@@ -25,6 +25,7 @@ import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
+import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
@@ -1093,4 +1094,53 @@ test('mapEdiPackageRows drops cartons whose fulfilment has a junk PO-DC', () => 
   assert.equal(rows.length, 1)
   assert.equal(rows[0].weight, 10) // the junk rows never inflate a real group
   assert.equal(orphanCartons, 2)
+})
+
+// ── outbound EDI delivery gaps ───────────────────────────────────────────────
+// Nima's ASNs read VALID in Orderful but never delivered, while NetSuite marked
+// them synced — silent on both sides. These lock the split that makes it visible.
+
+const asn = (o) => ({
+  type: '856_SHIP_NOTICE_MANIFEST', direction: 'OUT', stream: 'LIVE',
+  tradingPartner: "Bloomingdale's", ...o,
+})
+const NOW = new Date('2026-07-30T22:11:00Z')
+
+test('classifyEdiDelivery: undelivered past the grace window is stuck, inside it is in flight', () => {
+  const fresh = asn({ deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' })
+  const old = asn({ deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' })
+  assert.equal(classifyEdiDelivery(fresh, NOW).state, 'in_flight') // 46 min — could still land
+  assert.equal(classifyEdiDelivery(old, NOW).state, 'stuck')
+})
+
+test('classifyEdiDelivery: delivered-but-rejected is refused, not stuck — a re-send is the wrong fix', () => {
+  const r = classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }), NOW)
+  assert.equal(r.state, 'refused')
+  assert.match(r.reason, /REJECTED/)
+  assert.equal(classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED' }), NOW).state, 'ok')
+})
+
+test('computeEdiDeliveryGaps keeps ASNs, invoices and the two failures unlumped', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: 'OLD1', deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' }),
+    asn({ id: '2', businessNumber: 'NEW1', deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' }),
+    asn({ id: '3', businessNumber: 'REJ1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }),
+    { ...asn({ id: '4', businessNumber: 'INV1', deliveryStatus: 'PENDING', createdAt: '2025-10-21T00:00:00Z' }), type: '810_INVOICE' },
+  ], NOW)
+  assert.deepEqual(g.counts, {
+    asnStuck: 1, invoiceStuck: 1, asnRefused: 1, invoiceRefused: 0, asnInFlight: 1, invoiceInFlight: 0,
+  })
+  // A stuck invoice must never be counted as a stuck ASN — different urgency.
+  assert.equal(g.stuck.asn[0].businessNumber, 'OLD1')
+  assert.equal(g.stuck.invoice[0].businessNumber, 'INV1')
+  assert.equal(g.oldestAsnStuck.businessNumber, 'OLD1')
+  assert.equal(g.oldestAsnStuck.ageDays, 568)
+})
+
+test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
+  const g = computeEdiDeliveryGaps([
+    { ...asn({ id: '1', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), direction: 'IN' },
+    { ...asn({ id: '2', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), stream: 'TEST' },
+  ], NOW)
+  assert.equal(g.counts.asnStuck, 0) // a test ASN must never raise a real alert
 })
