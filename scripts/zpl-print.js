@@ -56,6 +56,11 @@ const port = Number(valueFlag('--port') || DEFAULT_PORT)
 const check = boolFlag('--check')
 const peek = boolFlag('--peek')
 const force = boolFlag('--force')
+// Delete the file once it has printed (Nima, 2026-07-30): NetSuite keeps the ZPL
+// and can re-issue it, so a local copy is just clutter — his DropPrint folder was
+// on an external drive and he'd rather nothing accumulated at all. Only ever
+// deletes after a CONFIRMED send; a refused or failed job is always kept.
+const del = boolFlag('--delete')
 // --watch is optional-value: bare means ~/Downloads, else the given dir.
 const watchDir = args.includes('--watch') ? valueFlag('--watch') : null
 const target = args[0]
@@ -132,6 +137,19 @@ async function printFile(file, { force = false } = {}) {
   await send(buffer)
   console.log(`✅ sent to ${host}:${port} — ${info.labels || 1} label(s) should print`)
   log(`PRINTED ${name} ${info.kb}KB labels=${info.labels} -> ${host}:${port}`)
+
+  // Only reached on a confirmed send — a refusal returned earlier and a failure
+  // threw, so a file is never deleted unless the printer actually took it.
+  if (del && file !== '-') {
+    try {
+      fs.unlinkSync(file)
+      console.log(`🗑  deleted ${name} (NetSuite keeps the original)`)
+      log(`DELETED ${name}`)
+    } catch (e) {
+      console.log(`⚠️  printed but could not delete ${name}: ${e.message}`)
+      log(`DELETE-FAILED ${name}: ${e.message}`)
+    }
+  }
   return true
 }
 
@@ -150,6 +168,7 @@ if (watchDir) {
   const r = await probe()
   console.log(r.ok ? `✅ printer ${host}:${port} reachable` : `⚠️  printer ${host}:${port} NOT reachable (${r.why}) — will still watch`)
   console.log(`👀 watching ${dir} for .zpl files — Ctrl-C to stop`)
+  console.log(del ? '   files are DELETED after they print' : '   files are kept (add --delete to discard after printing)')
   console.log(`   log: ${LOG}`)
   const seen = new Set()
   fs.watch(dir, async (_event, filename) => {
@@ -187,5 +206,6 @@ if (watchDir) {
   cat label.zpl | node scripts/zpl-print.js -   from stdin
 
   --host H --port P   override the printer
-  --force             send even if it doesn't look like ZPL`)
+  --force             send even if it doesn't look like ZPL
+  --delete            delete each file once it has printed (NetSuite keeps the ZPL)`)
 }
