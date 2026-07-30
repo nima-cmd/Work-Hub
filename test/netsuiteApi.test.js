@@ -94,9 +94,11 @@ test('runSuiteQL: soft-disables with no creds (never throws)', async () => {
 
 test('runSuiteQL: paginates until hasMore=false and concatenates rows', async () => {
   const calls = []
+  // totalResults is deliberately a LIE here (NetSuite reports pageSize×1000 in
+  // real life) — the client must ignore it and trust hasMore instead.
   const pages = [
-    { items: [{ a: 1 }, { a: 2 }], hasMore: true, totalResults: 3 },
-    { items: [{ a: 3 }], hasMore: false, totalResults: 3 },
+    { items: [{ a: 1 }, { a: 2 }], hasMore: true, totalResults: 2000 },
+    { items: [{ a: 3 }], hasMore: false, totalResults: 2000 },
   ]
   let i = 0
   const _fetch = async (url, init) => {
@@ -107,12 +109,25 @@ test('runSuiteQL: paginates until hasMore=false and concatenates rows', async ()
   const r = await runSuiteQL('SELECT a FROM t', { env: FAKE_ENV, pageSize: 2, _fetch })
   assert.equal(r.ok, true)
   assert.equal(r.rows.length, 3)
-  assert.equal(r.totalResults, 3)
+  assert.equal(r.truncated, false) // reached the true end
+  assert.equal(r.totalResults, undefined) // never surfaced — it's not a row count
   assert.equal(calls.length, 2)
   assert.match(calls[0].url, /offset=0/)
   assert.match(calls[1].url, /offset=2/)
   assert.equal(calls[0].body.q, 'SELECT a FROM t')
   assert.match(calls[0].auth, /^OAuth realm=/)
+})
+
+test('runSuiteQL: flags truncated=true when it stops at maxPages mid-stream', async () => {
+  // NetSuite still says hasMore, but we hit the page cap — must NOT look complete.
+  const _fetch = async () => ({
+    ok: true, status: 200, text: async () => '',
+    json: async () => ({ items: [{ a: 1 }], hasMore: true }),
+  })
+  const r = await runSuiteQL('SELECT a FROM t', { env: FAKE_ENV, pageSize: 1, maxPages: 2, _fetch })
+  assert.equal(r.ok, true)
+  assert.equal(r.rows.length, 2)
+  assert.equal(r.truncated, true)
 })
 
 test('runSuiteQL: surfaces a 401 as needsAuth (soft, not thrown)', async () => {

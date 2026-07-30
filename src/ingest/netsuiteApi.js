@@ -82,9 +82,16 @@ export function buildAuthHeader({ method, baseUrl, queryParams = {}, creds, nonc
 }
 
 // Run a SuiteQL query, auto-paginating via limit/offset. Read-only.
-// Returns { ok:true, rows, totalResults } on success; a soft marker
+// Returns { ok:true, rows } on success; a soft marker
 // ({ configured:false } | { needsAuth:true } | { error }) otherwise — never
 // throws for an expected/auth condition, mirroring the Google helpers.
+//
+// ⚠️ We deliberately do NOT surface the response's `totalResults`. Measured live
+// 2026-07-30 it is NOT a row count — it came back as exactly pageSize × 1000
+// (3000 at pageSize 3, 5000 at pageSize 5) while the true count from
+// `SELECT COUNT(*)` was 5,926. Trusting it would silently truncate or
+// mis-report. Termination is driven by the response's `hasMore` flag; when you
+// need a real total, run a COUNT(*) query.
 //   opts.pageSize  rows per request (NetSuite caps at 1000)
 //   opts.maxPages  safety cap on pages fetched (default 50 → up to 50k rows)
 //   opts._fetch    injectable fetch, for tests
@@ -96,7 +103,7 @@ export async function runSuiteQL(sql, opts = {}) {
   const baseUrl = suiteqlUrl(creds.account)
   const rows = []
   let offset = 0
-  let totalResults = null
+  let truncated = true // flipped false the moment NetSuite says hasMore=false
 
   for (let page = 0; page < maxPages; page++) {
     const queryParams = { limit: String(pageSize), offset: String(offset) }
@@ -128,10 +135,15 @@ export async function runSuiteQL(sql, opts = {}) {
 
     const data = await res.json()
     if (Array.isArray(data.items)) rows.push(...data.items)
-    if (typeof data.totalResults === 'number') totalResults = data.totalResults
-    if (!data.hasMore) break
+    if (!data.hasMore) {
+      truncated = false
+      break
+    }
     offset += pageSize
   }
 
-  return { ok: true, rows, totalResults: totalResults ?? rows.length }
+  // truncated=true means we stopped at maxPages while NetSuite still had more —
+  // a SILENT partial result otherwise, which would look like "that's all of it".
+  // Callers must treat this as incomplete (and the sync logs it).
+  return { ok: true, rows, truncated }
 }

@@ -99,6 +99,28 @@ export. That means:
   (stays `Packed`) are recognised as done via their **invoice / Fully-Billed**
   state, so they leave the "Waiting to Ship / Packed" queue and get credited.
 
+## SuiteQL gotchas (all measured live 2026-07-30 — don't relearn these)
+
+- **`totalResults` is NOT a row count.** It came back as exactly `pageSize × 1000`
+  (3000 at pageSize 3, 5000 at pageSize 5) while `SELECT COUNT(*)` said **5,926**.
+  The client never surfaces it; pagination terminates on `hasMore`, and it returns
+  `truncated:true` if it stopped at `maxPages` while more remained (so a partial
+  pull can't masquerade as a complete one). Use `COUNT(*)` for real totals.
+- **`transaction.shipstatus` 500s** ("unexpected error"). Use `transaction.status`
+  instead — for `ItemShip` the codes are **A = Picked, B = Packed, C = Shipped**
+  (live counts: 112 / 9 / 5,808).
+- **`item` needs Lists → Items**, otherwise the error is the misleading
+  `Record 'item' was not found` (it exists; the role just can't see it).
+- **Missing transaction permissions return an EMPTY SET, not an error** — see the
+  role note above. Never treat "no error" as "no data".
+- `createdfrom` isn't directly queryable — join `PreviousTransactionLineLink`
+  (`previousdoc` → `nextdoc`).
+- SO header fields confirmed: `tranid`, `BUILTIN.DF(entity)` = customer,
+  `status` + code (B Pending Fulfillment, F Pending Billing, G Billed),
+  `trandate`, `shipdate`, `foreigntotal`, `lastmodifieddate`, **`otherrefnum` =
+  the PO/Check Number**. Line-level `location`/`quantity` come from
+  `transactionline` (filter `mainline='F'`).
+
 ## Inventory (proven live 2026-07-30)
 
 Nima wants stock in the app too. The table is **`inventoryitemlocations`** joined
