@@ -69,7 +69,10 @@ const get = async (path) => {
 }
 
 // Stores / channels — we need the right one so wholesale never mixes with retail.
-const isV2 = working.base.includes('api.shipstation.com')
+// Compare the HOST exactly. A substring test is wrong here and silently broke this:
+// 'ssapi.shipstation.com' CONTAINS 'api.shipstation.com' (it's ss + api…), so the V1
+// host was misread as V2, a /v2 path was called against V1, and nothing printed.
+const isV2 = new URL(working.base).host === 'api.shipstation.com'
 if (!isV2) {
   const stores = await get('/stores')
   if (stores.err) console.log(`\n⚠️  couldn't list stores (${stores.err})`)
@@ -81,7 +84,9 @@ if (!isV2) {
     }
   }
   const carriers = await get('/carriers')
-  if (!carriers.err && Array.isArray(carriers.data)) {
+  if (carriers.err) console.log(`\n⚠️  couldn't list carriers (${carriers.err})`)
+  else if (!Array.isArray(carriers.data)) console.log('\n⚠️  carriers came back in an unexpected shape')
+  else {
     console.log(`\n🚚 Carriers (${carriers.data.length}):`)
     for (const c of carriers.data) {
       const bal = c.balance !== undefined && c.balance !== null ? ` balance=${c.balance}` : ''
@@ -90,7 +95,8 @@ if (!isV2) {
   }
 } else {
   const carriers = await get('/v2/carriers')
-  if (!carriers.err) {
+  if (carriers.err) console.log(`\n⚠️  couldn't list carriers (${carriers.err})`)
+  else {
     const list = carriers.data?.carriers || []
     console.log(`\n🚚 Carriers (${list.length}):`)
     for (const c of list) {
