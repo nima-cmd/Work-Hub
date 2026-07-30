@@ -30,6 +30,7 @@ import {
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
+import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
@@ -1043,6 +1044,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     // Shipped, which stranded 7 routed BOLs on the active board (2026-08-01).
     // Best-effort + gated on the creds, same contract as the two syncs above.
     let netsuite = null
+    let cartons = null
     if (netsuiteConfigured()) {
       try {
         const r = await syncFromNetsuite({})
@@ -1052,9 +1054,20 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       } catch (e) {
         console.error('NetSuite sync failed (recurring tasks still checked):', e.message)
       }
+      // The routing carton feed — the last source that used to need a manual CSV
+      // export. Separate from the sync above because it reads a different record
+      // and must be safe to re-run on its own while packing is in progress.
+      try {
+        const r = await syncEdiPackagesLive({})
+        cartons = r.ok
+          ? { poDcs: (r.rows || []).length, loaded: r.loaded ?? 0, removed: (r.removed || []).length, skipped: r.skipped }
+          : { error: r.error }
+      } catch (e) {
+        console.error('EDI carton feed failed (recurring tasks still checked):', e.message)
+      }
     }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
