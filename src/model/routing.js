@@ -78,6 +78,35 @@ export function consolidateRouting(rows = []) {
   return out
 }
 
+// Does NetSuite agree that this shipment's freight has left? (Nima, 2026-08-01)
+//
+// The routing feed is PO×DC grain — it carries no store numbers — so the finest
+// "did it ship" signal we can build is per member PO: every item fulfilment on
+// every store SO for that PO is Shipped. That direction is sound: a PO whose IFs
+// are ALL shipped cannot still have freight sitting for one of its DCs. The
+// coarseness only ever costs us a false *negative* (one lagging store on another
+// DC holds the verdict back), which is the safe way to be wrong.
+//
+// Deliberately returns the per-PO evidence, not just a boolean — the routing
+// view renders which POs confirm and which don't, per the never-lump rule. A PO
+// we have no IFs for at all is `unknown`, never silently counted as shipped.
+//
+// ifsByPo: { [poNumber]: { shipped, total } }
+// returns: { confirmed, byPo: [{ po, shipped, total, state }], pending[] }
+export function netsuiteShippedVerdict(memberPos = [], ifsByPo = {}) {
+  const byPo = memberPos.map((p) => {
+    const po = String(p)
+    const { shipped = 0, total = 0 } = ifsByPo[po] || {}
+    const state = total === 0 ? 'unknown' : shipped === total ? 'shipped' : 'partial'
+    return { po, shipped, total, state }
+  })
+  return {
+    confirmed: byPo.length > 0 && byPo.every((p) => p.state === 'shipped'),
+    byPo,
+    pending: byPo.filter((p) => p.state !== 'shipped').map((p) => p.po),
+  }
+}
+
 function numOf(v) {
   const n = parseFloat(v)
   return Number.isFinite(n) ? n : 0

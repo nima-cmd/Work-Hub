@@ -886,3 +886,32 @@ CREATE INDEX IF NOT EXISTS idx_po_item            ON purchase_orders(item);
 CREATE INDEX IF NOT EXISTS idx_oc_item             ON order_confirmations(item);
 CREATE INDEX IF NOT EXISTS idx_ocpo_oc            ON oc_po_links(oc_number);
 CREATE INDEX IF NOT EXISTS idx_ocpo_po            ON oc_po_links(po_number);
+
+-- ── The EDI paper trail for a routed shipment (Nima, 2026-08-01) ────────────
+-- "We want the BOL information archived, saved, linked with that 850 and 856,
+-- all for reference if we need to go back to it."
+--
+-- The lineage is derivable today — an outbound 856's business_number IS the BOL
+-- number, and edi_document_po_refs ties that ASN back to the member POs, whose
+-- own inbound 850s carry the PO number as their business_number. But derivation
+-- alone is not an archive: the Orderful sync works over a moving window, so a
+-- transaction that ages out takes the reference with it, and the business_number
+-- convention is a partner habit, not a contract. So the lineage is SNAPSHOTTED
+-- when the shipment is archived — ids and timestamps frozen at that moment.
+--
+-- One row per shipment. po_links is [{ po, transactionId, businessNumber,
+-- createdAt }] for the 850s — jsonb rather than a child table because it is
+-- written once, read whole, and never queried by PO.
+CREATE TABLE IF NOT EXISTS routing_shipment_edi (
+  shipment_id          INTEGER PRIMARY KEY REFERENCES routing_shipment(id) ON DELETE CASCADE,
+  bol_number           TEXT,
+  asn_transaction_id   TEXT,      -- the 856's Orderful transaction id
+  asn_business_number  TEXT,      -- = the BOL number, as transmitted
+  asn_created_at       TIMESTAMPTZ,
+  asn_delivery_status  TEXT,
+  asn_ack_status       TEXT,
+  po_links             JSONB DEFAULT '[]'::jsonb,
+  captured_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_edi_tx_business ON edi_transactions(business_number);

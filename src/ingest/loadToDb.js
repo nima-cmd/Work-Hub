@@ -586,6 +586,169 @@ export async function markShipmentShipped(id, shipped = true, db = pool) {
   return rows[0] || null
 }
 
+// Per-PO item-fulfilment tallies for the routing verdict: how many IFs on that
+// customer PO's store SOs exist, and how many NetSuite says are Shipped. Scoped
+// to the POs asked for, so this never scans the whole table.
+export async function fetchIfStatusByPo(poNumbers = [], db = pool) {
+  const pos = [...new Set(poNumbers.map((p) => String(p)).filter(Boolean))]
+  if (!pos.length) return {}
+  const { rows } = await db.query(
+    `SELECT o.po_number AS po,
+            count(f.if_number)::int AS total,
+            count(*) FILTER (WHERE f.status = 'Shipped')::int AS shipped
+       FROM orders o JOIN fulfillments f ON f.so_number = o.so_number
+      WHERE o.po_number = ANY($1::text[])
+      GROUP BY o.po_number`,
+    [pos],
+  )
+  return Object.fromEntries(rows.map((r) => [String(r.po), { shipped: r.shipped, total: r.total }]))
+}
+
+// The EDI paper trail for a set of BOLs, derived live: the outbound 856 whose
+// business_number IS the BOL number, plus the inbound 850 behind each member PO.
+// Keyed by BOL. See routing_shipment_edi in db/schema.sql for why we snapshot it
+// rather than relying on this derivation forever.
+export async function fetchShipmentEdiLineage(bolNumbers = [], db = pool) {
+  const bols = [...new Set(bolNumbers.map((b) => String(b || '').trim()).filter(Boolean))]
+  if (!bols.length) return {}
+  const { rows: asns } = await db.query(
+    `SELECT t.id, t.business_number AS "businessNumber", t.created_at AS "createdAt",
+            t.delivery_status AS "deliveryStatus", t.acknowledgment_status AS "ackStatus",
+            t.validation_status AS "validationStatus", t.trading_partner AS "tradingPartner",
+            array_remove(array_agg(DISTINCT r.po_number), NULL) AS "poRefs"
+       FROM edi_transactions t
+       LEFT JOIN edi_document_po_refs r ON r.transaction_id = t.id
+      WHERE t.type LIKE '856%' AND t.direction = 'OUT' AND t.business_number = ANY($1::text[])
+      GROUP BY t.id, t.business_number, t.created_at, t.delivery_status,
+               t.acknowledgment_status, t.validation_status, t.trading_partner`,
+    [bols],
+  )
+  const pos = [...new Set(asns.flatMap((a) => a.poRefs || []).map(String))]
+  const { rows: orders850 } = pos.length
+    ? await db.query(
+        `SELECT id, business_number AS "businessNumber", created_at AS "createdAt",
+                delivery_status AS "deliveryStatus", acknowledgment_status AS "ackStatus",
+                line_count AS "lineCount", total_units AS "totalUnits"
+           FROM edi_transactions
+          WHERE type LIKE '850%' AND direction = 'IN' AND business_number = ANY($1::text[])`,
+        [pos],
+      )
+    : { rows: [] }
+  const by850 = new Map(orders850.map((o) => [String(o.businessNumber), o]))
+  const out = {}
+  for (const a of asns) {
+    out[String(a.businessNumber)] = {
+      asn: {
+        transactionId: a.id, businessNumber: a.businessNumber, createdAt: a.createdAt,
+        deliveryStatus: a.deliveryStatus, ackStatus: a.ackStatus,
+        validationStatus: a.validationStatus, tradingPartner: a.tradingPartner,
+      },
+      poRefs: (a.poRefs || []).map(String).sort(),
+      po850: (a.poRefs || []).map(String).sort().map((po) => {
+        const t = by850.get(po)
+        return t
+          ? { po, transactionId: t.id, businessNumber: t.businessNumber, createdAt: t.createdAt,
+              deliveryStatus: t.deliveryStatus, ackStatus: t.ackStatus,
+              lineCount: t.lineCount, totalUnits: t.totalUnits }
+          : { po, transactionId: null }
+      }),
+    }
+  }
+  return out
+}
+
+// Freeze a shipment's EDI lineage. Idempotent — re-archiving refreshes the
+// snapshot rather than duplicating it.
+export async function saveShipmentEdiLineage(shipmentId, bolNumber, lineage, db = pool) {
+  if (!lineage?.asn) return null
+  const { rows } = await db.query(
+    `INSERT INTO routing_shipment_edi
+       (shipment_id, bol_number, asn_transaction_id, asn_business_number,
+        asn_created_at, asn_delivery_status, asn_ack_status, po_links, captured_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb, now())
+     ON CONFLICT (shipment_id) DO UPDATE SET
+       bol_number = EXCLUDED.bol_number,
+       asn_transaction_id = EXCLUDED.asn_transaction_id,
+       asn_business_number = EXCLUDED.asn_business_number,
+       asn_created_at = EXCLUDED.asn_created_at,
+       asn_delivery_status = EXCLUDED.asn_delivery_status,
+       asn_ack_status = EXCLUDED.asn_ack_status,
+       po_links = EXCLUDED.po_links,
+       captured_at = now()
+     RETURNING shipment_id AS "shipmentId"`,
+    [shipmentId, bolNumber, lineage.asn.transactionId, lineage.asn.businessNumber,
+     lineage.asn.createdAt, lineage.asn.deliveryStatus, lineage.asn.ackStatus,
+     JSON.stringify(lineage.po850 || [])],
+  )
+  return rows[0] || null
+}
+
+// Re-freeze snapshots whose 856 is STILL in the Orderful window. Without this a
+// snapshot taken minutes after transmission would pin the ASN at
+// PENDING/NOT_ACKNOWLEDGED forever, even though the partner's 997 lands hours
+// later and the live transaction goes DELIVERED/ACCEPTED. The snapshot is a
+// fallback for when the source ages out — so keep it current while it hasn't.
+export async function refreshShipmentEdiSnapshots(db = pool) {
+  const { rows } = await db.query(
+    `SELECT shipment_id AS "shipmentId", bol_number AS "bolNumber",
+            asn_delivery_status AS "deliveryStatus", asn_ack_status AS "ackStatus"
+       FROM routing_shipment_edi`,
+  )
+  if (!rows.length) return 0
+  const lineages = await fetchShipmentEdiLineage(rows.map((r) => r.bolNumber), db)
+  let n = 0
+  for (const r of rows) {
+    const live = lineages[String(r.bolNumber)]
+    if (!live?.asn) continue // aged out of the window — keep the frozen copy
+    if (live.asn.deliveryStatus === r.deliveryStatus && live.asn.ackStatus === r.ackStatus) continue
+    await saveShipmentEdiLineage(r.shipmentId, r.bolNumber, live, db)
+    n++
+  }
+  return n
+}
+
+export async function fetchShipmentEdiSnapshots(db = pool) {
+  const { rows } = await db.query(
+    `SELECT shipment_id AS "shipmentId", bol_number AS "bolNumber",
+            asn_transaction_id AS "asnTransactionId", asn_business_number AS "asnBusinessNumber",
+            asn_created_at AS "asnCreatedAt", asn_delivery_status AS "asnDeliveryStatus",
+            asn_ack_status AS "asnAckStatus", po_links AS "poLinks", captured_at AS "capturedAt"
+       FROM routing_shipment_edi`,
+  )
+  return Object.fromEntries(rows.map((r) => [r.shipmentId, r]))
+}
+
+// Archive every un-shipped routing shipment whose member POs are ALL fully
+// shipped per NetSuite (see netsuiteShippedVerdict). Runs at the tail of the
+// live sync: the freight physically left days ago, so a BOL still sitting in the
+// active board is stale data, not work. Returns what it archived so the caller
+// can report it rather than silently mutating the board.
+// shipped per NetSuite (see netsuiteShippedVerdict), snapshotting each one's EDI
+// paper trail (850 → BOL → 856) as it goes so the archived record keeps its
+// reference. Returns what it archived so the caller can report it rather than
+// silently mutating the board.
+export async function archiveNetsuiteShippedShipments(db = pool) {
+  const { netsuiteShippedVerdict } = await import('../model/routing.js')
+  const shipments = (await fetchRoutingShipments(db)).filter((s) => !s.shippedAt)
+  if (!shipments.length) return []
+  const ifsByPo = await fetchIfStatusByPo(shipments.flatMap((s) => s.memberPos || []), db)
+  const lineages = await fetchShipmentEdiLineage(shipments.map((s) => s.bolNumber), db)
+  const archived = []
+  for (const s of shipments) {
+    const v = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
+    if (!v.confirmed) continue
+    await markShipmentShipped(s.id, true, db)
+    const lineage = lineages[String(s.bolNumber)] || null
+    if (lineage) await saveShipmentEdiLineage(s.id, s.bolNumber, lineage, db)
+    archived.push({
+      id: s.id, bolNumber: s.bolNumber, partner: s.partner, dc: s.dc, memberPos: s.memberPos,
+      asn: lineage?.asn?.transactionId || null,
+      po850: (lineage?.po850 || []).filter((p) => p.transactionId).length,
+    })
+  }
+  return archived
+}
+
 export async function fetchRoutingShipmentById(id, db = pool) {
   const { rows } = await db.query(
     `SELECT id, dc_po_key AS "dcPoKey", partner, dc, member_pos AS "memberPos",

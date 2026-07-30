@@ -10,6 +10,7 @@
     "migrate": "node --env-file=.env.local scripts/migrate.js",
     "ingest": "node --env-file=.env.local scripts/ingest.js",
     "match:review": "node --env-file=.env.local scripts/match-review.js",
+    "sync:netsuite": "node --env-file=.env.local scripts/sync-netsuite.js",
     "check:netsuite": "node --env-file=.env.local scripts/check-netsuite.js",
     "check:shipstation": "node --env-file=.env.local scripts/check-shipstation.js",
     "zpl": "node scripts/zpl-print.js",

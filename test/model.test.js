@@ -23,7 +23,7 @@ import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
-import { consolidateRouting } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
@@ -846,6 +846,36 @@ test('consolidateRouting rolls up multiple POs into one DC shipment', () => {
   assert.equal(cg.weightLb, 41) // 26 + 15, whole pounds
   assert.equal(cg.cubicFeet, 5) // ceil(2.7 + 1.4) = ceil(4.1) = 5
   assert.equal(cg.showUnits, false) // Bloomingdale's portal doesn't need units
+})
+
+test('netsuiteShippedVerdict confirms only when every member PO is fully shipped', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7590875: { shipped: 23, total: 23 } }
+  const v = netsuiteShippedVerdict(['7527086', '7590875'], ifs)
+  assert.equal(v.confirmed, true)
+  assert.deepEqual(v.pending, [])
+  assert.deepEqual(v.byPo.map((p) => p.state), ['shipped', 'shipped'])
+})
+
+test('netsuiteShippedVerdict holds back on a partially shipped PO and names it', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7776940: { shipped: 4, total: 16 } }
+  const v = netsuiteShippedVerdict(['7527086', '7776940'], ifs)
+  assert.equal(v.confirmed, false)
+  assert.deepEqual(v.pending, ['7776940'])
+  // the evidence survives, per-PO — never collapsed to one flag
+  assert.deepEqual(v.byPo.find((p) => p.po === '7776940'), {
+    po: '7776940', shipped: 4, total: 16, state: 'partial',
+  })
+})
+
+test('netsuiteShippedVerdict treats a PO with no fulfilments as unknown, not shipped', () => {
+  const v = netsuiteShippedVerdict(['7527064'], {})
+  assert.equal(v.confirmed, false)
+  assert.equal(v.byPo[0].state, 'unknown')
+  assert.deepEqual(v.pending, ['7527064'])
+})
+
+test('netsuiteShippedVerdict never confirms a shipment with no member POs', () => {
+  assert.equal(netsuiteShippedVerdict([], {}).confirmed, false)
 })
 
 test('consolidateRouting always rounds cubic feet UP and never to a decimal', () => {

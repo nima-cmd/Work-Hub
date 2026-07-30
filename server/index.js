@@ -29,6 +29,8 @@ import {
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
+import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
+import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
@@ -1035,8 +1037,24 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('Orderful sync failed (recurring tasks still checked):', e.message)
       }
     }
+    // Pull NetSuite too. This module shipped in PR #16 as the app's primary data
+    // path but had NO caller anywhere, so Neon silently drifted from NetSuite —
+    // 14 item fulfilments read Picked/Packed here days after NetSuite marked them
+    // Shipped, which stranded 7 routed BOLs on the active board (2026-08-01).
+    // Best-effort + gated on the creds, same contract as the two syncs above.
+    let netsuite = null
+    if (netsuiteConfigured()) {
+      try {
+        const r = await syncFromNetsuite({})
+        netsuite = r.ok
+          ? { orders: r.nOrders, fulfillments: r.nFul, invoices: r.nInv, archived: (r.archived || []).length }
+          : { error: r.error }
+      } catch (e) {
+        console.error('NetSuite sync failed (recurring tasks still checked):', e.message)
+      }
+    }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

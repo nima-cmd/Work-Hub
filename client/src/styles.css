@@ -2271,3 +2271,38 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .freightPartner b { color: #fff; }
 .deskGo { font-size: 11px; }
 .trkSelect { color: #f0c08a; border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.16); }
+
+/* ── EDI paper trail on a routed shipment (850 → BOL → 856) ───────────────── */
+/* Reference material, so it reads quieter than the actionable rows above it. */
+.rt-ediTrail { font-size: 11px; }
+.rt-ediTrail.none { color: #f0a0a0; padding: 2px 0; }
+.rt-ediToggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px;
+  background: none; border: none; color: var(--muted, #8b949e); cursor: pointer;
+  font: inherit; border-radius: 5px;
+}
+.rt-ediToggle:hover { color: #c9d1d9; background: rgba(255,255,255,0.05); }
+.rt-ediChip {
+  padding: 1px 6px; border-radius: 5px; font-variant-numeric: tabular-nums;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
+}
+.rt-ediChip.asn.ok { background: rgba(126,231,135,0.12); border-color: rgba(126,231,135,0.35); color: #7ee787; }
+.rt-ediChip.asn.pending { background: rgba(217,180,43,0.12); border-color: rgba(217,180,43,0.35); color: #d9b42b; }
+.rt-ediChip.asn.bad { background: rgba(248,81,73,0.14); border-color: rgba(248,81,73,0.4); color: #ff8b84; }
+.rt-ediBody { display: flex; flex-direction: column; gap: 3px; padding: 4px 0 2px 14px; }
+.rt-ediRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-variant-numeric: tabular-nums; }
+.rt-ediKind {
+  min-width: 30px; text-align: center; padding: 1px 4px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+}
+.rt-ediKind.out { background: rgba(59,130,246,0.14); border: 1px solid rgba(59,130,246,0.35); color: #79b8ff; }
+.rt-ediKind.in  { background: rgba(163,113,247,0.14); border: 1px solid rgba(163,113,247,0.35); color: #c39bff; }
+.rt-ediNum { color: #c9d1d9; }
+.rt-ediMissing { color: #f0a0a0; }
+.rt-ediSnap { padding-top: 2px; font-size: 10px; }
+
+/* An 856 went out ahead of NetSuite marking the IFs shipped — a real gap. */
+.rt-asnAhead {
+  font-size: 11px; padding: 2px 8px; border-radius: 6px;
+  background: rgba(217,180,43,0.14); color: #d9b42b; border: 1px solid rgba(217,180,43,0.4);
+}
