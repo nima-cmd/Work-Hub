@@ -119,7 +119,14 @@ An admin does this once in NetSuite. **Give the token a read-only role.**
    **SuiteAnalytics Workbook** if not already on). Save.
 2. **Create the Integration record:** Setup → Integration → Manage Integrations →
    **New**. Name `Work-Hub Read-Only`, State **Enabled**, check **Token-Based
-   Authentication**, uncheck the user-credential/authorization-flow options.
+   Authentication**.
+   **⚠️ Uncheck `AUTHORIZATION CODE GRANT`** (under the OAuth 2.0 section — it's
+   checked by DEFAULT). It's an OAuth 2.0 flow that requires a Redirect URI, so
+   leaving it on fails the save with **"Invalid Redirect URI"** (hit 2026-07-30).
+   We use OAuth 1.0a TBA, not OAuth 2.0. Also leave **TBA: Authorization Flow**,
+   **TBA: IssueToken Endpoint** (we mint the token in the UI), **User
+   Credentials**, and every OAuth-2.0 **SCOPE** box unchecked — with TBA, access
+   comes from the ROLE's permissions (step 3), not from scopes.
    Save → copy **Consumer Key** + **Consumer Secret** (shown only once) →
    `NS_CONSUMER_KEY`, `NS_CONSUMER_SECRET`.
 3. **Read-only role:** Setup → Users/Roles → Manage Roles → **New** (or reuse the
