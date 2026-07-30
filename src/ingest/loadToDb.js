@@ -71,9 +71,10 @@ export async function loadFulfillments(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO fulfillments
-         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, tracking_numbers, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
        ON CONFLICT (if_number) DO UPDATE SET
+         tracking_numbers = COALESCE(EXCLUDED.tracking_numbers, fulfillments.tracking_numbers),
          so_number        = COALESCE(EXCLUDED.so_number, fulfillments.so_number),
          status           = COALESCE(EXCLUDED.status, fulfillments.status),
          packed_status    = COALESCE(EXCLUDED.packed_status, fulfillments.packed_status),
@@ -85,6 +86,7 @@ export async function loadFulfillments(records, db = pool) {
       [
         r.ifNumber, so, r.ifStatus || r.packedStatus || null, r.packedStatus || null,
         r.daysPending ?? null, r.invoice || null, r.date || null, r.actualShipDate || null,
+        r.trackingNumbers && r.trackingNumbers.length ? r.trackingNumbers : null,
       ],
     )
     n++

@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS fulfillments (
 
 ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS actual_ship_date DATE;
 
+-- Carrier tracking numbers on the IF (2026-07-30), pulled from NetSuite's
+-- TrackingNumberMap → trackingnumber join. An array because a multi-box shipment
+-- carries several (IF7285 and IF7268 each have two). These power two checks Nima
+-- asked for: an IF that HAS tracking but is still "Packed" was labelled and
+-- physically shipped and just never got marked shipped in NetSuite (that's the
+-- SO12288/SO12293 case) — while a packed IF with NO tracking is one that still
+-- genuinely needs a label.
+ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[];
+
 -- ── Invoices linked to an order ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS invoices (
   inv_number       TEXT PRIMARY KEY,

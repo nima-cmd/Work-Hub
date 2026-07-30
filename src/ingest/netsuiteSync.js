@@ -165,6 +165,20 @@ export function fulfillmentSql(since) {
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
+// Tracking numbers per IF. NetSuite exposes these ONLY via the TrackingNumberMap
+// join (transaction.trackingnumbers / linkedtrackingnumbers are not queryable
+// fields — both fail as unknown identifiers). One IF can have several rows when the
+// shipment is multi-box.
+export function trackingSql(since) {
+  return `SELECT DISTINCT c.tranid AS if_number, tn.trackingnumber
+          FROM transaction t
+          JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
+          JOIN transaction c ON c.id = l.nextdoc AND c.type='ItemShip'
+          JOIN TrackingNumberMap m ON m.transaction = c.id
+          JOIN trackingnumber tn ON tn.id = m.trackingnumber
+          WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
+}
+
 export function invoiceSql(since) {
   return `SELECT DISTINCT c.tranid AS inv_number, t.tranid AS so_number, c.status,
                  c.foreigntotal, c.foreignamountunpaid,
@@ -199,6 +213,8 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
   if (ifs.fail) return { ok: false, error: ifs.fail, records: [] }
   const invs = await run('invoices', invoiceSql(since))
   if (invs.fail) return { ok: false, error: invs.fail, records: [] }
+  const track = await run('tracking', trackingSql(since))
+  if (track.fail) return { ok: false, error: track.fail, records: [] }
 
   // first non-null location per SO
   const locBySo = new Map()
@@ -207,10 +223,23 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
     if (r.location && !locBySo.has(so)) locBySo.set(so, r.location)
   }
 
+  // tracking numbers grouped per IF (multi-box shipments have several)
+  const trackByIf = new Map()
+  for (const r of track.rows) {
+    const k = String(r.if_number || '').toUpperCase()
+    if (!k || !r.trackingnumber) continue
+    if (!trackByIf.has(k)) trackByIf.set(k, [])
+    const arr = trackByIf.get(k)
+    if (!arr.includes(r.trackingnumber)) arr.push(r.trackingnumber)
+  }
+
   const orderRecords = orders.rows.map((r) =>
     mapOrderRow({ ...r, location: locBySo.get(String(r.tranid || '').toUpperCase()) || '' }),
   )
-  const ifRecords = ifs.rows.map(mapFulfillmentRow)
+  const ifRecords = ifs.rows.map(mapFulfillmentRow).map((f) => ({
+    ...f,
+    trackingNumbers: trackByIf.get(f.ifNumber) || null,
+  }))
   const invRecords = invs.rows.map(mapInvoiceRow)
 
   return {
