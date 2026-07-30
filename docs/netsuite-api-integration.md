@@ -99,6 +99,30 @@ export. That means:
   (stays `Packed`) are recognised as done via their **invoice / Fully-Billed**
   state, so they leave the "Waiting to Ship / Packed" queue and get credited.
 
+## Inventory (proven live 2026-07-30)
+
+Nima wants stock in the app too. The table is **`inventoryitemlocations`** joined
+to `item` — NOT `inventorybalance` (that name doesn't exist and 404s):
+
+```sql
+SELECT i.itemid, i.itemtype,
+       iil.quantityonhand, iil.quantityavailable,
+       iil.quantitycommitted, iil.quantitybackordered,
+       BUILTIN.DF(iil.location) AS location
+FROM item i JOIN inventoryitemlocations iil ON iil.item = i.id
+WHERE iil.quantityonhand > 0
+```
+
+1,946 item/location rows with stock across **12 locations** (~31.3k units):
+Virtual Warehouse (955 SKUs / 16,693), Warehouse (462 / 7,569, 5,465 avail),
+China (217 / 2,401), Bloomingdale's (23 / 2,307, only 1,025 avail), Offsite
+Storage, Nordstrom (17 / 728, only **5** avail — heavily committed), Damages
+(0 avail), Consignment, Office, Shopbop, Sample Sale, WIP. These map onto the
+channel split in the locations memory, so per-location availability is the
+interesting cut (committed vs available per channel), not just a flat total.
+
+`quantitycommitted`/`quantitybackordered` are sometimes null — coalesce to 0.
+
 ## Phasing
 
 1. **Order lifecycle** — SOs + IFs + invoices (incl. recently-closed) + the
@@ -130,10 +154,21 @@ An admin does this once in NetSuite. **Give the token a read-only role.**
    Save → copy **Consumer Key** + **Consumer Secret** (shown only once) →
    `NS_CONSUMER_KEY`, `NS_CONSUMER_SECRET`.
 3. **Read-only role:** Setup → Users/Roles → Manage Roles → **New** (or reuse the
-   existing bot role if it's already view-only). Permissions — **View only**:
-   Transactions → Find Transaction, Sales Order, Item Fulfillment, Invoice;
-   Lists → Customers; Reports → SuiteAnalytics Workbook; Setup → **Log in using
-   Access Tokens** + **REST Web Services**. **No** create/edit/full permissions.
+   existing bot role if it's already view-only). Permissions — **View only, no
+   create/edit/full anywhere**:
+   - **Transactions:** Find Transaction *(critical — SuiteQL transaction access
+     hinges on it)*, Sales Order, Item Fulfillment, Invoice, Purchase Order
+   - **Lists:** Customers, **Items** *(inventory)*, **Locations** *(location
+     names)*, Vendors
+   - **Reports:** SuiteAnalytics Workbook
+   - **Setup:** Log in using Access Tokens, REST Web Services
+
+   ⚠️ **A missing permission is SILENT.** A role without transaction access gets
+   an **empty result set**, not an error (hit live 2026-07-30: customers returned
+   715 rows while every transaction query returned 0). Missing item access shows
+   as `Record 'item' was not found`. `npm run check:netsuite` now treats an empty
+   transaction read as a failure for exactly this reason. Also confirm the role
+   isn't subsidiary-restricted.
 4. **Assign the role** to a user (a dedicated integration user is ideal).
 5. **Create the Access Token:** Setup → Users/Roles → Access Tokens → **New** →
    pick Application = `Work-Hub Read-Only`, the User, the Role → Save → copy
