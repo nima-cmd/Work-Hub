@@ -942,13 +942,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   grid-template-areas:
     "attn core tasks"
     "comms core tasks"
+    "ship ship ship"
     "launch custody edi"
     "pipe pipe pipe";
   align-items: stretch;
 }
 .sectorGrid.radial .sector { grid-column: unset; } /* areas own placement now */
 @media (max-width: 1100px) {
-  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "attn" "comms" "tasks" "pipe" "launch" "custody" "edi"; }
+  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "ship" "attn" "comms" "tasks" "pipe" "launch" "custody" "edi"; }
 }
 @media (min-width: 1800px) {
   .sectorGrid.radial { grid-template-columns: minmax(380px, 1fr) minmax(460px, 560px) minmax(380px, 1fr); }
@@ -2168,3 +2169,105 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .s2dResult.error { border-color: var(--hi); }
 .s2dResult.skipped { opacity: 0.7; }
 .s2dLink { color: var(--accent); margin-left: 6px; }
+
+/* ═══ SHIP DESK — the label-gap surfaces (Nima, 2026-07-31) ═════════════════
+   Two surfaces over /api/label-gaps. The visual rule everywhere: the two
+   PARCEL lanes are loud and opposite-coloured, freight is present but dimmed.
+   They must never read as one number — that lumping is what hid SO12293. */
+
+/* ── app-wide "whose court" strip ───────────────────────────────────────── */
+.courtStrip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  margin: 0 0 12px; padding: 8px 12px;
+  background: linear-gradient(90deg, rgba(248,81,73,0.10), rgba(22,27,34,0.92) 42%);
+  border: 1px solid rgba(248,81,73,0.32); border-left: 3px solid var(--hi);
+  border-radius: 10px;
+}
+.courtStrip.collapsed {
+  background: rgba(22,27,34,0.9); border-color: var(--line); border-left-color: var(--mid);
+  padding: 4px 12px;
+}
+.courtGroup { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.courtNestor { padding-left: 14px; border-left: 1px solid var(--line); }
+.courtLabel {
+  font-family: var(--display); font-size: 10px; letter-spacing: 0.14em;
+  color: var(--muted); font-weight: 700; margin-right: 2px; white-space: nowrap;
+}
+.courtChip {
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+  padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--text);
+}
+.courtChip b { font-size: 13px; margin-right: 3px; }
+.courtChip:hover { background: rgba(255,255,255,0.10); }
+.courtChip.ct-bad  { border-color: rgba(248,81,73,0.55); color: #ffb3ad; background: rgba(248,81,73,0.12); }
+.courtChip.ct-warn { border-color: rgba(217,130,43,0.55); color: #f0c08a; background: rgba(217,130,43,0.10); }
+.courtChip.ct-info { border-color: rgba(59,130,246,0.45); color: #9dc0f5; }
+.courtChip.ct-ok   { border-color: rgba(46,160,67,0.50); color: #85d996; }
+.courtChip.ct-cyan { border-color: rgba(79,209,255,0.45); color: #92dcff; }
+
+/* The oldest item, named — the "impossible to miss" piece. Pushed right so it
+   reads as the strip's conclusion rather than another chip in the list. */
+.courtOldest {
+  margin-left: auto; font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+  padding: 3px 10px; border-radius: 7px; color: #ffd3cf;
+  background: rgba(248,81,73,0.16); border: 1px solid rgba(248,81,73,0.5);
+}
+.courtOldest:hover { background: rgba(248,81,73,0.26); }
+.courtOldest b { color: #fff; }
+.courtOldest em { font-style: normal; font-weight: 700; color: var(--hi); }
+.courtToggle {
+  font: inherit; font-size: 11px; cursor: pointer; color: var(--muted);
+  background: none; border: none; padding: 2px 4px;
+}
+.courtToggle:hover { color: var(--text); }
+.courtHide { margin-left: 4px; }
+
+/* ── Command Center sector: three lanes side by side ─────────────────────── */
+.shipDesk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 1100px) { .shipDesk { grid-template-columns: 1fr; } }
+.deskCol { min-width: 0; padding: 10px; border-radius: 9px; background: rgba(0,0,0,0.18); border: 1px solid var(--line); }
+.deskAct { background: rgba(0,0,0,0.26); }
+.deskFreight { opacity: 0.72; }        /* present, but never out-shouting the parcel lanes */
+.deskFreight:hover { opacity: 1; }
+.deskHead {
+  font-family: var(--display); font-size: 11px; letter-spacing: 0.1em; font-weight: 700;
+  display: flex; align-items: center; gap: 7px; margin-bottom: 4px;
+}
+.deskHead.bad { color: var(--hi); }
+.deskHead.warn { color: var(--mid); }
+.deskHead.info { color: var(--lo); }
+.deskWhy { font-size: 11px; color: var(--muted); margin-bottom: 9px; line-height: 1.35; }
+
+.gapRow { padding: 6px 8px; margin-bottom: 6px; border-radius: 7px; background: rgba(255,255,255,0.03); border-left: 3px solid var(--line); }
+.gapRow.sev-hi  { border-left-color: var(--hi);  background: rgba(248,81,73,0.09); }
+.gapRow.sev-mid { border-left-color: var(--mid); background: rgba(217,130,43,0.07); }
+.gapRow.sev-lo  { border-left-color: var(--lo); }
+.gapTop { display: flex; align-items: baseline; gap: 8px; }
+.gapIf { font-weight: 700; color: var(--text); }
+.gapSo { font-size: 11px; color: var(--muted); }
+.gapAge { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--muted); }
+.gapRow.sev-hi .gapAge { color: var(--hi); }
+.gapRow.sev-mid .gapAge { color: var(--mid); }
+.gapCust { font-size: 12px; color: #cfe3ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tracking numbers: click to copy — the next step is pasting them somewhere. */
+.trkList { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.trk {
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer;
+  padding: 2px 6px; border-radius: 5px; color: #92dcff;
+  background: rgba(79,209,255,0.10); border: 1px solid rgba(79,209,255,0.30);
+}
+.trk:hover { background: rgba(79,209,255,0.22); }
+.trkCopied { color: #85d996; border-color: rgba(46,160,67,0.5); background: rgba(46,160,67,0.16); }
+
+/* Freight roll-up: partner + count instead of one row per DC. */
+.freightRoll { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+.freightPartner {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  padding: 3px 8px; border-radius: 999px; color: #9dc0f5;
+  background: rgba(59,130,246,0.10); border: 1px solid rgba(59,130,246,0.30);
+}
+.freightPartner b { color: #fff; }
+.deskGo { font-size: 11px; }
+.trkSelect { color: #f0c08a; border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.16); }

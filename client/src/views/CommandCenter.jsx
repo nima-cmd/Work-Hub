@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchLaunchBay, fetchCustodyRegister, fetchEdiReview, fetchCredits, fetchAffection, fetchQuestEmails, createManualTask, completeQuestTask } from '../api.js'
+import { fetchEdiReview, fetchCredits, fetchAffection, fetchQuestEmails, createManualTask, completeQuestTask } from '../api.js'
+import { ShipDeskSector } from '../ShipDesk.jsx'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
 import { spaceBackdrop } from '../data/spaceBackdrop.js'
@@ -278,17 +279,16 @@ function TaskChip({ t, onRefresh, onNavigate }) {
 }
 
 // ── the hub ──────────────────────────────────────────────────────────────────
-export default function CommandCenter({ orders, tasks = [], onNavigate = () => {}, onRefresh }) {
-  const [bay, setBay] = useState(null)
-  const [custody, setCustody] = useState(null)
+// bay / custody / labelGaps now arrive as props — App owns them because the
+// app-wide court strip needs the same three feeds, and fetching them in both
+// places would double every request on this view.
+export default function CommandCenter({ orders, tasks = [], labelGaps = null, custody = null, bay = null, onNavigate = () => {}, onRefresh }) {
   const [edi, setEdi] = useState(null)
   const [credits, setCredits] = useState(null)
   const [crew, setCrew] = useState([])
   const [comms, setComms] = useState(null)
 
   useEffect(() => {
-    fetchLaunchBay().then(setBay).catch(() => setBay([]))
-    fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchEdiReview().then(setEdi).catch(() => setEdi(null))
     fetchCredits().then(setCredits).catch(() => {})
     fetchAffection().then(setCrew).catch(() => {})
@@ -339,6 +339,12 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
     back: custody.filter((c) => c.state === 'returned').length,
     stale: custody.filter((c) => c.stale),
   }
+  // The sector badge counts only the two ACTIONABLE lanes — freight is real
+  // work but it belongs to Routing, and folding it in would restore exactly the
+  // lumped number this feature exists to break apart.
+  const shipDeskCount = labelGaps
+    ? (labelGaps.counts?.labelledNotShipped ?? 0) + (labelGaps.counts?.needsLabel ?? 0)
+    : undefined
   const ediWork = edi ? computeEdiWork(edi.orders || [], edi.resolutions || []) : null
   const ediStats = ediWork && {
     open: ediWork.totals.open,
@@ -404,6 +410,15 @@ export default function CommandCenter({ orders, tasks = [], onNavigate = () => {
               </div>
             ))}
           </div>
+        </Sector>
+
+        {/* ── ship desk: the packed queue split into its two opposite actions ──
+             Full width and directly under the core, because these are the items
+             that used to sit unnoticed for weeks (SO12288/SO12293, and a
+             41-day-old unlabelled IF). */}
+        <Sector area="ship" title="SHIP DESK" count={shipDeskCount} tone={shipDeskCount ? 'hot' : undefined}
+                onOpen={() => onNavigate('ship')} openLabel="departures">
+          <ShipDeskSector labelGaps={labelGaps} onNavigate={onNavigate} />
         </Sector>
 
         {/* ── operations row ── */}

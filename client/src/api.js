@@ -754,6 +754,16 @@ export async function fetchPoDcs() {
   return res.json()
 }
 
+// Label / shipped-status reconciliation (Nima, 2026-07-30). Splits the Packed
+// queue into its two OPPOSITE actions — "you already shipped this, go mark it"
+// vs "this is still here, make a label" — plus the freight/BOL lane, which is
+// kept separate because it never carries a parcel tracking number.
+export async function fetchLabelGaps() {
+  const res = await fetch('/api/label-gaps')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Catalogue upload tracking (Nima, 2026-07-27)
 export async function fetchCatalogueGaps() {
   const res = await fetch('/api/catalogue/gaps')
