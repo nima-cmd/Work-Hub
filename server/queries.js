@@ -1118,6 +1118,90 @@ export async function setShipmentShipped(id, shipped = true) {
   return getRouting()
 }
 
+// ── Label / shipped-status reconciliation (Nima, 2026-07-30) ─────────────────
+// Two failure modes hide in the "Packed" queue, and they need OPPOSITE actions.
+// Splitting them is the whole point — lumped together they just look like a
+// backlog, which is why SO12288/SO12293 sat unnoticed:
+//
+//   • LABELLED_NOT_SHIPPED — the IF carries a carrier tracking number but is still
+//     Packed. It physically went out and someone entered tracking; only the status
+//     transition was missed. Action: mark it shipped in NetSuite. Until then the
+//     app (correctly) shows it as still with us, and no shipped-$ credit is stamped.
+//
+//   • NEEDS_LABEL — packed, no tracking at all. Genuinely still here awaiting a
+//     label. Action: make the label.
+//
+// Aged by how long it has been sitting so the oldest surface first — that's the
+// "nothing sits ignored" mission.
+export async function getLabelGaps({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number      AS "ifNumber",
+           f.so_number      AS "soNumber",
+           f.status,
+           f.packed_status  AS "packedStatus",
+           f.if_date        AS "ifDate",
+           f.invoice_number AS "invoiceNumber",
+           f.tracking_numbers AS "trackingNumbers",
+           o.customer, o.source, o.po_number AS "poNumber", o.dc,
+           i.status         AS "invoiceStatus",
+           i.amount_total   AS "invoiceTotal"
+    FROM fulfillments f
+    LEFT JOIN orders   o ON o.so_number = f.so_number
+    LEFT JOIN invoices i ON i.inv_number = f.invoice_number
+    -- Packed but not yet shipped. actual_ship_date is the belt-and-suspenders:
+    -- anything with a real ship date has already departed.
+    WHERE f.actual_ship_date IS NULL
+      AND f.status ILIKE 'packed'
+    ORDER BY f.if_date NULLS LAST
+  `)
+
+  const day = 86_400_000
+  const items = rows.map((r) => {
+    const tracking = r.trackingNumbers || []
+    const labelled = tracking.length > 0
+    const ageDays = r.ifDate ? Math.floor((today - new Date(r.ifDate)) / day) : null
+    // Which shipping lane is this? EDI partners (Bloomingdale's / Nordstrom /
+    // ShopBop) move on LTL FREIGHT under a BOL — they will NEVER carry a UPS
+    // parcel tracking number, so listing them as "needs a label" is pure noise
+    // (it was 12 of the first 16 hits). Their equivalent gap is a missing BOL,
+    // which the routing workspace already owns. Only the parcel lane belongs in
+    // the needs-a-label list.
+    const lane = r.source === 'edi' ? 'freight' : 'parcel'
+    return {
+      ...r,
+      trackingNumbers: tracking,
+      lane,
+      kind: labelled ? 'LABELLED_NOT_SHIPPED' : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
+      ageDays,
+      // A labelled-but-unshipped IF is the more urgent of the two: the customer
+      // already has the package while our books say it never left.
+      needed: labelled
+        ? `Shipped on ${tracking.length} label(s) — mark ${r.ifNumber} shipped in NetSuite`
+        : lane === 'freight'
+          ? `Freight/BOL lane — routed on a BOL, not a parcel label`
+          : `Packed with no carrier label — create one for ${r.ifNumber}`,
+    }
+  })
+
+  const labelledNotShipped = items.filter((i) => i.kind === 'LABELLED_NOT_SHIPPED')
+  const needsLabel = items.filter((i) => i.kind === 'NEEDS_LABEL')
+  const freight = items.filter((i) => i.kind === 'FREIGHT_BOL_LANE')
+  return {
+    items,
+    labelledNotShipped,
+    needsLabel,
+    freight, // kept separate so the parcel lists stay actionable, not buried
+    counts: {
+      labelledNotShipped: labelledNotShipped.length,
+      needsLabel: needsLabel.length,
+      freight: freight.length,
+    },
+    // Age the ACTIONABLE items only — a freight shipment awaiting its BOL
+    // shouldn't inflate the parcel backlog's headline number.
+    oldestAgeDays: [...labelledNotShipped, ...needsLabel].reduce((m, i) => Math.max(m, i.ageDays ?? 0), 0),
+  }
+}
+
 export async function setShipmentRefs(id, fields = {}) {
   await updateShipmentRefs(id, fields)
   // The Bloomingdale's authorization comes from the routing email and is typed

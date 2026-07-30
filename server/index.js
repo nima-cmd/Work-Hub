@@ -16,7 +16,7 @@ import {
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
-  streamMasterBol, fileMasterToDrive,
+  streamMasterBol, fileMasterToDrive, getLabelGaps,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getCatalogueGaps, buildCatalogueAddCsv,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
@@ -316,6 +316,17 @@ app.post('/api/edi/arrivals/dismiss', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Label / shipped-status reconciliation — splits the Packed queue into
+// "labelled but never marked shipped" vs "genuinely needs a label".
+app.get('/api/label-gaps', async (_req, res) => {
+  try {
+    res.json(await getLabelGaps())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 

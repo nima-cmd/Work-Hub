@@ -26,7 +26,11 @@ export async function loadOrders(orders, db = pool) {
          po_number       = COALESCE(EXCLUDED.po_number, orders.po_number),
          dc              = COALESCE(EXCLUDED.dc, orders.dc),
          store_number    = COALESCE(EXCLUDED.store_number, orders.store_number),
-         is_ats          = EXCLUDED.is_ats,
+         -- COALESCE (2026-07-30): the CSV mapper always sends a real boolean, so
+         -- this is a no-op there — but the live NetSuite pull can't read the ATS
+         -- custom field yet and sends null, which would otherwise WIPE a known
+         -- value on every sync.
+         is_ats          = COALESCE(EXCLUDED.is_ats, orders.is_ats),
          source          = COALESCE(EXCLUDED.source, orders.source),
          so_status       = COALESCE(EXCLUDED.so_status, orders.so_status),
          qty_ordered     = COALESCE(EXCLUDED.qty_ordered, orders.qty_ordered),
@@ -67,9 +71,10 @@ export async function loadFulfillments(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO fulfillments
-         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, tracking_numbers, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
        ON CONFLICT (if_number) DO UPDATE SET
+         tracking_numbers = COALESCE(EXCLUDED.tracking_numbers, fulfillments.tracking_numbers),
          so_number        = COALESCE(EXCLUDED.so_number, fulfillments.so_number),
          status           = COALESCE(EXCLUDED.status, fulfillments.status),
          packed_status    = COALESCE(EXCLUDED.packed_status, fulfillments.packed_status),
@@ -81,11 +86,35 @@ export async function loadFulfillments(records, db = pool) {
       [
         r.ifNumber, so, r.ifStatus || r.packedStatus || null, r.packedStatus || null,
         r.daysPending ?? null, r.invoice || null, r.date || null, r.actualShipDate || null,
+        r.trackingNumbers && r.trackingNumbers.length ? r.trackingNumbers : null,
       ],
     )
     n++
   }
   return n
+}
+
+// Reconcile fulfillments against a LIVE authoritative list (Nima, 2026-07-30).
+// The CSV path only ever upserts, so an Item Fulfillment deleted or voided in
+// NetSuite lingers in our DB forever and keeps inflating the picked/packed
+// queues — e.g. IF7406 sat on SO12293 as "Picked" though it no longer exists in
+// NetSuite (two IFs were created off that SO and one was removed).
+//
+// SCOPED ON PURPOSE: only rows whose so_number is in `soNumbers` are considered,
+// and `liveIfNumbers` must be the complete IF set for exactly those SOs. That
+// way a partial sync can never delete fulfillments belonging to orders it didn't
+// look at — unlike prune-by-absence over the whole table.
+export async function reconcileFulfillments(soNumbers, liveIfNumbers, db = pool) {
+  const sos = [...new Set((soNumbers || []).filter((s) => s && s !== 'UNLINKED'))]
+  if (!sos.length) return 0
+  const live = [...new Set((liveIfNumbers || []).filter(Boolean))]
+  const { rowCount } = await db.query(
+    `DELETE FROM fulfillments
+      WHERE so_number = ANY($1::text[])
+        AND if_number <> ALL($2::text[])`,
+    [sos, live.length ? live : ['__none__']],
+  )
+  return rowCount
 }
 
 // Stamp the FIRST time an IF is observed cleared for shipping ("Approved to
@@ -124,16 +153,22 @@ export async function loadInvoices(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO invoices
-         (inv_number, so_number, status, shipping_status, amount_remaining, ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())
+         (inv_number, so_number, status, shipping_status, amount_remaining, amount_total, ship_date, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
        ON CONFLICT (inv_number) DO UPDATE SET
          so_number        = COALESCE(EXCLUDED.so_number, invoices.so_number),
          status           = COALESCE(EXCLUDED.status, invoices.status),
          shipping_status  = COALESCE(EXCLUDED.shipping_status, invoices.shipping_status),
-         amount_remaining = COALESCE(EXCLUDED.amount_remaining, invoices.amount_remaining),
+         -- amount_remaining legitimately goes to 0 when an invoice is paid, so
+         -- it must NOT be COALESCE-protected (that would freeze it at the first
+         -- non-null we ever saw). Only skip when the source didn't supply it.
+         amount_remaining = CASE WHEN $5::numeric IS NULL THEN invoices.amount_remaining
+                                 ELSE EXCLUDED.amount_remaining END,
+         amount_total     = COALESCE(EXCLUDED.amount_total, invoices.amount_total),
          ship_date        = COALESCE(EXCLUDED.ship_date, invoices.ship_date),
          updated_at       = now()`,
-      [inv, so, r.invoiceStatus || r.soStatus || null, r.shippingStatus || null, r.amountRemaining ?? null, r.shipDate || null],
+      [inv, so, r.invoiceStatus || r.soStatus || null, r.shippingStatus || null,
+       r.amountRemaining ?? null, r.amountTotal ?? null, r.shipDate || null],
     )
     n++
   }
@@ -1388,10 +1423,22 @@ export async function stampShippedValue(records, db = pool) {
     )
     if (exists.rowCount) continue
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    // Value of the shipment. Was BROKEN (fixed 2026-07-30): the second branch
+    // read `orders.amount_remaining`, a column that does not exist — Postgres
+    // rejects the statement at parse time regardless of COALESCE, so this threw
+    // whenever a record carried an actualShipDate. It never surfaced only
+    // because the current 2-search CSV model never sets actualShipDate (which is
+    // also why no SHIPPED_VALUE credit has ever been stamped). The live NetSuite
+    // pull DOES supply ship dates, so it had to be fixed first.
+    // Prefer what was owed at ship time (Naghedi ships FOB/pre-payment, so that
+    // ≈ full value); fall back to the invoice TOTAL when it's already paid — a
+    // recently-closed order would otherwise credit $0 — then the order's paid
+    // amount.
     const { rows: amt } = await db.query(
       `SELECT COALESCE(
-         (SELECT amount_remaining FROM invoices WHERE inv_number = $1),
-         (SELECT amount_remaining FROM orders   WHERE so_number  = $2),
+         NULLIF((SELECT amount_remaining FROM invoices WHERE inv_number = $1), 0),
+         (SELECT amount_total     FROM invoices WHERE inv_number = $1),
+         (SELECT amount_paid      FROM orders   WHERE so_number  = $2),
          0) AS value`,
       [r.invoice || null, so],
     )
