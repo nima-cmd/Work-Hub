@@ -53,10 +53,23 @@ const tx = await runSuiteQL(
   "SELECT tranid, BUILTIN.DF(status) AS status FROM transaction WHERE type = 'SalesOrd'",
   { pageSize: 3, maxPages: 1 },
 )
-if (!tx.ok) {
-  console.log('❌ Customer read worked but TRANSACTIONS failed — almost certainly a')
-  console.log('   permission gap on the role: it needs View on Transactions →')
-  console.log('   Find Transaction / Sales Order / Item Fulfillment / Invoice.')
+// NOTE: a role that can't see transactions gets an EMPTY RESULT SET, not an
+// error — NetSuite filters by permission silently. So "0 rows" is a FAILURE
+// here, not a pass: this account always has sales orders.
+if (!tx.ok || tx.rows.length === 0) {
+  console.log('❌ Customer read worked, but SALES ORDERS came back ' + (tx.ok ? 'EMPTY.' : 'as an error.'))
+  if (tx.ok) {
+    console.log('   NetSuite returns an empty set (not an error) when the role lacks')
+    console.log('   transaction access — so this is a PERMISSION gap, not a query bug.')
+  }
+  console.log('\n   Fix on the role (Setup → Users/Roles → Manage Roles → edit it):')
+  console.log('     Permissions → Transactions, add with level VIEW:')
+  console.log('       • Find Transaction   ← the critical one for SuiteQL')
+  console.log('       • Sales Order')
+  console.log('       • Item Fulfillment')
+  console.log('       • Invoice')
+  console.log('   Also check the role is not restricted by subsidiary/department, and')
+  console.log('   that "Accessible Subsidiaries" includes the one holding the orders.')
   if (tx.error) console.log(`\n   NetSuite said: ${String(tx.error).slice(0, 600)}`)
   process.exit(1)
 }
