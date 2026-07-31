@@ -20,7 +20,7 @@ import {
   streamMasterBol, fileMasterToDrive, getLabelGaps, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
-  getAsnCartonCheck, startAsnCartonCheck,
+  getAsnCartonCheck, startAsnCartonCheck, startNetsuiteRefresh, netsuiteRefreshStatus,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -1141,6 +1141,28 @@ app.get('/api/edi-delivery-gaps', async (_req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Manual refresh from NetSuite — the button beside Import CSV (Nima,
+// 2026-07-31). 409 (not 500) when NetSuite is at its concurrent-request limit:
+// that is Celigo working, which has priority, so it's a "come back in a moment"
+// and NOT an error the person should read as broken. See refreshFromNetsuite.
+app.post('/api/netsuite/refresh', async (_req, res) => {
+  try {
+    const r = await startNetsuiteRefresh()
+    if (r.busy) return res.status(409).json(r)
+    if (r.error) return res.status(502).json(r)
+    res.json(r)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Polled while the button spins. The pull is detached (a full one is ~93s and
+// Render cuts a request near 100), so this is how the UI learns it finished.
+app.get('/api/netsuite/refresh', (_req, res) => {
+  res.json(netsuiteRefreshStatus())
 })
 
 // Carton-level ASN reconciliation — every carton that SHIPPED against every SSCC

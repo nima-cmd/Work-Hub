@@ -792,6 +792,26 @@ export async function fetchEdiDeliveryGaps() {
   return res.json()
 }
 
+// Pull fresh data from NetSuite on demand (Nima, 2026-07-31) — the button next
+// to Import CSV. 409 means NetSuite is at its concurrent-request limit, i.e.
+// Celigo is mid-run and has priority; that is a wait, not a failure, so it's
+// returned as a distinct `busy` shape rather than thrown as an error.
+// Starts the pull and returns immediately — a full refresh is ~93s, too long to
+// hold a request open through Render. Poll netsuiteRefreshStatus for the result.
+export async function refreshNetsuite() {
+  const res = await fetch('/api/netsuite/refresh', { method: 'POST' })
+  const body = await res.json().catch(() => ({}))
+  if (res.status === 409) return { busy: true, ...body }
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
+export async function netsuiteRefreshStatus() {
+  const res = await fetch('/api/netsuite/refresh')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Carton-level ASN reconciliation (Nima, 2026-07-31) — every carton that shipped
 // vs every SSCC on a DELIVERED 856. The sibling of the pack check one level down:
 // that one asks whether every unit made it into a box, this asks whether every box

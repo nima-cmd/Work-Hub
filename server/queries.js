@@ -2462,3 +2462,114 @@ export async function startAsnCartonCheck({ force = false } = {}) {
     .finally(() => { asnCheckInFlight = false })
   return { started: true, lastRanAt: last }
 }
+
+// ── Manual "refresh from NetSuite" (Nima, 2026-07-31) ────────────────────────
+// The button next to Import CSV. Nima had deliberately never asked for one,
+// fearing a cap on how many times we may call NetSuite — worth stating plainly
+// because it changes the design: THERE IS NO DAILY CALL QUOTA. SuiteQL/REST is
+// governed by CONCURRENT requests, and that allowance is shared with Celigo.
+//
+// So the cost of a press is not "one of a limited number of calls" — the
+// scheduled cycle already runs ~8 sequential queries roughly 16× a day. The only
+// real risk is colliding with Celigo, and Celigo has priority. Hence:
+//
+//   1. A cheap PREFLIGHT query first. If NetSuite is saturated we find out for
+//      the price of one tiny read instead of starting an 8-query sync that dies
+//      halfway and leaves the person guessing which half landed.
+//   2. NO RETRY, ever (see netsuiteApi.js). Retrying is how a button steals
+//      concurrency from the integration we're protecting.
+//   3. Sequential, exactly like the cron. Parallelising would be the one change
+//      that genuinely does hurt Celigo.
+//   4. The heavy pull is DETACHED. Measured live 2026-07-31 a full refresh takes
+//      ~93 seconds, and Render's proxy cuts a request near 100 — so holding the
+//      connection open would fail on the deploy Nima actually uses while working
+//      fine here. The PREFLIGHT stays synchronous, because "NetSuite is busy" is
+//      the answer he asked for and it must come back instantly.
+let netsuiteRefreshInFlight = false
+let netsuiteRefreshLast = null   // the last finished result, for the poller
+
+// Fast, synchronous: is NetSuite free right now? One tiny read.
+export async function preflightNetsuite() {
+  const { runSuiteQL, netsuiteConfigured } = await import('../src/ingest/netsuiteApi.js')
+  if (!netsuiteConfigured()) return { error: 'NetSuite is not configured on this server' }
+  if (netsuiteRefreshInFlight) return { busy: true, reason: 'in_flight' }
+  const pre = await runSuiteQL('SELECT id FROM transaction WHERE ROWNUM <= 1')
+  if (pre.busy) return { busy: true, reason: 'celigo', retryAfter: pre.retryAfter ?? null }
+  if (!pre.ok) return { error: pre.needsAuth ? 'NetSuite rejected our credentials' : (pre.error || 'the NetSuite preflight failed') }
+  return { ok: true }
+}
+
+// Preflight, then let the pull run on its own. Returns as soon as it STARTS.
+export async function startNetsuiteRefresh() {
+  const pre = await preflightNetsuite()
+  if (!pre.ok) return pre
+  netsuiteRefreshInFlight = true
+  netsuiteRefreshLast = null
+  refreshFromNetsuite({ preflighted: true })
+    .then((r) => { netsuiteRefreshLast = r; console.log('NetSuite refresh:', JSON.stringify(r)) })
+    .catch((e) => { netsuiteRefreshLast = { error: e?.message || String(e) } })
+    .finally(() => { netsuiteRefreshInFlight = false })
+  return { started: true }
+}
+
+// What the client polls while the button spins.
+export function netsuiteRefreshStatus() {
+  return { running: netsuiteRefreshInFlight, result: netsuiteRefreshLast }
+}
+
+export async function refreshFromNetsuite({ preflighted = false } = {}) {
+  const { isBusyResponse, netsuiteConfigured, runSuiteQL } = await import('../src/ingest/netsuiteApi.js')
+  // A busy signal can also arrive as a string propagated up from a sync, so the
+  // same detector is applied to error text, not only to live responses.
+  const busyFrom = (e) => isBusyResponse(0, e || '')
+
+  if (!netsuiteConfigured()) return { error: 'NetSuite is not configured on this server' }
+  if (!preflighted) {
+    const pre = await runSuiteQL('SELECT id FROM transaction WHERE ROWNUM <= 1')
+    if (pre.busy) return { busy: true, reason: 'celigo', retryAfter: pre.retryAfter ?? null }
+    if (!pre.ok) return { error: pre.needsAuth ? 'NetSuite rejected our credentials' : (pre.error || 'the NetSuite preflight failed') }
+  }
+  try {
+    const { syncFromNetsuite } = await import('../src/ingest/netsuiteSync.js')
+    const { syncFulfillmentDc } = await import('../src/ingest/fulfillmentDc.js')
+    const { syncEdiPackagesLive } = await import('../src/ingest/ediPackagesLive.js')
+
+    // Same three pulls the schedule does, in the same order. Anything that comes
+    // back busy stops the rest — pressing on would be the retry we just refused.
+    const main = await syncFromNetsuite({})
+    if (!main.ok) {
+      return busyFrom(main.error)
+        ? { busy: true, reason: 'celigo' }
+        : { error: main.error || 'the NetSuite pull failed' }
+    }
+
+    let cartons = null
+    let dcWarning = null
+    try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+      await syncFulfillmentDc({ since })
+    } catch (e) {
+      // Non-fatal: this only backfills the IF→(PO,DC) link. The orders the human
+      // pressed the button for are already in. Say so rather than failing.
+      dcWarning = e.message
+    }
+    const feed = await syncEdiPackagesLive({})
+    if (feed.ok) cartons = { loaded: feed.loaded ?? 0, skipped: feed.skipped || null }
+    else if (busyFrom(feed.error)) return { busy: true, reason: 'celigo', partial: 'orders are in; the carton feed hit the limit' }
+
+    return {
+      ok: true,
+      counts: {
+        orders: main.nOrders ?? 0,
+        fulfillments: main.nFul ?? 0,
+        invoices: main.nInv ?? 0,
+        archived: (main.archived || []).length,
+      },
+      cartons,
+      dcWarning,
+      syncedAt: new Date().toISOString(),
+    }
+  } catch (e) {
+    return busyFrom(e?.message) ? { busy: true, reason: 'celigo' } : { error: e?.message || String(e) }
+  }
+}
