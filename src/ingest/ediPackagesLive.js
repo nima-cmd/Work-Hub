@@ -159,8 +159,14 @@ export async function fetchEdiPackagesLive() {
   if (!ifs.ok) return { ok: false, error: `fulfilments: ${ifs.error || 'failed'}`, rows: [] }
   const ids = ifs.rows.map((r) => r.id).filter(Boolean)
   if (!ids.length) return { ok: true, rows: [], unparseableBoxes: [], orphanCartons: 0, ifCount: 0 }
-  const [pk, un] = await Promise.all([runSuiteQL(packageSql(ids)), runSuiteQL(ifUnitsSql(ids))])
+  // Deliberately SEQUENTIAL, not Promise.all (Nima, 2026-08-02). NetSuite
+  // governs SuiteTalk by CONCURRENT requests, and that allowance is shared with
+  // Celigo, whose integrations outrank this app. Running one query at a time
+  // means we never occupy more than a single slot; the extra second costs a
+  // background sync nothing.
+  const pk = await runSuiteQL(packageSql(ids))
   if (!pk.ok) return { ok: false, error: `cartons: ${pk.error || 'failed'}`, rows: [] }
+  const un = await runSuiteQL(ifUnitsSql(ids))
   // The pack check is an add-on: if the line query fails, the carton feed (and
   // therefore routing) must still load — the check just can't be shown.
   const out = mapEdiPackageRows({ ifs: ifs.rows, packages: pk.rows, ifUnits: un.ok ? un.rows : [] })
