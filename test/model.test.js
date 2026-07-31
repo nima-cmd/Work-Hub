@@ -1169,3 +1169,82 @@ test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
   ], NOW)
   assert.equal(g.counts.asnStuck, 0) // a test ASN must never raise a real alert
 })
+
+// ── Pack check (Nima, 2026-08-02) ────────────────────────────────────────────
+// "We just need to make sure every unit on an IF is packed, and if not we need
+// to go to that IF and pack them." Checked per-FULFILMENT, not per sales order:
+// an IF can be legitimately short against its SO (partial fulfilment), so an
+// SO-level check would cry wolf on every split shipment.
+import { checkFulfilmentPack, checkGroupPack, packSummary } from '../src/model/packCheck.js'
+
+test('packCheck: units on the IF all in cartons → ok', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7420', ifUnits: 12, packedUnits: 12, cartons: 3 })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.short, 0)
+})
+
+test('packCheck: a missed item shows as short, with the exact count to go pack', () => {
+  // Live case 2026-08-02: IF7350 on Nordstrom DC 584.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7350', ifUnits: 141, packedUnits: 82, cartons: 3 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.short, 59)
+  assert.equal(r.blankCartons, false)
+})
+
+test('packCheck: cartons made but no quantities entered is flagged distinctly', () => {
+  // Live case: IF7439 — one carton with a real weight but a blank qty field.
+  // The fix differs from a normal shortage: fill in the box you already made.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7439', ifUnits: 10, packedUnits: 0, cartons: 1 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.blankCartons, true)
+})
+
+test('packCheck: nothing packed yet is NOT an error — mid-pack that is normal', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7351', ifUnits: 70, packedUnits: 0, cartons: 0 })
+  assert.equal(r.status, 'not_started')
+  assert.equal(r.short, 0, 'not_started must not report a shortage or the check becomes noise')
+})
+
+test('packCheck: packing MORE than the IF says is caught too', () => {
+  const r = checkFulfilmentPack({ ifUnits: 10, packedUnits: 12, cartons: 2 })
+  assert.equal(r.status, 'over')
+  assert.equal(r.over, 2)
+})
+
+test('packCheck: one short IF makes the whole group not ready — the 856 is per group', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 50, packedUnits: 50, cartons: 2 },
+    { ifNumber: 'IF2', ifUnits: 38, packedUnits: 0, cartons: 1 },
+  ])
+  assert.equal(g.status, 'short')
+  assert.equal(g.ready, false)
+  assert.equal(g.shortUnits, 38)
+  assert.deepEqual(g.problems.map((p) => p.ifNumber), ['IF2'])
+})
+
+test('packCheck: a group whose every IF reconciles is ready to route', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 34, packedUnits: 34, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 42, packedUnits: 42, cartons: 2 },
+  ])
+  assert.equal(g.status, 'ok')
+  assert.equal(g.ready, true)
+  assert.equal(packSummary(g), '76/76 units')
+})
+
+test('packCheck: a part-packed group reads as in_progress, not short', () => {
+  // Some IFs done, others untouched — real shortages must stay distinguishable
+  // from work simply not begun, or the warning gets ignored.
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 20, packedUnits: 20, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 30, packedUnits: 0, cartons: 0 },
+  ])
+  assert.equal(g.status, 'in_progress')
+  assert.equal(g.ready, false)
+  assert.equal(g.problems.length, 0)
+})
+
+test('packSummary: always shows both numbers so a clean group proves it was checked', () => {
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 4, cartons: 1 }])), '4/10 units — 6 short')
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 0, cartons: 0 }])), '0/10 units — not packed yet')
+})

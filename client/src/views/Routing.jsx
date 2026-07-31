@@ -6,6 +6,7 @@ import {
   masterBolPdfUrl, fileMasterToDrive,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
+import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
 
 // EDI Routing (Nima, 2026-07-22) — replaces the NetSuite routing_helper.js
@@ -70,9 +71,17 @@ export default function Routing() {
     const held = new Set(data.heldKeys || [])
     const rows = (data.packages || []).filter((p) => isSelected(p.poNumber) && !held.has(`${p.poNumber}|${p.dc}`))
     const byKey = new Map((data.shipments || []).map((s) => [s.dcPoKey, s]))
+    // Pack check, recomputed here for the same reason consolidation is: the PO
+    // selection above changes which fulfilments belong to a group.
+    const packByPoDc = new Map()
+    for (const f of data.fulfilmentPack || []) {
+      if (!packByPoDc.has(f.poDc)) packByPoDc.set(f.poDc, [])
+      packByPoDc.get(f.poDc).push(f)
+    }
     return consolidateRouting(rows).map((g) => {
       const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
-      return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null }
+      const members = (g.memberPos || []).flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
+      return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
     })
   }, [data, selected])
 
@@ -422,6 +431,8 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
         {g.showUnits && <Cell label="Units" v={g.units} big />}
       </div>
 
+      <PackCheck pack={g.pack} />
+
       {g.cubicRoundingDiffers && (
         <div className="rt-warn" title="The feed's summed per-row rounded cubic feet differs from a single round-up of the raw total.">
           ⚠ cubic ft: {g.cubicFeet} (round-up of {g.rawCubicFeet}); feed's per-row sum = {g.cubicFeetRoundedSum}
@@ -429,8 +440,9 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
       )}
 
       {!s ? (
-        <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}>
-          {busy === g.dcPoKey ? 'Assigning…' : 'Assign BOL'}
+        <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}
+                title={g.pack?.status === 'short' ? 'This group is short — assigning a BOL now would ship an 856 claiming units that aren’t in the boxes.' : undefined}>
+          {busy === g.dcPoKey ? 'Assigning…' : g.pack?.status === 'short' ? 'Assign BOL anyway' : 'Assign BOL'}
         </button>
       ) : (
         <>
@@ -710,6 +722,31 @@ function RefEditor({ s, auths, busy, onSave }) {
       <label>FedEx pickup #<input value={d.fedexPickupNumber} onChange={set('fedexPickupNumber')} placeholder="pickup confirmation #" /></label>
       <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
       <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>
+    </div>
+  )
+}
+
+// Did every unit on every fulfilment in this group actually get packed?
+// (Nima, 2026-08-02.) Packing is manual and a missed item is otherwise
+// invisible until it comes back as a chargeback, so a clean group states its
+// numbers too — silence would be indistinguishable from "not checked".
+function PackCheck({ pack }) {
+  if (!pack || pack.status === 'empty') return null
+  const cls = pack.status === 'short' || pack.status === 'over' ? 'bad'
+    : pack.status === 'ok' ? 'good' : 'idle'
+  return (
+    <div className={'rt-pack ' + cls}>
+      <span className="rt-packMark">{cls === 'good' ? '✓' : cls === 'bad' ? '⚠' : '·'}</span>
+      <span className="rt-packText">{packSummary(pack)}</span>
+      {pack.problems.map((p) => (
+        <span key={p.ifNumber} className="rt-packIf"
+              title={p.blankCartons
+                ? `${p.ifNumber}: ${p.cartons} carton(s) exist but no quantities were entered on them`
+                : `${p.ifNumber}: ${p.packedUnits} of ${p.ifUnits} units packed across ${p.cartons} carton(s)`}>
+          {p.ifNumber} {p.packedUnits}/{p.ifUnits}
+          {p.blankCartons && <em> (cartons have no qty)</em>}
+        </span>
+      ))}
     </div>
   )
 }

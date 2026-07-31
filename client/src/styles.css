@@ -1856,6 +1856,16 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
 
+/* Pack check (2026-08-02) — every unit on the IF vs every unit in a carton. */
+.rt-pack { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; border-radius: 6px; padding: 5px 8px; }
+.rt-pack.good { color: #7ee787; background: rgba(126,231,135,0.08); border: 1px solid rgba(126,231,135,0.3); }
+.rt-pack.bad  { color: #ff9d9d; background: rgba(255,107,107,0.1);  border: 1px solid rgba(255,107,107,0.45); }
+.rt-pack.idle { color: var(--muted); background: var(--panel2); border: 1px solid var(--line); }
+.rt-packMark { font-weight: 800; }
+.rt-packText { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rt-packIf { font-variant-numeric: tabular-nums; background: rgba(255,107,107,0.16); border-radius: 4px; padding: 1px 6px; }
+.rt-packIf em { font-style: normal; opacity: 0.8; }
+
 .rt-assign { align-self: flex-start; }
 .rt-bol { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px dashed var(--line); }
 .rt-bol.assigned .rt-bolLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
