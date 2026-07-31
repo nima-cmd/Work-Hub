@@ -534,6 +534,16 @@ export async function fetchQuestActivity(date) {
   return res.json()
 }
 
+// Departures counted as SHIPMENTS — one BOL is one departure however many item
+// fulfilments it covers. Without this the Calendar showed 50 departures on
+// 2026-07-30 when eight trucks left.
+export async function fetchDepartures(opts = {}) {
+  const qs = new URLSearchParams(Object.entries(opts).filter(([, v]) => v)).toString()
+  const res = await fetch('/api/departures' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return (await res.json()).departures || []
+}
+
 // Upcoming Google Calendar events (in-app calendar + holocalls).
 export async function fetchCalendarEvents() {
   const res = await fetch('/api/calendar/events')

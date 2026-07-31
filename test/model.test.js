@@ -1290,3 +1290,113 @@ test('courtVoice: the warehouse line is empty at zero so the group can hide', ()
   assert.match(warehouseLine(1), /one of ours/)
   assert.match(warehouseLine(3), /Got 3 of ours/)
 })
+
+// ── Departures are SHIPMENTS, not fulfilments (Nima, 2026-08-02) ─────────────
+// 2026-07-30 rendered as 50 departures everywhere. It was 8 — seven
+// Bloomingdale's BOLs plus one parcel. Every EDI DC gets its own IF, so counting
+// IFs inflates departures ~6×.
+import { groupDepartures, departureSummary, departureLabel } from '../src/model/departures.js'
+
+const BOLS = [
+  { id: 1, bolNumber: 'NB1731234', dc: 'SC', partner: "Bloomingdale's", memberPos: ['7527086', '7590875', '7776940'] },
+  { id: 2, bolNumber: 'NB1731236', dc: 'JP', partner: "Bloomingdale's", memberPos: ['7590875', '7776940'] },
+]
+
+test('departures: many IFs across one DC collapse into a single BOL shipment', () => {
+  const g = groupDepartures([
+    { ifNumber: 'IF7300', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+    { ifNumber: 'IF7301', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+    { ifNumber: 'IF7302', poDc: '7776940-SC', actualShipDate: '2026-07-30' },
+  ], BOLS)
+  assert.equal(g.length, 1, 'three IFs to the same BOL are one departure')
+  assert.equal(g[0].bolNumber, 'NB1731234')
+  assert.equal(g[0].fulfilments.length, 3)
+  assert.deepEqual(g[0].poNumbers, ['7590875', '7776940'])
+})
+
+test('departures: different DCs on the same PO stay separate shipments', () => {
+  // They physically go to different places on different BOLs.
+  const g = groupDepartures([
+    { ifNumber: 'IF7300', poDc: '7590875-SC' },
+    { ifNumber: 'IF7299', poDc: '7590875-JP' },
+  ], BOLS)
+  assert.equal(g.length, 2)
+  assert.deepEqual(g.map((x) => x.bolNumber).sort(), ['NB1731234', 'NB1731236'])
+})
+
+test('departures: a parcel is its own shipment — never lumped by customer', () => {
+  // Two boutique parcels to one customer are two consignments with two
+  // tracking numbers; merging them would undercount real departures.
+  const g = groupDepartures([
+    { ifNumber: 'IF7409', customer: 'Turner & Co', source: 'boutique' },
+    { ifNumber: 'IF7410', customer: 'Turner & Co', source: 'boutique' },
+  ], BOLS)
+  assert.equal(g.length, 2)
+  assert.equal(g[0].kind, 'parcel')
+})
+
+test('departures: freight with no BOL yet still consolidates per PO-DC', () => {
+  // Otherwise the day's count would change purely because paperwork caught up.
+  const g = groupDepartures([
+    { ifNumber: 'IF1', poDc: '9999999-CG' },
+    { ifNumber: 'IF2', poDc: '9999999-CG' },
+  ], BOLS)
+  assert.equal(g.length, 1)
+  assert.equal(g[0].bolNumber, null)
+  assert.equal(g[0].kind, 'freight')
+  assert.equal(departureLabel(g[0]), 'DC CG (no BOL yet)')
+})
+
+test('departures: the 7/30 shape — 50 fulfilments really were 8 shipments', () => {
+  const ifs = []
+  // 3 Bloomingdale's POs fanned across 2 DCs = 2 BOLs, 48 fulfilments.
+  for (let i = 0; i < 24; i++) ifs.push({ ifNumber: `IFa${i}`, poDc: '7590875-SC' })
+  for (let i = 0; i < 24; i++) ifs.push({ ifNumber: `IFb${i}`, poDc: '7776940-JP' })
+  ifs.push({ ifNumber: 'IF7281', customer: 'Rustan' }) // the lone parcel
+  const g = groupDepartures(ifs, BOLS)
+  assert.equal(g.length, 3)
+  assert.equal(departureSummary(g), '3 departures · 49 fulfilments')
+})
+
+test('departureSummary: never shows the fulfilment count alone', () => {
+  // The whole failure was a big number reading as a shipment count.
+  assert.equal(departureSummary([{ fulfilments: [1] }]), '1 departure')
+  assert.match(departureSummary([{ fulfilments: [1, 2, 3] }]), /1 departure · 3 fulfilments/)
+  assert.equal(departureSummary([]), '')
+})
+
+test('departures: a BOL leaves once even if its IFs were stamped on two days', () => {
+  const g = groupDepartures([
+    { ifNumber: 'IF1', poDc: '7590875-SC', actualShipDate: '2026-07-31' },
+    { ifNumber: 'IF2', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+  ], BOLS)
+  assert.equal(g.length, 1)
+  assert.equal(g[0].shipDate, '2026-07-30', 'earliest wins — the truck left once')
+})
+
+// ── PO-DC parsing (hardened 2026-08-02) ─────────────────────────────────────
+// Purchase orders contain dashes, so splitting on the FIRST one invented a DC:
+// Rustan's "720-0326-19551-" read as PO 720 in DC "0326-19551-", which made a
+// parcel count as its own freight departure. (splitPoDc is imported at the top.)
+
+test('splitPoDc: the normal shapes still parse', () => {
+  assert.deepEqual(splitPoDc('7590875-SC'), { poNumber: '7590875', dc: 'SC' })
+  assert.deepEqual(splitPoDc('50073677-799'), { poNumber: '50073677', dc: '799' })
+  assert.deepEqual(splitPoDc('50073677-089'), { poNumber: '50073677', dc: '089' })
+})
+
+test('splitPoDc: a PO containing dashes splits on the LAST one', () => {
+  assert.deepEqual(splitPoDc('720-0326-19551-CG'), { poNumber: '720-0326-19551', dc: 'CG' })
+})
+
+test('splitPoDc: rejects the junk the live data actually carries', () => {
+  for (const junk of ['-', 'KSA-', '16844-', '720-0326-19551-', 'Pre-Fall 26 Bags-', '', null]) {
+    assert.equal(splitPoDc(junk), null, `${JSON.stringify(junk)} is not a PO-DC`)
+  }
+})
+
+test('splitPoDc: a trailing fragment that is not DC-shaped is rejected', () => {
+  // "Pre-Fall 26 Bags" would otherwise yield DC "Fall 26 Bags".
+  assert.equal(splitPoDc('Pre-Fall 26 Bags'), null)
+  assert.equal(splitPoDc('EQUS100026915-'), null)
+})

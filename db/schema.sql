@@ -745,6 +745,33 @@ CREATE TABLE IF NOT EXISTS edi_fulfillment_pack (
 );
 CREATE INDEX IF NOT EXISTS idx_edi_fulfillment_pack_podc ON edi_fulfillment_pack(po_dc);
 
+-- fulfillment_dc (Nima, 2026-08-02): which PO and destination DC each item
+-- fulfilment belongs to — the durable IF↔BOL link.
+--
+-- Why this exists separately from edi_fulfillment_pack above: that table is
+-- REPLACED every sync and only ever holds UNSHIPPED fulfilments, so the moment
+-- freight departs its DC is forgotten. That's precisely when we need it, because
+-- a departure is counted per BOL and the BOL is identified by (partner, DC, POs).
+--
+-- The number this fixes: 2026-07-30 shows 50 fulfilments shipped, which reads as
+-- 50 shipments. It was 8 — seven Bloomingdale's BOLs plus one parcel. Each DC on
+-- an EDI PO gets its own IF, so counting IFs inflates departures roughly 6×.
+-- Nima: "each DC has multiple IF … that inflates the number … we should be able
+-- to associate the IF with the BOL and consolidate them as one big massive
+-- shipment."
+--
+-- UPSERT, never deleted — unlike every other EDI table here. A fulfilment that
+-- has shipped keeps its row forever; that is the entire point.
+CREATE TABLE IF NOT EXISTS fulfillment_dc (
+  if_number   TEXT PRIMARY KEY,
+  po_dc       TEXT NOT NULL,   -- raw custbody_po_cd_identifier, e.g. "7590875-SC"
+  po_number   TEXT,
+  dc          TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_dc_po ON fulfillment_dc(po_number);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_dc_dc ON fulfillment_dc(dc);
+
 -- BOL number sequence — the "never reuse a BOL" guarantee. A Postgres sequence
 -- never hands out the same value twice, even across rollbacks or deletes, so a
 -- voided shipment can never recycle its number. Base is arbitrary/readability

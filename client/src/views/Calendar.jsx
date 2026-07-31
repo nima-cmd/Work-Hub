@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SourceBadge } from '../lib.jsx'
 import { imagesFor } from '../data/characterImages.js'
-import { fetchCalendarEvents, createManualTask } from '../api.js'
+import { departureLabel, departureSummary } from '../../../src/model/departures.js'
+import { fetchCalendarEvents, createManualTask, fetchDepartures } from '../api.js'
 
 const DAY = 86400000
 
@@ -15,9 +16,14 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
   const [selected, setSelected] = useState(today)
   const [cursor, setCursor] = useState(today)
   const [cal, setCal] = useState({ configured: false, events: [] }) // Google Calendar
+  // Departures come from the API already grouped into SHIPMENTS. Deriving them
+  // from orders[].fulfillments here is what produced "50 departures" on
+  // 2026-07-30 when eight trucks left — every DC on an EDI PO has its own IF.
+  const [departures, setDepartures] = useState([])
 
   useEffect(() => {
     fetchCalendarEvents().then(setCal).catch(() => setCal({ configured: false, events: [] }))
+    fetchDepartures().then(setDepartures).catch(() => setDepartures([]))
   }, [])
 
   // ── every dated thing, indexed by day ─────────────────────────────────────
@@ -27,9 +33,10 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
     for (const o of orders) {
       if (o.shipDate) push(startOfDay(new Date(o.shipDate).getTime()), { cat: 'deadline', kind: 'Ship due', o })
       if (o.cancelDate) push(startOfDay(new Date(o.cancelDate).getTime()), { cat: 'deadline', kind: 'Cancel by', o })
-      for (const f of o.fulfillments || []) {
-        if (f.actualShipDate) push(startOfDay(new Date(f.actualShipDate).getTime()), { cat: 'shipped', kind: 'Departed', o, f })
-      }
+    }
+    // One entry per SHIPMENT — a BOL covering 18 fulfilments is one departure.
+    for (const d of departures) {
+      if (d.shipDate) push(startOfDay(new Date(d.shipDate).getTime()), { cat: 'shipped', kind: 'Departed', d })
     }
     for (const a of activity) push(startOfDay(new Date(a.createdAt).getTime()), { cat: 'journal', kind: a.kind?.replace('_', ' ') || 'note', a })
     for (const e of events) push(startOfDay(new Date(e.occurredAt).getTime()), { cat: 'ledger', kind: ledgerKind(e), e })
@@ -37,7 +44,7 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
       if (ev.start) push(startOfDay(new Date(ev.start).getTime()), { cat: 'invite', kind: ev.holocall ? 'Holocall' : 'Invite', ev })
     }
     return m
-  }, [orders, activity, events, cal])
+  }, [orders, activity, events, cal, departures])
 
   const openTasks = tasks.filter((t) => t.status === 'open')
   const overdue = []
@@ -132,7 +139,16 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
           if (!list.length) return null
           return (
             <div key={cat} className="calDayGroup">
-              <div className="taskGroupHead">{CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span></div>
+              <div className="taskGroupHead">
+                {CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span>
+                {/* Both numbers, always — "8" alone was previously "50", and a
+                    shipment count that silently means fulfilments is the whole
+                    bug this fixes. */}
+                {cat === 'shipped' && (() => {
+                  const s = departureSummary(list.map((i) => i.d))
+                  return s.includes('·') ? <span className="muted"> · {s.split('· ')[1]}</span> : null
+                })()}
+              </div>
               {list.map((it, i) => <DayItem key={i} it={it} onRefresh={onRefresh} />)}
             </div>
           )
@@ -150,11 +166,30 @@ const CAT_LABEL = {
 
 function DayItem({ it, onRefresh }) {
   if (it.cat === 'invite') return <InviteRow ev={it.ev} onRefresh={onRefresh} />
-  if (it.cat === 'deadline' || it.cat === 'shipped') {
+  // A departure is a shipment. Freight names its BOL and says how many
+  // fulfilments rode on it, so the consolidation is visible rather than implied.
+  if (it.cat === 'shipped') {
+    const d = it.d
+    const n = d.fulfilments?.length || 0
+    return (
+      <div className="calRow">
+        <span className="caltag sev-lo">{d.kind === 'freight' ? 'BOL out' : 'Departed'}</span>
+        <span className="so">{departureLabel(d)}</span>
+        <span className="cust">{d.customer || d.partner || ''}</span>
+        {n > 1 && (
+          <span className="calNote" title={d.fulfilments.map((f) => f.ifNumber).join(', ')}>
+            {n} fulfilments{d.dc ? ` · DC ${d.dc}` : ''}
+          </span>
+        )}
+        {d.source && <SourceBadge source={d.source} />}
+      </div>
+    )
+  }
+  if (it.cat === 'deadline') {
     return (
       <div className={'calRow ' + (it.kind === 'Cancel by' ? 'cancel' : '')}>
-        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : it.cat === 'shipped' ? 'sev-lo' : 'sev-mid')}>{it.kind}</span>
-        <span className="so">{it.f?.ifNumber || it.o.soNumber}</span>
+        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : 'sev-mid')}>{it.kind}</span>
+        <span className="so">{it.o.soNumber}</span>
         <span className="cust">{it.o.customer}</span>
         <SourceBadge source={it.o.source} />
       </div>

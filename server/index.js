@@ -26,12 +26,13 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
-  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
+  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
 import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
+import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
@@ -144,6 +145,17 @@ app.get('/api/ledger', async (req, res) => {
         limit,
       }),
     })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Departures counted as SHIPMENTS (Nima, 2026-08-02) — one BOL is one departure
+// however many item fulfilments it covers. ?from/&to bound the window.
+app.get('/api/departures', async (req, res) => {
+  try {
+    res.json({ departures: await getDepartures({ from: req.query.from || null, to: req.query.to || null }) })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
@@ -1161,6 +1173,15 @@ app.post('/api/internal/recurring-check', async (req, res) => {
           : { error: r.error }
       } catch (e) {
         console.error('NetSuite sync failed (recurring tasks still checked):', e.message)
+      }
+      // The durable IF → (PO, DC) link that lets a departure be counted per BOL
+      // instead of per fulfilment. Incremental (last 30 days) so it's one cheap
+      // query; the full history was a one-off `npm run backfill:fulfillment-dc`.
+      try {
+        const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+        await syncFulfillmentDc({ since })
+      } catch (e) {
+        console.error('fulfilment-DC sync failed (rest of the check continues):', e.message)
       }
       // The routing carton feed — the last source that used to need a manual CSV
       // export. Separate from the sync above because it reads a different record

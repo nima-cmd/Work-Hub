@@ -36,9 +36,10 @@ import {
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
   fetchCatalogueSkus, fetchIfStatusByPo,
   fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
-  fetchFulfilmentPack,
+  fetchFulfilmentPack, fetchFulfillmentDc,
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
+import { groupDepartures } from '../src/model/departures.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
@@ -558,6 +559,27 @@ export async function getLedgerDailyCounts({ from, to } = {}) {
     e.byType[r.eventType] = r.n
   }
   return [...byDay.values()]
+}
+
+// ── Departures = shipments, not fulfilments (Nima, 2026-08-02) ───────────────
+// "Each DC has multiple IF … that inflates the number." 2026-07-30 read as 50
+// departures everywhere; it was 8. See src/model/departures.js for the rule.
+// The DC of an ALREADY-SHIPPED fulfilment only survives in fulfillment_dc —
+// edi_fulfillment_pack drops it the moment freight leaves.
+export async function getDepartures({ from = null, to = null } = {}) {
+  const [dcByIf, shipments] = await Promise.all([fetchFulfillmentDc(), fetchRoutingShipments()])
+  const { rows } = await pool.query(
+    `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
+            f.actual_ship_date AS "actualShipDate", f.invoice_number AS "invoiceNumber",
+            o.customer, o.source, o.po_number AS "poNumber"
+       FROM fulfillments f LEFT JOIN orders o USING (so_number)
+      WHERE f.actual_ship_date IS NOT NULL
+        AND ($1::date IS NULL OR f.actual_ship_date >= $1)
+        AND ($2::date IS NULL OR f.actual_ship_date <  $2)`,
+    [from || null, to || null],
+  )
+  const enriched = rows.map((r) => ({ ...r, poDc: dcByIf.get(r.ifNumber)?.poDc || null }))
+  return groupDepartures(enriched, shipments)
 }
 
 // ── Character affection (Nima, 2026-07-17) — relationship tracker ────────────
