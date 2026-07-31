@@ -1,0 +1,316 @@
+<?xml version="1.0"?>
+<!DOCTYPE pdf PUBLIC "-//big.faceless.org//report" "report-1.1.dtd">
+<pdf>
+<head>
+  <link name="NotoSans" type="font" subtype="truetype"
+        src="${nsfont.NotoSans_Regular}"
+        src-bold="${nsfont.NotoSans_Bold}"
+        src-italic="${nsfont.NotoSans_Italic}"
+        src-bolditalic="${nsfont.NotoSans_BoldItalic}" bytes="2" />
+  <#if .locale == "zh_CN">
+    <link name="NotoSansCJKsc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKsc_Regular}" src-bold="${nsfont.NotoSansCJKsc_Bold}" bytes="2" />
+  <#elseif .locale == "zh_TW">
+    <link name="NotoSansCJKtc" type="font" subtype="opentype" src="${nsfont.NotoSansCJKtc_Regular}" src-bold="${nsfont.NotoSansCJKtc_Bold}" bytes="2" />
+  <#elseif .locale == "ja_JP">
+    <link name="NotoSansCJKjp" type="font" subtype="opentype" src="${nsfont.NotoSansCJKjp_Regular}" src-bold="${nsfont.NotoSansCJKjp_Bold}" bytes="2" />
+  <#elseif .locale == "ko_KR">
+    <link name="NotoSansCJKkr" type="font" subtype="opentype" src="${nsfont.NotoSansCJKkr_Regular}" src-bold="${nsfont.NotoSansCJKkr_Bold}" bytes="2" />
+  <#elseif .locale == "th_TH">
+    <link name="NotoSansThai" type="font" subtype="opentype" src="${nsfont.NotoSansThai_Regular}" src-bold="${nsfont.NotoSansThai_Bold}" bytes="2" />
+  </#if>
+
+  <macrolist>
+    <macro id="nlheader">
+      <#if record.custbody_priority_invoice = "High">
+        <table class="prioritybar">
+          <tr><td><span class="prioritytext">PRIORITY</span></td></tr>
+        </table>
+      </#if>
+
+      <table>
+        <tr>
+          <td class="logo" vertical-align="top" style="padding-top: 0;">
+            <#if companyInformation.logoUrl?length != 0>
+              <div style="margin-bottom: 10px;">
+                <@filecabinet nstype="image" src="${companyInformation.logoUrl}" />
+              </div>
+            </#if>
+
+            <#assign addr = salesorder.shipaddress?default("")>
+            <#assign city = salesorder.shipcity?default("")>
+            <#assign st = salesorder.shipstate?default("")>
+            <#assign country = salesorder.shipcountry?default("")>
+
+            <#if country == "US" && city?has_content && st?has_content>
+              <#assign addr = addr?replace(city + " " + st, city + ", " + st)>
+            </#if>
+
+            <p>${addr}</p>
+          </td>
+
+          <td align="center" vertical-align="bottom">
+            <#if record.custbody_if_dc_code?has_content>
+              <span class="dccode">DC: ${record.custbody_if_dc_code}</span>
+            </#if>
+          </td>
+
+          <td align="right" vertical-align="top" style="padding-bottom: 0;">
+            <p class="title">FULFILLMENT</p>
+            <p class="number" style="padding: 15px 0 10px 0;">${record.tranid}</p>
+            <p>${record.trandate}</p>
+
+            <#if salesorder.custbody_sales_rep?has_content>
+              <p>Sales Rep: <b>${salesorder.custbody_sales_rep}</b></p>
+            </#if>
+
+            <#if record.custbody_warehouse_contact?has_content>
+              <p>Warehouse Contact: <b>${record.custbody_warehouse_contact}</b></p>
+            </#if>
+          </td>
+        </tr>
+
+        <#assign startVal = "">
+        <#if salesorder.startdate?has_content>
+          <#assign startVal = salesorder.startdate>
+        <#elseif salesorder.custbody_hb_edi_ship_not_before_date?has_content>
+          <#assign startVal = salesorder.custbody_hb_edi_ship_not_before_date>
+        </#if>
+
+        <#assign cancelVal = "">
+        <#if salesorder.enddate?has_content>
+          <#assign cancelVal = salesorder.enddate>
+        <#elseif salesorder.custbody_hb_edi_cancel_date?has_content>
+          <#assign cancelVal = salesorder.custbody_hb_edi_cancel_date>
+        </#if>
+
+        <#assign customerNameWithID = record.entity>
+        <#assign spaceIndex = customerNameWithID?index_of(" ")>
+        <#if spaceIndex gte 0>
+          <#assign cleanName = customerNameWithID?substring(spaceIndex)?trim>
+        <#else>
+          <#assign cleanName = customerNameWithID?trim>
+        </#if>
+        <#assign parts = cleanName?split(" - ", 2)>
+
+        <tr>
+          <td class="nowrap" align="left" vertical-align="middle" colspan="2" style="padding-top: 0;">
+            <p class="number" style="line-height: 26px;">${parts[0]}</p>
+            <#if parts?size gt 1>
+              <p class="number" style="line-height: 26px;">${parts[1]}</p>
+            </#if>
+          </td>
+
+          <td class="nowrap" align="right" vertical-align="bottom" style="padding-top: 0;">
+            <#if startVal?has_content><p class="number" style="line-height: 26px;">Start: ${startVal}</p></#if>
+            <#if cancelVal?has_content><p class="number" style="line-height: 26px;">Cancel: ${cancelVal}</p></#if>
+          </td>
+        </tr>
+      </table>
+    </macro>
+  </macrolist>
+
+  <style type="text/css">
+    * {
+      <#if .locale == "zh_CN">
+        font-family: NotoSans, NotoSansCJKsc, sans-serif;
+      <#elseif .locale == "zh_TW">
+        font-family: NotoSans, NotoSansCJKtc, sans-serif;
+      <#elseif .locale == "ja_JP">
+        font-family: NotoSans, NotoSansCJKjp, sans-serif;
+      <#elseif .locale == "ko_KR">
+        font-family: NotoSans, NotoSansCJKkr, sans-serif;
+      <#elseif .locale == "th_TH">
+        font-family: NotoSans, NotoSansThai, sans-serif;
+      <#else>
+        font-family: NotoSans, sans-serif;
+      </#if>
+    }
+
+    table, th, tr { vertical-align: top; }
+    table { font-size: 10pt; width: 100%; }
+
+    th {
+      font-weight: bold;
+      font-size: 10pt;
+      vertical-align: middle;
+      padding: 6px 3px;
+      background-color: #cfd7e3;
+      color: #333333;
+    }
+
+    td { padding: 6px 3px; vertical-align: middle; }
+    p { line-height: 16px; margin: 0; padding: 0; }
+    b { font-weight: bold; color: #333333; }
+
+    .right { text-align: right; align: right; }
+    .nowrap { white-space: nowrap; }
+    .padl6 { padding-left: 6px; }
+    .padr6 { padding-right: 6px; }
+
+    table.prioritybar { width: 100%; margin-bottom: 5px; }
+    table.prioritybar tr { background-color: red; height: 15px; color: white; }
+    table.prioritybar td { padding: 0; text-align: center; }
+    .prioritytext { font-size: 16pt; }
+
+    .title { font-size: 28pt; }
+    .number { font-size: 16pt; }
+
+    .dccode { font-size: 26pt; font-weight: bold; }
+
+    table.bodyinfo { width: 100%; margin-top: 15px; }
+    table.bodyinfo th { text-align: left; }
+    table.bodyinfo td { padding-top: 8px; }
+
+    table.itemtable { width: 100%; margin-top: 10px; table-layout: fixed; }
+    table.itemtable th { padding-bottom: 10px; padding-top: 10px; }
+    table.itemtable td { overflow: visible; }
+
+    p.itemname { line-height: 150%; margin: 0; }
+    .legacy { font-size: 10pt; }
+
+    .rowA { background-color: #ffffff; }
+    .rowB { background-color: #e1e6ee; }
+
+    .totaldata_row { border: 1px solid #d3d3d3; }
+    td.totaldata { font-weight: bold; padding-bottom: 10px; padding-top: 10px; }
+
+    table.footer td { padding: 0; font-size: 11pt; }
+    td.barcode { width: 50%; }
+
+    hr {
+      border-top: 1px dashed #d3d3d3;
+      width: 100%;
+      color: #ffffff;
+      background-color: #ffffff;
+      height: 1px;
+    }
+
+    div.returnform {
+      width: 100%;
+      height: 200pt;
+      page-break-inside: avoid;
+      page-break-after: avoid;
+    }
+  </style>
+</head>
+
+<body header="nlheader" header-height="21%" footer="nlfooter" footer-height="20pt" padding="0.4in" size="Letter">
+  <#assign cleanedLocation = salesorder.item[0].location?replace("Warehouse Bulk : ", "")>
+
+  <table class="bodyinfo">
+    <tr>
+      <th class="left">PO#</th>
+      <th>Sales Order No.</th>
+      <th>${record.shipmethod@label}</th>
+      <th class="nowrap">${salesorder.item[0].location@label}</th>
+    </tr>
+    <tr>
+      <td class="left nowrap">${salesorder.otherrefnum}</td>
+      <td>${salesorder.tranid}</td>
+      <td>${record.shipmethod}</td>
+      <td class="nowrap">${cleanedLocation}</td>
+    </tr>
+  </table>
+
+  <#if salesorder.item?has_content>
+    <table class="itemtable">
+      <colgroup>
+        <col style="width: 68%;" />
+        <col style="width: 16%;" />
+        <col style="width: 16%;" />
+      </colgroup>
+
+      <thead>
+        <tr>
+          <th class="nowrap padl6">${salesorder.item[0].item@label}</th>
+          <th align="left" class="nowrap">Retail Price</th>
+          <th align="right" class="nowrap padr6">${salesorder.item[0].quantity@label}</th>
+        </tr>
+      </thead>
+
+      <#list salesorder.item?sort_by("item") as tranline>
+        <#assign rowClass = (tranline_index % 2 == 0)?then("rowA","rowB")>
+        <tr class="${rowClass}">
+          <td class="padl6">
+            <p class="itemname">
+              <span class="nowrap"><b>
+                <#if tranline.custcol_display_legacy_sku>
+                  ${tranline.custcol_legacy_sku}
+                <#else>
+                  ${tranline.item}
+                </#if>
+              </b></span><br/>
+              <span class="nowrap">${tranline.custcol_salesdescription}</span>
+              <#if tranline.custcol_legacy_sku?has_content>
+                <br/><span class="nowrap legacy">(<#if tranline.custcol_display_legacy_sku>${tranline.item}<#else>${tranline.custcol_legacy_sku}</#if>)</span>
+              </#if>
+            </p>
+          </td>
+
+          <td align="left" vertical-align="top" class="nowrap">${tranline.custcol_retail_price}</td>
+          <td align="right" class="nowrap padr6">${tranline.quantity}</td>
+        </tr>
+      </#list>
+
+      <tr class="totaldata_row">
+        <td class="padl6"><#if record.memo?has_content><b>${record.memo@label}:</b>${record.memo}</#if></td>
+        <td></td>
+        <td class="totaldata right nowrap padr6">
+          <span style="margin-right: 10px">Total:</span>${record.custbody_total_qty_if}
+        </td>
+      </tr>
+
+      <#if record.custbody_comments_from_customer?has_content>
+        <tr class="totaldata_row">
+          <td class="padl6" colspan="2">
+            <p><b>${record.custbody_comments_from_customer@label}:</b></p>
+            <p>${record.custbody_comments_from_customer}</p>
+          </td>
+          <td></td>
+        </tr>
+      </#if>
+    </table>
+  </#if>
+
+  <#if preferences.RETURNFORM && returnForm??>
+    <hr />
+    <div class="returnform">
+      <table style="width: 100%; margin-top: 10px;">
+        <tr>
+          <td>${companyInformation.companyName}</td>
+          <td class="right"><span class="number">${returnForm@title}</span></td>
+        </tr>
+      </table>
+
+      <table style="width: 100%; margin-top: 10px;">
+        <tr>
+          <td class="addressheader" colspan="4">${returnForm.returnAddress}</td>
+          <th>${returnForm.rmaNum}</th>
+          <th colspan="2">${returnForm.customerName}</th>
+          <th>${salesorder.tranid@label}</th>
+        </tr>
+        <tr>
+          <td class="address" colspan="4" rowspan="2">&nbsp;</td>
+          <td>&nbsp;</td>
+          <td colspan="2">${salesorder.entity}</td>
+          <td>${salesorder.tranid}</td>
+        </tr>
+        <tr>
+          <td colspan="4">&nbsp;</td>
+        </tr>
+      </table>
+
+      <table class="itemtable" style="margin-top: 10px;">
+        <thead>
+          <tr>
+            <th colspan="2">${returnForm.item}</th>
+            <th colspan="1">${returnForm.quantity}</th>
+            <th colspan="5">${returnForm.reason}</th>
+          </tr>
+        </thead>
+        <tr><td colspan="8">&nbsp;</td></tr>
+      </table>
+    </div>
+  </#if>
+</body>
+</pdf>
