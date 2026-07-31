@@ -208,6 +208,8 @@ export default function Routing() {
             <button className="btnGhost" onClick={() => setSelected(new Set())}>None</button>
           </div>
 
+          <PackWarning groups={groups} />
+
           <GapsPanel gaps={data.gaps} />
 
           <HeldPanel held={data.held} busy={busy} onRelease={onRelease} />
@@ -275,6 +277,51 @@ export default function Routing() {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// Short-packed fulfilments, hoisted to the top of the view (Nima, 2026-08-02).
+// The per-card badge is the detail; this is the thing you cannot scroll past.
+// A shortage that reaches a BOL means the 856 announces units that aren't in the
+// boxes, which is a chargeback — so it earns the same treatment as the gaps
+// panel rather than living only beside the group it belongs to.
+//
+// 'not_started' and 'in_progress' groups never appear here. Mid-pack most of the
+// board is unfinished, and warning about that would make this permanent
+// furniture that gets ignored — the same reasoning as the strip hiding itself
+// when clear.
+function PackWarning({ groups = [] }) {
+  const bad = groups.filter((g) => g.pack?.status === 'short' || g.pack?.status === 'over')
+  if (!bad.length) return null
+  const units = bad.reduce((n, g) => n + g.pack.shortUnits, 0)
+
+  return (
+    <div className="rt-gaps rt-packWarn">
+      <div className="rt-gapsHead">
+        ⚠ {bad.length} shipment{bad.length === 1 ? '' : 's'} {bad.length === 1 ? 'is' : 'are'} short {units} unit{units === 1 ? '' : 's'}
+        <span className="muted"> — packed cartons don’t add up to what the fulfilment says it ships</span>
+      </div>
+      <div className="rt-gapGroup">
+        <div className="rt-gapWhy">
+          Routing one of these transmits an 856 claiming units that aren’t in the boxes.
+          Go back to the fulfilment and finish it, then <b>⟳ Pull from NetSuite</b>.
+        </div>
+        {bad.map((g) => (
+          <div key={g.dcPoKey} className="rt-packRow">
+            <span className="rt-packRowDc">{g.dc}</span>
+            <span className="muted">{g.memberPos.join(', ')}</span>
+            {g.pack.problems.map((p) => (
+              <span key={p.ifNumber} className="rt-gapChip miss">
+                {p.ifNumber} · {p.packedUnits}/{p.ifUnits}
+                {p.blankCartons
+                  ? ` · ${p.cartons} carton${p.cartons === 1 ? '' : 's'} with no quantity entered`
+                  : ` · ${p.short} short`}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

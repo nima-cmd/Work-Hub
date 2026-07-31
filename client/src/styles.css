@@ -1956,6 +1956,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-gapChip.miss { color: var(--hi); border-color: rgba(248,81,73,0.5); background: rgba(248,81,73,0.08); }
 .rt-gapChip.stale { color: var(--mid); border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.08); }
 
+/* Short-pack warning (2026-08-02) — one row per shipment, its DC leading. */
+.rt-packWarn .rt-packRow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rt-packRowDc {
+  font-family: var(--display); font-weight: 800; font-size: 13px; color: var(--hi);
+  min-width: 3.5ch; letter-spacing: 0.04em;
+}
+
 /* ── Routing manual PO hold (Nima, 2026-07-22) ───────────────────────────── */
 .rt-memberPos { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .rt-poTag { display: inline-flex; align-items: center; gap: 2px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 3px 1px 7px; }
