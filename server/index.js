@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 
 import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
+  getLedger, getOrderLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
@@ -118,6 +119,40 @@ app.get('/api/credits', async (_req, res) => {
 app.get('/api/affection', async (_req, res) => {
   try {
     res.json(await getAffection())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── The ledger (2026-08-02) ──────────────────────────────────────────────────
+// /api/ledger?so=SO12293                one order's full history, oldest first
+// /api/ledger?from=…&to=…&type=…&q=…    a window / search, newest first
+// /api/ledger/daily?from=…&to=…         per-day counts for the Calendar
+app.get('/api/ledger', async (req, res) => {
+  try {
+    const { so, from, to, type, docType, q, limit } = req.query
+    if (so) return res.json(await getOrderLedger(so))
+    res.json({
+      events: await getLedger({
+        from: from || null,
+        to: to || null,
+        // ?type=A&type=B arrives as an array; a single one as a string.
+        type: type ? (Array.isArray(type) ? type : [type]) : null,
+        docType: docType || null,
+        q: q || null,
+        limit,
+      }),
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/ledger/daily', async (req, res) => {
+  try {
+    res.json(await getLedgerDailyCounts({ from: req.query.from || null, to: req.query.to || null }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

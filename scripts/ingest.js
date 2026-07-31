@@ -18,7 +18,7 @@ import {
   loadPurchaseOrders, prunePurchaseOrders,
   loadOrderConfirmations, pruneOrderConfirmations,
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
-  stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+  stampApprovedForShipping, stampShippedValue, clearDepartedCustody, deriveOrderEvents,
   loadShipCentralQueue, pruneShipCentralQueue,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -89,7 +89,7 @@ const scqRows = readLineLevelSource('ShipCentralSOQueue.csv', 'shipCentralQueue'
 
 // All writes in ONE transaction — a crash partway (e.g. a bad row) rolls the
 // whole import back rather than stranding orders at a half-updated stage.
-const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, suggestedMatches, candidates } = await withTransaction(async (db) => {
+const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, nEvents, eventTypes, suggestedMatches, candidates } = await withTransaction(async (db) => {
   for (const [key, count, mtime] of snapshots) await recordSnapshot(key, count, mtime, db)
   const nOrders = await loadOrders(orders, db)
   const nFul = await loadFulfillments(records, db)
@@ -114,13 +114,17 @@ const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScq
   const links = await fetchOcPoLinks(db)
   const { suggestedMatches, candidates } = computeOcPoMatches({ ocs, pos: openPos, links })
 
-  return { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, suggestedMatches, candidates }
+  // Last, because it reads the tables everything above has just written.
+  const { inserted: nEvents, byType: eventTypes } = await deriveOrderEvents({ mode: 'sync' }, db)
+
+  return { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScqPruned, nEvents, eventTypes, suggestedMatches, candidates }
 })
 
 console.log(`\n✅ Ingested: ${nOrders} orders · ${nFul} fulfillments · ${nInv} invoices · ${nPo} PO lines · ${nOc} OC lines`)
 if (nPruned) console.log(`   pruned ${nPruned} order(s) no longer in the open pipeline`)
 if (nPoPruned) console.log(`   pruned ${nPoPruned} PO line(s) no longer in the open PO receiving export`)
 if (nOcPruned) console.log(`   pruned ${nOcPruned} OC line(s) no longer in the open OC export`)
+if (nEvents) console.log(`   ledger: ${nEvents} order event(s) — ${Object.entries(eventTypes).map(([k, v]) => `${k} ${v}`).join(' · ')}`)
 if (nScq) console.log(`   ShipCentral queue: ${nScq} SO(s) staged to pack${nScqPruned ? `, pruned ${nScqPruned} no longer queued` : ''}`)
 if (suggestedMatches.length || candidates.length) {
   console.log(`   OC↔PO matching (not written — review manually): ${suggestedMatches.length} unambiguous suggestion(s), ${candidates.length} group(s) need a decision (contention/shortage)`)

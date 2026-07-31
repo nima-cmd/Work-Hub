@@ -5,6 +5,7 @@
 
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
+import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
 // so we can later flag "stuck N days in the same stage".
@@ -1613,6 +1614,82 @@ export async function stampShippedValue(records, db = pool) {
     n++
   }
   return n
+}
+
+// ── The order-event spine (2026-08-02) ───────────────────────────────────────
+// Turns `order_events` from a custody log into the ledger item A always called
+// for. Derivation rules and the honest-timestamp policy live in
+// src/model/orderEvents.js; this half only reads state and writes rows.
+//
+// Reads current document state rather than the import's `records`, which is
+// deliberate: it means the CSV importer, the live NetSuite sync and the backfill
+// all share one code path, and the backfill needs no logic of its own.
+
+// Everything the spine derives from, camelCased for the model.
+export async function fetchEventSnapshot(db = pool) {
+  const [orders, fulfillments, invoices, routing, edi] = await Promise.all([
+    db.query(`SELECT so_number AS "soNumber", first_seen AS "firstSeen" FROM orders`),
+    db.query(`SELECT if_number AS "ifNumber", so_number AS "soNumber", status,
+                     if_date AS "ifDate", actual_ship_date AS "actualShipDate"
+                FROM fulfillments`),
+    db.query(`SELECT inv_number AS "invNumber", so_number AS "soNumber", status FROM invoices`),
+    db.query(`SELECT rs.dc_po_key AS "dcPoKey", rs.bol_number AS "bolNumber",
+                     rs.auth_number AS "authNumber", rs.bol_generated_at AS "bolGeneratedAt",
+                     ra.created_at AS "authorizedAt"
+                FROM routing_shipment rs
+                LEFT JOIN routing_auth ra ON ra.auth_number = rs.auth_number
+               WHERE rs.bol_generated_at IS NOT NULL OR ra.created_at IS NOT NULL`),
+    db.query(`SELECT type, direction, stream, business_number AS "businessNumber",
+                     trading_partner AS "tradingPartner", created_at AS "createdAt"
+                FROM edi_transactions
+               WHERE direction = 'OUT' AND stream = 'LIVE' AND (type LIKE '856%' OR type LIKE '810%')`),
+  ])
+  return {
+    orders: orders.rows,
+    fulfillments: fulfillments.rows,
+    invoices: invoices.rows,
+    routing: routing.rows,
+    edi: edi.rows,
+  }
+}
+
+// The (type, doc) pairs already recorded, so a re-run is a no-op. Scoped to the
+// types this module owns — custody scans and REACHED_APPROVED are written by
+// other code and must not be touched.
+async function fetchKnownEventKeys(db = pool) {
+  const { rows } = await db.query(
+    `SELECT DISTINCT event_type, doc_type, doc_number FROM order_events WHERE event_type = ANY($1)`,
+    [DERIVED_TYPES],
+  )
+  return new Set(rows.map((r) => `${r.event_type}|${r.doc_type}|${r.doc_number}`))
+}
+
+// Derive and insert. `mode` is 'sync' (default) or 'backfill' — see the
+// honest-timestamp note in the model. `dryRun` reports without writing.
+// Returns { inserted, byType, mode }.
+export async function deriveOrderEvents({ mode = 'sync', dryRun = false, batchSize = 500 } = {}, db = pool) {
+  const snapshot = await fetchEventSnapshot(db)
+  const known = await fetchKnownEventKeys(db)
+  const toInsert = pendingEvents(deriveEvents(snapshot), known, { mode })
+  const byType = summarize(toInsert)
+  if (dryRun || !toInsert.length) return { inserted: 0, byType, mode, dryRun }
+
+  for (let i = 0; i < toInsert.length; i += batchSize) {
+    const chunk = toInsert.slice(i, i + batchSize)
+    const params = []
+    const tuples = chunk.map((e) => {
+      const vals = [e.eventType, e.docType, e.docNumber, e.soNumber, e.note, e.occurredAt]
+      const start = params.length
+      params.push(...vals)
+      return `(${vals.map((_, k) => `$${start + k + 1}`).join(',')}, 'derived')`
+    })
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, occurred_at, source)
+       VALUES ${tuples.join(',')}`,
+      params,
+    )
+  }
+  return { inserted: toInsert.length, byType, mode, dryRun: false }
 }
 
 // ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ──────────

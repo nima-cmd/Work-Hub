@@ -26,6 +26,7 @@ import {
   loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
   pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+  deriveOrderEvents,
   loadEdiPackages, loadCatalogueSkus,
   loadShipCentralQueue, pruneShipCentralQueue,
 } from './loadToDb.js'
@@ -109,7 +110,7 @@ export async function importBatch(files) {
 
   // One transaction for all writes: a bad row rolls back the whole upload
   // instead of leaving orders half-updated.
-  const { nOrders, nFul, nInv, nPruned } = await withTransaction(async (db) => {
+  const { nOrders, nFul, nInv, nPruned, nEvents } = await withTransaction(async (db) => {
     for (const [name, count, mtime] of snapshots) await recordSnapshot(name, count, mtime, db)
     for (const { key, rows } of lineLevel) {
       await LINE_LEVEL_MAPPERS[key].load(rows, db)
@@ -122,8 +123,10 @@ export async function importBatch(files) {
     await stampShippedValue(records, db) // snapshot shipped $ for the header credits
     await clearDepartedCustody(records, db) // close custody + prune box rows for IFs that shipped
     const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
-    return { nOrders, nFul, nInv, nPruned }
+    // Last, because it reads the tables the loaders above have just written.
+    const events = await deriveOrderEvents({ mode: 'sync' }, db)
+    return { nOrders, nFul, nInv, nPruned, nEvents: events.inserted }
   })
 
-  return { files: perFile, orders: nOrders, fulfillments: nFul, invoices: nInv, pruned: nPruned }
+  return { files: perFile, orders: nOrders, fulfillments: nFul, invoices: nInv, pruned: nPruned, events: nEvents }
 }

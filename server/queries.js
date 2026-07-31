@@ -15,6 +15,7 @@ import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
+import { SPINE_LABEL, timeline } from '../src/model/orderEvents.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -449,6 +450,112 @@ export async function getCredits({ today = new Date() } = {}) {
     waiting: Number(waiting.rows[0].total),
     month: monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
   }
+}
+
+// ── The ledger read (2026-08-02) ─────────────────────────────────────────────
+// "A repository we can go back and search through, and the basis for the
+// calendar showing what occurred every day." Two ways in:
+//
+//   • by order   — getOrderLedger('SO12293'): everything that happened to that
+//     order and to every document hanging off it.
+//   • by date    — getLedger({ from, to }): what occurred in a window, which is
+//     what the Calendar wants.
+//
+// Events are tagged `observed: true` when their date is a first-sighting rather
+// than a real source timestamp (see the order_events comment in schema.sql), so
+// the UI can say "seen on" instead of implying it knows the day it happened.
+
+// occurred_at is only a first-sighting for these three — nothing upstream
+// records when they actually happened.
+const OBSERVED_TYPES = ['PACKED', 'INVOICED', 'PAID']
+
+const LEDGER_FIELDS = `id, event_type AS "eventType", doc_type AS "docType",
+                       doc_number AS "docNumber", so_number AS "soNumber",
+                       note, source, occurred_at AS "occurredAt"`
+
+const decorate = (rows) =>
+  rows.map((r) => ({
+    ...r,
+    label: SPINE_LABEL.get(r.eventType) || r.eventType,
+    observed: OBSERVED_TYPES.includes(r.eventType),
+  }))
+
+// One order's complete history. An event is part of it when it names the SO, or
+// when it sits on a document belonging to the SO — the second half matters
+// because DC routing events and some EDI events have no so_number of their own.
+export async function getOrderLedger(soNumber) {
+  const so = String(soNumber || '').trim()
+  if (!so) return { soNumber: null, events: [] }
+
+  const { rows: docs } = await pool.query(
+    `SELECT 'IF' AS doc_type, if_number  AS doc_number FROM fulfillments WHERE so_number = $1
+     UNION ALL
+     SELECT 'INV',            inv_number                FROM invoices     WHERE so_number = $1`,
+    [so],
+  )
+  const ifs = docs.filter((d) => d.doc_type === 'IF').map((d) => d.doc_number)
+  const invs = docs.filter((d) => d.doc_type === 'INV').map((d) => d.doc_number)
+
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events
+      WHERE so_number = $1
+         OR (doc_type = 'SO'  AND doc_number = $1)
+         OR (doc_type = 'IF'  AND doc_number = ANY($2))
+         OR (doc_type = 'INV' AND doc_number = ANY($3))`,
+    [so, ifs, invs],
+  )
+  return { soNumber: so, documents: { fulfillments: ifs, invoices: invs }, events: timeline(decorate(rows)) }
+}
+
+// A window of the ledger, newest first — the Calendar's feed and the general
+// search. `q` matches a document number so "IF7413" finds its whole trail.
+export async function getLedger({ from = null, to = null, type = null, docType = null, q = null, limit = 500 } = {}) {
+  const params = []
+  const where = []
+  // Every '$?' in `sql` binds the SAME value — which is what the `q` clause
+  // needs, matching one search term against two columns.
+  const add = (sql, val) => { params.push(val); where.push(sql.replaceAll('$?', `$${params.length}`)) }
+
+  if (from) add('occurred_at >= $?', from)
+  if (to) add('occurred_at < $?', to)
+  if (type) add('event_type = ANY($?)', Array.isArray(type) ? type : [type])
+  if (docType) add('doc_type = $?', docType)
+  if (q) add('(doc_number ILIKE $? OR so_number ILIKE $?)', `%${q}%`)
+
+  params.push(Math.min(Number(limit) || 500, 2000))
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY occurred_at DESC, id DESC
+     LIMIT $${params.length}`,
+    params,
+  )
+  return decorate(rows)
+}
+
+// Per-day counts for the Calendar's dots — cheap enough to load a whole month.
+export async function getLedgerDailyCounts({ from, to } = {}) {
+  const { rows } = await pool.query(
+    `SELECT occurred_at::date AS day, event_type AS "eventType", count(*)::int AS n
+       FROM order_events
+      WHERE ($1::timestamptz IS NULL OR occurred_at >= $1)
+        AND ($2::timestamptz IS NULL OR occurred_at <  $2)
+      GROUP BY 1, 2 ORDER BY 1 DESC`,
+    [from || null, to || null],
+  )
+  const byDay = new Map()
+  for (const r of rows) {
+    // A pg DATE arrives as a JS Date; toISOString would shift it across the
+    // date line in a negative-offset timezone. Format from the local parts.
+    const d = r.day instanceof Date
+      ? `${r.day.getFullYear()}-${String(r.day.getMonth() + 1).padStart(2, '0')}-${String(r.day.getDate()).padStart(2, '0')}`
+      : String(r.day).slice(0, 10)
+    if (!byDay.has(d)) byDay.set(d, { day: d, total: 0, byType: {} })
+    const e = byDay.get(d)
+    e.total += r.n
+    e.byType[r.eventType] = r.n
+  }
+  return [...byDay.values()]
 }
 
 // ── Character affection (Nima, 2026-07-17) — relationship tracker ────────────
