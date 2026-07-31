@@ -819,3 +819,11 @@ export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
   return res.json()
 }
 
+
+// Did the scheduled syncs actually RUN? Distinct from fetchFreshness, which
+// reports how old the source data is — a stopped sync looks like a quiet day.
+export async function fetchSyncHealth() {
+  const res = await fetch('/api/sync-health')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

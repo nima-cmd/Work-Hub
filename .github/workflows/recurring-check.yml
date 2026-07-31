@@ -9,6 +9,19 @@ name: Recurring task check
 # — GitHub can delay a scheduled run (sometimes by many minutes) during high
 # platform load. Fine for a personal reminder; not a hard real-time guarantee.
 #
+# MEASURED REALITY (2026-07-31): this asks for */10 and actually fires roughly
+# every 90 MINUTES. Observed gaps over 24h: 1h00m, 1h14m, 1h23m, 1h25m, 1h32m,
+# 1h35m, 1h37m, 1h38m, 2h02m, 2h10m. Tightening the cron expression does not
+# help — GitHub throttles regardless. Two consequences worth knowing:
+#   • Mid-pack the routing feed can be ~90 min behind. That's what the "Pull
+#     from NetSuite" button on the Routing view is for.
+#   • Don't set a staleness alarm at the requested cadence; see
+#     src/model/syncHealth.js, which warns at 3h and alarms at 6h.
+#
+# A green run here does NOT mean the syncs inside it did anything: the endpoint
+# gates each one on its creds being present and returns 200 either way. Check
+# GET /api/sync-health for what actually completed.
+#
 # Setup (one-time, in this repo's GitHub settings — Settings → Secrets and
 # variables → Actions):
 #   RENDER_URL   e.g. https://work-hub.onrender.com (no trailing slash)

@@ -1400,3 +1400,52 @@ test('splitPoDc: a trailing fragment that is not DC-shaped is rejected', () => {
   assert.equal(splitPoDc('Pre-Fall 26 Bags'), null)
   assert.equal(splitPoDc('EQUS100026915-'), null)
 })
+
+// ── Live-sync health (2026-07-31) ───────────────────────────────────────────
+// Distinct from data freshness: a sync that STOPS looks exactly like a quiet
+// day. Both of this repo's silent-drift incidents were that shape — PR #16's
+// sync had no caller for a week, and the scheduled check returns 200 while the
+// NetSuite pull inside it does nothing when creds are missing on the deploy.
+import { computeSyncHealth, syncHealthLine, syncStatus } from '../src/model/syncHealth.js'
+
+const SYNC_NOW = new Date('2026-07-31T03:00:00Z')
+const hoursAgo = (h) => new Date(SYNC_NOW.getTime() - h * 3.6e6).toISOString()
+
+test('syncHealth: thresholds allow for GitHub throttling, not the requested cadence', () => {
+  // The workflow asks for every 10 min; GitHub really fires it ~90 min apart, so
+  // warning at 10 min would be permanently on — the same as being off.
+  assert.equal(syncStatus(1.5), 'ok')
+  assert.equal(syncStatus(2.9), 'ok')
+  assert.equal(syncStatus(4), 'warn')
+  assert.equal(syncStatus(7), 'stale')
+  assert.equal(syncStatus(null), 'never')
+})
+
+test('syncHealth: healthy when every live sync has run recently', () => {
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(1), ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'ok')
+  assert.equal(h.ok, true)
+  assert.equal(syncHealthLine(h), '', 'a healthy app shows no bar at all')
+})
+
+test('syncHealth: the worst single sync wins — averaging would hide the dead one', () => {
+  // The real 2026-07-30 shape: cartons current, NetSuite 5h behind.
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(5), ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'warn')
+  assert.match(syncHealthLine(h), /NetSuite orders & fulfilments last synced 5h ago/)
+})
+
+test('syncHealth: a sync that never ran is worse than a stale one', () => {
+  const h = computeSyncHealth({ ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'never')
+  assert.match(syncHealthLine(h), /has never completed a sync here/)
+})
+
+test('syncHealth: the line names the sync — an anonymous warning gets ignored', () => {
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(50), ediPackagesLive: hoursAgo(49) }, SYNC_NOW)
+  assert.equal(h.status, 'stale')
+  const line = syncHealthLine(h)
+  assert.match(line, /NetSuite/, 'names the worst offender')
+  assert.match(line, /2d 2h/, 'days once past 24h, not "50h"')
+  assert.match(line, /and 1 other/, 'says how many more are affected')
+})

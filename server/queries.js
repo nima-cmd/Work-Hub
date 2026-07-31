@@ -40,6 +40,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
+import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
@@ -718,6 +719,19 @@ export async function getFreshness() {
   const maxAgeHours = ages.length ? Math.max(...ages) : null
 
   return { status, maxAgeHours, warnHours: WARN_HOURS, staleHours: STALE_HOURS, sources }
+}
+
+// Live-sync health — did the scheduled syncs actually RUN? Separate question
+// from getFreshness() above, which measures how old the source data is. A sync
+// that stops looks exactly like a quiet day unless someone asks this.
+export async function getSyncHealth() {
+  const { rows } = await pool.query(
+    `SELECT source, MAX(imported_at) AS last_at FROM import_snapshots
+      WHERE source = ANY($1) GROUP BY source`,
+    [LIVE_SYNCS.map((s) => s.key)],
+  )
+  const lastBySource = Object.fromEntries(rows.map((r) => [r.source, r.last_at]))
+  return computeSyncHealth(lastBySource)
 }
 
 // ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────

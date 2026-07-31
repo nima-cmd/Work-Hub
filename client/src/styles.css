@@ -2347,3 +2347,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   font-size: 11px; padding: 2px 8px; border-radius: 6px;
   background: rgba(217,180,43,0.14); color: #d9b42b; border: 1px solid rgba(217,180,43,0.4);
 }
+
+/* Live-sync alarm (2026-07-31) — shown only when a sync has stopped arriving. */
+.syncAlarm {
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+  padding: 7px 12px; border-radius: 8px; margin-bottom: 10px;
+  background: rgba(217,130,43,0.10); border: 1px solid rgba(217,130,43,0.45); color: var(--mid);
+}
+.syncAlarm.stale, .syncAlarm.never {
+  background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.5); color: var(--hi);
+}
+.syncAlarmMark { font-size: 13px; }
