@@ -47,6 +47,9 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
         approvalStatus: '',
         actualShipDate: null,
         billingStatus: '',
+        // A temp order holding stock until the real one arrives. Excluded from
+        // getOrders, so it never surfaces as work — see db/schema.sql.
+        isPlaceholder: false,
       })
     }
     return orders.get(key)
@@ -58,7 +61,7 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     'shippingStatus', 'soStatus', 'amountPaid', 'shipDate', 'startDate',
     'endDate', 'cancelDate', 'notes', 'qtyOrdered', 'qtyAllocated',
     'qtyFulfilled', 'isAts', 'invoice', 'approvalStatus', 'actualShipDate',
-    'billingStatus',
+    'billingStatus', 'isPlaceholder',
   ]
 
   for (const rec of allRecords) {

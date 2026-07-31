@@ -91,6 +91,12 @@ export function mapOrderRow(row) {
   const soStatus = SO_STATUS[code] || code || ''
   // String, not number: SuiteQL hands custom list values back as strings.
   const onHold = String(row.approval_status ?? '') === String(APPROVAL_ON_HOLD)
+  // A placeholder is a temp order holding stock until the real one arrives
+  // (Nima, 2026-07-31: "we don't need to track it"). SuiteQL returns a checkbox
+  // as 'T'/'F'; anything else — including absent, which is what the CSV path
+  // sends — stays null so it can't wipe a known value.
+  const ph = row.is_placeholder
+  const isPlaceholder = ph === 'T' || ph === true ? true : (ph === 'F' || ph === false ? false : null)
 
   let stage = STAGE.OPEN
   if (terminal) stage = STAGE.SHIPPED
@@ -117,6 +123,7 @@ export function mapOrderRow(row) {
     // recently-closed window able to close an order out instead of losing it.
     billingStatus: terminal ? 'Fully Billed' : null,
     netsuiteStatusCode: code,
+    isPlaceholder,
     terminal,
   }
 }
@@ -166,7 +173,8 @@ export function orderSql(since) {
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
                  t.foreigntotal, t.otherrefnum,
-                 t.custbody_approval_status AS approval_status
+                 t.custbody_approval_status AS approval_status,
+                 t.custbody_is_placeholder AS is_placeholder
           FROM transaction t
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }

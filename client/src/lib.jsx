@@ -372,7 +372,7 @@ export const STAGE_ORDER = [
 ]
 
 export const STAGE_SHORT = {
-  ON_HOLD_APPROVAL: 'On Hold',
+  ON_HOLD_APPROVAL: 'Pending Approval',
   OPEN_NEEDS_FULFILLMENT: 'Pending Fulfillment',
   PICKED_NEEDS_PACK: 'Item Fulfillments',
   PACKED_PENDING_NEXT: 'Packed',

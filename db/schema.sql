@@ -1121,3 +1121,13 @@ CREATE TABLE IF NOT EXISTS asn_carton_run (
 -- EXISTS is a no-op once the table is in Neon (see the note at the top of this
 -- file) and silently ignores a changed column list.
 ALTER TABLE asn_carton_run ADD COLUMN IF NOT EXISTS scope TEXT;
+
+-- custbody_is_placeholder (Nima, 2026-07-31): a temp order that HOLDS STOCK until
+-- the real order arrives. His words: "we don't need to track it." So it is
+-- ingested (the row stays honest and visible in Neon) but excluded from
+-- getOrders, which is the single read path every work view uses — a placeholder
+-- can therefore never appear as something to fulfil.
+--
+-- ALTER, not a changed CREATE: CREATE TABLE IF NOT EXISTS is a no-op once the
+-- table exists in Neon and silently ignores a new column.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN DEFAULT false;

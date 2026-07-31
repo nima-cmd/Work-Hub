@@ -96,6 +96,16 @@ export async function getOrders() {
         FROM invoices i WHERE i.so_number = o.so_number
       ), '[]'::json) AS invoices
     FROM orders o
+    -- Placeholder orders are EXCLUDED here, at the single read path every work
+    -- view uses (Nima, 2026-07-31: a temp order holding stock until the real one
+    -- arrives — "we don't need to track it"). Filtering here rather than at
+    -- ingest means the row stays in Neon and stays honest: if one is later
+    -- converted to a real order, clearing the checkbox brings it straight back,
+    -- and nothing had to be deleted and re-discovered.
+    --
+    -- IS NOT TRUE rather than a false comparison: the column is null for every
+    -- CSV-sourced order, and testing equality with false would hide all of them.
+    WHERE o.is_placeholder IS NOT TRUE
   `)
 
   const today = new Date()

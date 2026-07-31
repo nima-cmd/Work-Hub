@@ -143,3 +143,22 @@ test('a shipped order stays shipped even if it was once held', () => {
   const r = mapOrderRow({ tranid: 'SO5', status: 'G', approval_status: APPROVAL_ON_HOLD })
   assert.equal(r.stage, STAGE.SHIPPED)
 })
+
+test('mapOrderRow: a placeholder order is flagged so it can be kept out of the queues', () => {
+  // A temp order that holds stock until the real one arrives — Nima: "we don't
+  // need to track it." SuiteQL returns a checkbox as 'T'/'F'.
+  assert.equal(mapOrderRow({ tranid: 'SO12261', status: 'B', is_placeholder: 'T' }).isPlaceholder, true)
+  assert.equal(mapOrderRow({ tranid: 'SO12262', status: 'B', is_placeholder: 'F' }).isPlaceholder, false)
+})
+
+test('mapOrderRow: an absent placeholder field is null, NOT false', () => {
+  // The CSV path knows nothing about this field. Sending false would let a CSV
+  // import overwrite what the live pull established — the same null-clobber that
+  // is_ats already guards against with a COALESCE in loadOrders.
+  assert.equal(mapOrderRow({ tranid: 'SO1', status: 'B' }).isPlaceholder, null)
+  assert.equal(mapOrderRow({ tranid: 'SO2', status: 'B', is_placeholder: null }).isPlaceholder, null)
+})
+
+test('orderSql: asks for the placeholder field too', () => {
+  assert.match(orderSql('2026-06-30'), /custbody_is_placeholder/)
+})

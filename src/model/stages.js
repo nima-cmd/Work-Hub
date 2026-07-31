@@ -33,11 +33,12 @@ export const STAGE_LABEL = {
   // on-hold = SO awaiting approval, open = approved SO awaiting fulfillment,
   // picked = an Item Fulfillment has been created.
   //
-  // "On Hold" rather than "Pending Approval" (2026-07-31): in this account the
-  // native Pending-Approval status is never used, and a hold is carried on
-  // custbody_approval_status = 2 "On Hold" while the order still reads Pending
-  // Fulfillment. The label has to match what Nima sees in NetSuite.
-  [STAGE.ON_HOLD]: 'Sales Order — On Hold',
+  // "Pending Approval" is NIMA'S word for it, and it wins over the field's own
+  // ("custbody_approval_status = 2 On Hold"). His framing: "that's an order in
+  // pending fulfilment that should be filtered out to pending approval instead.
+  // We can't Fulfill this till its approved." The stage's whole job is to say
+  // "not fulfillable yet, waiting on approval", so it's named for that.
+  [STAGE.ON_HOLD]: 'Sales Order — Pending Approval',
   [STAGE.OPEN]: 'Sales Order — Pending Fulfillment',
   [STAGE.PICKED]: 'Item Fulfillment',
   [STAGE.PACKED]: 'Packed — watching for invoice',
@@ -48,7 +49,7 @@ export const STAGE_LABEL = {
 
 // The single next action a human should take at each stage.
 export const NEXT_ACTION = {
-  [STAGE.ON_HOLD]: 'Wait — do not fulfill yet',
+  [STAGE.ON_HOLD]: 'Wait for approval — do not fulfill yet',
   [STAGE.OPEN]: 'Create an Item Fulfillment',
   [STAGE.PICKED]: 'Pack it',
   [STAGE.PACKED]: 'Invoice / progress it',
