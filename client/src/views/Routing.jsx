@@ -122,6 +122,10 @@ export default function Routing() {
   }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
   const onShip = (s) => run('ship' + s.id, () => setShipmentShipped(s.id, !s.shippedAt))
+  // Toggle the routed flag with no paperwork attached — Nordstrom never gets a
+  // number to record, so the status is the only thing that can move.
+  const onSetRouted = (s, routed) =>
+    run('routed' + s.id, () => setShipmentRefs(s.id, { status: routed ? 'routed' : 'needs_routing' }))
   function toggleGroup(id) {
     setGroupSel((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
@@ -239,6 +243,7 @@ export default function Routing() {
                   <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
                     onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
                     onShip={g.shipment ? onShip : null}
+                    onSetRouted={g.shipment ? onSetRouted : null}
                     groupable={partner === "Bloomingdale's"}
                     groupChecked={g.shipment ? groupSel.has(g.shipment.id) : false}
                     onToggleGroup={g.shipment ? () => toggleGroup(g.shipment.id) : null} />
@@ -478,7 +483,7 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -547,6 +552,23 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
               </span>
             )}
           </div>
+          {/* Mark routed by hand (Nima, 2026-08-02). Bloomingdale's reaches
+              'routed' through the portal — project/shipment numbers, then an
+              auth from the routing email. NORDSTROM HAS NONE OF THAT: it's
+              always CTE/CAIE with no auth email, so there was literally nothing
+              to enter and its BOLs sat on "Needs routing" forever. A plain
+              checkmark is the whole mechanism it needs. Left on every partner —
+              a Bloomingdale's shipment routed by phone deserves it too. */}
+          {onSetRouted && !s.shippedAt && (
+            <button className={'btnGhost rt-routedBtn' + (s.status === 'routed' ? ' on' : '')}
+              disabled={busy === 'routed' + s.id}
+              title={s.status === 'routed'
+                ? 'Put this back in the routing queue'
+                : 'Routing is done for this BOL — no number to record'}
+              onClick={() => onSetRouted(s, s.status !== 'routed')}>
+              {s.status === 'routed' ? '✓ Routed' : '○ Mark routed'}
+            </button>
+          )}
           {onShip && (
             <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '')} disabled={busy === 'ship' + s.id}
               title={s.shippedAt ? 'Move back to the active queue' : 'Shipment has physically left — archive it to the Shipped tab (record kept)'}
