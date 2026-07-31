@@ -107,7 +107,7 @@ function Tracking({ numbers = [] }) {
 // chip sitting next to a "73" reads as noise, which is the same failure that
 // buried SO12293. Volume already lives in the Command Center stage strip; this
 // strip is only the small, aging, someone-must-act set.
-export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNavigate }) {
+export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnCartons, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false)
   if (!labelGaps) return null
 
@@ -123,6 +123,12 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNa
   // needs reading, not re-sending, so it would dilute a re-send action.
   const asnStuck = ediGaps?.counts?.asnStuck ?? 0
   const invoiceStuck = ediGaps?.counts?.invoiceStuck ?? 0
+  // Cartons that shipped and appear on NO delivered ASN. Kept as its own chip
+  // rather than folded into asnStuck above, per the never-lump rule: an
+  // undelivered DOCUMENT and an undeclared BOX are different failures with
+  // different fixes — one 856 is stuck in transport, the other was never sent for
+  // that carton at all. Summing them would hide which one you're looking at.
+  const cartonsUnannounced = asnCartons?.counts?.undeclared ?? 0
 
   // The oldest ACTIONABLE parcel item, named. Freight is excluded on purpose —
   // an un-BOL'd freight shipment isn't a label problem and would only inflate
@@ -141,6 +147,8 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNa
       title: 'Packed and waiting on an invoice' },
     { key: 'asnStuck', n: asnStuck, label: 'ASNs never sent', tone: 'bad', to: 'edi',
       title: 'Outbound 856s sitting undelivered in Orderful. NetSuite marks them synced, so this fails silently — the partner was never told the shipment is coming' },
+    { key: 'cartonsUnannounced', n: cartonsUnannounced, label: 'cartons unannounced', tone: 'bad', to: 'edi',
+      title: 'These cartons shipped and are on no delivered ASN — the partner received boxes it was never told about. The box is already gone, so the fix is sending the 856' },
     { key: 'invoiceStuck', n: invoiceStuck, label: 'invoices never sent', tone: 'warn', to: 'edi',
       title: 'Outbound 810s that never reached the partner — billed in NetSuite but never actually transmitted' },
     { key: 'canShip', n: canShip, label: 'can ship', tone: 'ok', to: 'launch',

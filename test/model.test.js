@@ -31,6 +31,7 @@ import { extractPoDates } from '../src/ingest/orderfulDates.js'
 import { extractAsnManifest } from '../src/ingest/orderfulAsn.js'
 import {
   normalizeSscc, checkAsnCartons, undeclaredByFulfilment, asnSummary,
+  asnCheckDue, ASN_CHECK_MIN_HOURS, findingRows,
 } from '../src/model/asnCartonCheck.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
 
@@ -1657,4 +1658,69 @@ test('asn: a carton announced on two ASNs explains the declared-count gap', () =
   assert.equal(r.counts.declared, 2)
   assert.equal(r.counts.reDeclared, 1)
   assert.deepEqual(r.reDeclared[0].declaredOn, ['6592086SC', '6592086ST'])
+})
+
+test('asn: a check that has never run is always due — that is the failure mode here', () => {
+  // This repo has twice shipped a module with no caller, which looks exactly
+  // like a working feature. "Never ran" must never read as "nothing to do".
+  assert.equal(asnCheckDue(null), true)
+  assert.equal(asnCheckDue(undefined), true)
+})
+
+test('asn: the cadence skips a fresh run and allows a stale one', () => {
+  const now = new Date('2026-07-31T18:00:00Z')
+  const hoursAgo = (h) => new Date(now.getTime() - h * 3600000)
+  assert.equal(asnCheckDue(hoursAgo(1), now), false)
+  assert.equal(asnCheckDue(hoursAgo(ASN_CHECK_MIN_HOURS - 0.1), now), false)
+  assert.equal(asnCheckDue(hoursAgo(ASN_CHECK_MIN_HOURS), now), true)
+  assert.equal(asnCheckDue(hoursAgo(30), now), true)
+  // A timestamp in the future (clock skew between the deploy and Neon) must not
+  // wedge the check off forever — it reads as due.
+  assert.equal(asnCheckDue(new Date(now.getTime() + 3600000), now), true)
+})
+
+test('asn: findingRows keeps the matched cartons, not just the failures', () => {
+  // The headline is "710/710 announced". Storing only failures would leave the
+  // UI able to say no problems found, which is also what never-looked says.
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF6941', poDc: '6592086-CG' },
+      { sscc: '185072747000000002', ifNumber: 'IF6941', poDc: '6592086-CG' },
+    ],
+    declared: [{ sscc: '00185072747000000001', businessNumber: '6592086SC' }],
+  })
+  const rows = findingRows(r)
+  const matched = rows.filter((x) => x.finding === 'matched')
+  const undeclared = rows.filter((x) => x.finding === 'undeclared')
+  assert.equal(matched.length, 1)
+  assert.deepEqual(matched[0].declaredOn, ['6592086SC'])
+  assert.equal(undeclared.length, 1)
+  assert.equal(undeclared[0].ifNumber, 'IF6941')
+  assert.equal(undeclared[0].poDc, '6592086-CG')
+})
+
+test('asn: a duplicated SSCC becomes one row per fulfilment — which boxes clash is the point', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000009', ifNumber: 'IF7001' },
+      { sscc: '185072747000000009', ifNumber: 'IF7002' },
+    ],
+    declared: [{ sscc: '00185072747000000009', businessNumber: '6592086SC' }],
+  })
+  const dup = findingRows(r).filter((x) => x.finding === 'duplicated')
+  assert.deepEqual(dup.map((d) => d.ifNumber), ['IF7001', 'IF7002'])
+  // Also still matched — the counts come off the run row, never off these rows,
+  // precisely because one carton can carry two findings.
+  assert.equal(findingRows(r).filter((x) => x.finding === 'matched').length, 1)
+})
+
+test('asn: a blank-SSCC carton still records WHICH fulfilment to go fix', () => {
+  const r = checkAsnCartons({
+    packed: [{ sscc: '', ifNumber: 'IF7439', poDc: '6592086-799' }],
+    declared: [{ sscc: '00185072747000000001', businessNumber: '6592086SC' }],
+  })
+  const blank = findingRows(r).filter((x) => x.finding === 'blank_sscc')
+  assert.equal(blank.length, 1)
+  assert.equal(blank[0].sscc, null)
+  assert.equal(blank[0].ifNumber, 'IF7439')
 })

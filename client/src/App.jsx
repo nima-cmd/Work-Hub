@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -156,6 +156,7 @@ export default function App() {
   // — and lifting them means the Command view no longer fetches them twice.
   const [labelGaps, setLabelGaps] = useState(null)
   const [ediGaps, setEdiGaps] = useState(null)
+  const [asnCartons, setAsnCartons] = useState(null)
   const [custody, setCustody] = useState(null)
   const [bay, setBay] = useState(null)
   const fileRef = useRef(null)
@@ -180,6 +181,9 @@ export default function App() {
     // the strip doesn't render, it never blocks the app.
     fetchLabelGaps().then(setLabelGaps).catch(() => setLabelGaps(null))
     fetchEdiDeliveryGaps().then(setEdiGaps).catch(() => setEdiGaps(null))
+    // Cartons that shipped with no delivered ASN. A Neon read of the last
+    // scheduled run — never the run itself, which reads NetSuite and Orderful.
+    fetchAsnCartons().then(setAsnCartons).catch(() => setAsnCartons(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
@@ -286,7 +290,7 @@ export default function App() {
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
         <SyncAlarm health={syncHealth} />
-        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} onNavigate={setView} />
+        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS}

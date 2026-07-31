@@ -45,6 +45,7 @@ import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/mo
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
+import { asnCheckDue, asnSummary, ASN_CHECK_MIN_HOURS, ASN_CHECK_WINDOW_DAYS } from '../src/model/asnCartonCheck.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
@@ -2319,4 +2320,145 @@ export async function getUpsConnection() {
     ready: wholesale.healthy,
     fix: wholesale.healthy ? null : 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect/re-authorize.',
   }
+}
+
+// ── Did every carton that shipped get announced? (Nima, 2026-07-31) ──────────
+// The comparison is src/model/asnCartonCheck.js; the run is
+// src/ingest/asnCartonSync.js. These two functions are the app's side of it: one
+// reads the last run's verdict for the UI, the other decides whether the
+// schedule should run it again.
+//
+// Read-only and cheap — Neon rows only. The run itself can't answer an HTTP
+// request (one Orderful message GET per delivered ASN, 212 live), which is
+// exactly why it persists.
+export async function getAsnCartonCheck() {
+  // The verdict comes from the last run that actually COMPLETED, and a failure
+  // since then is reported alongside it rather than replacing it. Showing only
+  // the newest row would throw away "710/710 as of this morning" the moment one
+  // run hit a NetSuite hiccup — and "no data" is the one answer this check must
+  // never give when it has an answer.
+  const { rows: runs } = await pool.query(
+    'SELECT * FROM asn_carton_run ORDER BY ran_at DESC FETCH FIRST 5 ROWS ONLY')
+  const latest = runs[0]
+  const run = runs.find((r) => !r.error)
+  const failedSince = latest && latest.error ? { ranAt: latest.ran_at, error: latest.error } : null
+
+  // Never run is its own answer, not an empty result. A check that has never
+  // executed looks identical to a clean one unless it says so.
+  if (!run) {
+    return { neverRun: true, minHours: ASN_CHECK_MIN_HOURS, counts: null,
+      headline: failedSince ? 'last run failed' : 'never run', failedSince,
+      undeclared: [], phantom: [], blankSscc: [], duplicated: [] }
+  }
+
+  const { rows } = await pool.query(
+    `SELECT sscc, finding, if_number, po_dc, declared_on FROM asn_carton_check
+      WHERE finding <> 'matched' ORDER BY finding, if_number, sscc`)
+
+  // Grouped by fulfilment, because you re-send an ASN for a shipment, not for a
+  // single box. Same grain as undeclaredByFulfilment() in the model — done here
+  // since the rows arrive flat.
+  const byIf = new Map()
+  for (const r of rows.filter((r) => r.finding === 'undeclared')) {
+    const k = r.if_number || '(unknown IF)'
+    if (!byIf.has(k)) byIf.set(k, { ifNumber: r.if_number, poDc: r.po_dc, ssccs: [] })
+    byIf.get(k).ssccs.push(r.sscc)
+  }
+  const blank = new Map()
+  for (const r of rows.filter((r) => r.finding === 'blank_sscc')) {
+    const k = r.if_number || '(unknown IF)'
+    if (!blank.has(k)) blank.set(k, { ifNumber: r.if_number, poDc: r.po_dc, cartons: 0 })
+    blank.get(k).cartons++
+  }
+  const dup = new Map()
+  for (const r of rows.filter((r) => r.finding === 'duplicated')) {
+    if (!dup.has(r.sscc)) dup.set(r.sscc, { sscc: r.sscc, ifNumbers: [] })
+    dup.get(r.sscc).ifNumbers.push(r.if_number)
+  }
+
+  const counts = run.counts || {}
+  return {
+    neverRun: false,
+    ranAt: run.ran_at,
+    status: run.status,
+    // The same one-liner the CLI prints, so the tab and the terminal never
+    // disagree about what the run found.
+    headline: asnSummary({ status: run.status, counts }),
+    counts,
+    scope: {
+      kind: run.scope,
+      pos: run.pos,
+      posRequested: run.pos_requested,
+      docsDelivered: run.docs_delivered,
+      docsUndelivered: run.docs_undelivered,
+      fulfillments: run.fulfillments,
+      shipped: run.shipped,
+      messageErrors: run.message_errors,
+    },
+    minHours: ASN_CHECK_MIN_HOURS,
+    due: asnCheckDue(run.ran_at),
+    failedSince,
+    undeclared: [...byIf.values()].sort((a, b) => b.ssccs.length - a.ssccs.length),
+    phantom: rows.filter((r) => r.finding === 'phantom').map((r) => ({ sscc: r.sscc, declaredOn: r.declared_on || [] })),
+    blankSscc: [...blank.values()],
+    duplicated: [...dup.values()],
+  }
+}
+
+// Run it and wait. `force` bypasses the ASN_CHECK_MIN_HOURS cadence (see the
+// model for why six hours).
+//
+// SCOPE: activity in the last ASN_CHECK_WINDOW_DAYS, on BOTH sides — POs with a
+// recent 856 and POs that shipped recently (a carton going out today on a PO
+// whose last ASN is old is precisely what must not be missed). The comparison is
+// still whole-PO, so nothing reads as a phantom just for being older.
+//
+// Not the full history, measured 2026-07-31 and deliberately: a full audit is
+// ~14 minutes and reports 127 undeclared cartons on 2023-era POs (IF4256–IF5513,
+// the POJ…-SBX2 era, one phantom SSCC literally "12345678910123456789"). Pinning
+// years of unactionable history to a live panel is how a check stops being read.
+// Run `npm run check:asn-cartons -- --all` for the audit.
+export async function runAsnCartonCheck({ force = false } = {}) {
+  const { rows } = await pool.query('SELECT MAX(ran_at) AS last FROM asn_carton_run')
+  const last = rows[0]?.last || null
+  if (!force && !asnCheckDue(last)) return { skipped: 'not due', lastRanAt: last }
+
+  const { syncAsnCartons } = await import('../src/ingest/asnCartonSync.js')
+  const r = await syncAsnCartons({ sinceDays: ASN_CHECK_WINDOW_DAYS })
+  if (!r.ok) throw new Error(r.error)
+  if (r.empty) return { skipped: r.reason }
+  return { ok: true, status: r.run.status, counts: r.run.counts, scope: { pos: r.run.pos, shipped: r.run.shipped } }
+}
+
+// Kick it off WITHOUT waiting, which is how both callers use it.
+//
+// The full run is minutes of SuiteQL (the PO scope is the whole 856 history,
+// chunked 50 POs at a time), and holding an HTTP request open that long is what
+// makes a scheduled POST fail through Render for reasons that have nothing to do
+// with the check. So: return immediately, let it finish.
+//
+// A failure is written to asn_carton_run.error rather than logged and lost.
+// Detached work that fails silently is exactly the shape of bug this repo keeps
+// paying for — a check nobody can see failing reads as a check that passed.
+let asnCheckInFlight = false
+export async function startAsnCartonCheck({ force = false } = {}) {
+  if (asnCheckInFlight) return { skipped: 'already running' }
+  const { rows } = await pool.query('SELECT MAX(ran_at) AS last FROM asn_carton_run')
+  const last = rows[0]?.last || null
+  if (!force && !asnCheckDue(last)) return { skipped: 'not due', lastRanAt: last, minHours: ASN_CHECK_MIN_HOURS }
+
+  asnCheckInFlight = true
+  runAsnCartonCheck({ force: true })
+    .then((r) => console.log('ASN carton check:', JSON.stringify(r)))
+    .catch(async (e) => {
+      console.error('ASN carton check failed:', e.message)
+      try {
+        await pool.query(
+          `INSERT INTO asn_carton_run (status, error) VALUES ('error', $1)`, [e.message])
+      } catch (e2) {
+        console.error('could not record the ASN check failure:', e2.message)
+      }
+    })
+    .finally(() => { asnCheckInFlight = false })
+  return { started: true, lastRanAt: last }
 }

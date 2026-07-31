@@ -792,6 +792,24 @@ export async function fetchEdiDeliveryGaps() {
   return res.json()
 }
 
+// Carton-level ASN reconciliation (Nima, 2026-07-31) — every carton that shipped
+// vs every SSCC on a DELIVERED 856. The sibling of the pack check one level down:
+// that one asks whether every unit made it into a box, this asks whether every box
+// that left was announced. Reads the last scheduled run; the run is a sync.
+export async function fetchAsnCartons() {
+  const res = await fetch('/api/asn-cartons')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Forces a run, ignoring the 6-hour cadence. Slow on purpose — it may have 856
+// bodies to harvest and two SuiteQL queries to make.
+export async function refreshAsnCartons() {
+  const res = await fetch('/api/asn-cartons/refresh', { method: 'POST' })
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Catalogue upload tracking (Nima, 2026-07-27)
 export async function fetchCatalogueGaps() {
   const res = await fetch('/api/catalogue/gaps')

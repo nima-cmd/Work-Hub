@@ -160,6 +160,71 @@ export function undeclaredByFulfilment(result) {
   return [...by.values()].sort((a, b) => b.ssccs.length - a.ssccs.length)
 }
 
+// Findings as rows. Matched cartons are kept, not just failures: the headline is
+// "710/710 announced", and that denominator is the evidence the two sides are
+// comparable at all. Counts are NOT derived from these rows — a duplicated SSCC
+// is also matched, so aggregating by finding would double-count. The run row
+// carries the model's counts verbatim instead.
+export function findingRows(result) {
+  const rows = []
+  for (const m of result.matched) {
+    rows.push({ sscc: m.sscc, finding: 'matched', ifNumber: m.ifNumber, poDc: m.poDc, declaredOn: m.declaredOn || [] })
+  }
+  for (const u of result.undeclared) {
+    rows.push({ sscc: u.sscc, finding: 'undeclared', ifNumber: u.ifNumber, poDc: u.poDc, declaredOn: [] })
+  }
+  for (const p of result.phantom) {
+    rows.push({ sscc: p.sscc, finding: 'phantom', ifNumber: null, poDc: null, declaredOn: p.declaredOn || [] })
+  }
+  for (const b of result.blankSscc) {
+    rows.push({ sscc: null, finding: 'blank_sscc', ifNumber: b.ifNumber ?? null, poDc: b.poDc ?? null, declaredOn: [] })
+  }
+  // One row per (SSCC, fulfilment) pair — the actionable fact about a duplicated
+  // license plate is WHICH boxes share it.
+  for (const d of result.duplicated) {
+    for (const ifNumber of d.ifNumbers) {
+      rows.push({ sscc: d.sscc, finding: 'duplicated', ifNumber, poDc: null, declaredOn: [] })
+    }
+  }
+  return rows
+}
+
+// How often the scheduled caller re-runs this. A full run costs one Orderful
+// message GET per delivered ASN the first time it sees it plus two SuiteQL
+// queries every time, and the recurring check fires roughly every 90 minutes
+// (GitHub throttles scheduled workflows — see syncHealth.js), so re-checking on
+// every cycle would spend NetSuite's shared concurrency allowance re-answering a
+// question whose inputs move a few times a day.
+//
+// Six hours is chosen against what it's protecting: an undeclared carton has
+// already left the building, so the fix is sending an ASN, not catching it in the
+// next ten minutes. A missed carton found four times a day is found in time.
+export const ASN_CHECK_MIN_HOURS = 6
+
+// How far back the SCHEDULED run looks for POs to check — on both sides: a
+// recent 856, or a recent shipment. Not the whole history, which the full audit
+// (`--all`) covers: measured 2026-07-31, full history is ~14 minutes and reports
+// 127 undeclared cartons on 2023-era POs, one of them announcing the SSCC
+// "12345678910123456789". Pinning years of unactionable history to a live panel
+// is how a check earns being ignored.
+//
+// 120 days, not 60, and the reason is a real finding: the first windowed run
+// caught Bloomingdale's IF6809 (PO 6049324, 4 cartons, shipped 2026-06-01, 810
+// invoiced and delivered, no 856 ever created) — 60 days old on the day it was
+// found, i.e. it would have aged out the following day. A window that only just
+// contains the thing it caught is set too tight. The run costs seconds, so the
+// only reason to bound it at all is keeping 2023-era junk off a live panel.
+export const ASN_CHECK_WINDOW_DAYS = 120
+
+// Never run at all → always due. That distinction matters here: this repo has
+// twice shipped a module with no caller, which looks exactly like a working
+// feature ([[netsuite-sync-wiring]]).
+export function asnCheckDue(lastRanAt, now = new Date(), minHours = ASN_CHECK_MIN_HOURS) {
+  if (!lastRanAt) return true
+  const ageHours = ((now instanceof Date ? now : new Date(now)).getTime() - new Date(lastRanAt).getTime()) / 3.6e6
+  return !(ageHours >= 0) || ageHours >= minHours
+}
+
 // One line for a badge. Always shows both numbers so a clean result still proves
 // it was checked, rather than silently showing nothing.
 export function asnSummary(result) {

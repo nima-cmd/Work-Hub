@@ -76,6 +76,7 @@ src/model/pipeline.js    merge sources → order; aging + ATS-aware flags
 src/model/source.js      EDI vs boutique classification
 src/model/upsRates.js    UPS wholesale rates + the never-mislabel-the-account rule
 src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 856
+src/ingest/asnCartonSync.js  runs that check + persists it (the CLI and the cron share it)
 src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
 src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account

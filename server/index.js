@@ -20,6 +20,7 @@ import {
   streamMasterBol, fileMasterToDrive, getLabelGaps, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
+  getAsnCartonCheck, startAsnCartonCheck,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
@@ -1142,6 +1143,32 @@ app.get('/api/edi-delivery-gaps', async (_req, res) => {
   }
 })
 
+// Carton-level ASN reconciliation — every carton that SHIPPED against every SSCC
+// on a DELIVERED 856 (Nima, 2026-07-31). Reads the last scheduled run out of
+// Neon; the run itself is far too expensive to do here (one Orderful message
+// body per delivered ASN).
+app.get('/api/asn-cartons', async (_req, res) => {
+  try {
+    res.json(await getAsnCartonCheck())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Re-check now, ignoring the 6-hour cadence — the button on the EDI tab.
+// Returns as soon as the run STARTS: a full pass is minutes of SuiteQL, and a
+// request held open that long fails for reasons unrelated to the check. The
+// client re-reads /api/asn-cartons to see the result land.
+app.post('/api/asn-cartons/refresh', async (_req, res) => {
+  try {
+    res.json(await startAsnCartonCheck({ force: true }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Scheduled trigger for the recurring-task engine (Gmail sync + the 9am/2pm
 // reminder + the daily CSV-freshness check) — meant to be called by an
 // external scheduler, not a browser. Render's own Cron Jobs have no free
@@ -1213,8 +1240,24 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('EDI carton feed failed (recurring tasks still checked):', e.message)
       }
     }
+    // Carton-level ASN reconciliation — did every carton that left get announced
+    // on an 856 the partner received? Needs BOTH integrations (NetSuite for the
+    // cartons, Orderful for the manifests), and self-limits to once every
+    // ASN_CHECK_MIN_HOURS so it isn't re-answered on every cycle. Best-effort,
+    // like the syncs above: a failure here must not cost the recurring tasks.
+    let asnCartons = null
+    if (netsuiteConfigured() && process.env.ORDERFUL_API_KEY) {
+      try {
+        // Detached — see startAsnCartonCheck. This response reports that it was
+        // STARTED, not what it found; the verdict lands in asn_carton_run.
+        asnCartons = await startAsnCartonCheck()
+      } catch (e) {
+        console.error('ASN carton check failed (recurring tasks still checked):', e.message)
+        asnCartons = { error: e.message }
+      }
+    }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, asnCartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
