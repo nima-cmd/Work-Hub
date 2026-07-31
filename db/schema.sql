@@ -223,6 +223,17 @@ CREATE TABLE IF NOT EXISTS edi_transactions (
   -- still get fetched exactly once instead of being skipped by a "both NULL"
   -- test. Same idempotency idiom as po_refs_checked. (Phase D, 2026-07-28.)
   po_dates_checked       BOOLEAN DEFAULT false,
+  -- 850s only: the PO's line items, parsed from the same /message body the
+  -- dates come from (PO1_loop → per line: style/UPC/qty/unit price). Lets the
+  -- app DIFF two versions of a re-sent 850 — Nordstrom/Shopbop/Bloomingdale's
+  -- re-transmit the same PO# when units or the ship window change, and this is
+  -- what shows exactly what changed between sends (2026-07-29). line_items is
+  -- the parsed array; total_units/line_count are cached rollups for cheap
+  -- comparison; po_lines_checked is the same fetch-once gate as the dates.
+  line_items             JSONB,
+  total_units            INTEGER,
+  line_count             INTEGER,
+  po_lines_checked       BOOLEAN DEFAULT false,
   synced_at              TIMESTAMPTZ DEFAULT now()
 );
 
@@ -230,6 +241,10 @@ ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS ship_not_before DATE;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS cancel_after DATE;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_refs_checked BOOLEAN DEFAULT false;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_dates_checked BOOLEAN DEFAULT false;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS line_items JSONB;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS total_units INTEGER;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS line_count INTEGER;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_lines_checked BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_edi_business_number ON edi_transactions(business_number);
 CREATE INDEX IF NOT EXISTS idx_edi_partner         ON edi_transactions(trading_partner);
@@ -398,7 +413,14 @@ ALTER TABLE edi_po_resolutions ADD COLUMN IF NOT EXISTS cancelled BOOLEAN DEFAUL
 --   'validated'  — confirmed real by tying it to its NetSuite order; the normal
 --                  856/810 flow resumes. (Nima's "review to park, validate by
 --                  confirming the NS order" model.)
+--   'unallocated'— parked with a REASON (Nima, 2026-07-29): the 850 arrived but
+--                  the units aren't allocated, so it can't be entered into
+--                  NetSuite yet. Behaves like 'in_review' (stops chasing docs),
+--                  but the partner re-sends the same PO# once it's allocatable —
+--                  so this state is what the version-diff re-check watches: a
+--                  newer, CHANGED 850 after this mark flips the PO to "re-check".
 --   null         — never touched; automatic tracking as before.
+-- (Free TEXT, no CHECK — new states are added here, not by migration.)
 ALTER TABLE edi_po_resolutions ADD COLUMN IF NOT EXISTS review_state TEXT;
 
 -- ── NetSuite Fulfillments (856 ASN search) — the BOL join key ────────────────
