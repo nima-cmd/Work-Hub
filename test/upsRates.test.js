@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import {
   UPS_ACCOUNTS, WHOLESALE_ACCOUNT, accountFromTracking, isWholesaleAccount, toPounds,
   weightMatches, eligibleActuals, normalizeActual, quoteFromActuals, liveFigure,
-  wholesaleFigure, crossChecks, rateAnswerForBox,
+  wholesaleFigure, crossChecks, rateAnswerForBox, isoDate,
 } from '../src/model/upsRates.js'
 import { mapShipmentRow, countByAccount } from '../src/ingest/shipstationCosts.js'
 import { rateRequest } from '../src/ingest/shipstationRates.js'
@@ -303,4 +303,28 @@ test('loadShipmentCosts respects the batch size so the parameter limit is never 
   assert.deepEqual(statements, [2000, 2000, 1000], '100+100+50 rows × 20 columns')
   // 500 × 20 = 10,000 bound parameters, well under Postgres's 65,535 ceiling.
   assert.ok(500 * 20 < 65535)
+})
+
+test('isoDate survives a pg DATE column, which arrives as a JS Date', () => {
+  // String(new Date(…)) is "Mon Apr 20 2026 …", so slicing 10 chars gave
+  // "Mon Apr 20" — which printed wrong AND made an April 2026 shipment compute as
+  // 308 months old. Caught live against real Neon rows.
+  assert.equal(isoDate(new Date('2026-04-20T00:00:00Z')), '2026-04-20')
+  assert.equal(isoDate('2026-04-20'), '2026-04-20')
+  assert.equal(isoDate('2026-04-20T08:40:11.560Z'), '2026-04-20')
+  assert.equal(isoDate('Mon Apr 20 2026'), null, 'a non-ISO string is rejected, not silently truncated')
+  assert.equal(isoDate(new Date('nonsense')), null)
+  assert.equal(isoDate(null), null)
+  assert.equal(isoDate(''), null)
+})
+
+test('staleness is computed correctly off a pg Date, not 300-odd months', () => {
+  const rows = Array.from({ length: 5 }, (_, i) => ({
+    trackingNumber: `1ZC6J61000000010${i}`, serviceCode: 'ups_ground', shipmentCost: 60 + i,
+    weightLb: 32, destPostal: '02554', destState: 'MA',
+    shipDate: new Date('2026-04-20T00:00:00Z'), voided: false,
+  }))
+  const q = quoteFromActuals(rows, { account: 'C6J610', serviceCode: 'ups_ground', weightLb: 32, destPostal: '02554', destState: 'MA' }, { asOfDate: '2026-08-02' })
+  assert.equal(q.asOf.to, '2026-04-20')
+  assert.equal(q.staleDays, 104, 'about three and a half months, not 300')
 })

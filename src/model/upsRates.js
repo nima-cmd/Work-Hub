@@ -68,6 +68,17 @@ export function accountFromTracking(tracking) {
 export const isWholesaleAccount = (account) => String(account || '').toUpperCase() === WHOLESALE_ACCOUNT
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
+
+// A DATE column comes back from pg as a JS Date, and String(date) is
+// "Mon Apr 20 2026 …" — slicing that to 10 chars yields "Mon Apr 20", which both
+// prints wrong and makes the staleness arithmetic nonsense (it reported an April
+// 2026 shipment as 308 months old). Normalize both shapes to YYYY-MM-DD.
+export function isoDate(d) {
+  if (!d) return null
+  if (d instanceof Date) return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+  const s = String(d).slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null
+}
 const zip3 = (p) => String(p || '').replace(/\D/g, '').slice(0, 3) || null
 const zip1 = (p) => String(p || '').replace(/\D/g, '').slice(0, 1) || null
 
@@ -167,7 +178,7 @@ export function quoteFromActuals(rows, target, { minSamples = 5, asOfDate = null
   if (!chosen || !chosen.hits.length) return null
 
   const costs = chosen.hits.map((r) => r.shipmentCost).sort((a, b) => a - b)
-  const dates = chosen.hits.map((r) => r.shipDate).filter(Boolean).map((d) => String(d).slice(0, 10)).sort()
+  const dates = chosen.hits.map((r) => isoDate(r.shipDate)).filter(Boolean).sort()
   const newest = dates.length ? dates[dates.length - 1] : null
   const ref = asOfDate ? new Date(asOfDate) : null
   const staleDays = newest && ref ? Math.round((ref - new Date(newest)) / 86400000) : null

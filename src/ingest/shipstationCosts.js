@@ -17,7 +17,7 @@
 // Rate limits: V1 allows 40 requests/minute and answers 429 with an
 // X-Rate-Limit-Reset (seconds). A full backfill is ~280 pages, so this waits out
 // the reset rather than hammering — a backfill is slow but unattended.
-import { accountFromTracking, toPounds } from '../model/upsRates.js'
+import { accountFromTracking, toPounds, isoDate } from '../model/upsRates.js'
 
 const V1 = 'https://ssapi.shipstation.com'
 
@@ -66,7 +66,7 @@ export function mapShipmentRow(s) {
     orderNumber: s.orderNumber ?? null,
     carrierCode: s.carrierCode ?? null,
     serviceCode: s.serviceCode ?? null,
-    shipDate: s.shipDate ? String(s.shipDate).slice(0, 10) : null,
+    shipDate: isoDate(s.shipDate),
     createDate: s.createDate ?? null,
     weightLb: toPounds(s.weight?.value, s.weight?.units),
     lengthIn: s.dimensions?.length ?? null,
