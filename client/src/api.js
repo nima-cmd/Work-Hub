@@ -827,3 +827,36 @@ export async function fetchSyncHealth() {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// The order ledger. Window mode: { from, to, type[], docType, q, limit }.
+export async function fetchLedger(opts = {}) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(opts)) {
+    if (v == null || v === '') continue
+    if (Array.isArray(v)) v.forEach((x) => p.append(k, x))
+    else p.set(k, v)
+  }
+  const qs = p.toString()
+  const res = await fetch('/api/ledger' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// One order's complete history — every event naming the SO or any document
+// hanging off it, oldest first.
+export async function fetchOrderLedger(soNumber) {
+  const res = await fetch('/api/ledger?so=' + encodeURIComponent(soNumber))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Per-day ledger counts for the Calendar's dots.
+export async function fetchLedgerDaily({ from = null, to = null } = {}) {
+  const p = new URLSearchParams()
+  if (from) p.set('from', from)
+  if (to) p.set('to', to)
+  const qs = p.toString()
+  const res = await fetch('/api/ledger/daily' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

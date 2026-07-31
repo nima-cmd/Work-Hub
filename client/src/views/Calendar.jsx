@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { SourceBadge } from '../lib.jsx'
 import { imagesFor } from '../data/characterImages.js'
 import { departureLabel, departureSummary } from '../../../src/model/departures.js'
-import { fetchCalendarEvents, createManualTask, fetchDepartures } from '../api.js'
+import { fetchCalendarEvents, createManualTask, fetchDepartures, fetchLedgerDaily } from '../api.js'
 
 const DAY = 86400000
 
@@ -20,10 +20,18 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
   // from orders[].fulfillments here is what produced "50 departures" on
   // 2026-07-30 when eight trucks left — every DC on an EDI PO has its own IF.
   const [departures, setDepartures] = useState([])
+  // Per-day ledger totals. The `events` prop is the newest 500 rows, which is
+  // fine for showing a day's detail but silently undercounts the grid once the
+  // ledger passes 500 (it's at 2,783). These counts come from a GROUP BY, so a
+  // day cell reports what actually happened rather than what fit in the feed.
+  const [ledgerDaily, setLedgerDaily] = useState(new Map())
 
   useEffect(() => {
     fetchCalendarEvents().then(setCal).catch(() => setCal({ configured: false, events: [] }))
     fetchDepartures().then(setDepartures).catch(() => setDepartures([]))
+    fetchLedgerDaily()
+      .then((rows) => setLedgerDaily(new Map(rows.map((r) => [r.day, r]))))
+      .catch(() => setLedgerDaily(new Map()))
   }, [])
 
   // ── every dated thing, indexed by day ─────────────────────────────────────
@@ -45,6 +53,12 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
     }
     return m
   }, [orders, activity, events, cal, departures])
+
+  // Local YYYY-MM-DD, matching how the daily-counts query formats its keys.
+  const dateKey = (ms) => {
+    const d = new Date(ms)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
 
   const openTasks = tasks.filter((t) => t.status === 'open')
   const overdue = []
@@ -101,6 +115,11 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
             const items = byDay.get(day) || []
             const cats = new Set(items.map((i) => i.cat))
             const inMonth = new Date(day).getMonth() === curMonth
+            // Ledger events counted from the server's GROUP BY, not the capped
+            // feed — so the number on a cell is the real one.
+            const ledgerN = ledgerDaily.get(dateKey(day))?.total ?? items.filter((i) => i.cat === 'ledger').length
+            const total = items.filter((i) => i.cat !== 'ledger').length + ledgerN
+            if (ledgerN > 0) cats.add('ledger')
             return (
               <button
                 key={day}
@@ -116,7 +135,7 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
                   {cats.has('journal') && <i className="calDot d-journal" title="journal" />}
                   {cats.has('invite') && <i className="calDot d-invite" title="calendar invite / holocall" />}
                 </div>
-                {items.length > 0 && <div className="calCount">{items.length}</div>}
+                {total > 0 && <div className="calCount">{total}</div>}
               </button>
             )
           })}

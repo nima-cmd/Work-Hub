@@ -2358,3 +2358,79 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.5); color: var(--hi);
 }
 .syncAlarmMark { font-size: 13px; }
+
+/* ── Ledger: order history (rebuilt 2026-07-31) ───────────────────────────── */
+.lgHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.lgHead h2 { margin: 0 0 4px; font-size: 20px; }
+.lgSub { font-size: 12px; max-width: 62ch; }
+.lgModes { display: flex; gap: 6px; flex: 0 0 auto; }
+.lgModes .btnGhost.on { border-color: var(--accent); color: var(--accent); }
+
+.lgBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.lgSelect {
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 8px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+}
+.lgCount { font-size: 12px; }
+.lgObsNote { font-style: normal; color: var(--mid); }
+
+.lgTypes { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 16px; }
+.lgType {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 3px 9px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+}
+.lgType.on { color: var(--text); border-color: currentColor; background: rgba(255,255,255,0.05); }
+
+/* One event. Tone says what KIND of moment it is; the dot carries the colour so
+   the row text stays readable. */
+.lgRows { display: flex; flex-direction: column; }
+.lgRow {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 5px 8px; border-left: 2px solid var(--line); font-size: 12.5px;
+}
+.lgRow:hover { background: rgba(255,255,255,0.03); }
+.lgWhen { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 5.5ch; font-size: 11.5px; }
+.lgDot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+.d-arrive { background: #58c7e0; }
+.d-hands  { background: #d9822b; }
+.d-money  { background: #7ee787; }
+.d-go     { background: #a371f7; }
+.d-edi    { background: #e3b341; }
+.lgLabel { font-weight: 600; }
+.lgDoc { font-variant-numeric: tabular-nums; color: var(--mid); }
+.lgSo {
+  font: inherit; font-size: 12px; cursor: pointer; padding: 1px 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.lgSo:hover { border-color: var(--accent); color: var(--accent); }
+.lgNote { color: var(--muted); font-style: italic; }
+
+/* An `observed` row is a different KIND of fact — a first sighting, not a
+   source timestamp. Dashed and muted so it can never be read as the real day.
+   Same discipline as wholesaleFigure() refusing to substitute an account. */
+.lgRow.observed { border-left-style: dashed; opacity: 0.78; }
+.lgRow.observed .lgWhen em { font-style: italic; }
+.lgObsTag {
+  font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 6px;
+}
+
+/* Order timeline — the spine, with the gaps left visible. */
+.lgOrder { max-width: 900px; }
+.lgOrderHead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.lgOrderHead h3 { margin: 0; font-size: 22px; font-variant-numeric: tabular-nums; }
+.lgSpine { display: flex; flex-direction: column; }
+.lgStage {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-left: 2px solid var(--line); font-size: 13px;
+}
+.lgStage.done { border-left-color: currentColor; }
+.lgStage.pending { opacity: 0.4; }
+/* Reached a later stage without this one — a real gap, not "not yet". */
+.lgStage.skipped { opacity: 0.55; border-left-style: dashed; }
+.lgStage.skipped .lgStageWhen { color: var(--hi); }
+.lgStageLabel { font-weight: 600; min-width: 22ch; }
+.lgStageWhen { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lgStageHit { color: var(--mid); }
+.lgStageHit.observed { border-bottom: 1px dashed var(--line); opacity: 0.8; }
