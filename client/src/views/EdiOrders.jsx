@@ -4,6 +4,7 @@ import {
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
+  fetchAsnCartons, refreshAsnCartons,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
@@ -15,6 +16,185 @@ const fmtD = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 
 const DAY_MS = 86400000
 const sod = (x) => { const d = new Date(x); d.setHours(0, 0, 0, 0); return d.getTime() }
+
+// ── Shipped cartons vs delivered ASNs (Nima, 2026-07-31) ─────────────────────
+// The pack check (on Routing) asks whether every unit on a fulfilment made it
+// into a carton. This is the next question down: did every carton that actually
+// LEFT get announced on an 856 the partner received? Both come back as the same
+// chargeback weeks later; the fixes are opposite.
+//
+// It lives here because this is where the ASN chips already point, and it reports
+// on shipped freight — which the Routing board, by design, no longer holds.
+//
+// The run is a scheduled sync (one Orderful message body per delivered ASN), so
+// this panel shows the LAST RUN and says when. Deliberately shows the matched
+// denominator on a clean result too: "710/710 announced" is a checked answer,
+// whereas a bare "no problems" is what never-looked also renders as.
+// What the run actually covered. A clean 120-day window is NOT a claim that the
+// whole history is clean, and the panel has to say which one it is showing —
+// otherwise the scheduled window quietly reads as an all-time all-clear.
+const scopeLabel = (kind) => {
+  if (!kind) return 'scope unrecorded'
+  if (kind === 'all') return 'full history'
+  if (kind === 'pos') return 'specific POs'
+  const m = /^window:(\d+)d$/.exec(kind)
+  if (m) return `last ${m[1]} days`
+  const r = /^recent:(\d+)$/.exec(kind)
+  return r ? `${r[1]} most recent ASNs` : kind
+}
+
+function AsnCartonPanel() {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = () => fetchAsnCartons().then(setData).catch((e) => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  async function recheck() {
+    setBusy(true); setErr(null)
+    try {
+      const r = await refreshAsnCartons()
+      if (r?.error) setErr(r.error)
+      await load()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  if (err && !data) return <div className="banner error">⚠ Couldn’t load the carton check: {err}</div>
+  if (!data) return null
+
+  const c = data.counts || {}
+  const s = data.scope || {}
+  const clean = !data.neverRun && data.status === 'ok'
+  const age = data.ranAt ? (Date.now() - new Date(data.ranAt).getTime()) / 3600000 : null
+
+  return (
+    <section style={{ marginTop: 28 }}>
+      <h2>
+        Shipped cartons vs ASNs{' '}
+        {data.neverRun
+          ? <span className="flag sev-hi">never run</span>
+          : clean
+            ? <span className="flag sev-lo">{data.headline}</span>
+            : <span className="flag sev-hi">{data.headline}</span>}
+      </h2>
+      <p className="hint">
+        Every carton NetSuite says <strong>shipped</strong>, matched by SSCC against every carton declared on a{' '}
+        <strong>delivered</strong> 856. An ASN still sitting in Orderful announced nothing, so it doesn’t count here.
+        {' '}Unannounced means the box is already gone — the fix is sending the ASN, not packing.
+      </p>
+
+      {data.neverRun ? (
+        <p className="hint">
+          Nothing recorded yet. It runs itself every {data.minHours}h with the scheduled check (needs both NetSuite and
+          Orderful), or press Re-check.
+        </p>
+      ) : (
+        <p className="hint">
+          Last run {new Date(data.ranAt).toLocaleString()}
+          {age != null && age >= 1 ? ` · ${Math.round(age)}h ago` : ''}
+          {' · '}{scopeLabel(s.kind)}
+          {' · '}{s.pos} PO(s){s.posRequested && s.pos > s.posRequested ? ` (${s.posRequested} asked for, closed over co-listed POs)` : ''}
+          {' · '}{s.docsDelivered} delivered ASN(s){s.docsUndelivered ? `, ${s.docsUndelivered} undelivered` : ''}
+          {' · '}{s.shipped} shipped fulfilment(s)
+          {c.reDeclared ? ` · ${c.reDeclared} carton(s) re-declared on a later ASN (benign)` : ''}
+          {s.messageErrors ? ` · ⚠ ${s.messageErrors} ASN body unreadable` : ''}
+        </p>
+      )}
+      {data.failedSince && (
+        // The verdict above is the last run that COMPLETED. This says a newer
+        // one failed, instead of the numbers silently going stale.
+        <div className="banner error">
+          ⚠ A later run failed at {new Date(data.failedSince.ranAt).toLocaleString()}: {data.failedSince.error}
+          {' '}— the counts above are from the last completed run.
+        </div>
+      )}
+      {err && <div className="banner error">⚠ {err}</div>}
+      {!!s.docsUndelivered && (
+        <p className="hint">
+          {s.docsUndelivered} of those 856s never reached the partner — those cartons can’t be reconciled here at all.
+          See the “ASNs never sent” chip.
+        </p>
+      )}
+
+      <button className="btnGhost" onClick={recheck} disabled={busy}>
+        {busy ? 'Checking… (reads NetSuite + Orderful)' : '↻ Re-check now'}
+      </button>
+
+      {!!data.undeclared.length && (
+        <>
+          <h3 style={{ marginTop: 16 }}>⚠ Shipped but never announced <span className="count">{c.undeclared}</span></h3>
+          <p className="hint">Grouped by fulfilment — you re-send an ASN for a shipment, not for a single box.</p>
+          <table className="grid">
+            <thead><tr><th>Fulfilment</th><th>PO-DC</th><th>Cartons</th><th>SSCCs</th></tr></thead>
+            <tbody>
+              {data.undeclared.map((g) => (
+                <tr key={g.ifNumber || 'unknown'}>
+                  <td className="mono">{g.ifNumber || '(unknown IF)'}</td>
+                  <td className="mono">{g.poDc || '—'}</td>
+                  <td>{g.ssccs.length}</td>
+                  <td className="mono cust">{g.ssccs.slice(0, 4).join(', ')}{g.ssccs.length > 4 ? ` … +${g.ssccs.length - 4}` : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {!!data.phantom.length && (
+        <>
+          <h3 style={{ marginTop: 16 }}>⚠ Announced but not in NetSuite <span className="count">{data.phantom.length}</span></h3>
+          <p className="hint">The partner is expecting a box that has no carton record — either it was deleted after the ASN went out, or the ASN invented it.</p>
+          <table className="grid">
+            <thead><tr><th>SSCC</th><th>Declared on</th></tr></thead>
+            <tbody>
+              {data.phantom.slice(0, 25).map((p) => (
+                <tr key={p.sscc}><td className="mono">{p.sscc}</td><td className="mono cust">{(p.declaredOn || []).join(', ')}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          {data.phantom.length > 25 && <p className="hint">… {data.phantom.length - 25} more.</p>}
+        </>
+      )}
+
+      {!!data.blankSscc.length && (
+        <>
+          <h3 style={{ marginTop: 16 }}>⚠ Cartons with no SSCC <span className="count">{c.blankSscc}</span></h3>
+          <p className="hint">Unreconcilable in either direction — the box exists but has no license plate. Same shape of miss as a carton with a weight and a blank quantity.</p>
+          <table className="grid">
+            <thead><tr><th>Fulfilment</th><th>PO-DC</th><th>Cartons</th></tr></thead>
+            <tbody>
+              {data.blankSscc.map((b) => (
+                <tr key={b.ifNumber || 'unknown'}><td className="mono">{b.ifNumber || '(unknown IF)'}</td><td className="mono">{b.poDc || '—'}</td><td>{b.cartons}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {!!data.duplicated.length && (
+        <>
+          <h3 style={{ marginTop: 16 }}>⚠ Duplicate SSCC <span className="count">{data.duplicated.length}</span></h3>
+          <p className="hint">One license plate on more than one carton — the partner’s receiving scan can’t tell them apart.</p>
+          <table className="grid">
+            <thead><tr><th>SSCC</th><th>On fulfilments</th></tr></thead>
+            <tbody>
+              {data.duplicated.map((d) => (
+                <tr key={d.sscc}><td className="mono">{d.sscc}</td><td className="mono cust">{d.ifNumbers.filter(Boolean).join(', ')}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {clean && (
+        <p className="hint" style={{ marginTop: 10 }}>
+          ✓ Every shipped carton on these POs is on a delivered ASN.
+        </p>
+      )}
+    </section>
+  )
+}
 
 // Ship-window calendar (Nima, 2026-07-20): the EDI view's own month grid —
 // every open PO plotted on its cancel-after (red = the drop-dead day) and
@@ -855,6 +1035,9 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
           )}
         </section>
       </div>
+
+      {/* ── did every carton that shipped get announced? ── */}
+      <AsnCartonPanel />
 
       {/* ── manually-entered old orders (unchanged) ── */}
       <section style={{ marginTop: 28 }}>

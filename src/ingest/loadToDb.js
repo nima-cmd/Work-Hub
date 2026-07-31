@@ -18,9 +18,9 @@ export async function loadOrders(orders, db = pool) {
          (so_number, customer, location, po_number, is_ats, source, stage, so_status,
           qty_ordered, qty_allocated, qty_fulfilled, amount_paid, shipping_status,
           start_date, ship_date, cancel_date, notes, approval_status, billing_status,
-          dc, store_number,
+          dc, store_number, is_placeholder,
           last_seen, last_movement, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now(), now(), now())
        ON CONFLICT (so_number) DO UPDATE SET
          customer        = COALESCE(EXCLUDED.customer, orders.customer),
          location        = COALESCE(EXCLUDED.location, orders.location),
@@ -44,6 +44,9 @@ export async function loadOrders(orders, db = pool) {
          cancel_date     = COALESCE(EXCLUDED.cancel_date, orders.cancel_date),
          notes           = COALESCE(EXCLUDED.notes, orders.notes),
          approval_status = COALESCE(EXCLUDED.approval_status, orders.approval_status),
+         -- COALESCE like is_ats: the CSV mapper doesn't know this field and sends
+         -- null, which must not wipe what the live pull established.
+         is_placeholder  = COALESCE(EXCLUDED.is_placeholder, orders.is_placeholder),
          billing_status  = COALESCE(EXCLUDED.billing_status, orders.billing_status),
          last_seen       = now(),
          last_movement   = CASE WHEN orders.stage IS DISTINCT FROM EXCLUDED.stage
@@ -57,6 +60,8 @@ export async function loadOrders(orders, db = pool) {
         o.shippingStatus || null, o.startDate || null, o.shipDate || null,
         o.cancelDate || null, o.notes || null, o.approvalStatus || null, o.billingStatus || null,
         o.dc || null, o.storeNumber || null,
+        // null (not false) when the source doesn't know — see the COALESCE above.
+        o.isPlaceholder ?? null,
       ],
     )
     n++

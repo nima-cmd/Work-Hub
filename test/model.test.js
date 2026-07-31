@@ -29,6 +29,11 @@ import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDel
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates, extractPoLines, summarizePoLines } from '../src/ingest/orderfulDates.js'
 import { diffPoVersions, poVersionInfo } from '../src/model/ediPoDiff.js'
+import { extractAsnManifest } from '../src/ingest/orderfulAsn.js'
+import {
+  normalizeSscc, checkAsnCartons, undeclaredByFulfilment, asnSummary,
+  asnCheckDue, ASN_CHECK_MIN_HOURS, findingRows,
+} from '../src/model/asnCartonCheck.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
@@ -1508,4 +1513,274 @@ test('syncHealth: the line names the sync — an anonymous warning gets ignored'
   assert.match(line, /NetSuite/, 'names the worst offender')
   assert.match(line, /2d 2h/, 'days once past 24h, not "50h"')
   assert.match(line, /and 1 other/, 'says how many more are affected')
+})
+
+// ── Health: connections & data flow (2026-07-31) ─────────────────────────────
+// Built after the deploy went 13h without a NetSuite sync while its cron
+// returned 200 every run. The cause was five env vars missing on Render, and the
+// reason nothing complained is structural: EVERY integration here is gated on an
+// xConfigured() check and skips silently when unset. Right for local dev,
+// dangerous in production — so absence must report as loudly as failure.
+import { computeIntegrationHealth, overallHealth, INTEGRATIONS } from '../src/model/health.js'
+
+const allSet = () => {
+  const p = {}
+  for (const i of INTEGRATIONS) for (const v of [...i.vars, ...(i.optional || [])]) p[v] = true
+  return p
+}
+
+test('health: names the missing variables — that IS the fix', () => {
+  const p = allSet()
+  delete p.NS_TOKEN_ID
+  delete p.NS_TOKEN_SECRET
+  const ns = computeIntegrationHealth(p).find((i) => i.key === 'netsuite')
+  assert.equal(ns.configured, false)
+  assert.deepEqual(ns.missing, ['NS_TOKEN_ID', 'NS_TOKEN_SECRET'])
+})
+
+test('health: a missing optional key is "partial", not broken', () => {
+  // No V2 key means no live rate comparison, but billed history still works.
+  const p = allSet()
+  delete p.SHIPSTATION_API_KEY_V2
+  const ss = computeIntegrationHealth(p).find((i) => i.key === 'shipstation')
+  assert.equal(ss.configured, true)
+  assert.equal(ss.partial, true)
+  assert.deepEqual(ss.missingOptional, ['SHIPSTATION_API_KEY_V2'])
+})
+
+test('health: a missing credential outranks a stale sync — it is usually the CAUSE', () => {
+  // The exact 2026-07-31 shape: NS_* absent on the deploy, netsuiteLive 13h old.
+  const p = allSet()
+  for (const v of INTEGRATIONS.find((i) => i.key === 'netsuite').vars) delete p[v]
+  const integrations = computeIntegrationHealth(p)
+  const v = overallHealth({ integrations, syncs: { status: 'stale' } })
+  assert.equal(v.status, 'broken')
+  assert.match(v.headline, /NetSuite is not configured — 5 variables missing/)
+  assert.match(v.detail, /why the data below is stale/, 'connects the two symptoms')
+})
+
+test('health: a stale sync with everything configured reads as its own problem', () => {
+  const v = overallHealth({ integrations: computeIntegrationHealth(allSet()), syncs: { status: 'warn' } })
+  assert.equal(v.status, 'stale')
+  assert.equal(v.detail, null)
+})
+
+test('health: all good says so', () => {
+  const v = overallHealth({ integrations: computeIntegrationHealth(allSet()), syncs: { status: 'ok' } })
+  assert.equal(v.status, 'ok')
+})
+
+test('health: every integration declares what breaks without it', () => {
+  // A row that just says "not configured" tells you nothing actionable.
+  for (const i of INTEGRATIONS) {
+    assert.ok(i.powers?.length, `${i.key} must say what it powers`)
+    assert.ok(i.ifMissing?.length, `${i.key} must say what happens when it's absent`)
+  }
+})
+
+// ── Carton-level ASN reconciliation ──────────────────────────────────────────
+// Shapes below mirror real data checked live 2026-07-31: NetSuite stores the
+// SSCC bare (18 digits), Orderful's 856 transmits it zero-padded (20).
+
+test('asn: the 856 zero-pads the SSCC and NetSuite does not — they must still match', () => {
+  // This is the whole reason normalizeSscc exists. A raw string compare here
+  // reports every carton unannounced, which reads as a disaster, not a format bug.
+  assert.equal(normalizeSscc('00185072747003728869'), '185072747003728869')
+  assert.equal(normalizeSscc('185072747003728869'), '185072747003728869')
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747003728869', ifNumber: 'IF7323' }],
+    declared: [{ sscc: '00185072747003728869', businessNumber: 'NB1731234' }],
+  })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.counts.matched, 1)
+  assert.equal(r.counts.undeclared, 0)
+})
+
+test('asn: only leading zeros are stripped — a wrong-length value stays a mismatch', () => {
+  // Truncating significant digits would manufacture a false match, which is
+  // worse than the miss it hides.
+  assert.equal(normalizeSscc('99185072747003728869'), '99185072747003728869')
+  assert.equal(normalizeSscc(''), null)
+  assert.equal(normalizeSscc(null), null)
+  // Separators and stray whitespace are stripped; the digits themselves are not.
+  assert.equal(normalizeSscc('  1850-7274 7003728869 '), '185072747003728869')
+})
+
+test('asn: a carton that shipped without being announced is the chargeback finding', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF7323', poDc: '7527086-SC' },
+      { sscc: '185072747000000002', ifNumber: 'IF7323', poDc: '7527086-SC' },
+    ],
+    declared: [{ sscc: '00185072747000000001', businessNumber: 'NB1731234' }],
+  })
+  assert.equal(r.status, 'undeclared')
+  assert.equal(r.counts.undeclared, 1)
+  assert.equal(r.undeclared[0].sscc, '185072747000000002')
+  assert.equal(r.undeclared[0].ifNumber, 'IF7323')
+  // Grouped by fulfilment, because you re-send an ASN per shipment, not per box.
+  const groups = undeclaredByFulfilment(r)
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0].ssccs, ['185072747000000002'])
+})
+
+test('asn: an announced carton with no NetSuite record is a phantom box', () => {
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747000000001', ifNumber: 'IF7323' }],
+    declared: [
+      { sscc: '00185072747000000001', businessNumber: 'NB1731234' },
+      { sscc: '00185072747000000009', businessNumber: 'NB1731234' },
+    ],
+  })
+  assert.equal(r.status, 'phantom')
+  assert.equal(r.counts.phantom, 1)
+  assert.equal(r.phantom[0].sscc, '185072747000000009')
+  assert.deepEqual(r.phantom[0].declaredOn, ['NB1731234'])
+})
+
+test('asn: nothing announced yet is not a failure', () => {
+  // Same reasoning as packCheck's not_started — pre-transmission there is
+  // nothing to reconcile, and crying wolf there is what gets a check ignored.
+  const r = checkAsnCartons({ packed: [{ sscc: '185072747000000001', ifNumber: 'IF7323' }], declared: [] })
+  assert.equal(r.status, 'no_asn')
+  assert.equal(r.counts.undeclared, 0)
+  assert.match(asnSummary(r), /no ASN yet/)
+  assert.equal(checkAsnCartons({}).status, 'empty')
+  assert.equal(asnSummary(checkAsnCartons({})), '')
+})
+
+test('asn: a carton with a blank SSCC is reported apart from a real miss', () => {
+  // The box exists and a field was left empty — same human error as the pack
+  // check's blank-quantity cartons, and a different fix from "send the ASN".
+  const r = checkAsnCartons({
+    packed: [{ sscc: '', ifNumber: 'IF7439' }, { sscc: null, ifNumber: 'IF7439' }],
+    declared: [{ sscc: '00185072747000000001' }],
+  })
+  assert.equal(r.counts.blankSscc, 2)
+  assert.equal(r.counts.packed, 0)
+})
+
+test('asn: a duplicated SSCC is its own defect', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF7323' },
+      { sscc: '185072747000000001', ifNumber: 'IF7324' },
+    ],
+    declared: [{ sscc: '00185072747000000001' }],
+  })
+  assert.equal(r.counts.duplicated, 1)
+  assert.deepEqual(r.duplicated[0].ifNumbers, ['IF7323', 'IF7324'])
+})
+
+test('asn: the manifest reads pack-level SSCCs and order-level POs, ignoring other marks', () => {
+  // Structure copied from the real Bloomingdale's ASN (txn 996376235).
+  const message = {
+    transactionSets: [{
+      HL_loop: [
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'S' }] },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'O' }], purchaseOrderReference: [{ purchaseOrderNumber: '7527086' }] },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'O' }], purchaseOrderReference: [{ purchaseOrderNumber: '7776940' }] },
+        {
+          hierarchicalLevel: [{ hierarchicalLevelCode: 'P' }],
+          marksAndNumbersInformation: [{ marksAndNumbersQualifier: 'GM', marksAndNumbers: '00185072747003728869' }],
+        },
+        {
+          // A non-GM mark must not be mistaken for a license plate.
+          hierarchicalLevel: [{ hierarchicalLevelCode: 'P' }],
+          marksAndNumbersInformation: [{ marksAndNumbersQualifier: 'CA', marksAndNumbers: 'CARTON-2' }],
+        },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'I' }] },
+      ],
+    }],
+  }
+  const m = extractAsnManifest(message)
+  assert.deepEqual(m.poNumbers, ['7527086', '7776940'])
+  assert.deepEqual(m.ssccs, ['00185072747003728869'])
+  assert.equal(m.packCount, 2)
+  // The second pack declared a carton with no SSCC — visible, not silently dropped.
+  assert.equal(m.packsWithoutSscc, 1)
+  assert.deepEqual(extractAsnManifest({}).ssccs, [])
+  assert.deepEqual(extractAsnManifest(null).poNumbers, [])
+})
+
+test('asn: a carton announced on two ASNs explains the declared-count gap', () => {
+  // Without this, a raw declared count of 3 against 2 unique cartons looks like
+  // an unexplained discrepancy, which is what makes a check stop being trusted.
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747000000001', ifNumber: 'IF6941' }, { sscc: '185072747000000002', ifNumber: 'IF6941' }],
+    declared: [
+      { sscc: '00185072747000000001', businessNumber: '6592086SC' },
+      { sscc: '00185072747000000001', businessNumber: '6592086ST' },
+      { sscc: '00185072747000000002', businessNumber: '6592086SC' },
+    ],
+  })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.counts.declared, 2)
+  assert.equal(r.counts.reDeclared, 1)
+  assert.deepEqual(r.reDeclared[0].declaredOn, ['6592086SC', '6592086ST'])
+})
+
+test('asn: a check that has never run is always due — that is the failure mode here', () => {
+  // This repo has twice shipped a module with no caller, which looks exactly
+  // like a working feature. "Never ran" must never read as "nothing to do".
+  assert.equal(asnCheckDue(null), true)
+  assert.equal(asnCheckDue(undefined), true)
+})
+
+test('asn: the cadence skips a fresh run and allows a stale one', () => {
+  const now = new Date('2026-07-31T18:00:00Z')
+  const hoursAgo = (h) => new Date(now.getTime() - h * 3600000)
+  assert.equal(asnCheckDue(hoursAgo(1), now), false)
+  assert.equal(asnCheckDue(hoursAgo(ASN_CHECK_MIN_HOURS - 0.1), now), false)
+  assert.equal(asnCheckDue(hoursAgo(ASN_CHECK_MIN_HOURS), now), true)
+  assert.equal(asnCheckDue(hoursAgo(30), now), true)
+  // A timestamp in the future (clock skew between the deploy and Neon) must not
+  // wedge the check off forever — it reads as due.
+  assert.equal(asnCheckDue(new Date(now.getTime() + 3600000), now), true)
+})
+
+test('asn: findingRows keeps the matched cartons, not just the failures', () => {
+  // The headline is "710/710 announced". Storing only failures would leave the
+  // UI able to say no problems found, which is also what never-looked says.
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF6941', poDc: '6592086-CG' },
+      { sscc: '185072747000000002', ifNumber: 'IF6941', poDc: '6592086-CG' },
+    ],
+    declared: [{ sscc: '00185072747000000001', businessNumber: '6592086SC' }],
+  })
+  const rows = findingRows(r)
+  const matched = rows.filter((x) => x.finding === 'matched')
+  const undeclared = rows.filter((x) => x.finding === 'undeclared')
+  assert.equal(matched.length, 1)
+  assert.deepEqual(matched[0].declaredOn, ['6592086SC'])
+  assert.equal(undeclared.length, 1)
+  assert.equal(undeclared[0].ifNumber, 'IF6941')
+  assert.equal(undeclared[0].poDc, '6592086-CG')
+})
+
+test('asn: a duplicated SSCC becomes one row per fulfilment — which boxes clash is the point', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000009', ifNumber: 'IF7001' },
+      { sscc: '185072747000000009', ifNumber: 'IF7002' },
+    ],
+    declared: [{ sscc: '00185072747000000009', businessNumber: '6592086SC' }],
+  })
+  const dup = findingRows(r).filter((x) => x.finding === 'duplicated')
+  assert.deepEqual(dup.map((d) => d.ifNumber), ['IF7001', 'IF7002'])
+  // Also still matched — the counts come off the run row, never off these rows,
+  // precisely because one carton can carry two findings.
+  assert.equal(findingRows(r).filter((x) => x.finding === 'matched').length, 1)
+})
+
+test('asn: a blank-SSCC carton still records WHICH fulfilment to go fix', () => {
+  const r = checkAsnCartons({
+    packed: [{ sscc: '', ifNumber: 'IF7439', poDc: '6592086-799' }],
+    declared: [{ sscc: '00185072747000000001', businessNumber: '6592086SC' }],
+  })
+  const blank = findingRows(r).filter((x) => x.finding === 'blank_sscc')
+  assert.equal(blank.length, 1)
+  assert.equal(blank[0].sscc, null)
+  assert.equal(blank[0].ifNumber, 'IF7439')
 })

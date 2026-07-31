@@ -58,11 +58,26 @@ export default function ScanToDrive() {
     const push = (r) => { out.push(r); setResults([...out]) }
     try {
       for (const d of plan.documents) {
-        if (d.skip) { push({ name: `${d.raw} (boutique)`, status: 'skipped', note: 'boutique filing not built yet' }); continue }
+        if (d.skip) {
+          // Only things we genuinely can't place land here now. Name it when we
+          // can: "IF7441" waiting on a sync is a different problem from a QR we
+          // don't recognise at all.
+          push({
+            name: d.ifNumber ? `${d.ifNumber}${d.customer ? ` · ${d.customer}` : ''}` : `${d.raw} (unrecognised)`,
+            status: 'skipped',
+            note: d.ifNumber && d.known === false
+              ? 'not in the app yet — press ↻ Refresh NetSuite and re-scan'
+              : 'couldn’t resolve its customer and order — not filed rather than filed wrong',
+          })
+          continue
+        }
         const bytes = bytesByPage[d.pageNums[0]]
         if (!bytes) { push({ name: d.filename, status: 'error', note: 'no bytes for this document' }); continue }
-        const r = await fileScannedDoc({ partner: d.partner, pos: d.pos, filename: d.filename, pdfBase64: bytesToBase64(bytes) })
-        push(mapResult(d.filename, `${d.partner}/${d.po}`, r))
+        const r = await fileScannedDoc({
+          partner: d.partner, pos: d.pos, filename: d.filename,
+          pdfBase64: bytesToBase64(bytes), root: d.root,
+        })
+        push(mapResult(d.filename, `${d.partner}/${d.pos[0]}`, r))
       }
       // Master BOL — needs a confirmed number (no QR to read it from).
       if (plan.master && masterBytes) {
@@ -88,6 +103,7 @@ export default function ScanToDrive() {
   }
 
   const edi = plan?.documents?.filter((d) => d.kind === 'edi') || []
+  const slips = plan?.documents?.filter((d) => d.kind === 'slip') || []
   const boutique = plan?.documents?.filter((d) => d.kind === 'boutique') || []
 
   return (
@@ -135,16 +151,49 @@ export default function ScanToDrive() {
             <thead><tr><th>File</th><th>Partner / PO</th><th>Pages</th></tr></thead>
             <tbody>
               {edi.map((d, i) => (
-                <tr key={i}><td>{d.filename}</td><td>{d.partner} · {d.po}{d.dc ? ` · ${d.dc}` : ' (PO-level)'}</td><td>{d.pageNums.length}</td></tr>
+                <tr key={i}>
+                  <td>{d.filename}</td>
+                  <td>
+                    {d.partner} · {d.po}{d.dc ? ` · ${d.dc}` : ' (PO-level)'}
+                    {d.ifNumber && <span className="cust"> · from {d.ifNumber}</span>}
+                  </td>
+                  <td>{d.pageNums.length}</td>
+                </tr>
               ))}
             </tbody>
           </table>
+          {slips.length > 0 && (
+            <>
+              <div className="s2dRowHead">
+                {slips.length} boutique packing slip(s)
+                <span className="muted"> → Packing Slips / customer / sales order</span>
+              </div>
+              <table className="s2dTable">
+                <thead><tr><th>File</th><th>Customer / Order</th><th>Pages</th></tr></thead>
+                <tbody>
+                  {slips.map((d, i) => (
+                    <tr key={i}>
+                      <td>{d.filename}</td>
+                      <td>
+                        {d.customer} · {d.soNumber}
+                        {d.customerPo && <span className="cust"> · PO {d.customerPo}</span>}
+                      </td>
+                      <td>{d.pageNums.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
           {boutique.length > 0 && (
-            <div className="hint">{boutique.length} boutique QR(s) skipped — boutique filing isn’t built yet.</div>
+            <div className="hint">
+              {boutique.length} document(s) skipped — {boutique.map((d) => d.ifNumber || d.raw).join(', ')}.
+              Not filed rather than filed somewhere wrong.
+            </div>
           )}
 
           <button className="importBtn big" onClick={upload} disabled={phase === 'uploading'}>
-            {phase === 'uploading' ? 'Filing to Drive…' : `⬆ File ${edi.length + (plan.master ? 1 : 0)} document(s) to Drive`}
+            {phase === 'uploading' ? 'Filing to Drive…' : `⬆ File ${edi.length + slips.length + (plan.master ? 1 : 0)} document(s) to Drive`}
           </button>
         </div>
       )}

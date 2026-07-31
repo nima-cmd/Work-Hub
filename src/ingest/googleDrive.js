@@ -45,12 +45,17 @@ async function ensureFolder(name, parentId, headers) {
   return { id: (await createRes.json()).id }
 }
 
-// Resolve a nested folder path (["Bloomingdale's", "7527064"]) under an optional
-// root, creating each level. The root folder is "Work-Hub BOLs" so the app's
-// output is self-contained and easy for Nima to find.
-async function ensurePath(segments, headers) {
+// The two output trees. BOLs are freight; packing slips are boutique/parcel and
+// deliberately live OUTSIDE that tree (Nima, 2026-07-31) so "BOLs" keeps meaning
+// freight — a boutique slip filed in there would read as a missing BOL.
+export const DRIVE_ROOT_BOLS = 'Work-Hub BOLs'
+export const DRIVE_ROOT_SLIPS = 'Packing Slips'
+
+// Resolve a nested folder path (["Bloomingdale's", "7527064"]) under a root,
+// creating each level. Defaults to the BOL tree so existing callers are unchanged.
+async function ensurePath(segments, headers, root = DRIVE_ROOT_BOLS) {
   let parent = null
-  for (const seg of ['Work-Hub BOLs', ...segments]) {
+  for (const seg of [root, ...segments]) {
     const r = await ensureFolder(seg, parent, headers)
     if (r.needsReauth) return { needsReauth: true }
     parent = r.id
@@ -96,7 +101,7 @@ async function putPdf(folderId, filename, buffer, headers) {
 // Upload a PDF buffer to /Work-Hub BOLs/<partner>/<po>/<filename>. When a
 // shipment consolidates multiple POs, it's filed under each PO's folder so it's
 // findable from any of them (the manual process filed per PO too).
-export async function uploadBolPdf({ partner, pos, filename, buffer }) {
+export async function uploadBolPdf({ partner, pos, filename, buffer, root = DRIVE_ROOT_BOLS }) {
   if (!process.env.GOOGLE_REFRESH_TOKEN) return { ok: false, configured: false }
   let headers
   try {
@@ -108,7 +113,7 @@ export async function uploadBolPdf({ partner, pos, filename, buffer }) {
   const uploaded = []
   const poList = pos && pos.length ? pos : ['_unfiled']
   for (const po of poList) {
-    const folder = await ensurePath([partner, String(po)], headers)
+    const folder = await ensurePath([partner, String(po)], headers, root)
     if (folder.needsReauth) return { ok: false, needsReauth: true }
     const put = await putPdf(folder.id, filename, buffer, headers)
     if (put.needsReauth) return { ok: false, needsReauth: true }
@@ -122,6 +127,6 @@ export async function uploadBolPdf({ partner, pos, filename, buffer }) {
 // — signed paper sits next to the app's PDFs). `pos` is the list of PO folders to
 // drop the file into (one for a per-DC IF split; all covered POs for a master
 // BOL). Returns per-PO Drive links. Mirrors uploadBolPdf's soft-fail contract.
-export async function uploadScannedPdf({ partner, pos, filename, buffer }) {
-  return uploadBolPdf({ partner, pos, filename, buffer })
+export async function uploadScannedPdf({ partner, pos, filename, buffer, root }) {
+  return uploadBolPdf({ partner, pos, filename, buffer, root })
 }
