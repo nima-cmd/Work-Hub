@@ -639,12 +639,19 @@ app.post('/api/scan/plan', async (req, res) => {
   }
 })
 
+// One document per call. A Drive failure comes back as 200 + { ok:false, reason }
+// rather than a 500 ON PURPOSE: the client files a stack in a loop, and a thrown
+// status turns one bad slip into an abandoned stack (that cost 12 of 15 slips on
+// 2026-07-31). Only a malformed REQUEST is a 4xx here.
 app.post('/api/scan/file-to-drive', async (req, res) => {
   try {
     res.json(await fileScannedDoc(req.body || {}))
   } catch (e) {
     console.error(e)
-    res.status(500).json({ error: e.message })
+    const badRequest = /required/i.test(e.message || '')
+    res.status(badRequest ? 400 : 200).json(
+      badRequest ? { error: e.message } : { ok: false, reason: 'server_error', detail: e.message },
+    )
   }
 })
 

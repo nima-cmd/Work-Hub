@@ -627,14 +627,28 @@ function GroupBar({ groups, groupSel, auths, busy, onGroup, onClear }) {
 
 // Master BOL for an authorization covering multiple final DCs (merge-center
 // consolidation). Opens the aggregated Master BOL PDF; files it to Drive.
+// A Drive upload that gave up says why. Rate limits get their own wording
+// because the fix is "try again shortly", not "go fix your credentials" — and
+// Drive reports throttling as a 403, which used to be read as a scope problem.
+function driveFailure(r) {
+  if (r.reason && /rate|quota/i.test(r.reason)) {
+    return `Drive throttled this${r.where ? ` on ${r.where}` : ''} even after retries — try again in a moment.`
+  }
+  return `Not filed — ${r.where || 'upload'} failed${r.reason ? ` (${r.reason})` : ''}.`
+}
+
 function MasterActions({ auth }) {
   const [state, setState] = useState(null)
   async function file() {
     setState({ busy: true })
     try {
       const r = await fileMasterToDrive(auth.authNumber)
+      // ⚠️ Check ok FIRST. A Drive failure now returns { ok:false, reason } instead
+      // of throwing, so an `else` fallthrough would report "filed" for an upload
+      // that never happened — the one outcome worse than a visible error.
       if (r.needsReauth) setState({ msg: 'Drive not authorized yet', ok: false })
       else if (r.configured === false) setState({ msg: 'Google not connected', ok: false })
+      else if (!r.ok) setState({ msg: driveFailure(r), ok: false })
       else setState({ msg: 'filed', ok: true })
     } catch (e) { setState({ msg: e.message, ok: false }) }
   }
@@ -659,6 +673,7 @@ function BolActions({ s }) {
       const r = await fileBolToDrive(s.id)
       if (r.needsReauth) setState({ msg: 'Drive not authorized yet — re-run connect-gmail.js to add the Drive scope.', ok: false })
       else if (r.configured === false) setState({ msg: 'Google not connected on this server.', ok: false })
+      else if (!r.ok) setState({ msg: driveFailure(r), ok: false })
       else setState({ msg: `Filed to Drive (${r.uploaded.length} folder${r.uploaded.length === 1 ? '' : 's'}).`, ok: true, links: r.uploaded })
     } catch (e) { setState({ msg: e.message, ok: false }) }
   }
