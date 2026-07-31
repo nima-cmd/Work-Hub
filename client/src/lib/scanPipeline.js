@@ -14,6 +14,11 @@ import * as pdfjsLib from 'pdfjs-dist'
 import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import jsQR from 'jsqr'
 import { PDFDocument } from 'pdf-lib'
+// The page→document grouping and QR classification live in src/model so they can
+// be unit-tested; this file can't be imported from node (pdfjs `?worker`).
+import { classifyQr, segmentPages } from '../../../src/model/scanSegments.js'
+
+export { classifyQr, segmentPages }
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
 
@@ -99,47 +104,6 @@ export async function decodeQr(imageData) {
     } catch { /* fall through to jsQR */ }
   }
   return jsQR(imageData.data, imageData.width, imageData.height)?.data || null
-}
-
-// Classify a QR payload into a filing target.
-//   EDI (per-DC)   → `DC:<po>:<abbrev>`  → { kind:'edi', po, dc }
-//   EDI (PO-level) → bare PO number      → { kind:'edi', po, dc:null }
-//   boutique       → (format TBD)        → { kind:'boutique', raw }
-// The old EDI labels encode just the PO number with no DC (seen live on the real
-// Bloomingdale's scan, pages 49-50: `7527064`, `7776929`) — same PO-level
-// fallback Scan Bay's server uses. `knownPos` (a Set of PO strings from the
-// loaded orders) disambiguates a bare number from a boutique QR when available;
-// without it, an all-digit payload is assumed to be a PO. Refine the boutique
-// branch once that QR's real format is known.
-export function classifyQr(raw, { knownPos } = {}) {
-  const s = String(raw || '').trim()
-  const dc = /^DC:([^:]+):(.*)$/.exec(s)
-  if (dc) return { kind: 'edi', po: dc[1].trim(), dc: (dc[2] || '').trim() || null, raw: s }
-  if (!s) return { kind: 'empty', raw: s }
-  if (knownPos ? knownPos.has(s) : /^\d{5,}$/.test(s)) return { kind: 'edi', po: s, dc: null, raw: s }
-  return { kind: 'boutique', raw: s } // refine once the boutique format is known
-}
-
-// Group pages into documents. A page with a QR opens a new document; QR-less
-// pages join the open document. Leading QR-less pages (before the first QR) are
-// returned as an `orphan` group so nothing is silently dropped.
-//   pageResults: [{ pageNum, qr }]  (qr = decoded string or null)
-// → { documents: [{ qr, classify, pageNums:[...] }], orphanPages:[...] }
-export function segmentPages(pageResults, { knownPos } = {}) {
-  const documents = []
-  const orphanPages = []
-  let current = null
-  for (const { pageNum, qr } of pageResults) {
-    if (qr) {
-      current = { qr, classify: classifyQr(qr, { knownPos }), pageNums: [pageNum] }
-      documents.push(current)
-    } else if (current) {
-      current.pageNums.push(pageNum)
-    } else {
-      orphanPages.push(pageNum)
-    }
-  }
-  return { documents, orphanPages }
 }
 
 // Copy the given 1-based pages out of an already-loaded PDFDocument into fresh

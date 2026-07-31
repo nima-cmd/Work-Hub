@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -156,6 +156,10 @@ export default function App() {
   // — and lifting them means the Command view no longer fetches them twice.
   const [labelGaps, setLabelGaps] = useState(null)
   const [ediGaps, setEdiGaps] = useState(null)
+  const [asnCartons, setAsnCartons] = useState(null)
+  // Manual NetSuite refresh (Nima, 2026-07-31). `nsBusy` is NOT an error state:
+  // it means Celigo is mid-run and holds the concurrency, which has priority.
+  const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
   const [custody, setCustody] = useState(null)
   const [bay, setBay] = useState(null)
   const fileRef = useRef(null)
@@ -180,10 +184,61 @@ export default function App() {
     // the strip doesn't render, it never blocks the app.
     fetchLabelGaps().then(setLabelGaps).catch(() => setLabelGaps(null))
     fetchEdiDeliveryGaps().then(setEdiGaps).catch(() => setEdiGaps(null))
+    // Cartons that shipped with no delivered ASN. A Neon read of the last
+    // scheduled run — never the run itself, which reads NetSuite and Orderful.
+    fetchAsnCartons().then(setAsnCartons).catch(() => setAsnCartons(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
   useEffect(refresh, [])
+
+  // Pull straight from NetSuite on demand. Sequential and never retried — see
+  // refreshFromNetsuite in server/queries.js for why retrying would be the one
+  // thing that actually harms Celigo.
+  async function onRefreshNetsuite() {
+    setNsSync({ state: 'running', msg: 'Pulling from NetSuite…' })
+    try {
+      const started = await refreshNetsuite()
+      if (started.busy) {
+        const r = started
+        const wait = r.retryAfter ? ` Try again in ~${r.retryAfter}s.` : ' Give it a moment and press again.'
+        setNsSync({
+          state: 'busy',
+          msg: r.reason === 'in_flight'
+            ? 'A refresh is already running — hang on.'
+            : `NetSuite is busy — Celigo is mid-run and gets priority.${wait}` +
+              (r.partial ? ` (${r.partial})` : ''),
+        })
+        return
+      }
+      // The pull is detached server-side, so wait on it here. ~93s for a full
+      // one; the 3s cadence keeps the pill honest without hammering.
+      setNsSync({ state: 'running', msg: 'Pulling from NetSuite… (about a minute and a half)' })
+      let r = null
+      for (let i = 0; i < 100; i++) {
+        await new Promise((ok) => setTimeout(ok, 3000))
+        const st = await netsuiteRefreshStatus().catch(() => null)
+        if (st && !st.running) { r = st.result || {}; break }
+      }
+      if (!r) { setNsSync({ state: 'error', msg: 'Still running after 5 minutes — check the server log.' }); return }
+      if (r.busy) {
+        setNsSync({ state: 'busy', msg: `NetSuite got busy mid-pull — Celigo has priority.${r.partial ? ` (${r.partial})` : ''}` })
+        refresh()
+        return
+      }
+      if (r.error) { setNsSync({ state: 'error', msg: r.error }); return }
+      const c = r.counts || {}
+      setNsSync({
+        state: 'done',
+        msg: `Synced ${c.orders ?? 0} orders · ${c.fulfillments ?? 0} fulfilments · ${c.invoices ?? 0} invoices` +
+          (r.cartons ? ` · cartons ${r.cartons.loaded}` : '') +
+          (r.dcWarning ? ' (the IF→DC backfill was skipped)' : ''),
+      })
+      refresh()
+    } catch (e) {
+      setNsSync({ state: 'error', msg: e.message })
+    }
+  }
 
   async function onFiles(e) {
     const files = [...e.target.files]
@@ -244,6 +299,24 @@ export default function App() {
             {importing ? 'Importing…' : '⤓ Import CSV'}
           </button>
           <input ref={fileRef} type="file" accept=".csv" multiple hidden onChange={onFiles} />
+          <button
+            className="importBtn"
+            onClick={onRefreshNetsuite}
+            disabled={nsSync.state === 'running'}
+            title="Pull orders, fulfilments and invoices straight from NetSuite now. There is no daily call limit — the only constraint is concurrency, which Celigo has priority on, so this will tell you if it has to wait."
+          >
+            {nsSync.state === 'running' ? 'Refreshing…' : '↻ Refresh NetSuite'}
+          </button>
+          {nsSync.msg && (
+            <span
+              className={'pill' + (nsSync.state === 'busy' ? ' warn' : nsSync.state === 'error' ? ' danger' : '')}
+              onClick={() => setNsSync({ state: 'idle', msg: null })}
+              style={{ cursor: 'pointer' }}
+              title="click to dismiss"
+            >
+              {nsSync.state === 'busy' ? '⏳ ' : nsSync.state === 'error' ? '⚠ ' : ''}{nsSync.msg}
+            </span>
+          )}
           <FreshnessPanel fresh={fresh} />
           {credits && <CreditsCounter credits={credits} />}
           {orders && (
@@ -286,7 +359,7 @@ export default function App() {
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
         <SyncAlarm health={syncHealth} />
-        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} onNavigate={setView} />
+        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS}

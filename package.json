@@ -17,6 +17,7 @@
     "ups:rate": "node --env-file=.env.local scripts/ups-rate.js",
     "check:netsuite": "node --env-file=.env.local scripts/check-netsuite.js",
     "check:shipstation": "node --env-file=.env.local scripts/check-shipstation.js",
+    "check:asn-cartons": "node --env-file=.env.local scripts/check-asn-cartons.js",
     "zpl": "node scripts/zpl-print.js",
     "zpl:watch": "node scripts/zpl-print.js --watch",
     "server": "node --env-file=.env.local server/index.js",

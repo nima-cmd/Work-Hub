@@ -1044,3 +1044,90 @@ CREATE TABLE IF NOT EXISTS ups_shipment_cost (
 CREATE INDEX IF NOT EXISTS idx_ups_cost_acct_svc ON ups_shipment_cost(ups_account, service_code);
 CREATE INDEX IF NOT EXISTS idx_ups_cost_state ON ups_shipment_cost(dest_state);
 CREATE INDEX IF NOT EXISTS idx_ups_cost_weight ON ups_shipment_cost(weight_lb);
+
+-- ── Carton-level ASN reconciliation (Nima, 2026-07-31) ───────────────────────
+-- Did every carton that actually LEFT get announced on an 856 the partner
+-- received? See src/model/asnCartonCheck.js for the comparison and
+-- src/ingest/asnCartonSync.js for the runner.
+--
+-- Why this is persisted at all, when the check itself is pure: a full run costs
+-- one Orderful message-body GET per delivered ASN (212 of them live) plus two
+-- SuiteQL queries, so it can never answer an HTTP request. The run writes here
+-- and the UI reads Neon.
+
+-- The declared side, harvested from the 856 bodies. DURABLE — never replaced.
+-- A delivered ASN's message body is immutable, so it is fetched exactly once
+-- ever and every later run compares against these rows for free. That is what
+-- makes the check affordable on a schedule.
+CREATE TABLE IF NOT EXISTS edi_asn_cartons (
+  transaction_id  TEXT NOT NULL,      -- Orderful txn id; joins edi_transactions.id
+  sscc            TEXT NOT NULL,      -- as transmitted (zero-padded); normalize before comparing
+  harvested_at    TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (transaction_id, sscc)
+);
+
+-- Which 856 bodies have been read. Separate from the table above because a
+-- manifest can legitimately yield ZERO SSCCs (pack segments with no license
+-- plate) — without this marker those documents would be re-fetched forever, and
+-- "no cartons declared" would be indistinguishable from "never looked".
+-- Failures are deliberately NOT recorded, so an unreadable message is retried
+-- next run instead of being silently written off.
+CREATE TABLE IF NOT EXISTS edi_asn_harvest (
+  transaction_id     TEXT PRIMARY KEY,
+  ssccs              INTEGER,         -- distinct license plates found
+  packs_without_sscc INTEGER,         -- cartons declared with no SSCC at all
+  harvested_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- The findings of the latest run, one row per carton. REPLACED wholesale each
+-- run, exactly like edi_fulfillment_pack — a carton whose ASN has since been
+-- re-sent must not linger as unannounced.
+--
+-- Matched rows are kept, not just the failures: the headline is "710/710
+-- announced", and that denominator is the evidence the two sides are actually
+-- comparable. A findings-only table could only ever say "no problems found",
+-- which is what "nobody looked" also looks like.
+CREATE TABLE IF NOT EXISTS asn_carton_check (
+  sscc         TEXT,                  -- NULL only for the blank_sscc finding
+  finding      TEXT NOT NULL,         -- matched | undeclared | phantom | blank_sscc | duplicated
+  if_number    TEXT,                  -- NULL for phantom (NetSuite has no carton)
+  po_dc        TEXT,
+  declared_on  TEXT[],                -- ASN business numbers; >1 means re-declared
+  checked_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_asn_carton_check_finding ON asn_carton_check(finding);
+
+-- One row per run, kept as history. Answers "is it getting worse?", which a
+-- replaced findings table alone cannot, and carries the run-level context the
+-- findings have no column for (how many POs were in scope, how many ASNs were
+-- undelivered and therefore announced nothing).
+CREATE TABLE IF NOT EXISTS asn_carton_run (
+  id                 SERIAL PRIMARY KEY,
+  ran_at             TIMESTAMPTZ DEFAULT now(),
+  status             TEXT,            -- ok | undeclared | phantom | no_asn | empty | error
+  pos                INTEGER,         -- POs in scope AFTER closure over the ASNs
+  pos_requested      INTEGER,         -- before closure; the gap is the co-listed POs
+  docs_delivered     INTEGER,
+  docs_undelivered   INTEGER,         -- announced nothing, by definition
+  fulfillments       INTEGER,
+  shipped            INTEGER,
+  message_errors     INTEGER,
+  counts             JSONB,           -- checkAsnCartons().counts verbatim
+  error              TEXT             -- set when the run could not complete
+);
+-- Which claim a run is making. A 60-day window finding nothing does NOT mean the
+-- whole history is clean, so the UI has to be able to say which it is showing.
+-- Added after the table existed, so it has to be an ALTER: CREATE TABLE IF NOT
+-- EXISTS is a no-op once the table is in Neon (see the note at the top of this
+-- file) and silently ignores a changed column list.
+ALTER TABLE asn_carton_run ADD COLUMN IF NOT EXISTS scope TEXT;
+
+-- custbody_is_placeholder (Nima, 2026-07-31): a temp order that HOLDS STOCK until
+-- the real order arrives. His words: "we don't need to track it." So it is
+-- ingested (the row stays honest and visible in Neon) but excluded from
+-- getOrders, which is the single read path every work view uses — a placeholder
+-- can therefore never appear as something to fulfil.
+--
+-- ALTER, not a changed CREATE: CREATE TABLE IF NOT EXISTS is a no-op once the
+-- table exists in Neon and silently ignores a new column.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN DEFAULT false;

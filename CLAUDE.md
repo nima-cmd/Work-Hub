@@ -26,6 +26,7 @@ npm run dev            # live-editing (Vite + API)
 npm run analyze        # CLI attention list straight from CSVs (no DB)
 npm run ups:rate       # what a big box costs on the WHOLESALE UPS account
 npm run sync:ups-costs # harvest real UPS billed costs from ShipStation
+npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 ```
 
 ## Data flow
@@ -74,6 +75,9 @@ src/model/stages.js      pipeline stages + next-action per stage
 src/model/pipeline.js    merge sources → order; aging + ATS-aware flags
 src/model/source.js      EDI vs boutique classification
 src/model/upsRates.js    UPS wholesale rates + the never-mislabel-the-account rule
+src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 856
+src/ingest/asnCartonSync.js  runs that check + persists it (the CLI and the cron share it)
+src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
 src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 server/queries.js        read orders (+fulfillments), re-apply flags

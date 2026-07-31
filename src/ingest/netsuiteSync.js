@@ -38,6 +38,13 @@ export const SO_STATUS = {
 export const SO_OPEN_CODES = ['A', 'B', 'D', 'E', 'F']
 export const SO_TERMINAL_CODES = ['G', 'H']
 
+// The real hold signal in this account: the custom list `custbody_approval_status`
+// on the sales order. Measured live 2026-07-31 across the 135 open SOs — 108
+// read 1 "Approved", 27 read 2 "On Hold". The native Pending-Approval status is
+// never used, so this field is the ONLY way to know an order is held.
+export const APPROVAL_APPROVED = 1
+export const APPROVAL_ON_HOLD = 2
+
 // Item Fulfillment. This is the ONLY reliable shipped signal —
 // transaction.shipstatus 500s, so read transaction.status.
 export const IF_STATUS = { A: 'Picked', B: 'Packed', C: 'Shipped' }
@@ -65,14 +72,35 @@ export function windowStart(days, now = new Date()) {
 // (buildPipeline may promote it via shippingStatus), on-hold → ON_HOLD, else
 // OPEN. Picked/Packed/Shipped from the IF records merge in by SO# via
 // furthestStage, exactly as with the CSVs.
+//
+// ⚠️ A HOLD IS NOT A NETSUITE STATUS HERE (Nima, 2026-07-31). The native
+// "Pending Approval" status (code 'A') is never used in this account — measured
+// live: of 5,927 sales orders, the only statuses present are B (135), D (2),
+// G (4,953) and H (837), so the `code === 'A'` branch below has never once
+// fired. Holds are carried on the CUSTOM field `custbody_approval_status`
+// (1 = Approved, 2 = On Hold), and every open SO reads status B "Pending
+// Fulfillment" regardless.
+//
+// The consequence, which is the bug this fixes: all 27 on-hold orders sat in
+// Kanban's Pending Fulfillment as work to start (73 shown, 46 real). Reading
+// the field is the whole fix — the ON_HOLD stage already existed and ranks
+// below OPEN, it was just unreachable.
 export function mapOrderRow(row) {
   const code = row.status || ''
   const terminal = SO_TERMINAL_CODES.includes(code)
   const soStatus = SO_STATUS[code] || code || ''
+  // String, not number: SuiteQL hands custom list values back as strings.
+  const onHold = String(row.approval_status ?? '') === String(APPROVAL_ON_HOLD)
+  // A placeholder is a temp order holding stock until the real one arrives
+  // (Nima, 2026-07-31: "we don't need to track it"). SuiteQL returns a checkbox
+  // as 'T'/'F'; anything else — including absent, which is what the CSV path
+  // sends — stays null so it can't wipe a known value.
+  const ph = row.is_placeholder
+  const isPlaceholder = ph === 'T' || ph === true ? true : (ph === 'F' || ph === false ? false : null)
 
   let stage = STAGE.OPEN
   if (terminal) stage = STAGE.SHIPPED
-  else if (code === 'A') stage = STAGE.ON_HOLD
+  else if (code === 'A' || onHold) stage = STAGE.ON_HOLD
 
   return {
     source: 'NetSuiteLive',
@@ -95,6 +123,7 @@ export function mapOrderRow(row) {
     // recently-closed window able to close an order out instead of losing it.
     billingStatus: terminal ? 'Fully Billed' : null,
     netsuiteStatusCode: code,
+    isPlaceholder,
     terminal,
   }
 }
@@ -143,7 +172,9 @@ export function orderSql(since) {
   return `SELECT t.tranid, BUILTIN.DF(t.entity) AS customer, t.status,
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
-                 t.foreigntotal, t.otherrefnum
+                 t.foreigntotal, t.otherrefnum,
+                 t.custbody_approval_status AS approval_status,
+                 t.custbody_is_placeholder AS is_placeholder
           FROM transaction t
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }

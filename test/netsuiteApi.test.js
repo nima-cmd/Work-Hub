@@ -11,6 +11,8 @@ import {
   netsuiteCreds,
   netsuiteConfigured,
   runSuiteQL,
+  isBusyResponse,
+  retryAfterSeconds,
 } from '../src/ingest/netsuiteApi.js'
 
 const CREDS = {
@@ -136,4 +138,71 @@ test('runSuiteQL: surfaces a 401 as needsAuth (soft, not thrown)', async () => {
   assert.equal(r.ok, false)
   assert.equal(r.needsAuth, true)
   assert.equal(r.status, 401)
+})
+
+// ── Celigo-priority / concurrency governance ────────────────────────────────
+// There is no daily call quota on SuiteQL — the limit is CONCURRENT requests,
+// shared with Celigo. A saturated account is normal and temporary, so it has to
+// be distinguishable from a real failure.
+
+test('busy: a 429 is busy whatever the body says', () => {
+  assert.equal(isBusyResponse(429, ''), true)
+  assert.equal(isBusyResponse('429', 'anything'), true)
+})
+
+test('busy: a concurrency rejection dressed as a 400 is still busy', () => {
+  // NetSuite is not consistent about pairing 429 with these codes, and reading
+  // this as a malformed query would send someone to debug the SQL instead of
+  // waiting for Celigo.
+  const body = '{"o:errorDetails":[{"o:errorCode":"SSS_REQUEST_LIMIT_EXCEEDED"}]}'
+  assert.equal(isBusyResponse(400, body), true)
+  assert.equal(isBusyResponse(0, 'CONCURRENT_REQUEST_LIMIT_EXCEEDED'), true)
+  assert.equal(isBusyResponse(0, 'ws_request_blocked'), true) // case-insensitive
+})
+
+test('busy: a genuine query error is NOT busy', () => {
+  // The distinction that matters — this one is our bug, not Celigo's turn.
+  assert.equal(isBusyResponse(400, 'Invalid or unsupported search'), false)
+  assert.equal(isBusyResponse(500, 'UNEXPECTED_ERROR'), false)
+  assert.equal(isBusyResponse(0, ''), false)
+  assert.equal(isBusyResponse(0, null), false)
+})
+
+test('busy: runSuiteQL reports busy instead of a generic failure, and does NOT retry', async () => {
+  let calls = 0
+  const _fetch = async () => {
+    calls++
+    return {
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '30' }),
+      text: async () => 'SSS_REQUEST_LIMIT_EXCEEDED',
+    }
+  }
+  const r = await runSuiteQL('SELECT id FROM transaction', { _fetch, env: {
+    NS_ACCOUNT_ID: CREDS.account, NS_CONSUMER_KEY: 'k', NS_CONSUMER_SECRET: 's',
+    NS_TOKEN_ID: 't', NS_TOKEN_SECRET: 'ts',
+  } })
+  assert.equal(r.ok, false)
+  assert.equal(r.busy, true)
+  assert.equal(r.retryAfter, 30)
+  // ONE attempt. Retrying is how a button steals concurrency from Celigo.
+  assert.equal(calls, 1)
+})
+
+test('busy: an auth failure still outranks busy — 401 is not "come back later"', async () => {
+  const _fetch = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => 'nope' })
+  const r = await runSuiteQL('SELECT id FROM transaction', { _fetch, env: {
+    NS_ACCOUNT_ID: CREDS.account, NS_CONSUMER_KEY: 'k', NS_CONSUMER_SECRET: 's',
+    NS_TOKEN_ID: 't', NS_TOKEN_SECRET: 'ts',
+  } })
+  assert.equal(r.needsAuth, true)
+  assert.ok(!r.busy)
+})
+
+test('retryAfterSeconds: only a usable positive number', () => {
+  assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '15' })), 15)
+  assert.equal(retryAfterSeconds(new Headers()), null)
+  assert.equal(retryAfterSeconds(new Headers({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })), null)
+  assert.equal(retryAfterSeconds(undefined), null)
 })

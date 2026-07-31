@@ -81,6 +81,41 @@ export function buildAuthHeader({ method, baseUrl, queryParams = {}, creds, nonc
   return `OAuth realm="${normalizeAccount(creds.account)}", ${pieces.join(', ')}`
 }
 
+// ── Concurrency governance: the ONLY real limit on this integration ──────────
+// There is no daily call quota on SuiteQL/REST. What NetSuite governs is how
+// many requests run AT ONCE, and that allowance is shared with Celigo — which
+// is the integration that must not lose. So a saturated account is a normal,
+// expected, temporary condition here, not a failure: it means Celigo is working.
+//
+// ⚠️ We deliberately DO NOT RETRY on this. A retry loop is precisely how a
+// human pressing a button would take concurrency away from Celigo — the thing
+// we're trying to protect. Fail immediately, say plainly that NetSuite is busy,
+// and let the person press it again. Slow and honest beats fast and rude.
+export const BUSY_CODES = [
+  'SSS_REQUEST_LIMIT_EXCEEDED',        // SuiteTalk/REST concurrency governance
+  'CONCURRENT_REQUEST_LIMIT_EXCEEDED',
+  'REQUEST_LIMIT_EXCEEDED',
+  'SSS_CONCURRENCY_LIMIT_EXCEEDED',
+  'WS_REQUEST_BLOCKED',                // request queued/blocked behind others
+]
+
+// Busy is detected from the STATUS or the BODY, not just the status: NetSuite is
+// not consistent about pairing 429 with these codes, and a concurrency rejection
+// dressed as a 400 must not read as "the query is wrong".
+export function isBusyResponse(status, body = '') {
+  if (Number(status) === 429) return true
+  const t = String(body || '').toUpperCase()
+  return BUSY_CODES.some((c) => t.includes(c))
+}
+
+// Seconds NetSuite asks us to wait, when it says. Advisory only — nothing here
+// sleeps on it; it's for telling the human how long to give it.
+export function retryAfterSeconds(headers) {
+  const v = headers?.get?.('retry-after')
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 // Run a SuiteQL query, auto-paginating via limit/offset. Read-only.
 // Returns { ok:true, rows } on success; a soft marker
 // ({ configured:false } | { needsAuth:true } | { error }) otherwise — never
@@ -124,12 +159,24 @@ export async function runSuiteQL(sql, opts = {}) {
       return { ok: false, error: `network: ${e?.message || e}`, rows }
     }
 
-    if (res.status === 401 || res.status === 403) {
-      const body = await res.text().catch(() => '')
-      return { ok: false, needsAuth: true, status: res.status, error: body, rows }
-    }
     if (!res.ok) {
       const body = await res.text().catch(() => '')
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, needsAuth: true, status: res.status, error: body, rows }
+      }
+      // Checked BEFORE the generic branch: a concurrency rejection is Celigo
+      // holding the line, not a broken query, and the two need opposite
+      // responses from whoever is reading the message.
+      if (isBusyResponse(res.status, body)) {
+        return {
+          ok: false,
+          busy: true,
+          status: res.status,
+          retryAfter: retryAfterSeconds(res.headers),
+          error: 'NetSuite is at its concurrent-request limit',
+          rows,
+        }
+      }
       return { ok: false, status: res.status, error: body, rows }
     }
 

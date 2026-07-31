@@ -45,6 +45,7 @@ import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/mo
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
+import { asnCheckDue, asnSummary, ASN_CHECK_MIN_HOURS, ASN_CHECK_WINDOW_DAYS } from '../src/model/asnCartonCheck.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
@@ -95,6 +96,16 @@ export async function getOrders() {
         FROM invoices i WHERE i.so_number = o.so_number
       ), '[]'::json) AS invoices
     FROM orders o
+    -- Placeholder orders are EXCLUDED here, at the single read path every work
+    -- view uses (Nima, 2026-07-31: a temp order holding stock until the real one
+    -- arrives — "we don't need to track it"). Filtering here rather than at
+    -- ingest means the row stays in Neon and stays honest: if one is later
+    -- converted to a real order, clearing the checkbox brings it straight back,
+    -- and nothing had to be deleted and re-discovered.
+    --
+    -- IS NOT TRUE rather than a false comparison: the column is null for every
+    -- CSV-sourced order, and testing equality with false would hide all of them.
+    WHERE o.is_placeholder IS NOT TRUE
   `)
 
   const today = new Date()
@@ -2318,5 +2329,257 @@ export async function getUpsConnection() {
     ecom,
     ready: wholesale.healthy,
     fix: wholesale.healthy ? null : 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect/re-authorize.',
+  }
+}
+
+// ── Did every carton that shipped get announced? (Nima, 2026-07-31) ──────────
+// The comparison is src/model/asnCartonCheck.js; the run is
+// src/ingest/asnCartonSync.js. These two functions are the app's side of it: one
+// reads the last run's verdict for the UI, the other decides whether the
+// schedule should run it again.
+//
+// Read-only and cheap — Neon rows only. The run itself can't answer an HTTP
+// request (one Orderful message GET per delivered ASN, 212 live), which is
+// exactly why it persists.
+export async function getAsnCartonCheck() {
+  // The verdict comes from the last run that actually COMPLETED, and a failure
+  // since then is reported alongside it rather than replacing it. Showing only
+  // the newest row would throw away "710/710 as of this morning" the moment one
+  // run hit a NetSuite hiccup — and "no data" is the one answer this check must
+  // never give when it has an answer.
+  const { rows: runs } = await pool.query(
+    'SELECT * FROM asn_carton_run ORDER BY ran_at DESC FETCH FIRST 5 ROWS ONLY')
+  const latest = runs[0]
+  const run = runs.find((r) => !r.error)
+  const failedSince = latest && latest.error ? { ranAt: latest.ran_at, error: latest.error } : null
+
+  // Never run is its own answer, not an empty result. A check that has never
+  // executed looks identical to a clean one unless it says so.
+  if (!run) {
+    return { neverRun: true, minHours: ASN_CHECK_MIN_HOURS, counts: null,
+      headline: failedSince ? 'last run failed' : 'never run', failedSince,
+      undeclared: [], phantom: [], blankSscc: [], duplicated: [] }
+  }
+
+  const { rows } = await pool.query(
+    `SELECT sscc, finding, if_number, po_dc, declared_on FROM asn_carton_check
+      WHERE finding <> 'matched' ORDER BY finding, if_number, sscc`)
+
+  // Grouped by fulfilment, because you re-send an ASN for a shipment, not for a
+  // single box. Same grain as undeclaredByFulfilment() in the model — done here
+  // since the rows arrive flat.
+  const byIf = new Map()
+  for (const r of rows.filter((r) => r.finding === 'undeclared')) {
+    const k = r.if_number || '(unknown IF)'
+    if (!byIf.has(k)) byIf.set(k, { ifNumber: r.if_number, poDc: r.po_dc, ssccs: [] })
+    byIf.get(k).ssccs.push(r.sscc)
+  }
+  const blank = new Map()
+  for (const r of rows.filter((r) => r.finding === 'blank_sscc')) {
+    const k = r.if_number || '(unknown IF)'
+    if (!blank.has(k)) blank.set(k, { ifNumber: r.if_number, poDc: r.po_dc, cartons: 0 })
+    blank.get(k).cartons++
+  }
+  const dup = new Map()
+  for (const r of rows.filter((r) => r.finding === 'duplicated')) {
+    if (!dup.has(r.sscc)) dup.set(r.sscc, { sscc: r.sscc, ifNumbers: [] })
+    dup.get(r.sscc).ifNumbers.push(r.if_number)
+  }
+
+  const counts = run.counts || {}
+  return {
+    neverRun: false,
+    ranAt: run.ran_at,
+    status: run.status,
+    // The same one-liner the CLI prints, so the tab and the terminal never
+    // disagree about what the run found.
+    headline: asnSummary({ status: run.status, counts }),
+    counts,
+    scope: {
+      kind: run.scope,
+      pos: run.pos,
+      posRequested: run.pos_requested,
+      docsDelivered: run.docs_delivered,
+      docsUndelivered: run.docs_undelivered,
+      fulfillments: run.fulfillments,
+      shipped: run.shipped,
+      messageErrors: run.message_errors,
+    },
+    minHours: ASN_CHECK_MIN_HOURS,
+    due: asnCheckDue(run.ran_at),
+    failedSince,
+    undeclared: [...byIf.values()].sort((a, b) => b.ssccs.length - a.ssccs.length),
+    phantom: rows.filter((r) => r.finding === 'phantom').map((r) => ({ sscc: r.sscc, declaredOn: r.declared_on || [] })),
+    blankSscc: [...blank.values()],
+    duplicated: [...dup.values()],
+  }
+}
+
+// Run it and wait. `force` bypasses the ASN_CHECK_MIN_HOURS cadence (see the
+// model for why six hours).
+//
+// SCOPE: activity in the last ASN_CHECK_WINDOW_DAYS, on BOTH sides — POs with a
+// recent 856 and POs that shipped recently (a carton going out today on a PO
+// whose last ASN is old is precisely what must not be missed). The comparison is
+// still whole-PO, so nothing reads as a phantom just for being older.
+//
+// Not the full history, measured 2026-07-31 and deliberately: a full audit is
+// ~14 minutes and reports 127 undeclared cartons on 2023-era POs (IF4256–IF5513,
+// the POJ…-SBX2 era, one phantom SSCC literally "12345678910123456789"). Pinning
+// years of unactionable history to a live panel is how a check stops being read.
+// Run `npm run check:asn-cartons -- --all` for the audit.
+export async function runAsnCartonCheck({ force = false } = {}) {
+  const { rows } = await pool.query('SELECT MAX(ran_at) AS last FROM asn_carton_run')
+  const last = rows[0]?.last || null
+  if (!force && !asnCheckDue(last)) return { skipped: 'not due', lastRanAt: last }
+
+  const { syncAsnCartons } = await import('../src/ingest/asnCartonSync.js')
+  const r = await syncAsnCartons({ sinceDays: ASN_CHECK_WINDOW_DAYS })
+  if (!r.ok) throw new Error(r.error)
+  if (r.empty) return { skipped: r.reason }
+  return { ok: true, status: r.run.status, counts: r.run.counts, scope: { pos: r.run.pos, shipped: r.run.shipped } }
+}
+
+// Kick it off WITHOUT waiting, which is how both callers use it.
+//
+// The full run is minutes of SuiteQL (the PO scope is the whole 856 history,
+// chunked 50 POs at a time), and holding an HTTP request open that long is what
+// makes a scheduled POST fail through Render for reasons that have nothing to do
+// with the check. So: return immediately, let it finish.
+//
+// A failure is written to asn_carton_run.error rather than logged and lost.
+// Detached work that fails silently is exactly the shape of bug this repo keeps
+// paying for — a check nobody can see failing reads as a check that passed.
+let asnCheckInFlight = false
+export async function startAsnCartonCheck({ force = false } = {}) {
+  if (asnCheckInFlight) return { skipped: 'already running' }
+  const { rows } = await pool.query('SELECT MAX(ran_at) AS last FROM asn_carton_run')
+  const last = rows[0]?.last || null
+  if (!force && !asnCheckDue(last)) return { skipped: 'not due', lastRanAt: last, minHours: ASN_CHECK_MIN_HOURS }
+
+  asnCheckInFlight = true
+  runAsnCartonCheck({ force: true })
+    .then((r) => console.log('ASN carton check:', JSON.stringify(r)))
+    .catch(async (e) => {
+      console.error('ASN carton check failed:', e.message)
+      try {
+        await pool.query(
+          `INSERT INTO asn_carton_run (status, error) VALUES ('error', $1)`, [e.message])
+      } catch (e2) {
+        console.error('could not record the ASN check failure:', e2.message)
+      }
+    })
+    .finally(() => { asnCheckInFlight = false })
+  return { started: true, lastRanAt: last }
+}
+
+// ── Manual "refresh from NetSuite" (Nima, 2026-07-31) ────────────────────────
+// The button next to Import CSV. Nima had deliberately never asked for one,
+// fearing a cap on how many times we may call NetSuite — worth stating plainly
+// because it changes the design: THERE IS NO DAILY CALL QUOTA. SuiteQL/REST is
+// governed by CONCURRENT requests, and that allowance is shared with Celigo.
+//
+// So the cost of a press is not "one of a limited number of calls" — the
+// scheduled cycle already runs ~8 sequential queries roughly 16× a day. The only
+// real risk is colliding with Celigo, and Celigo has priority. Hence:
+//
+//   1. A cheap PREFLIGHT query first. If NetSuite is saturated we find out for
+//      the price of one tiny read instead of starting an 8-query sync that dies
+//      halfway and leaves the person guessing which half landed.
+//   2. NO RETRY, ever (see netsuiteApi.js). Retrying is how a button steals
+//      concurrency from the integration we're protecting.
+//   3. Sequential, exactly like the cron. Parallelising would be the one change
+//      that genuinely does hurt Celigo.
+//   4. The heavy pull is DETACHED. Measured live 2026-07-31 a full refresh takes
+//      ~93 seconds, and Render's proxy cuts a request near 100 — so holding the
+//      connection open would fail on the deploy Nima actually uses while working
+//      fine here. The PREFLIGHT stays synchronous, because "NetSuite is busy" is
+//      the answer he asked for and it must come back instantly.
+let netsuiteRefreshInFlight = false
+let netsuiteRefreshLast = null   // the last finished result, for the poller
+
+// Fast, synchronous: is NetSuite free right now? One tiny read.
+export async function preflightNetsuite() {
+  const { runSuiteQL, netsuiteConfigured } = await import('../src/ingest/netsuiteApi.js')
+  if (!netsuiteConfigured()) return { error: 'NetSuite is not configured on this server' }
+  if (netsuiteRefreshInFlight) return { busy: true, reason: 'in_flight' }
+  const pre = await runSuiteQL('SELECT id FROM transaction WHERE ROWNUM <= 1')
+  if (pre.busy) return { busy: true, reason: 'celigo', retryAfter: pre.retryAfter ?? null }
+  if (!pre.ok) return { error: pre.needsAuth ? 'NetSuite rejected our credentials' : (pre.error || 'the NetSuite preflight failed') }
+  return { ok: true }
+}
+
+// Preflight, then let the pull run on its own. Returns as soon as it STARTS.
+export async function startNetsuiteRefresh() {
+  const pre = await preflightNetsuite()
+  if (!pre.ok) return pre
+  netsuiteRefreshInFlight = true
+  netsuiteRefreshLast = null
+  refreshFromNetsuite({ preflighted: true })
+    .then((r) => { netsuiteRefreshLast = r; console.log('NetSuite refresh:', JSON.stringify(r)) })
+    .catch((e) => { netsuiteRefreshLast = { error: e?.message || String(e) } })
+    .finally(() => { netsuiteRefreshInFlight = false })
+  return { started: true }
+}
+
+// What the client polls while the button spins.
+export function netsuiteRefreshStatus() {
+  return { running: netsuiteRefreshInFlight, result: netsuiteRefreshLast }
+}
+
+export async function refreshFromNetsuite({ preflighted = false } = {}) {
+  const { isBusyResponse, netsuiteConfigured, runSuiteQL } = await import('../src/ingest/netsuiteApi.js')
+  // A busy signal can also arrive as a string propagated up from a sync, so the
+  // same detector is applied to error text, not only to live responses.
+  const busyFrom = (e) => isBusyResponse(0, e || '')
+
+  if (!netsuiteConfigured()) return { error: 'NetSuite is not configured on this server' }
+  if (!preflighted) {
+    const pre = await runSuiteQL('SELECT id FROM transaction WHERE ROWNUM <= 1')
+    if (pre.busy) return { busy: true, reason: 'celigo', retryAfter: pre.retryAfter ?? null }
+    if (!pre.ok) return { error: pre.needsAuth ? 'NetSuite rejected our credentials' : (pre.error || 'the NetSuite preflight failed') }
+  }
+  try {
+    const { syncFromNetsuite } = await import('../src/ingest/netsuiteSync.js')
+    const { syncFulfillmentDc } = await import('../src/ingest/fulfillmentDc.js')
+    const { syncEdiPackagesLive } = await import('../src/ingest/ediPackagesLive.js')
+
+    // Same three pulls the schedule does, in the same order. Anything that comes
+    // back busy stops the rest — pressing on would be the retry we just refused.
+    const main = await syncFromNetsuite({})
+    if (!main.ok) {
+      return busyFrom(main.error)
+        ? { busy: true, reason: 'celigo' }
+        : { error: main.error || 'the NetSuite pull failed' }
+    }
+
+    let cartons = null
+    let dcWarning = null
+    try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+      await syncFulfillmentDc({ since })
+    } catch (e) {
+      // Non-fatal: this only backfills the IF→(PO,DC) link. The orders the human
+      // pressed the button for are already in. Say so rather than failing.
+      dcWarning = e.message
+    }
+    const feed = await syncEdiPackagesLive({})
+    if (feed.ok) cartons = { loaded: feed.loaded ?? 0, skipped: feed.skipped || null }
+    else if (busyFrom(feed.error)) return { busy: true, reason: 'celigo', partial: 'orders are in; the carton feed hit the limit' }
+
+    return {
+      ok: true,
+      counts: {
+        orders: main.nOrders ?? 0,
+        fulfillments: main.nFul ?? 0,
+        invoices: main.nInv ?? 0,
+        archived: (main.archived || []).length,
+      },
+      cartons,
+      dcWarning,
+      syncedAt: new Date().toISOString(),
+    }
+  } catch (e) {
+    return busyFrom(e?.message) ? { busy: true, reason: 'celigo' } : { error: e?.message || String(e) }
   }
 }

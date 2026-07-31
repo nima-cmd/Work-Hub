@@ -9,7 +9,12 @@
 
 import { pool } from '../src/db.js'
 import { parseDcToken, partnerForDc } from '../src/model/dc.js'
-import { uploadScannedPdf } from '../src/ingest/googleDrive.js'
+import { uploadScannedPdf, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
+
+// A Drive folder name can't carry a slash, and a customer name legitimately can
+// ("Wexner: Joseph - Jackson"). Strip only what Drive/paths can't take, and keep
+// the rest verbatim so the folder still reads like the customer.
+const safeFolder = (s) => String(s || '').replace(/[\\/]+/g, '-').replace(/\s+/g, ' ').trim()
 
 // Partner for a PO with no DC on its tag (the old bare-PO labels): read it off
 // the order's customer. EDI POs are Bloomingdale's unless the customer clearly
@@ -23,14 +28,59 @@ async function partnerForPo(po) {
   return null // unknown — surfaced as a warning, filed under _Unresolved
 }
 
+// An IF number off the NetSuite packing slip's footer QR (2026-07-31).
+//
+// The slip is the SAME template for every channel, so the payload is deliberately
+// just the fulfilment number and this is where the channel is decided.
+// `fulfillment_dc` holds one row per IF and contains ONLY EDI fulfilments — 2,246
+// rows, every one with a DC, zero boutique — because it is built from
+// custbody_po_cd_identifier, which only EDI fulfilments carry. So presence in
+// that table IS the channel test, and it needs no new field on the print template.
+//
+// ⚠️ That table is filled incrementally by the ~90-minute sync, so a fulfilment
+// created and scanned within the same hour may not be there yet and would read as
+// boutique. The caller surfaces that as a warning naming the fix (press Refresh
+// NetSuite) rather than silently filing it to the wrong place.
+async function resolveFulfilment(ifNumber) {
+  const { rows } = await pool.query(
+    'SELECT po_number, dc FROM fulfillment_dc WHERE if_number = $1', [ifNumber])
+  if (!rows.length) return null
+  const po = rows[0].po_number
+  const dc = rows[0].dc || null
+  // Partner from the PO's own customer first. partnerForDc is a shape heuristic
+  // (digits → Nordstrom, else Bloomingdale's) and fulfillment_dc carries codes it
+  // gets wrong — 'SBX2' is ShopBop but reads as Bloomingdale's. A null partner
+  // files under _Unresolved with a warning, which beats a confident wrong folder.
+  const partner = (await partnerForPo(po)) || (dc ? partnerForDc(dc) : null)
+  return { kind: 'edi', po, dc, partner, ifNumber }
+}
+
 // Classify one QR payload with DB authority. DC:<po>:<abbrev> → per-DC EDI; a
-// bare number that matches a known open PO → PO-level EDI; anything else →
-// boutique (format still TBD — passed through for the caller to flag).
+// bare number that matches a known open PO → PO-level EDI; IF<n> → look up the
+// channel; anything else → boutique (format still TBD).
 async function classify(qr, knownPos) {
   const s = String(qr || '').trim()
   const dc = parseDcToken(s)
   if (dc) return { kind: 'edi', po: dc.poNumber, dc: dc.dc, partner: partnerForDc(dc.dc || '') }
   if (knownPos.has(s)) return { kind: 'edi', po: s, dc: null, partner: await partnerForPo(s) }
+  if (/^IF\d+$/i.test(s)) {
+    const ifNumber = s.toUpperCase()
+    const edi = await resolveFulfilment(ifNumber)
+    if (edi) return edi
+    // Known fulfilment, no EDI mapping → boutique. Named, not just "unknown QR".
+    const { rows } = await pool.query(
+      `SELECT f.so_number, o.customer, o.po_number
+         FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+        WHERE f.if_number = $1`, [ifNumber])
+    return {
+      kind: 'boutique', raw: s, po: null, dc: null, partner: null,
+      ifNumber,
+      soNumber: rows[0]?.so_number || null,
+      customer: rows[0]?.customer || null,
+      customerPo: rows[0]?.po_number || null,
+      known: rows.length > 0,
+    }
+  }
   return { kind: 'boutique', raw: s, po: null, dc: null, partner: null }
 }
 
@@ -69,14 +119,47 @@ export async function planScanFiling(segments = []) {
     if (seg.orphan || !seg.qr) continue // handled as the master below
     const c = await classify(seg.qr, knownPos)
     if (c.kind === 'boutique') {
-      warnings.push(`Boutique QR "${c.raw}" — boutique filing not built yet, skipped.`)
-      documents.push({ kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true })
+      // Boutique slips file to Packing Slips/<customer>/<SO>/ (Nima, 2026-07-31).
+      // Customer first because that's how you'd go looking for one; the SO level
+      // keeps a split shipment's fulfilments together (IF7441 and IF7452 for the
+      // same order sit side by side).
+      //
+      // Filed only when we can NAME both levels. Anything else stays skipped
+      // rather than inventing a folder — a slip in the wrong place is harder to
+      // find than one that was never filed and said so.
+      if (c.ifNumber && c.customer && c.soNumber) {
+        documents.push({
+          kind: 'slip', root: DRIVE_ROOT_SLIPS,
+          partner: safeFolder(c.customer), pos: [c.soNumber],
+          filename: `${c.ifNumber}.pdf`,
+          customer: c.customer, soNumber: c.soNumber, ifNumber: c.ifNumber,
+          customerPo: c.customerPo || null, pageNums: seg.pageNums, qr: seg.qr,
+        })
+        continue
+      }
+      if (c.ifNumber) {
+        warnings.push(
+          c.known
+            ? `${c.ifNumber} — couldn't resolve ${!c.customer ? 'the customer' : 'its sales order'}, so it was skipped rather than filed somewhere wrong.`
+            : `${c.ifNumber} isn't in the app yet — if you just created it, press ↻ Refresh NetSuite and re-scan; otherwise check the number.`,
+        )
+      } else {
+        warnings.push(`Unrecognised QR "${c.raw}" — skipped.`)
+      }
+      documents.push({
+        kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true,
+        ifNumber: c.ifNumber || null, soNumber: c.soNumber || null,
+        customer: c.customer || null, customerPo: c.customerPo || null, known: c.known ?? null,
+      })
       continue
     }
     if (!c.partner) warnings.push(`PO ${c.po}: couldn't resolve partner — will file under _Unresolved.`)
     const partner = c.partner || '_Unresolved'
     const filename = c.dc ? `${c.po}-${c.dc}.pdf` : `${c.po}.pdf`
-    documents.push({ kind: 'edi', po: c.po, dc: c.dc, partner, pos: [c.po], filename, pageNums: seg.pageNums, qr: seg.qr })
+    documents.push({
+      kind: 'edi', po: c.po, dc: c.dc, partner, pos: [c.po], filename,
+      pageNums: seg.pageNums, qr: seg.qr, ifNumber: c.ifNumber || null,
+    })
   }
 
   // Master BOL = the leading orphan pages. Covers every EDI PO in the scan; a
@@ -106,10 +189,12 @@ export async function planScanFiling(segments = []) {
 // Upload one already-resolved split to Drive. Called once per document so each
 // stays well under the JSON body limit and the UI can show per-file progress.
 //   { partner, pos: [poFolders], filename, pdfBase64 }
-export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root }) {
   if (!partner || !pos?.length || !filename || !pdfBase64) {
     throw new Error('partner, pos, filename and pdfBase64 are required')
   }
+  // Only the two known trees — never a caller-supplied path.
+  const target = root === DRIVE_ROOT_SLIPS ? DRIVE_ROOT_SLIPS : DRIVE_ROOT_BOLS
   const buffer = Buffer.from(pdfBase64, 'base64')
-  return uploadScannedPdf({ partner, pos, filename, buffer })
+  return uploadScannedPdf({ partner, pos, filename, buffer, root: target })
 }
