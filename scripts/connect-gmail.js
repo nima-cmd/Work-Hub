@@ -28,14 +28,16 @@ const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
 authUrl.searchParams.set('client_id', CLIENT_ID)
 authUrl.searchParams.set('redirect_uri', REDIRECT_URI)
 authUrl.searchParams.set('response_type', 'code')
-// gmail.modify (read/mark-read/label) + calendar.readonly (pull events for the
-// in-app calendar + holocalls, Nima 2026-07-21) + drive.file (write the
-// generated VICS BOL PDFs into Drive, Nima 2026-07-22 — drive.file only touches
-// files THIS app creates, never the rest of the Drive). Re-run this after
-// adding a scope to mint a refresh token that carries ALL of them.
+// gmail.modify (read/mark-read/label) + calendar (read events for the in-app
+// calendar/holocalls AND write — create the "Naghedi Shipping" calendar + add a
+// shipped event per truck, Nima 2026-07-29; full scope is a superset of the old
+// calendar.readonly) + drive.file (write BOL/scanned PDFs into Drive, Nima
+// 2026-07-22; drive.file only touches files THIS app creates — works on Shared
+// Drives too with supportsAllDrives). Re-run this after adding a scope to mint a
+// refresh token that carries ALL of them.
 authUrl.searchParams.set('scope', [
   'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/drive.file',
 ].join(' '))
 authUrl.searchParams.set('access_type', 'offline') // required to get a refresh token

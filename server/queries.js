@@ -56,7 +56,10 @@ import {
   createEdiTask, fetchEdiTaskStates, closeEdiTask,
 } from '../src/ingest/loadToDb.js'
 import { fetchInboxMessages, markMessageRead, applyLabel, fetchThread, getProfile, listUserLabels, markMessageSpam } from '../src/ingest/gmail.js'
-import { fetchCalendarEvents } from '../src/ingest/googleCalendar.js'
+import {
+  fetchCalendarEvents,
+  upsertShippingEvent, deleteShippingEvent, shippingEventId,
+} from '../src/ingest/googleCalendar.js'
 import { getCharacterById, CHARACTERS } from '../src/model/characters.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { parseDcToken, parseDc, dcAbbrev } from '../src/model/dc.js'
@@ -1302,17 +1305,146 @@ async function computeRoutingGaps({ packages, shipments }) {
   return { items: gaps, feedImportedAt: feedAt ? new Date(feedAt).toISOString() : null }
 }
 
+// ── Naghedi Shipping calendar sync ───────────────────────────────────────────
+// When a BOL is marked shipped, drop ONE all-day event on the app-owned "Naghedi
+// Shipping" calendar per TRUCK: the master BOL if this shipment rolls up into one
+// (several DCs consolidated through a merge center), otherwise the DC BOL itself.
+// The event id is derived from the BOL number, so a second DC of the same master
+// shipping — or re-clicking — refreshes the SAME event instead of duplicating.
+// Everything here is best-effort and soft-failing: a missing `calendar` scope, a
+// disabled API, or any Google hiccup must never block the shipped toggle itself
+// (setShipmentShipped catches throws; the Google helpers return soft markers).
+
+// A DATE column comes back from pg as a Date (local midnight) and ship dates
+// typed in the UI as 'YYYY-MM-DD' strings — normalise both to a calendar day,
+// falling back to today so an event always lands somewhere sensible.
+function toCalDate(d) {
+  if (typeof d === 'string') {
+    const m = d.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (m) return m[1]
+  }
+  const dt = d ? new Date(d) : new Date()
+  const src = isNaN(dt.getTime()) ? new Date() : dt
+  const y = src.getFullYear()
+  const mo = String(src.getMonth() + 1).padStart(2, '0')
+  const da = String(src.getDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
+}
+
+// Resolve the "truck" a shipment belongs to: its master (if the auth has a Master
+// BOL) or the shipment itself. Returns the display fields + a per-(PO,DC) carton
+// breakdown for the event description.
+async function truckForShipment(shipment) {
+  const auths = await fetchRoutingAuths()
+  const auth = shipment.authNumber ? auths.find((a) => a.authNumber === shipment.authNumber) : null
+
+  if (auth?.masterBolNumber) {
+    const master = await buildMasterShipment(auth.authNumber)
+    const members = (await fetchRoutingShipments()).filter((s) => s.authNumber === auth.authNumber)
+    const rows = []
+    for (const m of members) {
+      const enriched = await withLineItems(m)
+      for (const li of enriched.lineItems || []) rows.push({ po: li.po, dc: m.dc, cartons: li.cartons })
+    }
+    return {
+      isMaster: true,
+      authNumber: auth.authNumber,
+      partner: master.partner,
+      bolNumber: master.bolNumber,
+      shipDate: master.shipDate,
+      carrier: master.carrier,
+      scac: master.scac,
+      mergeCenter: master.mergeCenter,
+      palletCount: master.palletCount,
+      cartons: master.cartons,
+      weightLb: master.weightLb,
+      posCount: (master.memberPos || []).length,
+      rows,
+    }
+  }
+
+  const enriched = await withLineItems(shipment)
+  return {
+    isMaster: false,
+    partner: shipment.partner,
+    bolNumber: shipment.bolNumber,
+    shipDate: shipment.shipDate,
+    carrier: shipment.carrier,
+    scac: shipment.scac,
+    mergeCenter: shipment.mergeCenter,
+    palletCount: null,
+    cartons: enriched.cartons,
+    weightLb: enriched.weightLb,
+    posCount: (shipment.memberPos || []).length,
+    rows: (enriched.lineItems || []).map((li) => ({ po: li.po, dc: shipment.dc, cartons: li.cartons })),
+  }
+}
+
+function shipmentEventText(truck, driveLink) {
+  const n = truck.posCount
+  const title = `Shipped: ${truck.partner} · ${truck.bolNumber} · ${n} PO${n === 1 ? '' : 's'}`
+  const lines = []
+  if (truck.isMaster) lines.push(`Master BOL · merge center ${truck.mergeCenter || '—'}`)
+  if (truck.carrier) lines.push(`Carrier: ${truck.carrier}${truck.scac ? ` (${truck.scac})` : ''}`)
+  lines.push(
+    `${truck.cartons ?? '?'} cartons · ${Math.ceil(Number(truck.weightLb) || 0)} lb` +
+      (truck.palletCount ? ` · ${truck.palletCount} pallets` : ''),
+  )
+  lines.push('', 'PO / DC breakdown:')
+  for (const r of truck.rows) lines.push(`  • PO ${r.po} · DC ${r.dc} — ${r.cartons || 0} cartons`)
+  if (driveLink) lines.push('', `📄 BOL PDF on Drive: ${driveLink}`)
+  return { title, description: lines.join('\n') }
+}
+
+async function syncShipmentCalendar(id, shipped) {
+  const shipment = await fetchRoutingShipmentById(id)
+  if (!shipment || !shipment.bolNumber) return
+  const truck = await truckForShipment(shipment)
+  const eventId = shippingEventId(truck.bolNumber)
+
+  if (!shipped) {
+    // Un-shipped. Keep the truck's event only if a sibling DC is still shipped
+    // (markShipmentShipped already cleared this row's shipped_at). Otherwise
+    // remove it so the calendar reflects reality.
+    let stillShipped = false
+    if (truck.isMaster) {
+      const members = (await fetchRoutingShipments()).filter((s) => s.authNumber === truck.authNumber)
+      stillShipped = members.some((s) => s.shippedAt)
+    }
+    if (!stillShipped) return void (await deleteShippingEvent(eventId))
+  }
+
+  // Best-effort: (re)file the BOL PDF to Drive so the archived doc exists when the
+  // truck leaves, and grab a link for the event. Never let a Drive failure block
+  // the calendar event.
+  let driveLink = null
+  try {
+    const filed = truck.isMaster ? await fileMasterToDrive(truck.authNumber) : await fileShipmentToDrive(id)
+    if (filed?.ok) driveLink = filed.uploaded?.[0]?.link || null
+  } catch { /* Drive down / disabled — event still gets created without a link */ }
+
+  const { title, description } = shipmentEventText(truck, driveLink)
+  await upsertShippingEvent({ eventId, date: toCalDate(truck.shipDate), title, description })
+}
+
 export async function setShipmentShipped(id, shipped = true) {
   await markShipmentShipped(id, shipped)
   // Archiving by hand freezes the EDI paper trail too, exactly as the sync's
   // auto-archive does — otherwise a manually-shipped BOL loses its 850/856
   // reference the moment those transactions age out of the Orderful window.
+  // FIRST, because it's the durable record; the calendar below is decoration.
   if (shipped) {
     const s = await fetchRoutingShipmentById(id)
     if (s?.bolNumber) {
       const lineage = (await fetchShipmentEdiLineage([s.bolNumber]))[String(s.bolNumber)]
       if (lineage) await saveShipmentEdiLineage(id, s.bolNumber, lineage)
     }
+  }
+  try {
+    await syncShipmentCalendar(id, shipped)
+  } catch (e) {
+    // Calendar/Drive are never allowed to break the shipped toggle.
+    console.warn('[shipping-calendar] sync failed (soft):', e?.message || e)
   }
   return getRouting()
 }
