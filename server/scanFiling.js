@@ -23,14 +23,59 @@ async function partnerForPo(po) {
   return null // unknown — surfaced as a warning, filed under _Unresolved
 }
 
+// An IF number off the NetSuite packing slip's footer QR (2026-07-31).
+//
+// The slip is the SAME template for every channel, so the payload is deliberately
+// just the fulfilment number and this is where the channel is decided.
+// `fulfillment_dc` holds one row per IF and contains ONLY EDI fulfilments — 2,246
+// rows, every one with a DC, zero boutique — because it is built from
+// custbody_po_cd_identifier, which only EDI fulfilments carry. So presence in
+// that table IS the channel test, and it needs no new field on the print template.
+//
+// ⚠️ That table is filled incrementally by the ~90-minute sync, so a fulfilment
+// created and scanned within the same hour may not be there yet and would read as
+// boutique. The caller surfaces that as a warning naming the fix (press Refresh
+// NetSuite) rather than silently filing it to the wrong place.
+async function resolveFulfilment(ifNumber) {
+  const { rows } = await pool.query(
+    'SELECT po_number, dc FROM fulfillment_dc WHERE if_number = $1', [ifNumber])
+  if (!rows.length) return null
+  const po = rows[0].po_number
+  const dc = rows[0].dc || null
+  // Partner from the PO's own customer first. partnerForDc is a shape heuristic
+  // (digits → Nordstrom, else Bloomingdale's) and fulfillment_dc carries codes it
+  // gets wrong — 'SBX2' is ShopBop but reads as Bloomingdale's. A null partner
+  // files under _Unresolved with a warning, which beats a confident wrong folder.
+  const partner = (await partnerForPo(po)) || (dc ? partnerForDc(dc) : null)
+  return { kind: 'edi', po, dc, partner, ifNumber }
+}
+
 // Classify one QR payload with DB authority. DC:<po>:<abbrev> → per-DC EDI; a
-// bare number that matches a known open PO → PO-level EDI; anything else →
-// boutique (format still TBD — passed through for the caller to flag).
+// bare number that matches a known open PO → PO-level EDI; IF<n> → look up the
+// channel; anything else → boutique (format still TBD).
 async function classify(qr, knownPos) {
   const s = String(qr || '').trim()
   const dc = parseDcToken(s)
   if (dc) return { kind: 'edi', po: dc.poNumber, dc: dc.dc, partner: partnerForDc(dc.dc || '') }
   if (knownPos.has(s)) return { kind: 'edi', po: s, dc: null, partner: await partnerForPo(s) }
+  if (/^IF\d+$/i.test(s)) {
+    const ifNumber = s.toUpperCase()
+    const edi = await resolveFulfilment(ifNumber)
+    if (edi) return edi
+    // Known fulfilment, no EDI mapping → boutique. Named, not just "unknown QR".
+    const { rows } = await pool.query(
+      `SELECT f.so_number, o.customer, o.po_number
+         FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+        WHERE f.if_number = $1`, [ifNumber])
+    return {
+      kind: 'boutique', raw: s, po: null, dc: null, partner: null,
+      ifNumber,
+      soNumber: rows[0]?.so_number || null,
+      customer: rows[0]?.customer || null,
+      customerPo: rows[0]?.po_number || null,
+      known: rows.length > 0,
+    }
+  }
   return { kind: 'boutique', raw: s, po: null, dc: null, partner: null }
 }
 
@@ -69,14 +114,33 @@ export async function planScanFiling(segments = []) {
     if (seg.orphan || !seg.qr) continue // handled as the master below
     const c = await classify(seg.qr, knownPos)
     if (c.kind === 'boutique') {
-      warnings.push(`Boutique QR "${c.raw}" — boutique filing not built yet, skipped.`)
-      documents.push({ kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true })
+      // A fulfilment we can NAME is a different situation from an unrecognised
+      // QR, and saying so is the difference between "we know what this is and
+      // haven't been told where to put it" and "no idea what this is".
+      if (c.ifNumber) {
+        const who = c.customer ? ` · ${c.customer}` : ''
+        warnings.push(
+          c.known
+            ? `${c.ifNumber}${who} — boutique fulfilment; no Drive folder chosen for boutique slips yet, so it was skipped.`
+            : `${c.ifNumber} isn't in the app yet — if you just created it, press ↻ Refresh NetSuite and re-scan; otherwise check the number.`,
+        )
+      } else {
+        warnings.push(`Boutique QR "${c.raw}" — boutique filing not built yet, skipped.`)
+      }
+      documents.push({
+        kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true,
+        ifNumber: c.ifNumber || null, soNumber: c.soNumber || null,
+        customer: c.customer || null, customerPo: c.customerPo || null, known: c.known ?? null,
+      })
       continue
     }
     if (!c.partner) warnings.push(`PO ${c.po}: couldn't resolve partner — will file under _Unresolved.`)
     const partner = c.partner || '_Unresolved'
     const filename = c.dc ? `${c.po}-${c.dc}.pdf` : `${c.po}.pdf`
-    documents.push({ kind: 'edi', po: c.po, dc: c.dc, partner, pos: [c.po], filename, pageNums: seg.pageNums, qr: seg.qr })
+    documents.push({
+      kind: 'edi', po: c.po, dc: c.dc, partner, pos: [c.po], filename,
+      pageNums: seg.pageNums, qr: seg.qr, ifNumber: c.ifNumber || null,
+    })
   }
 
   // Master BOL = the leading orphan pages. Covers every EDI PO in the scan; a
