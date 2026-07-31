@@ -28,6 +28,10 @@ import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPac
 import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
+import { extractAsnManifest } from '../src/ingest/orderfulAsn.js'
+import {
+  normalizeSscc, checkAsnCartons, undeclaredByFulfilment, asnSummary,
+} from '../src/model/asnCartonCheck.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
 
 test('parseCsv handles quoted commas and duplicate headers', () => {
@@ -1511,4 +1515,146 @@ test('health: every integration declares what breaks without it', () => {
     assert.ok(i.powers?.length, `${i.key} must say what it powers`)
     assert.ok(i.ifMissing?.length, `${i.key} must say what happens when it's absent`)
   }
+})
+
+// ── Carton-level ASN reconciliation ──────────────────────────────────────────
+// Shapes below mirror real data checked live 2026-07-31: NetSuite stores the
+// SSCC bare (18 digits), Orderful's 856 transmits it zero-padded (20).
+
+test('asn: the 856 zero-pads the SSCC and NetSuite does not — they must still match', () => {
+  // This is the whole reason normalizeSscc exists. A raw string compare here
+  // reports every carton unannounced, which reads as a disaster, not a format bug.
+  assert.equal(normalizeSscc('00185072747003728869'), '185072747003728869')
+  assert.equal(normalizeSscc('185072747003728869'), '185072747003728869')
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747003728869', ifNumber: 'IF7323' }],
+    declared: [{ sscc: '00185072747003728869', businessNumber: 'NB1731234' }],
+  })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.counts.matched, 1)
+  assert.equal(r.counts.undeclared, 0)
+})
+
+test('asn: only leading zeros are stripped — a wrong-length value stays a mismatch', () => {
+  // Truncating significant digits would manufacture a false match, which is
+  // worse than the miss it hides.
+  assert.equal(normalizeSscc('99185072747003728869'), '99185072747003728869')
+  assert.equal(normalizeSscc(''), null)
+  assert.equal(normalizeSscc(null), null)
+  // Separators and stray whitespace are stripped; the digits themselves are not.
+  assert.equal(normalizeSscc('  1850-7274 7003728869 '), '185072747003728869')
+})
+
+test('asn: a carton that shipped without being announced is the chargeback finding', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF7323', poDc: '7527086-SC' },
+      { sscc: '185072747000000002', ifNumber: 'IF7323', poDc: '7527086-SC' },
+    ],
+    declared: [{ sscc: '00185072747000000001', businessNumber: 'NB1731234' }],
+  })
+  assert.equal(r.status, 'undeclared')
+  assert.equal(r.counts.undeclared, 1)
+  assert.equal(r.undeclared[0].sscc, '185072747000000002')
+  assert.equal(r.undeclared[0].ifNumber, 'IF7323')
+  // Grouped by fulfilment, because you re-send an ASN per shipment, not per box.
+  const groups = undeclaredByFulfilment(r)
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0].ssccs, ['185072747000000002'])
+})
+
+test('asn: an announced carton with no NetSuite record is a phantom box', () => {
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747000000001', ifNumber: 'IF7323' }],
+    declared: [
+      { sscc: '00185072747000000001', businessNumber: 'NB1731234' },
+      { sscc: '00185072747000000009', businessNumber: 'NB1731234' },
+    ],
+  })
+  assert.equal(r.status, 'phantom')
+  assert.equal(r.counts.phantom, 1)
+  assert.equal(r.phantom[0].sscc, '185072747000000009')
+  assert.deepEqual(r.phantom[0].declaredOn, ['NB1731234'])
+})
+
+test('asn: nothing announced yet is not a failure', () => {
+  // Same reasoning as packCheck's not_started — pre-transmission there is
+  // nothing to reconcile, and crying wolf there is what gets a check ignored.
+  const r = checkAsnCartons({ packed: [{ sscc: '185072747000000001', ifNumber: 'IF7323' }], declared: [] })
+  assert.equal(r.status, 'no_asn')
+  assert.equal(r.counts.undeclared, 0)
+  assert.match(asnSummary(r), /no ASN yet/)
+  assert.equal(checkAsnCartons({}).status, 'empty')
+  assert.equal(asnSummary(checkAsnCartons({})), '')
+})
+
+test('asn: a carton with a blank SSCC is reported apart from a real miss', () => {
+  // The box exists and a field was left empty — same human error as the pack
+  // check's blank-quantity cartons, and a different fix from "send the ASN".
+  const r = checkAsnCartons({
+    packed: [{ sscc: '', ifNumber: 'IF7439' }, { sscc: null, ifNumber: 'IF7439' }],
+    declared: [{ sscc: '00185072747000000001' }],
+  })
+  assert.equal(r.counts.blankSscc, 2)
+  assert.equal(r.counts.packed, 0)
+})
+
+test('asn: a duplicated SSCC is its own defect', () => {
+  const r = checkAsnCartons({
+    packed: [
+      { sscc: '185072747000000001', ifNumber: 'IF7323' },
+      { sscc: '185072747000000001', ifNumber: 'IF7324' },
+    ],
+    declared: [{ sscc: '00185072747000000001' }],
+  })
+  assert.equal(r.counts.duplicated, 1)
+  assert.deepEqual(r.duplicated[0].ifNumbers, ['IF7323', 'IF7324'])
+})
+
+test('asn: the manifest reads pack-level SSCCs and order-level POs, ignoring other marks', () => {
+  // Structure copied from the real Bloomingdale's ASN (txn 996376235).
+  const message = {
+    transactionSets: [{
+      HL_loop: [
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'S' }] },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'O' }], purchaseOrderReference: [{ purchaseOrderNumber: '7527086' }] },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'O' }], purchaseOrderReference: [{ purchaseOrderNumber: '7776940' }] },
+        {
+          hierarchicalLevel: [{ hierarchicalLevelCode: 'P' }],
+          marksAndNumbersInformation: [{ marksAndNumbersQualifier: 'GM', marksAndNumbers: '00185072747003728869' }],
+        },
+        {
+          // A non-GM mark must not be mistaken for a license plate.
+          hierarchicalLevel: [{ hierarchicalLevelCode: 'P' }],
+          marksAndNumbersInformation: [{ marksAndNumbersQualifier: 'CA', marksAndNumbers: 'CARTON-2' }],
+        },
+        { hierarchicalLevel: [{ hierarchicalLevelCode: 'I' }] },
+      ],
+    }],
+  }
+  const m = extractAsnManifest(message)
+  assert.deepEqual(m.poNumbers, ['7527086', '7776940'])
+  assert.deepEqual(m.ssccs, ['00185072747003728869'])
+  assert.equal(m.packCount, 2)
+  // The second pack declared a carton with no SSCC — visible, not silently dropped.
+  assert.equal(m.packsWithoutSscc, 1)
+  assert.deepEqual(extractAsnManifest({}).ssccs, [])
+  assert.deepEqual(extractAsnManifest(null).poNumbers, [])
+})
+
+test('asn: a carton announced on two ASNs explains the declared-count gap', () => {
+  // Without this, a raw declared count of 3 against 2 unique cartons looks like
+  // an unexplained discrepancy, which is what makes a check stop being trusted.
+  const r = checkAsnCartons({
+    packed: [{ sscc: '185072747000000001', ifNumber: 'IF6941' }, { sscc: '185072747000000002', ifNumber: 'IF6941' }],
+    declared: [
+      { sscc: '00185072747000000001', businessNumber: '6592086SC' },
+      { sscc: '00185072747000000001', businessNumber: '6592086ST' },
+      { sscc: '00185072747000000002', businessNumber: '6592086SC' },
+    ],
+  })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.counts.declared, 2)
+  assert.equal(r.counts.reDeclared, 1)
+  assert.deepEqual(r.reDeclared[0].declaredOn, ['6592086SC', '6592086ST'])
 })
