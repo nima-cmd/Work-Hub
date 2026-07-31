@@ -848,10 +848,10 @@ export async function planScanFiling(segments) {
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
 }
-export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root }) {
   const res = await fetch('/api/scan/file-to-drive', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ partner, pos, filename, pdfBase64 }),
+    body: JSON.stringify({ partner, pos, filename, pdfBase64, root }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()

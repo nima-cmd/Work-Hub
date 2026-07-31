@@ -9,7 +9,12 @@
 
 import { pool } from '../src/db.js'
 import { parseDcToken, partnerForDc } from '../src/model/dc.js'
-import { uploadScannedPdf } from '../src/ingest/googleDrive.js'
+import { uploadScannedPdf, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
+
+// A Drive folder name can't carry a slash, and a customer name legitimately can
+// ("Wexner: Joseph - Jackson"). Strip only what Drive/paths can't take, and keep
+// the rest verbatim so the folder still reads like the customer.
+const safeFolder = (s) => String(s || '').replace(/[\\/]+/g, '-').replace(/\s+/g, ' ').trim()
 
 // Partner for a PO with no DC on its tag (the old bare-PO labels): read it off
 // the order's customer. EDI POs are Bloomingdale's unless the customer clearly
@@ -114,18 +119,32 @@ export async function planScanFiling(segments = []) {
     if (seg.orphan || !seg.qr) continue // handled as the master below
     const c = await classify(seg.qr, knownPos)
     if (c.kind === 'boutique') {
-      // A fulfilment we can NAME is a different situation from an unrecognised
-      // QR, and saying so is the difference between "we know what this is and
-      // haven't been told where to put it" and "no idea what this is".
+      // Boutique slips file to Packing Slips/<customer>/<SO>/ (Nima, 2026-07-31).
+      // Customer first because that's how you'd go looking for one; the SO level
+      // keeps a split shipment's fulfilments together (IF7441 and IF7452 for the
+      // same order sit side by side).
+      //
+      // Filed only when we can NAME both levels. Anything else stays skipped
+      // rather than inventing a folder — a slip in the wrong place is harder to
+      // find than one that was never filed and said so.
+      if (c.ifNumber && c.customer && c.soNumber) {
+        documents.push({
+          kind: 'slip', root: DRIVE_ROOT_SLIPS,
+          partner: safeFolder(c.customer), pos: [c.soNumber],
+          filename: `${c.ifNumber}.pdf`,
+          customer: c.customer, soNumber: c.soNumber, ifNumber: c.ifNumber,
+          customerPo: c.customerPo || null, pageNums: seg.pageNums, qr: seg.qr,
+        })
+        continue
+      }
       if (c.ifNumber) {
-        const who = c.customer ? ` · ${c.customer}` : ''
         warnings.push(
           c.known
-            ? `${c.ifNumber}${who} — boutique fulfilment; no Drive folder chosen for boutique slips yet, so it was skipped.`
+            ? `${c.ifNumber} — couldn't resolve ${!c.customer ? 'the customer' : 'its sales order'}, so it was skipped rather than filed somewhere wrong.`
             : `${c.ifNumber} isn't in the app yet — if you just created it, press ↻ Refresh NetSuite and re-scan; otherwise check the number.`,
         )
       } else {
-        warnings.push(`Boutique QR "${c.raw}" — boutique filing not built yet, skipped.`)
+        warnings.push(`Unrecognised QR "${c.raw}" — skipped.`)
       }
       documents.push({
         kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true,
@@ -170,10 +189,12 @@ export async function planScanFiling(segments = []) {
 // Upload one already-resolved split to Drive. Called once per document so each
 // stays well under the JSON body limit and the UI can show per-file progress.
 //   { partner, pos: [poFolders], filename, pdfBase64 }
-export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root }) {
   if (!partner || !pos?.length || !filename || !pdfBase64) {
     throw new Error('partner, pos, filename and pdfBase64 are required')
   }
+  // Only the two known trees — never a caller-supplied path.
+  const target = root === DRIVE_ROOT_SLIPS ? DRIVE_ROOT_SLIPS : DRIVE_ROOT_BOLS
   const buffer = Buffer.from(pdfBase64, 'base64')
-  return uploadScannedPdf({ partner, pos, filename, buffer })
+  return uploadScannedPdf({ partner, pos, filename, buffer, root: target })
 }
