@@ -15,6 +15,7 @@ import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
+import { SPINE_LABEL, timeline } from '../src/model/orderEvents.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -33,10 +34,16 @@ import {
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
   ensureMasterBol,
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
-  fetchCatalogueSkus,
+  fetchCatalogueSkus, fetchIfStatusByPo,
+  fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
+  fetchFulfilmentPack, fetchFulfillmentDc,
 } from '../src/ingest/loadToDb.js'
+import { checkGroupPack } from '../src/model/packCheck.js'
+import { groupDepartures } from '../src/model/departures.js'
+import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
-import { consolidateRouting } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
@@ -452,6 +459,133 @@ export async function getCredits({ today = new Date() } = {}) {
   }
 }
 
+// ── The ledger read (2026-08-02) ─────────────────────────────────────────────
+// "A repository we can go back and search through, and the basis for the
+// calendar showing what occurred every day." Two ways in:
+//
+//   • by order   — getOrderLedger('SO12293'): everything that happened to that
+//     order and to every document hanging off it.
+//   • by date    — getLedger({ from, to }): what occurred in a window, which is
+//     what the Calendar wants.
+//
+// Events are tagged `observed: true` when their date is a first-sighting rather
+// than a real source timestamp (see the order_events comment in schema.sql), so
+// the UI can say "seen on" instead of implying it knows the day it happened.
+
+// occurred_at is only a first-sighting for these three — nothing upstream
+// records when they actually happened.
+const OBSERVED_TYPES = ['PACKED', 'INVOICED', 'PAID']
+
+const LEDGER_FIELDS = `id, event_type AS "eventType", doc_type AS "docType",
+                       doc_number AS "docNumber", so_number AS "soNumber",
+                       note, source, occurred_at AS "occurredAt"`
+
+const decorate = (rows) =>
+  rows.map((r) => ({
+    ...r,
+    label: SPINE_LABEL.get(r.eventType) || r.eventType,
+    observed: OBSERVED_TYPES.includes(r.eventType),
+  }))
+
+// One order's complete history. An event is part of it when it names the SO, or
+// when it sits on a document belonging to the SO — the second half matters
+// because DC routing events and some EDI events have no so_number of their own.
+export async function getOrderLedger(soNumber) {
+  const so = String(soNumber || '').trim()
+  if (!so) return { soNumber: null, events: [] }
+
+  const { rows: docs } = await pool.query(
+    `SELECT 'IF' AS doc_type, if_number  AS doc_number FROM fulfillments WHERE so_number = $1
+     UNION ALL
+     SELECT 'INV',            inv_number                FROM invoices     WHERE so_number = $1`,
+    [so],
+  )
+  const ifs = docs.filter((d) => d.doc_type === 'IF').map((d) => d.doc_number)
+  const invs = docs.filter((d) => d.doc_type === 'INV').map((d) => d.doc_number)
+
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events
+      WHERE so_number = $1
+         OR (doc_type = 'SO'  AND doc_number = $1)
+         OR (doc_type = 'IF'  AND doc_number = ANY($2))
+         OR (doc_type = 'INV' AND doc_number = ANY($3))`,
+    [so, ifs, invs],
+  )
+  return { soNumber: so, documents: { fulfillments: ifs, invoices: invs }, events: timeline(decorate(rows)) }
+}
+
+// A window of the ledger, newest first — the Calendar's feed and the general
+// search. `q` matches a document number so "IF7413" finds its whole trail.
+export async function getLedger({ from = null, to = null, type = null, docType = null, q = null, limit = 500 } = {}) {
+  const params = []
+  const where = []
+  // Every '$?' in `sql` binds the SAME value — which is what the `q` clause
+  // needs, matching one search term against two columns.
+  const add = (sql, val) => { params.push(val); where.push(sql.replaceAll('$?', `$${params.length}`)) }
+
+  if (from) add('occurred_at >= $?', from)
+  if (to) add('occurred_at < $?', to)
+  if (type) add('event_type = ANY($?)', Array.isArray(type) ? type : [type])
+  if (docType) add('doc_type = $?', docType)
+  if (q) add('(doc_number ILIKE $? OR so_number ILIKE $?)', `%${q}%`)
+
+  params.push(Math.min(Number(limit) || 500, 2000))
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY occurred_at DESC, id DESC
+     LIMIT $${params.length}`,
+    params,
+  )
+  return decorate(rows)
+}
+
+// Per-day counts for the Calendar's dots — cheap enough to load a whole month.
+export async function getLedgerDailyCounts({ from, to } = {}) {
+  const { rows } = await pool.query(
+    `SELECT occurred_at::date AS day, event_type AS "eventType", count(*)::int AS n
+       FROM order_events
+      WHERE ($1::timestamptz IS NULL OR occurred_at >= $1)
+        AND ($2::timestamptz IS NULL OR occurred_at <  $2)
+      GROUP BY 1, 2 ORDER BY 1 DESC`,
+    [from || null, to || null],
+  )
+  const byDay = new Map()
+  for (const r of rows) {
+    // A pg DATE arrives as a JS Date; toISOString would shift it across the
+    // date line in a negative-offset timezone. Format from the local parts.
+    const d = r.day instanceof Date
+      ? `${r.day.getFullYear()}-${String(r.day.getMonth() + 1).padStart(2, '0')}-${String(r.day.getDate()).padStart(2, '0')}`
+      : String(r.day).slice(0, 10)
+    if (!byDay.has(d)) byDay.set(d, { day: d, total: 0, byType: {} })
+    const e = byDay.get(d)
+    e.total += r.n
+    e.byType[r.eventType] = r.n
+  }
+  return [...byDay.values()]
+}
+
+// ── Departures = shipments, not fulfilments (Nima, 2026-08-02) ───────────────
+// "Each DC has multiple IF … that inflates the number." 2026-07-30 read as 50
+// departures everywhere; it was 8. See src/model/departures.js for the rule.
+// The DC of an ALREADY-SHIPPED fulfilment only survives in fulfillment_dc —
+// edi_fulfillment_pack drops it the moment freight leaves.
+export async function getDepartures({ from = null, to = null } = {}) {
+  const [dcByIf, shipments] = await Promise.all([fetchFulfillmentDc(), fetchRoutingShipments()])
+  const { rows } = await pool.query(
+    `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
+            f.actual_ship_date AS "actualShipDate", f.invoice_number AS "invoiceNumber",
+            o.customer, o.source, o.po_number AS "poNumber"
+       FROM fulfillments f LEFT JOIN orders o USING (so_number)
+      WHERE f.actual_ship_date IS NOT NULL
+        AND ($1::date IS NULL OR f.actual_ship_date >= $1)
+        AND ($2::date IS NULL OR f.actual_ship_date <  $2)`,
+    [from || null, to || null],
+  )
+  const enriched = rows.map((r) => ({ ...r, poDc: dcByIf.get(r.ifNumber)?.poDc || null }))
+  return groupDepartures(enriched, shipments)
+}
+
 // ── Character affection (Nima, 2026-07-17) — relationship tracker ────────────
 export async function getAffection() {
   const tasks = await fetchQuestTasks()
@@ -588,6 +722,19 @@ export async function getFreshness() {
   const maxAgeHours = ages.length ? Math.max(...ages) : null
 
   return { status, maxAgeHours, warnHours: WARN_HOURS, staleHours: STALE_HOURS, sources }
+}
+
+// Live-sync health — did the scheduled syncs actually RUN? Separate question
+// from getFreshness() above, which measures how old the source data is. A sync
+// that stops looks exactly like a quiet day unless someone asks this.
+export async function getSyncHealth() {
+  const { rows } = await pool.query(
+    `SELECT source, MAX(imported_at) AS last_at FROM import_snapshots
+      WHERE source = ANY($1) GROUP BY source`,
+    [LIVE_SYNCS.map((s) => s.key)],
+  )
+  const lastBySource = Object.fromEntries(rows.map((r) => [r.source, r.last_at]))
+  return computeSyncHealth(lastBySource)
 }
 
 // ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────
@@ -890,12 +1037,51 @@ export async function getRouting() {
     }
   })
 
+  // Annotate every shipment with NetSuite's own verdict on whether its freight
+  // has left, with the per-PO evidence attached (never one lumped flag).
+  const ifsByPo = await fetchIfStatusByPo(shipments.flatMap((s) => s.memberPos || []))
+  // The EDI paper trail: prefer the frozen snapshot taken at archive time, fall
+  // back to the live derivation for shipments not yet archived. So a BOL's 850 →
+  // 856 reference is visible before it's archived and preserved after.
+  const [lineages, snapshots] = await Promise.all([
+    fetchShipmentEdiLineage(shipments.map((s) => s.bolNumber)),
+    fetchShipmentEdiSnapshots(),
+  ])
+  for (const s of shipments) {
+    s.netsuite = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
+    const live = lineages[String(s.bolNumber)] || null
+    const snap = snapshots[s.id] || null
+    s.edi = live
+      ? { ...live, snapshotAt: snap?.capturedAt || null }
+      : snap
+        ? {
+            asn: {
+              transactionId: snap.asnTransactionId, businessNumber: snap.asnBusinessNumber,
+              createdAt: snap.asnCreatedAt, deliveryStatus: snap.asnDeliveryStatus,
+              ackStatus: snap.asnAckStatus,
+            },
+            po850: snap.poLinks || [],
+            poRefs: (snap.poLinks || []).map((p) => p.po),
+            fromSnapshot: true, snapshotAt: snap.capturedAt,
+          }
+        : null
+    // An ASN went out but NetSuite still doesn't call it shipped — a real gap,
+    // surfaced rather than used to auto-archive.
+    s.asnAheadOfNetsuite = !!(s.edi?.asn && !s.netsuite.confirmed)
+  }
+
   const byKey = new Map()
   for (const s of shipments) byKey.set(s.dcPoKey, s)
 
+  // Pack check (Nima, 2026-08-02): every unit on a fulfilment must be in a
+  // carton before its group can ship. Keyed by PO-DC so a group covering several
+  // POs picks up each one's fulfilments.
+  const packByPoDc = await fetchFulfilmentPack()
+
   const consolidated = groups.map((g) => {
     const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
-    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null }
+    const members = g.memberPos.flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
+    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
   })
 
   const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
@@ -909,6 +1095,9 @@ export async function getRouting() {
   return {
     packages, consolidated, shipments, detached, auths, gaps,
     held, heldKeys: [...heldSet], packageCount: packages.length,
+    // Flat, like `packages`: the view re-consolidates over a PO subset
+    // client-side and must be able to recompute the pack check to match.
+    fulfilmentPack: [...packByPoDc.values()].flat(),
   }
 }
 
@@ -1240,6 +1429,17 @@ async function syncShipmentCalendar(id, shipped) {
 
 export async function setShipmentShipped(id, shipped = true) {
   await markShipmentShipped(id, shipped)
+  // Archiving by hand freezes the EDI paper trail too, exactly as the sync's
+  // auto-archive does — otherwise a manually-shipped BOL loses its 850/856
+  // reference the moment those transactions age out of the Orderful window.
+  // FIRST, because it's the durable record; the calendar below is decoration.
+  if (shipped) {
+    const s = await fetchRoutingShipmentById(id)
+    if (s?.bolNumber) {
+      const lineage = (await fetchShipmentEdiLineage([s.bolNumber]))[String(s.bolNumber)]
+      if (lineage) await saveShipmentEdiLineage(id, s.bolNumber, lineage)
+    }
+  }
   try {
     await syncShipmentCalendar(id, shipped)
   } catch (e) {
@@ -1247,6 +1447,90 @@ export async function setShipmentShipped(id, shipped = true) {
     console.warn('[shipping-calendar] sync failed (soft):', e?.message || e)
   }
   return getRouting()
+}
+
+// ── Label / shipped-status reconciliation (Nima, 2026-07-30) ─────────────────
+// Two failure modes hide in the "Packed" queue, and they need OPPOSITE actions.
+// Splitting them is the whole point — lumped together they just look like a
+// backlog, which is why SO12288/SO12293 sat unnoticed:
+//
+//   • LABELLED_NOT_SHIPPED — the IF carries a carrier tracking number but is still
+//     Packed. It physically went out and someone entered tracking; only the status
+//     transition was missed. Action: mark it shipped in NetSuite. Until then the
+//     app (correctly) shows it as still with us, and no shipped-$ credit is stamped.
+//
+//   • NEEDS_LABEL — packed, no tracking at all. Genuinely still here awaiting a
+//     label. Action: make the label.
+//
+// Aged by how long it has been sitting so the oldest surface first — that's the
+// "nothing sits ignored" mission.
+export async function getLabelGaps({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number      AS "ifNumber",
+           f.so_number      AS "soNumber",
+           f.status,
+           f.packed_status  AS "packedStatus",
+           f.if_date        AS "ifDate",
+           f.invoice_number AS "invoiceNumber",
+           f.tracking_numbers AS "trackingNumbers",
+           o.customer, o.source, o.po_number AS "poNumber", o.dc,
+           i.status         AS "invoiceStatus",
+           i.amount_total   AS "invoiceTotal"
+    FROM fulfillments f
+    LEFT JOIN orders   o ON o.so_number = f.so_number
+    LEFT JOIN invoices i ON i.inv_number = f.invoice_number
+    -- Packed but not yet shipped. actual_ship_date is the belt-and-suspenders:
+    -- anything with a real ship date has already departed.
+    WHERE f.actual_ship_date IS NULL
+      AND f.status ILIKE 'packed'
+    ORDER BY f.if_date NULLS LAST
+  `)
+
+  const day = 86_400_000
+  const items = rows.map((r) => {
+    const tracking = r.trackingNumbers || []
+    const labelled = tracking.length > 0
+    const ageDays = r.ifDate ? Math.floor((today - new Date(r.ifDate)) / day) : null
+    // Which shipping lane is this? EDI partners (Bloomingdale's / Nordstrom /
+    // ShopBop) move on LTL FREIGHT under a BOL — they will NEVER carry a UPS
+    // parcel tracking number, so listing them as "needs a label" is pure noise
+    // (it was 12 of the first 16 hits). Their equivalent gap is a missing BOL,
+    // which the routing workspace already owns. Only the parcel lane belongs in
+    // the needs-a-label list.
+    const lane = r.source === 'edi' ? 'freight' : 'parcel'
+    return {
+      ...r,
+      trackingNumbers: tracking,
+      lane,
+      kind: labelled ? 'LABELLED_NOT_SHIPPED' : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
+      ageDays,
+      // A labelled-but-unshipped IF is the more urgent of the two: the customer
+      // already has the package while our books say it never left.
+      needed: labelled
+        ? `Shipped on ${tracking.length} label(s) — mark ${r.ifNumber} shipped in NetSuite`
+        : lane === 'freight'
+          ? `Freight/BOL lane — routed on a BOL, not a parcel label`
+          : `Packed with no carrier label — create one for ${r.ifNumber}`,
+    }
+  })
+
+  const labelledNotShipped = items.filter((i) => i.kind === 'LABELLED_NOT_SHIPPED')
+  const needsLabel = items.filter((i) => i.kind === 'NEEDS_LABEL')
+  const freight = items.filter((i) => i.kind === 'FREIGHT_BOL_LANE')
+  return {
+    items,
+    labelledNotShipped,
+    needsLabel,
+    freight, // kept separate so the parcel lists stay actionable, not buried
+    counts: {
+      labelledNotShipped: labelledNotShipped.length,
+      needsLabel: needsLabel.length,
+      freight: freight.length,
+    },
+    // Age the ACTIONABLE items only — a freight shipment awaiting its BOL
+    // shouldn't inflate the parcel backlog's headline number.
+    oldestAgeDays: [...labelledNotShipped, ...needsLabel].reduce((m, i) => Math.max(m, i.ageDays ?? 0), 0),
+  }
 }
 
 export async function setShipmentRefs(id, fields = {}) {
@@ -2038,3 +2322,115 @@ export async function getTaskActivity(date) {
 }
 
 export { NETSUITE_DOC_TYPES }
+
+// ── Did the document actually reach the partner? (Nima, 2026-08-01) ──────────
+// See src/model/ediDelivery.js. Reads the synced Orderful transactions and splits
+// the two silent failures — never delivered vs delivered-and-refused — keeping
+// ASNs apart from invoices.
+export async function getEdiDeliveryGaps() {
+  const txns = await fetchEdiTransactions()
+  return computeEdiDeliveryGaps(txns)
+}
+
+// ── What will the big box cost on the WHOLESALE UPS account? (Nima, 2026-08-02) ──
+//
+// Nima's ask: "if we can get the rate for the big boxes in ShipStation or anywhere
+// it would be great." Two sources are combined here, and they are never blended:
+//
+//   1. A LIVE quote on C6J610, the wholesale account. This is the number he wants,
+//      and it is unavailable until he reconnects that carrier in ShipStation —
+//      /v2/rates against it answers "the connection appears to be invalid". The
+//      code path is complete and switches on by itself the moment it's fixed.
+//   2. What C6J610 was ACTUALLY BILLED for comparable boxes, harvested from the
+//      years of labels bought on it through ShipStation (npm run sync:ups-costs).
+//      Real invoiced wholesale money, available today, with the caveat that older
+//      actuals predate UPS's annual increases.
+//
+// A live 18GE01 quote is also fetched, but ONLY as a cross-check — it is the ecom
+// account, and boutique freight bills to C6J610 (the tracking numbers prove it),
+// so wholesaleFigure() refuses to substitute it. See src/model/upsRates.js.
+export async function getUpsRate({ ifNumber, destination, serviceCode = 'ups_ground', residential = false } = {}) {
+  const { fetchFulfillmentBoxes } = await import('../src/ingest/loadToDb.js')
+  const { fetchActuals } = await import('../src/ingest/shipstationCosts.js')
+  const { quoteAccount } = await import('../src/ingest/shipstationRates.js')
+  const { WHOLESALE_ACCOUNT, quoteFromActuals, rateAnswerForBox, liveFigure } = await import('../src/model/upsRates.js')
+
+  const boxes = await fetchFulfillmentBoxes(ifNumber)
+  if (!boxes.length) {
+    return { ifNumber, boxes: [], error: `no scanned-in boxes captured for ${ifNumber} — the rate comes off the box dims recorded at scan-in` }
+  }
+
+  // One history read for the whole shipment; the model does the per-box matching.
+  const actuals = await fetchActuals({ account: WHOLESALE_ACCOUNT, serviceCode }, pool)
+  const asOfDate = new Date().toISOString().slice(0, 10)
+
+  const results = []
+  let liveWholesaleError = null
+  for (const box of boxes) {
+    const figures = []
+
+    // 1. Live wholesale — the real answer, when the connection is up.
+    const wholesaleLive = await quoteAccount({ account: WHOLESALE_ACCOUNT, box, destination, residential })
+    if (wholesaleLive.ok) {
+      const pick = wholesaleLive.figures.find((f) => f.serviceCode === serviceCode) || wholesaleLive.figures[0]
+      if (pick) figures.push(pick)
+    } else {
+      liveWholesaleError = wholesaleLive.error
+    }
+
+    // 2. Wholesale billed history — works today.
+    const hist = quoteFromActuals(
+      actuals,
+      { account: WHOLESALE_ACCOUNT, serviceCode, weightLb: Number(box.weightLb), destPostal: destination?.postalCode, destState: destination?.state },
+      { asOfDate },
+    )
+    if (hist) figures.push(hist)
+
+    // 3. The ecom account, cross-check only.
+    const ecomLive = await quoteAccount({ account: '18GE01', box, destination, residential })
+    if (ecomLive.ok) {
+      const pick = ecomLive.figures.find((f) => f.serviceCode === serviceCode) || ecomLive.figures[0]
+      if (pick) figures.push(pick)
+    }
+
+    results.push(rateAnswerForBox(box, figures, { liveWholesaleError }))
+  }
+
+  // Shipment total, only when EVERY box produced a wholesale figure — a partial sum
+  // would read as the shipment's cost while silently omitting boxes.
+  const perBox = results.map((r) => (r.wholesale ? (r.wholesale.total ?? r.wholesale.median) : null))
+  const complete = perBox.every((v) => typeof v === 'number')
+  const total = complete ? Math.round(perBox.reduce((a, b) => a + b, 0) * 100) / 100 : null
+
+  return {
+    ifNumber,
+    serviceCode,
+    destination,
+    account: WHOLESALE_ACCOUNT,
+    boxes: results,
+    wholesaleTotal: total,
+    wholesaleTotalBasis: complete ? results[0].wholesale.basis : null,
+    incompleteReason: complete ? null 
+      : `no wholesale figure for ${perBox.filter((v) => typeof v !== 'number').length} of ${perBox.length} box(es) — a partial total would understate the shipment`,
+    liveWholesaleError,
+    historyRows: actuals.length,
+    fix: liveWholesaleError
+      ? 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect. Then GET /api/ups/connection to confirm.'
+      : null,
+  }
+}
+
+// Rate-tests the wholesale carrier. Deliberately does NOT trust /v2/carriers — the
+// broken connection still advertises 23 healthy services from cache, which is what
+// made this look fine for weeks. One free quote is the only honest check.
+export async function getUpsConnection() {
+  const { checkConnection } = await import('../src/ingest/shipstationRates.js')
+  const { WHOLESALE_ACCOUNT } = await import('../src/model/upsRates.js')
+  const [wholesale, ecom] = await Promise.all([checkConnection(WHOLESALE_ACCOUNT), checkConnection('18GE01')])
+  return {
+    wholesale,
+    ecom,
+    ready: wholesale.healthy,
+    fix: wholesale.healthy ? null : 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect/re-authorize.',
+  }
+}

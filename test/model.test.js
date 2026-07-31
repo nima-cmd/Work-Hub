@@ -23,7 +23,9 @@ import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
-import { consolidateRouting } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
+import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
@@ -848,6 +850,36 @@ test('consolidateRouting rolls up multiple POs into one DC shipment', () => {
   assert.equal(cg.showUnits, false) // Bloomingdale's portal doesn't need units
 })
 
+test('netsuiteShippedVerdict confirms only when every member PO is fully shipped', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7590875: { shipped: 23, total: 23 } }
+  const v = netsuiteShippedVerdict(['7527086', '7590875'], ifs)
+  assert.equal(v.confirmed, true)
+  assert.deepEqual(v.pending, [])
+  assert.deepEqual(v.byPo.map((p) => p.state), ['shipped', 'shipped'])
+})
+
+test('netsuiteShippedVerdict holds back on a partially shipped PO and names it', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7776940: { shipped: 4, total: 16 } }
+  const v = netsuiteShippedVerdict(['7527086', '7776940'], ifs)
+  assert.equal(v.confirmed, false)
+  assert.deepEqual(v.pending, ['7776940'])
+  // the evidence survives, per-PO — never collapsed to one flag
+  assert.deepEqual(v.byPo.find((p) => p.po === '7776940'), {
+    po: '7776940', shipped: 4, total: 16, state: 'partial',
+  })
+})
+
+test('netsuiteShippedVerdict treats a PO with no fulfilments as unknown, not shipped', () => {
+  const v = netsuiteShippedVerdict(['7527064'], {})
+  assert.equal(v.confirmed, false)
+  assert.equal(v.byPo[0].state, 'unknown')
+  assert.deepEqual(v.pending, ['7527064'])
+})
+
+test('netsuiteShippedVerdict never confirms a shipment with no member POs', () => {
+  assert.equal(netsuiteShippedVerdict([], {}).confirmed, false)
+})
+
 test('consolidateRouting always rounds cubic feet UP and never to a decimal', () => {
   const rows = [
     { poNumber: 'A', dc: 'SC', weight: 10.2, cartons: 1, units: 3, cubicFeetRaw: 1.1, cubicFeetRounded: 2 },
@@ -904,7 +936,7 @@ test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', ()
 // the freight weight (411 freight + 1 pallet = 454). Pallets are counted ONLY
 // on the master (Nima, 2026-07-29): per-DC child BOLs — and a master before its
 // count is entered — show NO pallet count and plain freight weight.
-import { palletWeight } from '../server/bolPdf.js'
+import { palletWeight, dcTag } from '../server/bolPdf.js'
 
 test('palletWeight: master BOL uses the manual count and adds 43 lb tare per pallet', () => {
   assert.deepEqual(palletWeight({ isMaster: true, palletCount: 1, weightLb: 411 }),
@@ -927,6 +959,31 @@ test('palletWeight: a per-DC child BOL never shows pallets — blank H.U. + plai
   // Even a stray palletCount off the master is ignored — pallets are master-only.
   assert.deepEqual(palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 }),
     { hu: '', weight: 90, manual: false })
+})
+
+// The big header DC callout (Nima, 2026-08-02) — on a Bloomingdale's BOL the
+// ship-to ADDRESS is the merge center, so before this the destination DC only
+// appeared in a small line inside the address box, and matching cartons to the
+// right BOL at labelling time was error-prone.
+test('dcTag: a Bloomingdale\'s DC prints its code AND its name', () => {
+  assert.equal(dcTag('CG', 'final'), 'FINAL DC: CG — China Grove DC')
+  assert.equal(dcTag('SC', 'final'), 'FINAL DC: SC — Secaucus')
+})
+
+test('dcTag: a numeric Nordstrom DC prints the bare code, not "DC DC 799"', () => {
+  // dcLabel('799') is already "DC 799", so echoing it would read "FINAL DC: DC 799".
+  assert.equal(dcTag('799', 'final'), 'FINAL DC: 799')
+  assert.equal(dcTag('089', 'final'), 'FINAL DC: 089')
+})
+
+test('dcTag: a master BOL names NO single DC — it aggregates several', () => {
+  // Printing one DC on a master would actively mislabel the shipment.
+  assert.equal(dcTag('CG', 'master'), 'MASTER BOL — MULTIPLE DCs')
+})
+
+test('dcTag: no DC yields no callout rather than a stray "FINAL DC:" label', () => {
+  assert.equal(dcTag('', 'final'), '')
+  assert.equal(dcTag(null, 'final'), '')
 })
 
 // ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────
@@ -984,4 +1041,411 @@ test('resolveLabelChips: skips an unresolvable user label, tolerates empty input
   assert.deepEqual(resolveLabelChips(['Label_99'], {}), []) // unknown Label_* dropped, not shown as gibberish
   assert.deepEqual(resolveLabelChips(), [])
   assert.deepEqual(resolveLabelChips(['STARRED'], {}), [{ id: 'STARRED', name: 'Starred' }])
+})
+
+// ── the live EDI carton feed ─────────────────────────────────────────────────
+// Field names and the rounding rule were validated against saved search
+// customsearch3947 on all six live PO-DCs; these lock the parts that are pure.
+
+test('parseBoxDims reads a box type name, whatever the case of the x', () => {
+  assert.deepEqual(parseBoxDims('24x16x17'), [24, 16, 17])
+  assert.deepEqual(parseBoxDims('24X14X4'), [24, 14, 4])
+  assert.deepEqual(parseBoxDims(' 18 x 12 x 5 '), [18, 12, 5])
+  assert.equal(parseBoxDims('Custom Mailer'), null) // not dimensional → reportable
+  assert.equal(parseBoxDims(''), null)
+})
+
+test('splitPoDc rejects the junk identifiers the live data contains', () => {
+  assert.deepEqual(splitPoDc('7242978-SC'), { poNumber: '7242978', dc: 'SC' })
+  assert.equal(splitPoDc('-'), null)      // no PO, no DC
+  assert.equal(splitPoDc('KSA-'), null)   // PO but no DC
+  assert.equal(splitPoDc('-CG'), null)    // DC but no PO
+  assert.equal(splitPoDc(null), null)
+})
+
+test('mapEdiPackageRows groups cartons per PO-DC and matches the saved search', () => {
+  // IF7402 / PO 7817926-CG: the real 9 cartons, whose search row is
+  // 9 cartons · 292 lb · 215 units · 33.5 cu ft · 36 rounded.
+  const boxes = [
+    ['24x16x17', 45, 15], ['24x16x17', 37, 27], ['24x16x17', 23, 18],
+    ['24x16x17', 30, 24], ['24x16x17', 34, 26], ['24x16x17', 33, 25],
+    ['24x16x17', 32, 24], ['24x16x17', 29, 28], ['24x16x17', 29, 28],
+  ]
+  const { rows } = mapEdiPackageRows({
+    ifs: [{ id: '2803458', po_dc: '7817926-CG' }],
+    packages: boxes.map(([box, weight, units]) => ({ if_id: '2803458', box, weight, units })),
+  })
+  assert.equal(rows.length, 1)
+  const r = rows[0]
+  assert.equal(r.poNumber, '7817926')
+  assert.equal(r.dc, 'CG')
+  assert.equal(r.cartons, 9)
+  assert.equal(r.weight, 292)
+  assert.equal(r.units, 215)
+  // 24×16×17/1728 = 3.7777… → 3.8 per carton × 9 = 34.2, NOT ceil-per-carton (36)
+  assert.equal(r.cubicFeetRaw, 34.2)
+  assert.equal(r.cubicFeetRounded, 36) // sum of per-carton ceilings
+  assert.equal(r.suggestedBol, '7817926DCCG') // the search's own BOL formula
+})
+
+test('mapEdiPackageRows rounds cubic feet PER CARTON, not once on the total', () => {
+  // The distinction is why summing raw came out light on every group: 3.7777×3
+  // = 11.33 → 11.3, but 3.8×3 = 11.4. Per-carton rounding is the search's rule.
+  const pkgs = Array.from({ length: 3 }, () => ({ if_id: '1', box: '24x16x17', weight: 10, units: 5 }))
+  const { rows } = mapEdiPackageRows({ ifs: [{ id: '1', po_dc: '9-SC' }], packages: pkgs })
+  assert.equal(rows[0].cubicFeetRaw, 11.4)
+})
+
+test('mapEdiPackageRows counts a carton but reports an unusable box type', () => {
+  const { rows, unparseableBoxes } = mapEdiPackageRows({
+    ifs: [{ id: '1', po_dc: '77-CG' }],
+    packages: [{ if_id: '1', box: 'Loose', weight: 5, units: 2 }],
+  })
+  assert.equal(rows[0].cartons, 1)      // the carton still counts
+  assert.equal(rows[0].weight, 5)
+  assert.equal(rows[0].cubicFeetRaw, 0) // but contributes no volume
+  assert.deepEqual(unparseableBoxes, ['Loose']) // and says so
+})
+
+test('mapEdiPackageRows drops cartons whose fulfilment has a junk PO-DC', () => {
+  const { rows, orphanCartons } = mapEdiPackageRows({
+    ifs: [{ id: '1', po_dc: '7242978-SC' }, { id: '2', po_dc: 'KSA-' }],
+    packages: [
+      { if_id: '1', box: '18x12x5', weight: 10, units: 3 },
+      { if_id: '2', box: '18x12x5', weight: 99, units: 99 },
+      { if_id: '3', box: '18x12x5', weight: 99, units: 99 }, // unknown fulfilment
+    ],
+  })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].weight, 10) // the junk rows never inflate a real group
+  assert.equal(orphanCartons, 2)
+})
+
+// ── outbound EDI delivery gaps ───────────────────────────────────────────────
+// Nima's ASNs read VALID in Orderful but never delivered, while NetSuite marked
+// them synced — silent on both sides. These lock the split that makes it visible.
+
+const asn = (o) => ({
+  type: '856_SHIP_NOTICE_MANIFEST', direction: 'OUT', stream: 'LIVE',
+  tradingPartner: "Bloomingdale's", ...o,
+})
+const NOW = new Date('2026-07-30T22:11:00Z')
+
+test('classifyEdiDelivery: undelivered past the grace window is stuck, inside it is in flight', () => {
+  const fresh = asn({ deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' })
+  const old = asn({ deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' })
+  assert.equal(classifyEdiDelivery(fresh, NOW).state, 'in_flight') // 46 min — could still land
+  assert.equal(classifyEdiDelivery(old, NOW).state, 'stuck')
+})
+
+test('classifyEdiDelivery: delivered-but-rejected is refused, not stuck — a re-send is the wrong fix', () => {
+  const r = classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }), NOW)
+  assert.equal(r.state, 'refused')
+  assert.match(r.reason, /REJECTED/)
+  assert.equal(classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED' }), NOW).state, 'ok')
+})
+
+test('computeEdiDeliveryGaps keeps ASNs, invoices and the two failures unlumped', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: 'OLD1', deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' }),
+    asn({ id: '2', businessNumber: 'NEW1', deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' }),
+    asn({ id: '3', businessNumber: 'REJ1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }),
+    { ...asn({ id: '4', businessNumber: 'INV1', deliveryStatus: 'PENDING', createdAt: '2025-10-21T00:00:00Z' }), type: '810_INVOICE' },
+  ], NOW)
+  assert.deepEqual(g.counts, {
+    asnStuck: 1, invoiceStuck: 1, asnRefused: 1, invoiceRefused: 0, asnInFlight: 1, invoiceInFlight: 0,
+  })
+  // A stuck invoice must never be counted as a stuck ASN — different urgency.
+  assert.equal(g.stuck.asn[0].businessNumber, 'OLD1')
+  assert.equal(g.stuck.invoice[0].businessNumber, 'INV1')
+  assert.equal(g.oldestAsnStuck.businessNumber, 'OLD1')
+  assert.equal(g.oldestAsnStuck.ageDays, 568)
+})
+
+test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
+  const g = computeEdiDeliveryGaps([
+    { ...asn({ id: '1', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), direction: 'IN' },
+    { ...asn({ id: '2', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), stream: 'TEST' },
+  ], NOW)
+  assert.equal(g.counts.asnStuck, 0) // a test ASN must never raise a real alert
+})
+
+// ── Pack check (Nima, 2026-08-02) ────────────────────────────────────────────
+// "We just need to make sure every unit on an IF is packed, and if not we need
+// to go to that IF and pack them." Checked per-FULFILMENT, not per sales order:
+// an IF can be legitimately short against its SO (partial fulfilment), so an
+// SO-level check would cry wolf on every split shipment.
+import { checkFulfilmentPack, checkGroupPack, packSummary } from '../src/model/packCheck.js'
+
+test('packCheck: units on the IF all in cartons → ok', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7420', ifUnits: 12, packedUnits: 12, cartons: 3 })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.short, 0)
+})
+
+test('packCheck: a missed item shows as short, with the exact count to go pack', () => {
+  // Live case 2026-08-02: IF7350 on Nordstrom DC 584.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7350', ifUnits: 141, packedUnits: 82, cartons: 3 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.short, 59)
+  assert.equal(r.blankCartons, false)
+})
+
+test('packCheck: cartons made but no quantities entered is flagged distinctly', () => {
+  // Live case: IF7439 — one carton with a real weight but a blank qty field.
+  // The fix differs from a normal shortage: fill in the box you already made.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7439', ifUnits: 10, packedUnits: 0, cartons: 1 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.blankCartons, true)
+})
+
+test('packCheck: nothing packed yet is NOT an error — mid-pack that is normal', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7351', ifUnits: 70, packedUnits: 0, cartons: 0 })
+  assert.equal(r.status, 'not_started')
+  assert.equal(r.short, 0, 'not_started must not report a shortage or the check becomes noise')
+})
+
+test('packCheck: packing MORE than the IF says is caught too', () => {
+  const r = checkFulfilmentPack({ ifUnits: 10, packedUnits: 12, cartons: 2 })
+  assert.equal(r.status, 'over')
+  assert.equal(r.over, 2)
+})
+
+test('packCheck: one short IF makes the whole group not ready — the 856 is per group', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 50, packedUnits: 50, cartons: 2 },
+    { ifNumber: 'IF2', ifUnits: 38, packedUnits: 0, cartons: 1 },
+  ])
+  assert.equal(g.status, 'short')
+  assert.equal(g.ready, false)
+  assert.equal(g.shortUnits, 38)
+  assert.deepEqual(g.problems.map((p) => p.ifNumber), ['IF2'])
+})
+
+test('packCheck: a group whose every IF reconciles is ready to route', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 34, packedUnits: 34, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 42, packedUnits: 42, cartons: 2 },
+  ])
+  assert.equal(g.status, 'ok')
+  assert.equal(g.ready, true)
+  assert.equal(packSummary(g), '76/76 units')
+})
+
+test('packCheck: a part-packed group reads as in_progress, not short', () => {
+  // Some IFs done, others untouched — real shortages must stay distinguishable
+  // from work simply not begun, or the warning gets ignored.
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 20, packedUnits: 20, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 30, packedUnits: 0, cartons: 0 },
+  ])
+  assert.equal(g.status, 'in_progress')
+  assert.equal(g.ready, false)
+  assert.equal(g.problems.length, 0)
+})
+
+test('packSummary: always shows both numbers so a clean group proves it was checked', () => {
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 4, cartons: 1 }])), '4/10 units — 6 short')
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 0, cartons: 0 }])), '0/10 units — not packed yet')
+})
+
+// ── Court strip voice (Nima, 2026-08-02) ─────────────────────────────────────
+// A crew member says what to pick up next instead of a "⚑ OUR COURT" label.
+// It must never invent or blend numbers — the never-lump rule still governs the
+// strip; this only ever repeats one count the chips already show.
+import { courtLine, warehouseLine } from '../src/model/courtVoice.js'
+
+test('courtVoice: picks the lane Nima can finish himself, not the biggest number', () => {
+  // 61 stuck invoices would drown out 4 labels every single day.
+  const line = courtLine([
+    { key: 'invoiceStuck', n: 61, label: 'invoices never sent' },
+    { key: 'needsLabel', n: 4, label: 'need a label' },
+  ])
+  assert.match(line, /4 parcels need a label/)
+})
+
+test('courtVoice: an item aging past a week overrides the lane order', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF7228', ageDays: 41 })
+  assert.match(line, /IF7228 has been sitting 41 days/)
+})
+
+test('courtVoice: a fresh oldest item does NOT override — no false alarm', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF9999', ageDays: 2 })
+  assert.match(line, /need a label/)
+})
+
+test('courtVoice: singular reads properly — no "1 parcels"', () => {
+  assert.match(courtLine([{ key: 'needsLabel', n: 1, label: 'need a label' }]), /One parcel needs a label/)
+  assert.match(courtLine([{ key: 'canShip', n: 1, label: 'can ship' }]), /One order is/)
+})
+
+test('courtVoice: an empty board says so rather than rendering nothing', () => {
+  assert.equal(courtLine([]), "Board's clear. Enjoy it.")
+})
+
+test('courtVoice: the warehouse line is empty at zero so the group can hide', () => {
+  assert.equal(warehouseLine(0), '')
+  assert.match(warehouseLine(1), /one of ours/)
+  assert.match(warehouseLine(3), /Got 3 of ours/)
+})
+
+// ── Departures are SHIPMENTS, not fulfilments (Nima, 2026-08-02) ─────────────
+// 2026-07-30 rendered as 50 departures everywhere. It was 8 — seven
+// Bloomingdale's BOLs plus one parcel. Every EDI DC gets its own IF, so counting
+// IFs inflates departures ~6×.
+import { groupDepartures, departureSummary, departureLabel } from '../src/model/departures.js'
+
+const BOLS = [
+  { id: 1, bolNumber: 'NB1731234', dc: 'SC', partner: "Bloomingdale's", memberPos: ['7527086', '7590875', '7776940'] },
+  { id: 2, bolNumber: 'NB1731236', dc: 'JP', partner: "Bloomingdale's", memberPos: ['7590875', '7776940'] },
+]
+
+test('departures: many IFs across one DC collapse into a single BOL shipment', () => {
+  const g = groupDepartures([
+    { ifNumber: 'IF7300', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+    { ifNumber: 'IF7301', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+    { ifNumber: 'IF7302', poDc: '7776940-SC', actualShipDate: '2026-07-30' },
+  ], BOLS)
+  assert.equal(g.length, 1, 'three IFs to the same BOL are one departure')
+  assert.equal(g[0].bolNumber, 'NB1731234')
+  assert.equal(g[0].fulfilments.length, 3)
+  assert.deepEqual(g[0].poNumbers, ['7590875', '7776940'])
+})
+
+test('departures: different DCs on the same PO stay separate shipments', () => {
+  // They physically go to different places on different BOLs.
+  const g = groupDepartures([
+    { ifNumber: 'IF7300', poDc: '7590875-SC' },
+    { ifNumber: 'IF7299', poDc: '7590875-JP' },
+  ], BOLS)
+  assert.equal(g.length, 2)
+  assert.deepEqual(g.map((x) => x.bolNumber).sort(), ['NB1731234', 'NB1731236'])
+})
+
+test('departures: a parcel is its own shipment — never lumped by customer', () => {
+  // Two boutique parcels to one customer are two consignments with two
+  // tracking numbers; merging them would undercount real departures.
+  const g = groupDepartures([
+    { ifNumber: 'IF7409', customer: 'Turner & Co', source: 'boutique' },
+    { ifNumber: 'IF7410', customer: 'Turner & Co', source: 'boutique' },
+  ], BOLS)
+  assert.equal(g.length, 2)
+  assert.equal(g[0].kind, 'parcel')
+})
+
+test('departures: freight with no BOL yet still consolidates per PO-DC', () => {
+  // Otherwise the day's count would change purely because paperwork caught up.
+  const g = groupDepartures([
+    { ifNumber: 'IF1', poDc: '9999999-CG' },
+    { ifNumber: 'IF2', poDc: '9999999-CG' },
+  ], BOLS)
+  assert.equal(g.length, 1)
+  assert.equal(g[0].bolNumber, null)
+  assert.equal(g[0].kind, 'freight')
+  assert.equal(departureLabel(g[0]), 'DC CG (no BOL yet)')
+})
+
+test('departures: the 7/30 shape — 50 fulfilments really were 8 shipments', () => {
+  const ifs = []
+  // 3 Bloomingdale's POs fanned across 2 DCs = 2 BOLs, 48 fulfilments.
+  for (let i = 0; i < 24; i++) ifs.push({ ifNumber: `IFa${i}`, poDc: '7590875-SC' })
+  for (let i = 0; i < 24; i++) ifs.push({ ifNumber: `IFb${i}`, poDc: '7776940-JP' })
+  ifs.push({ ifNumber: 'IF7281', customer: 'Rustan' }) // the lone parcel
+  const g = groupDepartures(ifs, BOLS)
+  assert.equal(g.length, 3)
+  assert.equal(departureSummary(g), '3 departures · 49 fulfilments')
+})
+
+test('departureSummary: never shows the fulfilment count alone', () => {
+  // The whole failure was a big number reading as a shipment count.
+  assert.equal(departureSummary([{ fulfilments: [1] }]), '1 departure')
+  assert.match(departureSummary([{ fulfilments: [1, 2, 3] }]), /1 departure · 3 fulfilments/)
+  assert.equal(departureSummary([]), '')
+})
+
+test('departures: a BOL leaves once even if its IFs were stamped on two days', () => {
+  const g = groupDepartures([
+    { ifNumber: 'IF1', poDc: '7590875-SC', actualShipDate: '2026-07-31' },
+    { ifNumber: 'IF2', poDc: '7590875-SC', actualShipDate: '2026-07-30' },
+  ], BOLS)
+  assert.equal(g.length, 1)
+  assert.equal(g[0].shipDate, '2026-07-30', 'earliest wins — the truck left once')
+})
+
+// ── PO-DC parsing (hardened 2026-08-02) ─────────────────────────────────────
+// Purchase orders contain dashes, so splitting on the FIRST one invented a DC:
+// Rustan's "720-0326-19551-" read as PO 720 in DC "0326-19551-", which made a
+// parcel count as its own freight departure. (splitPoDc is imported at the top.)
+
+test('splitPoDc: the normal shapes still parse', () => {
+  assert.deepEqual(splitPoDc('7590875-SC'), { poNumber: '7590875', dc: 'SC' })
+  assert.deepEqual(splitPoDc('50073677-799'), { poNumber: '50073677', dc: '799' })
+  assert.deepEqual(splitPoDc('50073677-089'), { poNumber: '50073677', dc: '089' })
+})
+
+test('splitPoDc: a PO containing dashes splits on the LAST one', () => {
+  assert.deepEqual(splitPoDc('720-0326-19551-CG'), { poNumber: '720-0326-19551', dc: 'CG' })
+})
+
+test('splitPoDc: rejects the junk the live data actually carries', () => {
+  for (const junk of ['-', 'KSA-', '16844-', '720-0326-19551-', 'Pre-Fall 26 Bags-', '', null]) {
+    assert.equal(splitPoDc(junk), null, `${JSON.stringify(junk)} is not a PO-DC`)
+  }
+})
+
+test('splitPoDc: a trailing fragment that is not DC-shaped is rejected', () => {
+  // "Pre-Fall 26 Bags" would otherwise yield DC "Fall 26 Bags".
+  assert.equal(splitPoDc('Pre-Fall 26 Bags'), null)
+  assert.equal(splitPoDc('EQUS100026915-'), null)
+})
+
+// ── Live-sync health (2026-07-31) ───────────────────────────────────────────
+// Distinct from data freshness: a sync that STOPS looks exactly like a quiet
+// day. Both of this repo's silent-drift incidents were that shape — PR #16's
+// sync had no caller for a week, and the scheduled check returns 200 while the
+// NetSuite pull inside it does nothing when creds are missing on the deploy.
+import { computeSyncHealth, syncHealthLine, syncStatus } from '../src/model/syncHealth.js'
+
+const SYNC_NOW = new Date('2026-07-31T03:00:00Z')
+const hoursAgo = (h) => new Date(SYNC_NOW.getTime() - h * 3.6e6).toISOString()
+
+test('syncHealth: thresholds allow for GitHub throttling, not the requested cadence', () => {
+  // The workflow asks for every 10 min; GitHub really fires it ~90 min apart, so
+  // warning at 10 min would be permanently on — the same as being off.
+  assert.equal(syncStatus(1.5), 'ok')
+  assert.equal(syncStatus(2.9), 'ok')
+  assert.equal(syncStatus(4), 'warn')
+  assert.equal(syncStatus(7), 'stale')
+  assert.equal(syncStatus(null), 'never')
+})
+
+test('syncHealth: healthy when every live sync has run recently', () => {
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(1), ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'ok')
+  assert.equal(h.ok, true)
+  assert.equal(syncHealthLine(h), '', 'a healthy app shows no bar at all')
+})
+
+test('syncHealth: the worst single sync wins — averaging would hide the dead one', () => {
+  // The real 2026-07-30 shape: cartons current, NetSuite 5h behind.
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(5), ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'warn')
+  assert.match(syncHealthLine(h), /NetSuite orders & fulfilments last synced 5h ago/)
+})
+
+test('syncHealth: a sync that never ran is worse than a stale one', () => {
+  const h = computeSyncHealth({ ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'never')
+  assert.match(syncHealthLine(h), /has never completed a sync here/)
+})
+
+test('syncHealth: the line names the sync — an anonymous warning gets ignored', () => {
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(50), ediPackagesLive: hoursAgo(49) }, SYNC_NOW)
+  assert.equal(h.status, 'stale')
+  const line = syncHealthLine(h)
+  assert.match(line, /NetSuite/, 'names the worst offender')
+  assert.match(line, /2d 2h/, 'days once past 24h, not "50h"')
+  assert.match(line, /and 1 other/, 'says how many more are affected')
 })

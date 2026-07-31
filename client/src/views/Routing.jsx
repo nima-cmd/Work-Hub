@@ -3,9 +3,10 @@ import {
   fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
-  masterBolPdfUrl, fileMasterToDrive,
+  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
+import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
 
 // EDI Routing (Nima, 2026-07-22) — replaces the NetSuite routing_helper.js
@@ -43,10 +44,23 @@ export default function Routing() {
   const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
   const [tab, setTab] = useState('active') // 'active' | 'shipped'
 
+  const [pulled, setPulled] = useState(null) // last NetSuite pull's result line
+
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
   }
   useEffect(load, [])
+
+  // Go back to NetSuite for cartons packed since the last sync. Safe to hit
+  // repeatedly mid-pack — it's the same work the scheduled sync does.
+  async function onPull() {
+    setBusy('pull'); setErr(null)
+    try {
+      const r = await refreshRoutingFeed()
+      setData(r.routing)
+      setPulled(r.synced)
+    } catch (e) { setErr(e.message) } finally { setBusy(null) }
+  }
 
   const allPos = useMemo(() => {
     if (!data) return []
@@ -70,9 +84,17 @@ export default function Routing() {
     const held = new Set(data.heldKeys || [])
     const rows = (data.packages || []).filter((p) => isSelected(p.poNumber) && !held.has(`${p.poNumber}|${p.dc}`))
     const byKey = new Map((data.shipments || []).map((s) => [s.dcPoKey, s]))
+    // Pack check, recomputed here for the same reason consolidation is: the PO
+    // selection above changes which fulfilments belong to a group.
+    const packByPoDc = new Map()
+    for (const f of data.fulfilmentPack || []) {
+      if (!packByPoDc.has(f.poDc)) packByPoDc.set(f.poDc, [])
+      packByPoDc.get(f.poDc).push(f)
+    }
     return consolidateRouting(rows).map((g) => {
       const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
-      return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null }
+      const members = (g.memberPos || []).flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
+      return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
     })
   }, [data, selected])
 
@@ -100,6 +122,10 @@ export default function Routing() {
   }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
   const onShip = (s) => run('ship' + s.id, () => setShipmentShipped(s.id, !s.shippedAt))
+  // Toggle the routed flag with no paperwork attached — Nordstrom never gets a
+  // number to record, so the status is the only thing that can move.
+  const onSetRouted = (s, routed) =>
+    run('routed' + s.id, () => setShipmentRefs(s.id, { status: routed ? 'routed' : 'needs_routing' }))
   function toggleGroup(id) {
     setGroupSel((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
@@ -145,10 +171,30 @@ export default function Routing() {
             The numbers below are the exact whole-number entries for the partner portal.
           </div>
         </div>
-        <button className="btnGhost" onClick={load}>↻ Reload feed</button>
+        <div className="rt-headActions">
+          {/* Two genuinely different refreshes, and conflating them is why packed
+              cartons appeared to be "missing from the feed": Reload re-reads
+              what Neon already has, Pull goes back to NetSuite for cartons
+              packed since the last sync. Packing runs for hours, so Pull is the
+              one that matters mid-pack — hence it's the primary button. */}
+          <button className="btn rt-pull" disabled={busy === 'pull'} onClick={onPull}
+                  title="Re-read the carton records straight from NetSuite — use this as you finish packing">
+            {busy === 'pull' ? '⟳ Pulling from NetSuite…' : '⟳ Pull from NetSuite'}
+          </button>
+          <button className="btnGhost" disabled={busy === 'pull'} onClick={load}
+                  title="Re-read what the app already has — does not go back to NetSuite">↻ Reload
+          </button>
+        </div>
       </div>
 
       {err && <div className="banner error">⚠ {err}</div>}
+      {pulled && (
+        <div className={'banner ' + (pulled.skipped ? 'warn' : 'ok')}>
+          {pulled.skipped
+            ? `NetSuite returned no cartons — the feed was left untouched (${pulled.skipped}).`
+            : `Pulled ${pulled.cartons} carton${pulled.cartons === 1 ? '' : 's'} from NetSuite across ${pulled.loaded} PO-DC group${pulled.loaded === 1 ? '' : 's'}.`}
+        </div>
+      )}
 
       {!data.packageCount ? (
         <div className="rt-empty">
@@ -165,6 +211,8 @@ export default function Routing() {
             <button className="btnGhost" onClick={() => setSelected(null)}>All</button>
             <button className="btnGhost" onClick={() => setSelected(new Set())}>None</button>
           </div>
+
+          <PackWarning groups={groups} />
 
           <GapsPanel gaps={data.gaps} />
 
@@ -195,6 +243,7 @@ export default function Routing() {
                   <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
                     onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
                     onShip={g.shipment ? onShip : null}
+                    onSetRouted={g.shipment ? onSetRouted : null}
                     groupable={partner === "Bloomingdale's"}
                     groupChecked={g.shipment ? groupSel.has(g.shipment.id) : false}
                     onToggleGroup={g.shipment ? () => toggleGroup(g.shipment.id) : null} />
@@ -233,6 +282,51 @@ export default function Routing() {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// Short-packed fulfilments, hoisted to the top of the view (Nima, 2026-08-02).
+// The per-card badge is the detail; this is the thing you cannot scroll past.
+// A shortage that reaches a BOL means the 856 announces units that aren't in the
+// boxes, which is a chargeback — so it earns the same treatment as the gaps
+// panel rather than living only beside the group it belongs to.
+//
+// 'not_started' and 'in_progress' groups never appear here. Mid-pack most of the
+// board is unfinished, and warning about that would make this permanent
+// furniture that gets ignored — the same reasoning as the strip hiding itself
+// when clear.
+function PackWarning({ groups = [] }) {
+  const bad = groups.filter((g) => g.pack?.status === 'short' || g.pack?.status === 'over')
+  if (!bad.length) return null
+  const units = bad.reduce((n, g) => n + g.pack.shortUnits, 0)
+
+  return (
+    <div className="rt-gaps rt-packWarn">
+      <div className="rt-gapsHead">
+        ⚠ {bad.length} shipment{bad.length === 1 ? '' : 's'} {bad.length === 1 ? 'is' : 'are'} short {units} unit{units === 1 ? '' : 's'}
+        <span className="muted"> — packed cartons don’t add up to what the fulfilment says it ships</span>
+      </div>
+      <div className="rt-gapGroup">
+        <div className="rt-gapWhy">
+          Routing one of these transmits an 856 claiming units that aren’t in the boxes.
+          Go back to the fulfilment and finish it, then <b>⟳ Pull from NetSuite</b>.
+        </div>
+        {bad.map((g) => (
+          <div key={g.dcPoKey} className="rt-packRow">
+            <span className="rt-packRowDc">{g.dc}</span>
+            <span className="muted">{g.memberPos.join(', ')}</span>
+            {g.pack.problems.map((p) => (
+              <span key={p.ifNumber} className="rt-gapChip miss">
+                {p.ifNumber} · {p.packedUnits}/{p.ifUnits}
+                {p.blankCartons
+                  ? ` · ${p.cartons} carton${p.cartons === 1 ? '' : 's'} with no quantity entered`
+                  : ` · ${p.short} short`}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -389,7 +483,7 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -422,6 +516,8 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
         {g.showUnits && <Cell label="Units" v={g.units} big />}
       </div>
 
+      <PackCheck pack={g.pack} />
+
       {g.cubicRoundingDiffers && (
         <div className="rt-warn" title="The feed's summed per-row rounded cubic feet differs from a single round-up of the raw total.">
           ⚠ cubic ft: {g.cubicFeet} (round-up of {g.rawCubicFeet}); feed's per-row sum = {g.cubicFeetRoundedSum}
@@ -429,8 +525,9 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
       )}
 
       {!s ? (
-        <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}>
-          {busy === g.dcPoKey ? 'Assigning…' : 'Assign BOL'}
+        <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}
+                title={g.pack?.status === 'short' ? 'This group is short — assigning a BOL now would ship an 856 claiming units that aren’t in the boxes.' : undefined}>
+          {busy === g.dcPoKey ? 'Assigning…' : g.pack?.status === 'short' ? 'Assign BOL anyway' : 'Assign BOL'}
         </button>
       ) : (
         <>
@@ -445,7 +542,33 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
             {s.shippedAt
               ? <span className="rt-shippedTag" title={`Shipped ${new Date(s.shippedAt).toLocaleString()}`}>✓ shipped {new Date(s.shippedAt).toLocaleDateString()}</span>
               : !detached && <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>}
+            {/* The ASN went out but NetSuite still doesn't call the freight shipped
+                — surfaced, never used to auto-archive. Names the lagging POs so
+                it points at a specific fix rather than a lumped count. */}
+            {s.asnAheadOfNetsuite && !s.shippedAt && (
+              <span className="rt-asnAhead"
+                title={`856 transmitted, but NetSuite hasn't marked every IF shipped for PO ${(s.netsuite?.pending || []).join(', ')} — go mark them shipped.`}>
+                856 sent · NetSuite behind ({(s.netsuite?.pending || []).join(', ')})
+              </span>
+            )}
           </div>
+          {/* Mark routed by hand (Nima, 2026-08-02). Bloomingdale's reaches
+              'routed' through the portal — project/shipment numbers, then an
+              auth from the routing email. NORDSTROM HAS NONE OF THAT: it's
+              always CTE/CAIE with no auth email, so there was literally nothing
+              to enter and its BOLs sat on "Needs routing" forever. A plain
+              checkmark is the whole mechanism it needs. Left on every partner —
+              a Bloomingdale's shipment routed by phone deserves it too. */}
+          {onSetRouted && !s.shippedAt && (
+            <button className={'btnGhost rt-routedBtn' + (s.status === 'routed' ? ' on' : '')}
+              disabled={busy === 'routed' + s.id}
+              title={s.status === 'routed'
+                ? 'Put this back in the routing queue'
+                : 'Routing is done for this BOL — no number to record'}
+              onClick={() => onSetRouted(s, s.status !== 'routed')}>
+              {s.status === 'routed' ? '✓ Routed' : '○ Mark routed'}
+            </button>
+          )}
           {onShip && (
             <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '')} disabled={busy === 'ship' + s.id}
               title={s.shippedAt ? 'Move back to the active queue' : 'Shipment has physically left — archive it to the Shipped tab (record kept)'}
@@ -456,6 +579,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 
           <BolActions s={s} />
           <RefSummary s={s} />
+          <EdiTrail s={s} />
           <EmailLinks docType="ROUTING_SHIPMENT" docNumber={s.id} compact />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
             {editing ? '▾ Route info' : '✎ Route info'}
@@ -570,6 +694,66 @@ function RefSummary({ s }) {
   )
 }
 
+// The EDI paper trail for a BOL: the 850(s) that ordered it and the 856 that
+// announced it, with Orderful transaction ids so you can go straight back to the
+// document. Kept as a disclosure rather than always-open — it's reference
+// material, not work, and the routing board's job is to show what needs doing.
+function EdiTrail({ s }) {
+  const [open, setOpen] = useState(false)
+  const edi = s.edi
+  if (!edi?.asn) {
+    // Archived with no ASN found is worth saying out loud — an EDI partner
+    // shipment with no 856 means the ship notice never went out.
+    if (!s.shippedAt) return null
+    return <div className="rt-ediTrail none" title="No outbound 856 was found for this BOL number.">⚠ no 856 on file for this BOL</div>
+  }
+  const linked = (edi.po850 || []).filter((p) => p.transactionId)
+  const ok = edi.asn.ackStatus === 'ACCEPTED'
+  const rejected = edi.asn.ackStatus === 'REJECTED'
+  return (
+    <div className="rt-ediTrail">
+      <button className="rt-ediToggle" onClick={() => setOpen((o) => !o)}
+        title="The 850 → BOL → 856 reference for this shipment">
+        {open ? '▾' : '▸'} EDI trail
+        <span className="rt-ediChip">{linked.length} × 850</span>
+        <span className={'rt-ediChip asn' + (rejected ? ' bad' : ok ? ' ok' : ' pending')}>
+          856 {rejected ? 'rejected' : ok ? 'accepted' : 'pending'}
+        </span>
+      </button>
+      {open && (
+        <div className="rt-ediBody">
+          <div className="rt-ediRow">
+            <span className="rt-ediKind out">856</span>
+            <span className="rt-ediNum">{edi.asn.businessNumber}</span>
+            <span className="muted">tx {edi.asn.transactionId}</span>
+            {edi.asn.createdAt && <span className="muted">sent {String(edi.asn.createdAt).slice(0, 10)}</span>}
+            <span className="muted">{edi.asn.deliveryStatus}/{edi.asn.ackStatus}</span>
+          </div>
+          {(edi.po850 || []).map((p) => (
+            <div className="rt-ediRow" key={p.po}>
+              <span className="rt-ediKind in">850</span>
+              <span className="rt-ediNum">PO {p.po}</span>
+              {p.transactionId
+                ? <>
+                    <span className="muted">tx {p.transactionId}</span>
+                    {p.createdAt && <span className="muted">rec'd {String(p.createdAt).slice(0, 10)}</span>}
+                    {p.totalUnits != null && <span className="muted">{p.totalUnits} units</span>}
+                  </>
+                : <span className="rt-ediMissing">no 850 on file</span>}
+            </div>
+          ))}
+          {edi.snapshotAt && (
+            <div className="rt-ediSnap muted">
+              archived reference frozen {new Date(edi.snapshotAt).toLocaleDateString()}
+              {edi.fromSnapshot && ' · transaction has aged out of Orderful'}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RefEditor({ s, auths, busy, onSave }) {
   const [d, setD] = useState({
     status: s.status || 'needs_routing',
@@ -640,6 +824,31 @@ function RefEditor({ s, auths, busy, onSave }) {
       <label>FedEx pickup #<input value={d.fedexPickupNumber} onChange={set('fedexPickupNumber')} placeholder="pickup confirmation #" /></label>
       <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
       <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>
+    </div>
+  )
+}
+
+// Did every unit on every fulfilment in this group actually get packed?
+// (Nima, 2026-08-02.) Packing is manual and a missed item is otherwise
+// invisible until it comes back as a chargeback, so a clean group states its
+// numbers too — silence would be indistinguishable from "not checked".
+function PackCheck({ pack }) {
+  if (!pack || pack.status === 'empty') return null
+  const cls = pack.status === 'short' || pack.status === 'over' ? 'bad'
+    : pack.status === 'ok' ? 'good' : 'idle'
+  return (
+    <div className={'rt-pack ' + cls}>
+      <span className="rt-packMark">{cls === 'good' ? '✓' : cls === 'bad' ? '⚠' : '·'}</span>
+      <span className="rt-packText">{packSummary(pack)}</span>
+      {pack.problems.map((p) => (
+        <span key={p.ifNumber} className="rt-packIf"
+              title={p.blankCartons
+                ? `${p.ifNumber}: ${p.cartons} carton(s) exist but no quantities were entered on them`
+                : `${p.ifNumber}: ${p.packedUnits} of ${p.ifUnits} units packed across ${p.cartons} carton(s)`}>
+          {p.ifNumber} {p.packedUnits}/{p.ifUnits}
+          {p.blankCartons && <em> (cartons have no qty)</em>}
+        </span>
+      ))}
     </div>
   )
 }

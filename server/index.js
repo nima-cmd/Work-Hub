@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 
 import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
+  getLedger, getOrderLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
@@ -16,19 +17,23 @@ import {
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
-  streamMasterBol, fileMasterToDrive,
+  streamMasterBol, fileMasterToDrive, getLabelGaps, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
-  getCatalogueGaps, buildCatalogueAddCsv,
+  getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
-  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed,
+  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
+import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
+import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
+import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
+import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes } from './printLabel.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
@@ -115,6 +120,60 @@ app.get('/api/credits', async (_req, res) => {
 app.get('/api/affection', async (_req, res) => {
   try {
     res.json(await getAffection())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── The ledger (2026-08-02) ──────────────────────────────────────────────────
+// /api/ledger?so=SO12293                one order's full history, oldest first
+// /api/ledger?from=…&to=…&type=…&q=…    a window / search, newest first
+// /api/ledger/daily?from=…&to=…         per-day counts for the Calendar
+app.get('/api/ledger', async (req, res) => {
+  try {
+    const { so, from, to, type, docType, q, limit } = req.query
+    if (so) return res.json(await getOrderLedger(so))
+    res.json({
+      events: await getLedger({
+        from: from || null,
+        to: to || null,
+        // ?type=A&type=B arrives as an array; a single one as a string.
+        type: type ? (Array.isArray(type) ? type : [type]) : null,
+        docType: docType || null,
+        q: q || null,
+        limit,
+      }),
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Departures counted as SHIPMENTS (Nima, 2026-08-02) — one BOL is one departure
+// however many item fulfilments it covers. ?from/&to bound the window.
+app.get('/api/sync-health', async (_req, res) => {
+  try {
+    res.json(await getSyncHealth())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/departures', async (req, res) => {
+  try {
+    res.json({ departures: await getDepartures({ from: req.query.from || null, to: req.query.to || null }) })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/ledger/daily', async (req, res) => {
+  try {
+    res.json(await getLedgerDailyCounts({ from: req.query.from || null, to: req.query.to || null }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
@@ -319,10 +378,82 @@ app.post('/api/edi/arrivals/dismiss', async (req, res) => {
   }
 })
 
+// Label / shipped-status reconciliation — splits the Packed queue into
+// "labelled but never marked shipped" vs "genuinely needs a label".
+app.get('/api/label-gaps', async (_req, res) => {
+  try {
+    res.json(await getLabelGaps())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── UPS wholesale rates ──────────────────────────────────────────────────────
+// The rate for the big boxes, off the dims already captured at scan-in.
+//   GET /api/ups/rate?if=IF7228&postal=02554&state=MA&city=Nantucket
+// Destination is passed in because Neon doesn't hold a boutique ship-to address.
+// A quote is a READ — ShipStation charges nothing for it and nothing here buys a
+// label. See getUpsRate in queries.js for why two sources are kept separate.
+app.get('/api/ups/rate', async (req, res) => {
+  try {
+    const ifNumber = String(req.query.if || '').trim()
+    if (!ifNumber) return res.status(400).json({ error: 'pass ?if=IF#####' })
+    const postalCode = String(req.query.postal || '').trim()
+    if (!postalCode) return res.status(400).json({ error: 'pass ?postal= — UPS ground price is driven by distance, so a rate without a destination is meaningless' })
+    res.json(await getUpsRate({
+      ifNumber,
+      destination: {
+        postalCode,
+        state: String(req.query.state || '').trim() || null,
+        city: String(req.query.city || '').trim() || null,
+        country: String(req.query.country || 'US').trim(),
+      },
+      serviceCode: String(req.query.service || 'ups_ground').trim(),
+      residential: req.query.residential === 'true',
+    }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Did the reconnect work? Rate-tests both accounts. Run this right after fixing it.
+app.get('/api/ups/connection', async (_req, res) => {
+  try {
+    res.json(await getUpsConnection())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── EDI routing + BOL ────────────────────────────────────────────────────────
 app.get('/api/routing', async (_req, res) => {
   try {
     res.json(await getRouting())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Re-pull the carton feed on demand (Nima, 2026-08-02). Packing happens over
+// hours and the board is only as current as the last sync — which until now
+// meant a terminal, or waiting on a cron that had been dead for two days. Same
+// work the scheduled sync does, so it's safe to hit repeatedly mid-pack.
+// Returns the refreshed board so the view updates in one round trip.
+app.post('/api/routing/refresh', async (_req, res) => {
+  try {
+    if (!netsuiteConfigured()) return res.status(503).json({ error: 'NetSuite is not configured on this server' })
+    const sync = await syncEdiPackagesLive({})
+    if (!sync.ok) return res.status(502).json({ error: sync.error || 'the NetSuite pull failed' })
+    res.json({
+      // `skipped` is the empty-pull guard, not a failure — the feed was left
+      // alone on purpose, and the UI should say so rather than claim success.
+      synced: { loaded: sync.loaded ?? 0, cartons: sync.cartonCount ?? 0, skipped: sync.skipped || null },
+      routing: await getRouting(),
+    })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
@@ -990,6 +1121,18 @@ app.get('/api/quest-search', async (req, res) => {
   }
 })
 
+// Outbound EDI documents that never reached the partner (Nima, 2026-08-01) —
+// ASNs and invoices sitting undelivered in Orderful, plus any the partner
+// rejected. Silent in both NetSuite and Orderful until you go looking.
+app.get('/api/edi-delivery-gaps', async (_req, res) => {
+  try {
+    res.json(await getEdiDeliveryGaps())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Scheduled trigger for the recurring-task engine (Gmail sync + the 9am/2pm
 // reminder + the daily CSV-freshness check) — meant to be called by an
 // external scheduler, not a browser. Render's own Cron Jobs have no free
@@ -1024,8 +1167,45 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('Orderful sync failed (recurring tasks still checked):', e.message)
       }
     }
+    // Pull NetSuite too. This module shipped in PR #16 as the app's primary data
+    // path but had NO caller anywhere, so Neon silently drifted from NetSuite —
+    // 14 item fulfilments read Picked/Packed here days after NetSuite marked them
+    // Shipped, which stranded 7 routed BOLs on the active board (2026-08-01).
+    // Best-effort + gated on the creds, same contract as the two syncs above.
+    let netsuite = null
+    let cartons = null
+    if (netsuiteConfigured()) {
+      try {
+        const r = await syncFromNetsuite({})
+        netsuite = r.ok
+          ? { orders: r.nOrders, fulfillments: r.nFul, invoices: r.nInv, archived: (r.archived || []).length }
+          : { error: r.error }
+      } catch (e) {
+        console.error('NetSuite sync failed (recurring tasks still checked):', e.message)
+      }
+      // The durable IF → (PO, DC) link that lets a departure be counted per BOL
+      // instead of per fulfilment. Incremental (last 30 days) so it's one cheap
+      // query; the full history was a one-off `npm run backfill:fulfillment-dc`.
+      try {
+        const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+        await syncFulfillmentDc({ since })
+      } catch (e) {
+        console.error('fulfilment-DC sync failed (rest of the check continues):', e.message)
+      }
+      // The routing carton feed — the last source that used to need a manual CSV
+      // export. Separate from the sync above because it reads a different record
+      // and must be safe to re-run on its own while packing is in progress.
+      try {
+        const r = await syncEdiPackagesLive({})
+        cartons = r.ok
+          ? { poDcs: (r.rows || []).length, loaded: r.loaded ?? 0, removed: (r.removed || []).length, skipped: r.skipped }
+          : { error: r.error }
+      } catch (e) {
+        console.error('EDI carton feed failed (recurring tasks still checked):', e.message)
+      }
+    }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
