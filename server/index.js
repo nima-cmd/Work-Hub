@@ -417,6 +417,28 @@ app.get('/api/routing', async (_req, res) => {
   }
 })
 
+// Re-pull the carton feed on demand (Nima, 2026-08-02). Packing happens over
+// hours and the board is only as current as the last sync — which until now
+// meant a terminal, or waiting on a cron that had been dead for two days. Same
+// work the scheduled sync does, so it's safe to hit repeatedly mid-pack.
+// Returns the refreshed board so the view updates in one round trip.
+app.post('/api/routing/refresh', async (_req, res) => {
+  try {
+    if (!netsuiteConfigured()) return res.status(503).json({ error: 'NetSuite is not configured on this server' })
+    const sync = await syncEdiPackagesLive({})
+    if (!sync.ok) return res.status(502).json({ error: sync.error || 'the NetSuite pull failed' })
+    res.json({
+      // `skipped` is the empty-pull guard, not a failure — the feed was left
+      // alone on purpose, and the UI should say so rather than claim success.
+      synced: { loaded: sync.loaded ?? 0, cartons: sync.cartonCount ?? 0, skipped: sync.skipped || null },
+      routing: await getRouting(),
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/api/routing/assign-bol', async (req, res) => {
   try {
     res.json(await assignRoutingBol(req.body || {}))

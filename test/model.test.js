@@ -1248,3 +1248,45 @@ test('packSummary: always shows both numbers so a clean group proves it was chec
   assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 4, cartons: 1 }])), '4/10 units — 6 short')
   assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 0, cartons: 0 }])), '0/10 units — not packed yet')
 })
+
+// ── Court strip voice (Nima, 2026-08-02) ─────────────────────────────────────
+// A crew member says what to pick up next instead of a "⚑ OUR COURT" label.
+// It must never invent or blend numbers — the never-lump rule still governs the
+// strip; this only ever repeats one count the chips already show.
+import { courtLine, warehouseLine } from '../src/model/courtVoice.js'
+
+test('courtVoice: picks the lane Nima can finish himself, not the biggest number', () => {
+  // 61 stuck invoices would drown out 4 labels every single day.
+  const line = courtLine([
+    { key: 'invoiceStuck', n: 61, label: 'invoices never sent' },
+    { key: 'needsLabel', n: 4, label: 'need a label' },
+  ])
+  assert.match(line, /4 parcels need a label/)
+})
+
+test('courtVoice: an item aging past a week overrides the lane order', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF7228', ageDays: 41 })
+  assert.match(line, /IF7228 has been sitting 41 days/)
+})
+
+test('courtVoice: a fresh oldest item does NOT override — no false alarm', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF9999', ageDays: 2 })
+  assert.match(line, /need a label/)
+})
+
+test('courtVoice: singular reads properly — no "1 parcels"', () => {
+  assert.match(courtLine([{ key: 'needsLabel', n: 1, label: 'need a label' }]), /One parcel needs a label/)
+  assert.match(courtLine([{ key: 'canShip', n: 1, label: 'can ship' }]), /One order is/)
+})
+
+test('courtVoice: an empty board says so rather than rendering nothing', () => {
+  assert.equal(courtLine([]), "Board's clear. Enjoy it.")
+})
+
+test('courtVoice: the warehouse line is empty at zero so the group can hide', () => {
+  assert.equal(warehouseLine(0), '')
+  assert.match(warehouseLine(1), /one of ours/)
+  assert.match(warehouseLine(3), /Got 3 of ours/)
+})

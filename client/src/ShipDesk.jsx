@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { STAGE } from '../../src/model/stages.js'
+import { getCharacterById } from '../../src/model/characters.js'
+import { courtLine, warehouseLine, COURT_VOICE_ID, WAREHOUSE_VOICE_ID } from '../../src/model/courtVoice.js'
+import { imagesFor } from './data/characterImages.js'
 
 // Ship Desk (Nima, 2026-07-31) — the UI over GET /api/label-gaps.
 //
@@ -172,7 +175,7 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNa
   return (
     <div className="courtStrip">
       <span className="courtGroup">
-        <span className="courtLabel">⚑ OUR COURT</span>
+        <CrewVoice id={COURT_VOICE_ID} line={courtLine(chips, oldest)} />
         {chips.map((c) => (
           <button key={c.key} className={'courtChip ct-' + c.tone} title={c.title}
                   onClick={() => onNavigate?.(c.to)}>
@@ -183,7 +186,7 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNa
 
       {withNestor > 0 && (
         <span className="courtGroup courtNestor">
-          <span className="courtLabel">⇄ WITH NESTOR</span>
+          <CrewVoice id={WAREHOUSE_VOICE_ID} line={warehouseLine(withNestor)} />
           <button className="courtChip ct-cyan" title="Scanned out to the warehouse and not yet back"
                   onClick={() => onNavigate?.('custody')}>
             <b>{withNestor}</b> scanned out
@@ -201,6 +204,22 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNa
 
       <button className="courtToggle courtHide" onClick={() => setCollapsed(true)} title="Collapse">▾</button>
     </div>
+  )
+}
+
+// A crew member with something to say. Portrait-optional by design, like every
+// other character surface in the app — the line still reads if the art for that
+// character hasn't been dropped in yet, so adding a new one can never blank the
+// strip.
+function CrewVoice({ id, line }) {
+  const c = getCharacterById(id)
+  const img = imagesFor(id)[0]
+  if (!line) return null
+  return (
+    <span className="courtVoice" title={c?.name || ''}>
+      <span className="courtVoiceFace">{img ? <img src={img} alt="" /> : '◈'}</span>
+      <span className="courtVoiceText">{line}</span>
+    </span>
   )
 }
 

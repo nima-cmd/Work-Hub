@@ -1828,6 +1828,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* ── EDI Routing (Nima, 2026-07-22) ──────────────────────────────────────── */
 .routing { padding: 4px 2px 40px; }
 .rt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.rt-headActions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.rt-pull { white-space: nowrap; }
 .rt-head h2 { margin: 0 0 4px; font-size: 20px; }
 .rt-sub { font-size: 13px; max-width: 640px; line-height: 1.4; }
 .rt-empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); }
@@ -2203,6 +2205,24 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   font-family: var(--display); font-size: 10px; letter-spacing: 0.14em;
   color: var(--muted); font-weight: 700; margin-right: 2px; white-space: nowrap;
 }
+/* Crew voice on the strip (2026-08-02) — a face and a line instead of a label.
+   Capped width so a long line can never push the chips off screen. */
+.courtVoice { display: flex; align-items: center; gap: 7px; margin-right: 4px; min-width: 0; }
+.courtVoiceFace {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line);
+}
+.courtVoiceFace img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Wraps rather than truncates — the line IS the feature, and an ellipsised
+   "start the…" tells Nima nothing. The strip already wraps, so a two-line
+   voice just pushes chips onto the next row instead of hiding words. */
+.courtVoiceText {
+  font-size: 12px; color: var(--text); opacity: 0.92; line-height: 1.3;
+  max-width: 30ch; white-space: normal;
+}
+.courtNestor .courtVoiceText { max-width: 24ch; color: var(--muted); }
+
 .courtChip {
   font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
   padding: 3px 9px; border-radius: 999px;

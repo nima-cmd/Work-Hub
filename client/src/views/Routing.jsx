@@ -3,7 +3,7 @@ import {
   fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
-  masterBolPdfUrl, fileMasterToDrive,
+  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
@@ -44,10 +44,23 @@ export default function Routing() {
   const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
   const [tab, setTab] = useState('active') // 'active' | 'shipped'
 
+  const [pulled, setPulled] = useState(null) // last NetSuite pull's result line
+
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
   }
   useEffect(load, [])
+
+  // Go back to NetSuite for cartons packed since the last sync. Safe to hit
+  // repeatedly mid-pack — it's the same work the scheduled sync does.
+  async function onPull() {
+    setBusy('pull'); setErr(null)
+    try {
+      const r = await refreshRoutingFeed()
+      setData(r.routing)
+      setPulled(r.synced)
+    } catch (e) { setErr(e.message) } finally { setBusy(null) }
+  }
 
   const allPos = useMemo(() => {
     if (!data) return []
@@ -154,10 +167,30 @@ export default function Routing() {
             The numbers below are the exact whole-number entries for the partner portal.
           </div>
         </div>
-        <button className="btnGhost" onClick={load}>↻ Reload feed</button>
+        <div className="rt-headActions">
+          {/* Two genuinely different refreshes, and conflating them is why packed
+              cartons appeared to be "missing from the feed": Reload re-reads
+              what Neon already has, Pull goes back to NetSuite for cartons
+              packed since the last sync. Packing runs for hours, so Pull is the
+              one that matters mid-pack — hence it's the primary button. */}
+          <button className="btn rt-pull" disabled={busy === 'pull'} onClick={onPull}
+                  title="Re-read the carton records straight from NetSuite — use this as you finish packing">
+            {busy === 'pull' ? '⟳ Pulling from NetSuite…' : '⟳ Pull from NetSuite'}
+          </button>
+          <button className="btnGhost" disabled={busy === 'pull'} onClick={load}
+                  title="Re-read what the app already has — does not go back to NetSuite">↻ Reload
+          </button>
+        </div>
       </div>
 
       {err && <div className="banner error">⚠ {err}</div>}
+      {pulled && (
+        <div className={'banner ' + (pulled.skipped ? 'warn' : 'ok')}>
+          {pulled.skipped
+            ? `NetSuite returned no cartons — the feed was left untouched (${pulled.skipped}).`
+            : `Pulled ${pulled.cartons} carton${pulled.cartons === 1 ? '' : 's'} from NetSuite across ${pulled.loaded} PO-DC group${pulled.loaded === 1 ? '' : 's'}.`}
+        </div>
+      )}
 
       {!data.packageCount ? (
         <div className="rt-empty">
