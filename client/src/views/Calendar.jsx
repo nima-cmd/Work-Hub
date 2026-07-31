@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SourceBadge } from '../lib.jsx'
 import { imagesFor } from '../data/characterImages.js'
-import { fetchCalendarEvents, createManualTask } from '../api.js'
+import { departureLabel, departureSummary } from '../../../src/model/departures.js'
+import { fetchCalendarEvents, createManualTask, fetchDepartures, fetchLedgerDaily } from '../api.js'
 
 const DAY = 86400000
 
@@ -15,9 +16,22 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
   const [selected, setSelected] = useState(today)
   const [cursor, setCursor] = useState(today)
   const [cal, setCal] = useState({ configured: false, events: [] }) // Google Calendar
+  // Departures come from the API already grouped into SHIPMENTS. Deriving them
+  // from orders[].fulfillments here is what produced "50 departures" on
+  // 2026-07-30 when eight trucks left — every DC on an EDI PO has its own IF.
+  const [departures, setDepartures] = useState([])
+  // Per-day ledger totals. The `events` prop is the newest 500 rows, which is
+  // fine for showing a day's detail but silently undercounts the grid once the
+  // ledger passes 500 (it's at 2,783). These counts come from a GROUP BY, so a
+  // day cell reports what actually happened rather than what fit in the feed.
+  const [ledgerDaily, setLedgerDaily] = useState(new Map())
 
   useEffect(() => {
     fetchCalendarEvents().then(setCal).catch(() => setCal({ configured: false, events: [] }))
+    fetchDepartures().then(setDepartures).catch(() => setDepartures([]))
+    fetchLedgerDaily()
+      .then((rows) => setLedgerDaily(new Map(rows.map((r) => [r.day, r]))))
+      .catch(() => setLedgerDaily(new Map()))
   }, [])
 
   // ── every dated thing, indexed by day ─────────────────────────────────────
@@ -27,9 +41,10 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
     for (const o of orders) {
       if (o.shipDate) push(startOfDay(new Date(o.shipDate).getTime()), { cat: 'deadline', kind: 'Ship due', o })
       if (o.cancelDate) push(startOfDay(new Date(o.cancelDate).getTime()), { cat: 'deadline', kind: 'Cancel by', o })
-      for (const f of o.fulfillments || []) {
-        if (f.actualShipDate) push(startOfDay(new Date(f.actualShipDate).getTime()), { cat: 'shipped', kind: 'Departed', o, f })
-      }
+    }
+    // One entry per SHIPMENT — a BOL covering 18 fulfilments is one departure.
+    for (const d of departures) {
+      if (d.shipDate) push(startOfDay(new Date(d.shipDate).getTime()), { cat: 'shipped', kind: 'Departed', d })
     }
     for (const a of activity) push(startOfDay(new Date(a.createdAt).getTime()), { cat: 'journal', kind: a.kind?.replace('_', ' ') || 'note', a })
     for (const e of events) push(startOfDay(new Date(e.occurredAt).getTime()), { cat: 'ledger', kind: ledgerKind(e), e })
@@ -37,7 +52,13 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
       if (ev.start) push(startOfDay(new Date(ev.start).getTime()), { cat: 'invite', kind: ev.holocall ? 'Holocall' : 'Invite', ev })
     }
     return m
-  }, [orders, activity, events, cal])
+  }, [orders, activity, events, cal, departures])
+
+  // Local YYYY-MM-DD, matching how the daily-counts query formats its keys.
+  const dateKey = (ms) => {
+    const d = new Date(ms)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
 
   const openTasks = tasks.filter((t) => t.status === 'open')
   const overdue = []
@@ -94,6 +115,11 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
             const items = byDay.get(day) || []
             const cats = new Set(items.map((i) => i.cat))
             const inMonth = new Date(day).getMonth() === curMonth
+            // Ledger events counted from the server's GROUP BY, not the capped
+            // feed — so the number on a cell is the real one.
+            const ledgerN = ledgerDaily.get(dateKey(day))?.total ?? items.filter((i) => i.cat === 'ledger').length
+            const total = items.filter((i) => i.cat !== 'ledger').length + ledgerN
+            if (ledgerN > 0) cats.add('ledger')
             return (
               <button
                 key={day}
@@ -109,7 +135,7 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
                   {cats.has('journal') && <i className="calDot d-journal" title="journal" />}
                   {cats.has('invite') && <i className="calDot d-invite" title="calendar invite / holocall" />}
                 </div>
-                {items.length > 0 && <div className="calCount">{items.length}</div>}
+                {total > 0 && <div className="calCount">{total}</div>}
               </button>
             )
           })}
@@ -132,7 +158,16 @@ export default function Calendar({ orders, tasks = [], activity = [], events = [
           if (!list.length) return null
           return (
             <div key={cat} className="calDayGroup">
-              <div className="taskGroupHead">{CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span></div>
+              <div className="taskGroupHead">
+                {CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span>
+                {/* Both numbers, always — "8" alone was previously "50", and a
+                    shipment count that silently means fulfilments is the whole
+                    bug this fixes. */}
+                {cat === 'shipped' && (() => {
+                  const s = departureSummary(list.map((i) => i.d))
+                  return s.includes('·') ? <span className="muted"> · {s.split('· ')[1]}</span> : null
+                })()}
+              </div>
               {list.map((it, i) => <DayItem key={i} it={it} onRefresh={onRefresh} />)}
             </div>
           )
@@ -150,11 +185,30 @@ const CAT_LABEL = {
 
 function DayItem({ it, onRefresh }) {
   if (it.cat === 'invite') return <InviteRow ev={it.ev} onRefresh={onRefresh} />
-  if (it.cat === 'deadline' || it.cat === 'shipped') {
+  // A departure is a shipment. Freight names its BOL and says how many
+  // fulfilments rode on it, so the consolidation is visible rather than implied.
+  if (it.cat === 'shipped') {
+    const d = it.d
+    const n = d.fulfilments?.length || 0
+    return (
+      <div className="calRow">
+        <span className="caltag sev-lo">{d.kind === 'freight' ? 'BOL out' : 'Departed'}</span>
+        <span className="so">{departureLabel(d)}</span>
+        <span className="cust">{d.customer || d.partner || ''}</span>
+        {n > 1 && (
+          <span className="calNote" title={d.fulfilments.map((f) => f.ifNumber).join(', ')}>
+            {n} fulfilments{d.dc ? ` · DC ${d.dc}` : ''}
+          </span>
+        )}
+        {d.source && <SourceBadge source={d.source} />}
+      </div>
+    )
+  }
+  if (it.cat === 'deadline') {
     return (
       <div className={'calRow ' + (it.kind === 'Cancel by' ? 'cancel' : '')}>
-        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : it.cat === 'shipped' ? 'sev-lo' : 'sev-mid')}>{it.kind}</span>
-        <span className="so">{it.f?.ifNumber || it.o.soNumber}</span>
+        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : 'sev-mid')}>{it.kind}</span>
+        <span className="so">{it.o.soNumber}</span>
         <span className="cust">{it.o.customer}</span>
         <SourceBadge source={it.o.source} />
       </div>

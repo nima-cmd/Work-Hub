@@ -534,6 +534,16 @@ export async function fetchQuestActivity(date) {
   return res.json()
 }
 
+// Departures counted as SHIPMENTS — one BOL is one departure however many item
+// fulfilments it covers. Without this the Calendar showed 50 departures on
+// 2026-07-30 when eight trucks left.
+export async function fetchDepartures(opts = {}) {
+  const qs = new URLSearchParams(Object.entries(opts).filter(([, v]) => v)).toString()
+  const res = await fetch('/api/departures' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return (await res.json()).departures || []
+}
+
 // Upcoming Google Calendar events (in-app calendar + holocalls).
 export async function fetchCalendarEvents() {
   const res = await fetch('/api/calendar/events')
@@ -809,3 +819,44 @@ export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
   return res.json()
 }
 
+
+// Did the scheduled syncs actually RUN? Distinct from fetchFreshness, which
+// reports how old the source data is — a stopped sync looks like a quiet day.
+export async function fetchSyncHealth() {
+  const res = await fetch('/api/sync-health')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// The order ledger. Window mode: { from, to, type[], docType, q, limit }.
+export async function fetchLedger(opts = {}) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(opts)) {
+    if (v == null || v === '') continue
+    if (Array.isArray(v)) v.forEach((x) => p.append(k, x))
+    else p.set(k, v)
+  }
+  const qs = p.toString()
+  const res = await fetch('/api/ledger' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// One order's complete history — every event naming the SO or any document
+// hanging off it, oldest first.
+export async function fetchOrderLedger(soNumber) {
+  const res = await fetch('/api/ledger?so=' + encodeURIComponent(soNumber))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Per-day ledger counts for the Calendar's dots.
+export async function fetchLedgerDaily({ from = null, to = null } = {}) {
+  const p = new URLSearchParams()
+  if (from) p.set('from', from)
+  if (to) p.set('to', to)
+  const qs = p.toString()
+  const res = await fetch('/api/ledger/daily' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

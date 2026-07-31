@@ -533,6 +533,32 @@ export async function fetchEdiPackages(db = pool) {
   return rows
 }
 
+// The durable IF → (PO, DC) link. UPSERT and never delete: a fulfilment that has
+// shipped must keep its DC, because that is when a departure count needs it.
+export async function loadFulfillmentDc(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    if (!r.ifNumber || !r.poDc) continue
+    await db.query(
+      `INSERT INTO fulfillment_dc (if_number, po_dc, po_number, dc, updated_at)
+       VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (if_number) DO UPDATE SET
+         po_dc = EXCLUDED.po_dc, po_number = EXCLUDED.po_number,
+         dc = EXCLUDED.dc, updated_at = now()`,
+      [r.ifNumber, r.poDc, r.poNumber || null, r.dc || null],
+    )
+    n++
+  }
+  return n
+}
+
+export async function fetchFulfillmentDc(db = pool) {
+  const { rows } = await db.query(
+    `SELECT if_number AS "ifNumber", po_dc AS "poDc", po_number AS "poNumber", dc FROM fulfillment_dc`,
+  )
+  return new Map(rows.map((r) => [r.ifNumber, r]))
+}
+
 // The pack check's per-IF rows, grouped by PO-DC so a routing group covering
 // several POs can gather each one's fulfilments in a single pass.
 export async function fetchFulfilmentPack(db = pool) {

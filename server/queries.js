@@ -36,9 +36,11 @@ import {
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
   fetchCatalogueSkus, fetchIfStatusByPo,
   fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
-  fetchFulfilmentPack,
+  fetchFulfilmentPack, fetchFulfillmentDc,
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
+import { groupDepartures } from '../src/model/departures.js'
+import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
@@ -560,6 +562,27 @@ export async function getLedgerDailyCounts({ from, to } = {}) {
   return [...byDay.values()]
 }
 
+// ── Departures = shipments, not fulfilments (Nima, 2026-08-02) ───────────────
+// "Each DC has multiple IF … that inflates the number." 2026-07-30 read as 50
+// departures everywhere; it was 8. See src/model/departures.js for the rule.
+// The DC of an ALREADY-SHIPPED fulfilment only survives in fulfillment_dc —
+// edi_fulfillment_pack drops it the moment freight leaves.
+export async function getDepartures({ from = null, to = null } = {}) {
+  const [dcByIf, shipments] = await Promise.all([fetchFulfillmentDc(), fetchRoutingShipments()])
+  const { rows } = await pool.query(
+    `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
+            f.actual_ship_date AS "actualShipDate", f.invoice_number AS "invoiceNumber",
+            o.customer, o.source, o.po_number AS "poNumber"
+       FROM fulfillments f LEFT JOIN orders o USING (so_number)
+      WHERE f.actual_ship_date IS NOT NULL
+        AND ($1::date IS NULL OR f.actual_ship_date >= $1)
+        AND ($2::date IS NULL OR f.actual_ship_date <  $2)`,
+    [from || null, to || null],
+  )
+  const enriched = rows.map((r) => ({ ...r, poDc: dcByIf.get(r.ifNumber)?.poDc || null }))
+  return groupDepartures(enriched, shipments)
+}
+
 // ── Character affection (Nima, 2026-07-17) — relationship tracker ────────────
 export async function getAffection() {
   const tasks = await fetchQuestTasks()
@@ -696,6 +719,19 @@ export async function getFreshness() {
   const maxAgeHours = ages.length ? Math.max(...ages) : null
 
   return { status, maxAgeHours, warnHours: WARN_HOURS, staleHours: STALE_HOURS, sources }
+}
+
+// Live-sync health — did the scheduled syncs actually RUN? Separate question
+// from getFreshness() above, which measures how old the source data is. A sync
+// that stops looks exactly like a quiet day unless someone asks this.
+export async function getSyncHealth() {
+  const { rows } = await pool.query(
+    `SELECT source, MAX(imported_at) AS last_at FROM import_snapshots
+      WHERE source = ANY($1) GROUP BY source`,
+    [LIVE_SYNCS.map((s) => s.key)],
+  )
+  const lastBySource = Object.fromEntries(rows.map((r) => [r.source, r.last_at]))
+  return computeSyncHealth(lastBySource)
 }
 
 // ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────

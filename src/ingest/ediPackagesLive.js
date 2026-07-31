@@ -85,13 +85,23 @@ const round1 = (n) => Math.round(n * 10) / 10
 
 // A PO-DC identifier is only usable with BOTH halves present — the live data
 // contains junk keys ("-", "KSA-") from fulfilments with no PO or no DC.
+//
+// Splits on the LAST dash, not the first, and requires the DC to actually look
+// like one (2026-08-02). Both matter because purchase orders contain dashes:
+// Rustan's "720-0326-19551-" was being read as PO "720" in DC "0326-19551-",
+// which invented a freight destination for what is really a parcel and made it
+// count as its own departure. Real DC codes are short and alphanumeric —
+// Bloomingdale's are two letters (SC/ST/JP/CI/CG/HA/CL), Nordstrom three digits
+// (569/584/799/089…) — so anything with spaces or punctuation is not a DC.
+const DC_SHAPE = /^[A-Za-z0-9]{1,6}$/
 export function splitPoDc(poDc) {
   const s = String(poDc || '').trim()
-  const dash = s.indexOf('-')
+  const dash = s.lastIndexOf('-')
   if (dash < 1) return null
   const poNumber = s.slice(0, dash).trim()
   const dc = s.slice(dash + 1).trim()
-  return poNumber && dc ? { poNumber, dc } : null
+  if (!poNumber || !DC_SHAPE.test(dc)) return null
+  return { poNumber, dc }
 }
 
 // Pure: SuiteQL rows → the same record shape fromEdiPackagesVolume emits, so the

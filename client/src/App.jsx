@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchCustodyRegister, fetchLaunchBay } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
+import { syncHealthLine } from '../../src/model/syncHealth.js'
 import CommandCenter from './views/CommandCenter.jsx'
 import FlightDeck from './views/FlightDeck.jsx'
 import FlightPlan from './views/FlightPlan.jsx'
@@ -28,6 +29,26 @@ const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 
 // it lists every required export with its own age, so you know exactly which
 // one to re-pull — a stale IF/Invoice export silently misclassifies orders
 // (they sit at an earlier stage than they really are).
+// Live syncs have stopped arriving (2026-07-31). getFreshness above answers "how
+// old is the source data"; this answers "did the sync actually RUN", which is a
+// different failure and an invisible one — a dead sync looks exactly like a
+// quiet day. Both of this repo's silent-drift incidents were this shape: PR
+// #16's sync had no caller for a week, and the scheduled check returns 200 while
+// the NetSuite pull inside it does nothing when creds are missing on the deploy.
+// Renders nothing when healthy — no permanent "all good" bar.
+function SyncAlarm({ health }) {
+  if (!health || health.ok) return null
+  const line = syncHealthLine(health)
+  if (!line) return null
+  return (
+    <div className={'syncAlarm ' + health.status} title={health.syncs
+      .map((s) => `${s.label}: ${s.lastAt ? new Date(s.lastAt).toLocaleString() : 'never'}`).join('\n')}>
+      <span className="syncAlarmMark">{health.status === 'stale' || health.status === 'never' ? '⛔' : '⚠'}</span>
+      {line}
+    </div>
+  )
+}
+
 function FreshnessPanel({ fresh }) {
   const [open, setOpen] = useState(false)
   if (!fresh) return null
@@ -120,6 +141,7 @@ export default function App() {
   const [tasks, setTasks] = useState([])
   const [activity, setActivity] = useState([])
   const [events, setEvents] = useState([])
+  const [syncHealth, setSyncHealth] = useState(null)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('command')
   const [fresh, setFresh] = useState(null)
@@ -150,6 +172,8 @@ export default function App() {
     fetchQuestActivity().then(setActivity).catch(() => {})
     // Order-events ledger (custody scans) — folds into Calendar's day grid.
     fetchOrderEvents().then(setEvents).catch(() => {})
+    // Is the live data still arriving at all? Best-effort like the rest.
+    fetchSyncHealth().then(setSyncHealth).catch(() => setSyncHealth(null))
     // Ship desk / court strip. Best-effort like the rest: a failure just means
     // the strip doesn't render, it never blocks the app.
     fetchLabelGaps().then(setLabelGaps).catch(() => setLabelGaps(null))
@@ -259,6 +283,7 @@ export default function App() {
         {/* Whose-court strip — app-wide on purpose (Nima, 2026-07-31): the
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
+        <SyncAlarm health={syncHealth} />
         <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
