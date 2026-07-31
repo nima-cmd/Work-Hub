@@ -23,7 +23,9 @@ import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
-import { consolidateRouting } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
+import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { partnerForDc, dcLabel } from '../src/model/dc.js'
 import { extractPoDates } from '../src/ingest/orderfulDates.js'
 import { resolveLabelChips } from '../src/model/gmailLabels.js'
@@ -848,6 +850,36 @@ test('consolidateRouting rolls up multiple POs into one DC shipment', () => {
   assert.equal(cg.showUnits, false) // Bloomingdale's portal doesn't need units
 })
 
+test('netsuiteShippedVerdict confirms only when every member PO is fully shipped', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7590875: { shipped: 23, total: 23 } }
+  const v = netsuiteShippedVerdict(['7527086', '7590875'], ifs)
+  assert.equal(v.confirmed, true)
+  assert.deepEqual(v.pending, [])
+  assert.deepEqual(v.byPo.map((p) => p.state), ['shipped', 'shipped'])
+})
+
+test('netsuiteShippedVerdict holds back on a partially shipped PO and names it', () => {
+  const ifs = { 7527086: { shipped: 9, total: 9 }, 7776940: { shipped: 4, total: 16 } }
+  const v = netsuiteShippedVerdict(['7527086', '7776940'], ifs)
+  assert.equal(v.confirmed, false)
+  assert.deepEqual(v.pending, ['7776940'])
+  // the evidence survives, per-PO — never collapsed to one flag
+  assert.deepEqual(v.byPo.find((p) => p.po === '7776940'), {
+    po: '7776940', shipped: 4, total: 16, state: 'partial',
+  })
+})
+
+test('netsuiteShippedVerdict treats a PO with no fulfilments as unknown, not shipped', () => {
+  const v = netsuiteShippedVerdict(['7527064'], {})
+  assert.equal(v.confirmed, false)
+  assert.equal(v.byPo[0].state, 'unknown')
+  assert.deepEqual(v.pending, ['7527064'])
+})
+
+test('netsuiteShippedVerdict never confirms a shipment with no member POs', () => {
+  assert.equal(netsuiteShippedVerdict([], {}).confirmed, false)
+})
+
 test('consolidateRouting always rounds cubic feet UP and never to a decimal', () => {
   const rows = [
     { poNumber: 'A', dc: 'SC', weight: 10.2, cartons: 1, units: 3, cubicFeetRaw: 1.1, cubicFeetRounded: 2 },
@@ -984,4 +1016,131 @@ test('resolveLabelChips: skips an unresolvable user label, tolerates empty input
   assert.deepEqual(resolveLabelChips(['Label_99'], {}), []) // unknown Label_* dropped, not shown as gibberish
   assert.deepEqual(resolveLabelChips(), [])
   assert.deepEqual(resolveLabelChips(['STARRED'], {}), [{ id: 'STARRED', name: 'Starred' }])
+})
+
+// ── the live EDI carton feed ─────────────────────────────────────────────────
+// Field names and the rounding rule were validated against saved search
+// customsearch3947 on all six live PO-DCs; these lock the parts that are pure.
+
+test('parseBoxDims reads a box type name, whatever the case of the x', () => {
+  assert.deepEqual(parseBoxDims('24x16x17'), [24, 16, 17])
+  assert.deepEqual(parseBoxDims('24X14X4'), [24, 14, 4])
+  assert.deepEqual(parseBoxDims(' 18 x 12 x 5 '), [18, 12, 5])
+  assert.equal(parseBoxDims('Custom Mailer'), null) // not dimensional → reportable
+  assert.equal(parseBoxDims(''), null)
+})
+
+test('splitPoDc rejects the junk identifiers the live data contains', () => {
+  assert.deepEqual(splitPoDc('7242978-SC'), { poNumber: '7242978', dc: 'SC' })
+  assert.equal(splitPoDc('-'), null)      // no PO, no DC
+  assert.equal(splitPoDc('KSA-'), null)   // PO but no DC
+  assert.equal(splitPoDc('-CG'), null)    // DC but no PO
+  assert.equal(splitPoDc(null), null)
+})
+
+test('mapEdiPackageRows groups cartons per PO-DC and matches the saved search', () => {
+  // IF7402 / PO 7817926-CG: the real 9 cartons, whose search row is
+  // 9 cartons · 292 lb · 215 units · 33.5 cu ft · 36 rounded.
+  const boxes = [
+    ['24x16x17', 45, 15], ['24x16x17', 37, 27], ['24x16x17', 23, 18],
+    ['24x16x17', 30, 24], ['24x16x17', 34, 26], ['24x16x17', 33, 25],
+    ['24x16x17', 32, 24], ['24x16x17', 29, 28], ['24x16x17', 29, 28],
+  ]
+  const { rows } = mapEdiPackageRows({
+    ifs: [{ id: '2803458', po_dc: '7817926-CG' }],
+    packages: boxes.map(([box, weight, units]) => ({ if_id: '2803458', box, weight, units })),
+  })
+  assert.equal(rows.length, 1)
+  const r = rows[0]
+  assert.equal(r.poNumber, '7817926')
+  assert.equal(r.dc, 'CG')
+  assert.equal(r.cartons, 9)
+  assert.equal(r.weight, 292)
+  assert.equal(r.units, 215)
+  // 24×16×17/1728 = 3.7777… → 3.8 per carton × 9 = 34.2, NOT ceil-per-carton (36)
+  assert.equal(r.cubicFeetRaw, 34.2)
+  assert.equal(r.cubicFeetRounded, 36) // sum of per-carton ceilings
+  assert.equal(r.suggestedBol, '7817926DCCG') // the search's own BOL formula
+})
+
+test('mapEdiPackageRows rounds cubic feet PER CARTON, not once on the total', () => {
+  // The distinction is why summing raw came out light on every group: 3.7777×3
+  // = 11.33 → 11.3, but 3.8×3 = 11.4. Per-carton rounding is the search's rule.
+  const pkgs = Array.from({ length: 3 }, () => ({ if_id: '1', box: '24x16x17', weight: 10, units: 5 }))
+  const { rows } = mapEdiPackageRows({ ifs: [{ id: '1', po_dc: '9-SC' }], packages: pkgs })
+  assert.equal(rows[0].cubicFeetRaw, 11.4)
+})
+
+test('mapEdiPackageRows counts a carton but reports an unusable box type', () => {
+  const { rows, unparseableBoxes } = mapEdiPackageRows({
+    ifs: [{ id: '1', po_dc: '77-CG' }],
+    packages: [{ if_id: '1', box: 'Loose', weight: 5, units: 2 }],
+  })
+  assert.equal(rows[0].cartons, 1)      // the carton still counts
+  assert.equal(rows[0].weight, 5)
+  assert.equal(rows[0].cubicFeetRaw, 0) // but contributes no volume
+  assert.deepEqual(unparseableBoxes, ['Loose']) // and says so
+})
+
+test('mapEdiPackageRows drops cartons whose fulfilment has a junk PO-DC', () => {
+  const { rows, orphanCartons } = mapEdiPackageRows({
+    ifs: [{ id: '1', po_dc: '7242978-SC' }, { id: '2', po_dc: 'KSA-' }],
+    packages: [
+      { if_id: '1', box: '18x12x5', weight: 10, units: 3 },
+      { if_id: '2', box: '18x12x5', weight: 99, units: 99 },
+      { if_id: '3', box: '18x12x5', weight: 99, units: 99 }, // unknown fulfilment
+    ],
+  })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].weight, 10) // the junk rows never inflate a real group
+  assert.equal(orphanCartons, 2)
+})
+
+// ── outbound EDI delivery gaps ───────────────────────────────────────────────
+// Nima's ASNs read VALID in Orderful but never delivered, while NetSuite marked
+// them synced — silent on both sides. These lock the split that makes it visible.
+
+const asn = (o) => ({
+  type: '856_SHIP_NOTICE_MANIFEST', direction: 'OUT', stream: 'LIVE',
+  tradingPartner: "Bloomingdale's", ...o,
+})
+const NOW = new Date('2026-07-30T22:11:00Z')
+
+test('classifyEdiDelivery: undelivered past the grace window is stuck, inside it is in flight', () => {
+  const fresh = asn({ deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' })
+  const old = asn({ deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' })
+  assert.equal(classifyEdiDelivery(fresh, NOW).state, 'in_flight') // 46 min — could still land
+  assert.equal(classifyEdiDelivery(old, NOW).state, 'stuck')
+})
+
+test('classifyEdiDelivery: delivered-but-rejected is refused, not stuck — a re-send is the wrong fix', () => {
+  const r = classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }), NOW)
+  assert.equal(r.state, 'refused')
+  assert.match(r.reason, /REJECTED/)
+  assert.equal(classifyEdiDelivery(asn({ deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED' }), NOW).state, 'ok')
+})
+
+test('computeEdiDeliveryGaps keeps ASNs, invoices and the two failures unlumped', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: 'OLD1', deliveryStatus: 'PENDING', createdAt: '2025-01-08T16:24:00Z' }),
+    asn({ id: '2', businessNumber: 'NEW1', deliveryStatus: 'PENDING', createdAt: '2026-07-30T21:25:00Z' }),
+    asn({ id: '3', businessNumber: 'REJ1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-02-12T00:00:00Z' }),
+    { ...asn({ id: '4', businessNumber: 'INV1', deliveryStatus: 'PENDING', createdAt: '2025-10-21T00:00:00Z' }), type: '810_INVOICE' },
+  ], NOW)
+  assert.deepEqual(g.counts, {
+    asnStuck: 1, invoiceStuck: 1, asnRefused: 1, invoiceRefused: 0, asnInFlight: 1, invoiceInFlight: 0,
+  })
+  // A stuck invoice must never be counted as a stuck ASN — different urgency.
+  assert.equal(g.stuck.asn[0].businessNumber, 'OLD1')
+  assert.equal(g.stuck.invoice[0].businessNumber, 'INV1')
+  assert.equal(g.oldestAsnStuck.businessNumber, 'OLD1')
+  assert.equal(g.oldestAsnStuck.ageDays, 568)
+})
+
+test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
+  const g = computeEdiDeliveryGaps([
+    { ...asn({ id: '1', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), direction: 'IN' },
+    { ...asn({ id: '2', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), stream: 'TEST' },
+  ], NOW)
+  assert.equal(g.counts.asnStuck, 0) // a test ASN must never raise a real alert
 })

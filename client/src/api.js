@@ -764,6 +764,15 @@ export async function fetchLabelGaps() {
   return res.json()
 }
 
+// Outbound EDI documents that never reached the partner (Nima, 2026-08-01).
+// NetSuite marks the fulfilment 856-synced while Orderful still holds the
+// transaction undelivered, so nothing complains — this is the only place it shows.
+export async function fetchEdiDeliveryGaps() {
+  const res = await fetch('/api/edi-delivery-gaps')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Catalogue upload tracking (Nima, 2026-07-27)
 export async function fetchCatalogueGaps() {
   const res = await fetch('/api/catalogue/gaps')

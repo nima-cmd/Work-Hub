@@ -104,7 +104,7 @@ function Tracking({ numbers = [] }) {
 // chip sitting next to a "73" reads as noise, which is the same failure that
 // buried SO12293. Volume already lives in the Command Center stage strip; this
 // strip is only the small, aging, someone-must-act set.
-export function CourtStrip({ labelGaps, custody, bay, orders = [], onNavigate }) {
+export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false)
   if (!labelGaps) return null
 
@@ -114,6 +114,12 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], onNavigate })
   const withNestor = custody ? custody.filter((c) => c.state === 'with_warehouse').length : null
   const canShip = bay ? bay.filter((s) => s.floating).length : null
   const needsInvoice = orders.filter((o) => o.stage === STAGE.PACKED).length
+  // Outbound EDI that never reached the partner. ASNs and invoices stay apart —
+  // an unannounced shipment is a compliance chargeback, an undelivered invoice is
+  // money not asked for. `refused` is excluded from these chips on purpose: it
+  // needs reading, not re-sending, so it would dilute a re-send action.
+  const asnStuck = ediGaps?.counts?.asnStuck ?? 0
+  const invoiceStuck = ediGaps?.counts?.invoiceStuck ?? 0
 
   // The oldest ACTIONABLE parcel item, named. Freight is excluded on purpose —
   // an un-BOL'd freight shipment isn't a label problem and would only inflate
@@ -130,6 +136,10 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], onNavigate })
       title: 'EDI/freight lane — these move on a BOL, not a parcel label' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',
       title: 'Packed and waiting on an invoice' },
+    { key: 'asnStuck', n: asnStuck, label: 'ASNs never sent', tone: 'bad', to: 'edi',
+      title: 'Outbound 856s sitting undelivered in Orderful. NetSuite marks them synced, so this fails silently — the partner was never told the shipment is coming' },
+    { key: 'invoiceStuck', n: invoiceStuck, label: 'invoices never sent', tone: 'warn', to: 'edi',
+      title: 'Outbound 810s that never reached the partner — billed in NetSuite but never actually transmitted' },
     { key: 'canShip', n: canShip, label: 'can ship', tone: 'ok', to: 'launch',
       title: 'Cleared to launch — ready to go out' },
   ].filter((c) => c.n)

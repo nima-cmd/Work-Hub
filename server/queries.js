@@ -33,10 +33,12 @@ import {
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
   ensureMasterBol,
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
-  fetchCatalogueSkus,
+  fetchCatalogueSkus, fetchIfStatusByPo,
+  fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
 } from '../src/ingest/loadToDb.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
-import { consolidateRouting } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
@@ -887,6 +889,39 @@ export async function getRouting() {
     }
   })
 
+  // Annotate every shipment with NetSuite's own verdict on whether its freight
+  // has left, with the per-PO evidence attached (never one lumped flag).
+  const ifsByPo = await fetchIfStatusByPo(shipments.flatMap((s) => s.memberPos || []))
+  // The EDI paper trail: prefer the frozen snapshot taken at archive time, fall
+  // back to the live derivation for shipments not yet archived. So a BOL's 850 →
+  // 856 reference is visible before it's archived and preserved after.
+  const [lineages, snapshots] = await Promise.all([
+    fetchShipmentEdiLineage(shipments.map((s) => s.bolNumber)),
+    fetchShipmentEdiSnapshots(),
+  ])
+  for (const s of shipments) {
+    s.netsuite = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
+    const live = lineages[String(s.bolNumber)] || null
+    const snap = snapshots[s.id] || null
+    s.edi = live
+      ? { ...live, snapshotAt: snap?.capturedAt || null }
+      : snap
+        ? {
+            asn: {
+              transactionId: snap.asnTransactionId, businessNumber: snap.asnBusinessNumber,
+              createdAt: snap.asnCreatedAt, deliveryStatus: snap.asnDeliveryStatus,
+              ackStatus: snap.asnAckStatus,
+            },
+            po850: snap.poLinks || [],
+            poRefs: (snap.poLinks || []).map((p) => p.po),
+            fromSnapshot: true, snapshotAt: snap.capturedAt,
+          }
+        : null
+    // An ASN went out but NetSuite still doesn't call it shipped — a real gap,
+    // surfaced rather than used to auto-archive.
+    s.asnAheadOfNetsuite = !!(s.edi?.asn && !s.netsuite.confirmed)
+  }
+
   const byKey = new Map()
   for (const s of shipments) byKey.set(s.dcPoKey, s)
 
@@ -1115,6 +1150,16 @@ async function computeRoutingGaps({ packages, shipments }) {
 
 export async function setShipmentShipped(id, shipped = true) {
   await markShipmentShipped(id, shipped)
+  // Archiving by hand freezes the EDI paper trail too, exactly as the sync's
+  // auto-archive does — otherwise a manually-shipped BOL loses its 850/856
+  // reference the moment those transactions age out of the Orderful window.
+  if (shipped) {
+    const s = await fetchRoutingShipmentById(id)
+    if (s?.bolNumber) {
+      const lineage = (await fetchShipmentEdiLineage([s.bolNumber]))[String(s.bolNumber)]
+      if (lineage) await saveShipmentEdiLineage(id, s.bolNumber, lineage)
+    }
+  }
   return getRouting()
 }
 
@@ -1991,3 +2036,12 @@ export async function getTaskActivity(date) {
 }
 
 export { NETSUITE_DOC_TYPES }
+
+// ── Did the document actually reach the partner? (Nima, 2026-08-01) ──────────
+// See src/model/ediDelivery.js. Reads the synced Orderful transactions and splits
+// the two silent failures — never delivered vs delivered-and-refused — keeping
+// ASNs apart from invoices.
+export async function getEdiDeliveryGaps() {
+  const txns = await fetchEdiTransactions()
+  return computeEdiDeliveryGaps(txns)
+}

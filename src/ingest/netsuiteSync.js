@@ -282,7 +282,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
   const {
     loadOrders, loadFulfillments, loadInvoices, recordSnapshot,
     stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
-    reconcileFulfillments,
+    reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
   } = await import('./loadToDb.js')
 
   const ROLLBACK = Symbol('dry-run rollback')
@@ -298,8 +298,15 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
       // Kill fulfillments that no longer exist in NetSuite, scoped to the SOs we
       // actually pulled (see reconcileFulfillments — never a whole-table prune).
       const nPhantoms = await reconcileFulfillments(pulled.soNumbers, pulled.ifNumbers, db)
+      // Freight NetSuite now says has fully shipped shouldn't still sit on the
+      // active routing board (Nima, 2026-08-01 — 7 Bloomingdale's BOLs were
+      // stuck there only because nothing ever ran this sync).
+      const archived = await archiveNetsuiteShippedShipments(db)
+      // Keep already-frozen EDI snapshots current while their 856 is still in
+      // the Orderful window (a fresh ASN is PENDING for hours before the 997).
+      const nEdiRefreshed = await refreshShipmentEdiSnapshots(db)
       await recordSnapshot('netsuiteLive', orders.length, new Date(), db)
-      const out = { nOrders, nFul, nInv, nCredits, nPhantoms }
+      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed }
       if (dryRun) {
         const e = new Error('dry run')
         e.code = ROLLBACK

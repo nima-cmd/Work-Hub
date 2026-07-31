@@ -445,6 +445,15 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
             {s.shippedAt
               ? <span className="rt-shippedTag" title={`Shipped ${new Date(s.shippedAt).toLocaleString()}`}>✓ shipped {new Date(s.shippedAt).toLocaleDateString()}</span>
               : !detached && <button className="btnGhost" disabled={busy === 'void' + s.id} onClick={() => onVoid(s)}>Void</button>}
+            {/* The ASN went out but NetSuite still doesn't call the freight shipped
+                — surfaced, never used to auto-archive. Names the lagging POs so
+                it points at a specific fix rather than a lumped count. */}
+            {s.asnAheadOfNetsuite && !s.shippedAt && (
+              <span className="rt-asnAhead"
+                title={`856 transmitted, but NetSuite hasn't marked every IF shipped for PO ${(s.netsuite?.pending || []).join(', ')} — go mark them shipped.`}>
+                856 sent · NetSuite behind ({(s.netsuite?.pending || []).join(', ')})
+              </span>
+            )}
           </div>
           {onShip && (
             <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '')} disabled={busy === 'ship' + s.id}
@@ -456,6 +465,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 
           <BolActions s={s} />
           <RefSummary s={s} />
+          <EdiTrail s={s} />
           <EmailLinks docType="ROUTING_SHIPMENT" docNumber={s.id} compact />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
             {editing ? '▾ Route info' : '✎ Route info'}
@@ -566,6 +576,66 @@ function RefSummary({ s }) {
   return (
     <div className="rt-refSummary">
       {bits.map(([k, v]) => <span key={k} className="rt-refBit"><span className="muted">{k}</span> {v}</span>)}
+    </div>
+  )
+}
+
+// The EDI paper trail for a BOL: the 850(s) that ordered it and the 856 that
+// announced it, with Orderful transaction ids so you can go straight back to the
+// document. Kept as a disclosure rather than always-open — it's reference
+// material, not work, and the routing board's job is to show what needs doing.
+function EdiTrail({ s }) {
+  const [open, setOpen] = useState(false)
+  const edi = s.edi
+  if (!edi?.asn) {
+    // Archived with no ASN found is worth saying out loud — an EDI partner
+    // shipment with no 856 means the ship notice never went out.
+    if (!s.shippedAt) return null
+    return <div className="rt-ediTrail none" title="No outbound 856 was found for this BOL number.">⚠ no 856 on file for this BOL</div>
+  }
+  const linked = (edi.po850 || []).filter((p) => p.transactionId)
+  const ok = edi.asn.ackStatus === 'ACCEPTED'
+  const rejected = edi.asn.ackStatus === 'REJECTED'
+  return (
+    <div className="rt-ediTrail">
+      <button className="rt-ediToggle" onClick={() => setOpen((o) => !o)}
+        title="The 850 → BOL → 856 reference for this shipment">
+        {open ? '▾' : '▸'} EDI trail
+        <span className="rt-ediChip">{linked.length} × 850</span>
+        <span className={'rt-ediChip asn' + (rejected ? ' bad' : ok ? ' ok' : ' pending')}>
+          856 {rejected ? 'rejected' : ok ? 'accepted' : 'pending'}
+        </span>
+      </button>
+      {open && (
+        <div className="rt-ediBody">
+          <div className="rt-ediRow">
+            <span className="rt-ediKind out">856</span>
+            <span className="rt-ediNum">{edi.asn.businessNumber}</span>
+            <span className="muted">tx {edi.asn.transactionId}</span>
+            {edi.asn.createdAt && <span className="muted">sent {String(edi.asn.createdAt).slice(0, 10)}</span>}
+            <span className="muted">{edi.asn.deliveryStatus}/{edi.asn.ackStatus}</span>
+          </div>
+          {(edi.po850 || []).map((p) => (
+            <div className="rt-ediRow" key={p.po}>
+              <span className="rt-ediKind in">850</span>
+              <span className="rt-ediNum">PO {p.po}</span>
+              {p.transactionId
+                ? <>
+                    <span className="muted">tx {p.transactionId}</span>
+                    {p.createdAt && <span className="muted">rec'd {String(p.createdAt).slice(0, 10)}</span>}
+                    {p.totalUnits != null && <span className="muted">{p.totalUnits} units</span>}
+                  </>
+                : <span className="rt-ediMissing">no 850 on file</span>}
+            </div>
+          ))}
+          {edi.snapshotAt && (
+            <div className="rt-ediSnap muted">
+              archived reference frozen {new Date(edi.snapshotAt).toLocaleDateString()}
+              {edi.fromSnapshot && ' · transaction has aged out of Orderful'}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
