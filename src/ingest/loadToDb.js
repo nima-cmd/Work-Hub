@@ -130,20 +130,49 @@ export async function reconcileFulfillments(soNumbers, liveIfNumbers, db = pool)
 // is lost. An approved ship still sitting here a day after its launch day is
 // exactly that miss. Idempotent: one REACHED_APPROVED per IF, ever — so the
 // launch day is pinned to first observation and never drifts on re-imports.
+//
+// ⚠️ The original signal here — `packedStatus` "Approved to Ship" — comes ONLY
+// from the `unpackedFulfillments` CSV, whose last import was 2026-07-09. So this
+// stamped 11 IFs ever (last one 2026-07-27) and then went silent, which meant the
+// delay warning could never fire again no matter how long a cleared shipment sat.
+// The live equivalent is the invoice's own gate (`custbody_invoice_status` = 3),
+// which reaches an IF through its linked invoice — so both signals are accepted.
+//
+// The invoice route has no real "approved at" timestamp: NetSuite stores the
+// state, not when it changed. That makes this an OBSERVED event (occurred_at =
+// first sync that saw it), which is honest to within one sync interval and is
+// noted as such on the row — as opposed to backdating it to the invoice date,
+// which would invent a float that never happened.
 export async function stampApprovedForShipping(records, db = pool) {
+  // invoice → its gate string, so an IF record can be judged by the invoice it
+  // was linked to in this same pull.
+  const gateByInvoice = new Map()
+  for (const r of records) {
+    if (r.invoice && r.shippingStatus) gateByInvoice.set(r.invoice, r.shippingStatus)
+  }
+  const approvedByGate = (r) =>
+    /approved for shipping/i.test(gateByInvoice.get(r.invoice) || '')
+
   let n = 0
   for (const r of records) {
     if (!r.ifNumber) continue
-    if (!/approved to ship/i.test(r.packedStatus || '')) continue
+    // Already gone — the float is over, and a stamp now would only age noise.
+    if (r.actualShipDate) continue
+    if (!/approved to ship/i.test(r.packedStatus || '') && !approvedByGate(r)) continue
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    // Say which signal cleared it, and that the date is an observation — a reader
+    // of the ledger can then tell a real approval date from a first-sighting.
+    const note = approvedByGate(r)
+      ? `observed cleared by ${r.invoice} (invoice gate)`
+      : 'observed cleared by the fulfilment status'
     const { rowCount } = await db.query(
-      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, source)
-       SELECT 'REACHED_APPROVED', 'IF', $1, $2, 'derived'
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, source, note)
+       SELECT 'REACHED_APPROVED', 'IF', $1, $2, 'derived', $3
        WHERE NOT EXISTS (
          SELECT 1 FROM order_events
          WHERE event_type = 'REACHED_APPROVED' AND doc_type = 'IF' AND doc_number = $1
        )`,
-      [r.ifNumber, so],
+      [r.ifNumber, so, note],
     )
     n += rowCount
   }

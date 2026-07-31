@@ -2313,6 +2313,25 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .gapRow.sev-mid .gapAge { color: var(--mid); }
 .gapCust { font-size: 12px; color: #cfe3ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Which date to mark it shipped ON (step 6). The date is monospaced and loud
+   because it's meant to be read off the screen and typed into NetSuite; the
+   evidence sits underneath in muted text so the claim is never bigger than what
+   the app actually knows. */
+.deskAlarm { display: block; margin-top: 4px; color: var(--hi); font-weight: 700; }
+.gapDate { margin-top: 5px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.gapDateWhen { font: 700 12px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.2px; }
+.gapDateWhy { font-size: 10.5px; color: var(--muted); }
+.gapDateDrift { font-size: 10.5px; color: var(--muted); margin-left: auto; }
+.gapDateOk   .gapDateWhen { color: #9fe6b0; }
+.gapDateWarn .gapDateWhen { color: var(--mid); }
+.gapDateBad  .gapDateWhen { color: var(--hi); }
+.gapDateTag {
+  margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.4px; padding: 1px 5px; border-radius: 4px;
+  color: var(--hi); background: rgba(248,81,73,0.14); border: 1px solid rgba(248,81,73,0.34);
+}
+.gapDateNone { font-size: 11px; color: var(--muted); font-style: italic; }
+
 /* Tracking numbers: click to copy — the next step is pasting them somewhere. */
 .trkList { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .trk {
