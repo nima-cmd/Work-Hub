@@ -32,7 +32,12 @@ export const STAGE_LABEL = {
   // Naming (Nima, 2026-07-21): the early stages read in NetSuite terms —
   // on-hold = SO awaiting approval, open = approved SO awaiting fulfillment,
   // picked = an Item Fulfillment has been created.
-  [STAGE.ON_HOLD]: 'Sales Order — Pending Approval',
+  //
+  // "On Hold" rather than "Pending Approval" (2026-07-31): in this account the
+  // native Pending-Approval status is never used, and a hold is carried on
+  // custbody_approval_status = 2 "On Hold" while the order still reads Pending
+  // Fulfillment. The label has to match what Nima sees in NetSuite.
+  [STAGE.ON_HOLD]: 'Sales Order — On Hold',
   [STAGE.OPEN]: 'Sales Order — Pending Fulfillment',
   [STAGE.PICKED]: 'Item Fulfillment',
   [STAGE.PACKED]: 'Packed — watching for invoice',

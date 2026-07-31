@@ -7,6 +7,7 @@ import {
   mapOrderRow, mapFulfillmentRow, mapInvoiceRow,
   windowStart, orderSql, fulfillmentSql, invoiceSql,
   SO_STATUS, IF_STATUS, INV_STATUS, SO_OPEN_CODES, SO_TERMINAL_CODES,
+  APPROVAL_ON_HOLD, APPROVAL_APPROVED,
 } from '../src/ingest/netsuiteSync.js'
 import { STAGE } from '../src/model/stages.js'
 
@@ -106,4 +107,39 @@ test('queries scope to open OR the recent window, and are SELECT-only', () => {
     assert.match(sql, /PreviousTransactionLineLink/)
     assert.match(sql, /SELECT DISTINCT/i)
   }
+})
+
+test('mapOrderRow: an On Hold order is NOT pending fulfilment', () => {
+  // The bug this fixes. In this account the native Pending-Approval status is
+  // never used — a held order still reads status B "Pending Fulfillment" and the
+  // hold lives only on custbody_approval_status. Measured live 2026-07-31: all
+  // 27 held orders were sitting in Kanban's Pending Fulfillment as work to start.
+  const held = mapOrderRow({ tranid: 'SO12303', customer: 'Joseph- New Orleans', status: 'B', approval_status: APPROVAL_ON_HOLD })
+  assert.equal(held.stage, STAGE.ON_HOLD)
+  // NetSuite's own status string stays honest — it really does say Pending
+  // Fulfillment. Only the stage (and so the queue) changes.
+  assert.equal(held.soStatus, 'Pending Fulfillment')
+})
+
+test('mapOrderRow: approved and unset both stay OPEN', () => {
+  assert.equal(mapOrderRow({ tranid: 'SO1', status: 'B', approval_status: APPROVAL_APPROVED }).stage, STAGE.OPEN)
+  // Absent field must not be read as held — the CSV path supplies no such value.
+  assert.equal(mapOrderRow({ tranid: 'SO2', status: 'B' }).stage, STAGE.OPEN)
+  assert.equal(mapOrderRow({ tranid: 'SO3', status: 'B', approval_status: null }).stage, STAGE.OPEN)
+})
+
+test('mapOrderRow: SuiteQL hands the custom list back as a STRING', () => {
+  // It arrives as "2", not 2. A === comparison against the number silently never
+  // matches, which is the same shape of bug as reading the field not at all.
+  assert.equal(mapOrderRow({ tranid: 'SO4', status: 'B', approval_status: '2' }).stage, STAGE.ON_HOLD)
+})
+
+test('orderSql: asks for the approval field — the hold is invisible without it', () => {
+  assert.match(orderSql('2026-06-30'), /custbody_approval_status/)
+})
+
+test('a shipped order stays shipped even if it was once held', () => {
+  // Terminal wins: a held-then-closed order must not reappear as work.
+  const r = mapOrderRow({ tranid: 'SO5', status: 'G', approval_status: APPROVAL_ON_HOLD })
+  assert.equal(r.stage, STAGE.SHIPPED)
 })
