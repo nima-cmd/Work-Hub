@@ -26,7 +26,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
-  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth,
+  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
@@ -153,6 +153,15 @@ app.get('/api/ledger', async (req, res) => {
 
 // Departures counted as SHIPMENTS (Nima, 2026-08-02) — one BOL is one departure
 // however many item fulfilments it covers. ?from/&to bound the window.
+app.get('/api/health', async (_req, res) => {
+  try {
+    res.json(await getHealth())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.get('/api/sync-health', async (_req, res) => {
   try {
     res.json(await getSyncHealth())

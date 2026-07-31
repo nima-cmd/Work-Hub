@@ -860,3 +860,11 @@ export async function fetchLedgerDaily({ from = null, to = null } = {}) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Health — what's configured, what's arriving. Returns booleans and variable
+// NAMES only; the server never sends a credential value.
+export async function fetchHealth() {
+  const res = await fetch('/api/health')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

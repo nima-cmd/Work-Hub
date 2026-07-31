@@ -18,6 +18,7 @@ import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
 import Datapad from './views/Datapad.jsx'
 import Ledger from './views/Ledger.jsx'
+import Health from './views/Health.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
 import ScanBay from './views/ScanBay.jsx'
 import CustodyRegister from './views/CustodyRegister.jsx'
@@ -125,6 +126,7 @@ const VIEWS = [
   { key: 'tasks', label: 'Tasks', C: Tasks },
   // Chronicle of completed work — done tasks by completion day (Nima, 2026-07-28).
   { key: 'ledger', label: 'Ledger', C: Ledger },
+  { key: 'health', label: 'Health', C: Health },
   { key: 'transmissions', label: 'Transmissions', C: Transmissions },
   { key: 'crew', label: 'Crew', C: Crew },
   { key: 'datapad', label: 'Datapad', C: Datapad },

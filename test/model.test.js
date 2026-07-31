@@ -1449,3 +1449,66 @@ test('syncHealth: the line names the sync — an anonymous warning gets ignored'
   assert.match(line, /2d 2h/, 'days once past 24h, not "50h"')
   assert.match(line, /and 1 other/, 'says how many more are affected')
 })
+
+// ── Health: connections & data flow (2026-07-31) ─────────────────────────────
+// Built after the deploy went 13h without a NetSuite sync while its cron
+// returned 200 every run. The cause was five env vars missing on Render, and the
+// reason nothing complained is structural: EVERY integration here is gated on an
+// xConfigured() check and skips silently when unset. Right for local dev,
+// dangerous in production — so absence must report as loudly as failure.
+import { computeIntegrationHealth, overallHealth, INTEGRATIONS } from '../src/model/health.js'
+
+const allSet = () => {
+  const p = {}
+  for (const i of INTEGRATIONS) for (const v of [...i.vars, ...(i.optional || [])]) p[v] = true
+  return p
+}
+
+test('health: names the missing variables — that IS the fix', () => {
+  const p = allSet()
+  delete p.NS_TOKEN_ID
+  delete p.NS_TOKEN_SECRET
+  const ns = computeIntegrationHealth(p).find((i) => i.key === 'netsuite')
+  assert.equal(ns.configured, false)
+  assert.deepEqual(ns.missing, ['NS_TOKEN_ID', 'NS_TOKEN_SECRET'])
+})
+
+test('health: a missing optional key is "partial", not broken', () => {
+  // No V2 key means no live rate comparison, but billed history still works.
+  const p = allSet()
+  delete p.SHIPSTATION_API_KEY_V2
+  const ss = computeIntegrationHealth(p).find((i) => i.key === 'shipstation')
+  assert.equal(ss.configured, true)
+  assert.equal(ss.partial, true)
+  assert.deepEqual(ss.missingOptional, ['SHIPSTATION_API_KEY_V2'])
+})
+
+test('health: a missing credential outranks a stale sync — it is usually the CAUSE', () => {
+  // The exact 2026-07-31 shape: NS_* absent on the deploy, netsuiteLive 13h old.
+  const p = allSet()
+  for (const v of INTEGRATIONS.find((i) => i.key === 'netsuite').vars) delete p[v]
+  const integrations = computeIntegrationHealth(p)
+  const v = overallHealth({ integrations, syncs: { status: 'stale' } })
+  assert.equal(v.status, 'broken')
+  assert.match(v.headline, /NetSuite is not configured — 5 variables missing/)
+  assert.match(v.detail, /why the data below is stale/, 'connects the two symptoms')
+})
+
+test('health: a stale sync with everything configured reads as its own problem', () => {
+  const v = overallHealth({ integrations: computeIntegrationHealth(allSet()), syncs: { status: 'warn' } })
+  assert.equal(v.status, 'stale')
+  assert.equal(v.detail, null)
+})
+
+test('health: all good says so', () => {
+  const v = overallHealth({ integrations: computeIntegrationHealth(allSet()), syncs: { status: 'ok' } })
+  assert.equal(v.status, 'ok')
+})
+
+test('health: every integration declares what breaks without it', () => {
+  // A row that just says "not configured" tells you nothing actionable.
+  for (const i of INTEGRATIONS) {
+    assert.ok(i.powers?.length, `${i.key} must say what it powers`)
+    assert.ok(i.ifMissing?.length, `${i.key} must say what happens when it's absent`)
+  }
+})

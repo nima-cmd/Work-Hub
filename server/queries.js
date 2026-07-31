@@ -41,6 +41,7 @@ import {
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
 import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
+import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
@@ -732,6 +733,23 @@ export async function getSyncHealth() {
   )
   const lastBySource = Object.fromEntries(rows.map((r) => [r.source, r.last_at]))
   return computeSyncHealth(lastBySource)
+}
+
+// Health — what's configured, what's reachable, what's still arriving. Built
+// after the deploy went 13h without a NetSuite sync while its cron returned 200
+// on every run: the creds were simply absent, and a missing credential is not an
+// error anywhere in this app (every integration skips quietly when unset).
+//
+// ⚠️ Sends BOOLEANS and VARIABLE NAMES only — never a credential value. The
+// presence map is built here and nothing downstream can see more than that.
+export async function getHealth() {
+  const present = {}
+  for (const i of INTEGRATIONS) {
+    for (const v of [...i.vars, ...(i.optional || [])]) present[v] = Boolean(process.env[v])
+  }
+  const integrations = computeIntegrationHealth(present)
+  const syncs = await getSyncHealth()
+  return { overall: overallHealth({ integrations, syncs }), integrations, syncs }
 }
 
 // ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────
