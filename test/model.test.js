@@ -936,7 +936,7 @@ test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', ()
 // the freight weight (411 freight + 1 pallet = 454). Pallets are counted ONLY
 // on the master (Nima, 2026-07-29): per-DC child BOLs — and a master before its
 // count is entered — show NO pallet count and plain freight weight.
-import { palletWeight } from '../server/bolPdf.js'
+import { palletWeight, dcTag } from '../server/bolPdf.js'
 
 test('palletWeight: master BOL uses the manual count and adds 43 lb tare per pallet', () => {
   assert.deepEqual(palletWeight({ isMaster: true, palletCount: 1, weightLb: 411 }),
@@ -959,6 +959,31 @@ test('palletWeight: a per-DC child BOL never shows pallets — blank H.U. + plai
   // Even a stray palletCount off the master is ignored — pallets are master-only.
   assert.deepEqual(palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 }),
     { hu: '', weight: 90, manual: false })
+})
+
+// The big header DC callout (Nima, 2026-08-02) — on a Bloomingdale's BOL the
+// ship-to ADDRESS is the merge center, so before this the destination DC only
+// appeared in a small line inside the address box, and matching cartons to the
+// right BOL at labelling time was error-prone.
+test('dcTag: a Bloomingdale\'s DC prints its code AND its name', () => {
+  assert.equal(dcTag('CG', 'final'), 'FINAL DC: CG — China Grove DC')
+  assert.equal(dcTag('SC', 'final'), 'FINAL DC: SC — Secaucus')
+})
+
+test('dcTag: a numeric Nordstrom DC prints the bare code, not "DC DC 799"', () => {
+  // dcLabel('799') is already "DC 799", so echoing it would read "FINAL DC: DC 799".
+  assert.equal(dcTag('799', 'final'), 'FINAL DC: 799')
+  assert.equal(dcTag('089', 'final'), 'FINAL DC: 089')
+})
+
+test('dcTag: a master BOL names NO single DC — it aggregates several', () => {
+  // Printing one DC on a master would actively mislabel the shipment.
+  assert.equal(dcTag('CG', 'master'), 'MASTER BOL — MULTIPLE DCs')
+})
+
+test('dcTag: no DC yields no callout rather than a stray "FINAL DC:" label', () => {
+  assert.equal(dcTag('', 'final'), '')
+  assert.equal(dcTag(null, 'final'), '')
 })
 
 // ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────

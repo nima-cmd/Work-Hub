@@ -48,6 +48,22 @@ function fmtDate(d) {
   return String(d).slice(0, 10)
 }
 
+// The final DC, big enough to read across a warehouse (Nima, 2026-08-02). On a
+// Bloomingdale's BOL the ship-to ADDRESS is the merge center, so the only thing
+// naming the actual destination was a small line inside the address box — which
+// made matching cartons to the right BOL error-prone at labelling time. A master
+// BOL deliberately names no DC: it aggregates several, and printing one would be
+// wrong. dcLabel() already renders a numeric Nordstrom DC as "DC 799", so the
+// code isn't repeated for those.
+export function dcTag(dc, kind) {
+  if (kind === 'master') return 'MASTER BOL — MULTIPLE DCs'
+  const code = String(dc || '').trim()
+  if (!code) return ''
+  const label = dcLabel(code)
+  const adds = label && label !== code && label !== `DC ${code}`
+  return adds ? `FINAL DC: ${code} — ${label}` : `FINAL DC: ${code}`
+}
+
 const L = {
   liability: 'NOTE: Liability Limitation for loss or damage in this shipment may be applicable. See 49 U.S.C. 14706(c)(1)(A) and (B).',
   received: 'RECEIVED, subject to individually determined rates or contracts that have been agreed upon in writing between the carrier and shipper, if applicable, otherwise to the rates, classifications and rules that have been established by the carrier and are available to the shipper, on request, and to all applicable state and federal regulations.',
@@ -97,7 +113,11 @@ function render(doc, shipment, kind) {
   // ── Header ──────────────────────────────────────────────────────────────
   doc.font('Helvetica').fontSize(7).fillColor('#000')
     .text(shipment.shipDate ? `Date: ${fmtDate(shipment.shipDate)}` : 'Date:', M, y + 3)
-  doc.font('Helvetica-Bold').fontSize(9).text('Page ______', rX, y + 3, { width: half, align: 'right' })
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#000').text('Page ______', rX, y + 3, { width: half, align: 'right' })
+  // Centred between them so it reads at a glance without moving the VICS grid —
+  // 13pt bold fits the existing 16pt header band, so nothing below shifts.
+  const tag = dcTag(shipment.dc, kind)
+  if (tag) doc.font('Helvetica-Bold').fontSize(13).fillColor(RED).text(tag, M, y + 1, { width: W, align: 'center' })
   y += 16
 
   // ── Ship From | Bill of Lading Number + barcode ─────────────────────────
