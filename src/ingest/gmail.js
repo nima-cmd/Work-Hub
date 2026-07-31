@@ -190,7 +190,10 @@ export async function markMessageSpam(id) {
 }
 
 // Finds a label by name, creating it if it doesn't exist yet, then applies it
-// to the message. Returns the label so callers can surface its name/id.
+// to the message. The modify endpoint returns the updated Message resource, so
+// we hand back its `labelIds` too — that's Gmail's own confirmation the label
+// stuck ("ensure it got added"), which the caller persists locally so the chip
+// shows immediately instead of waiting for the next full sync.
 export async function applyLabel(id, labelName) {
   const token = await getAccessToken()
   const { labels } = await apiFetch(token, `${GMAIL_API}/labels`)
@@ -201,9 +204,9 @@ export async function applyLabel(id, labelName) {
       body: { name: labelName, labelListVisibility: 'labelShow', messageListVisibility: 'show' },
     })
   }
-  await apiFetch(token, `${GMAIL_API}/messages/${id}/modify`, {
+  const updated = await apiFetch(token, `${GMAIL_API}/messages/${id}/modify`, {
     method: 'POST',
     body: { addLabelIds: [label.id] },
   })
-  return label
+  return { label, labelIds: updated.labelIds || [] }
 }

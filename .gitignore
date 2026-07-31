@@ -7,3 +7,6 @@ dist/
 # raw exports / customer data — never commit
 /data/
 *.local.csv
+
+# scanner spike sample (large, do not commit)
+client/public/_sample.pdf

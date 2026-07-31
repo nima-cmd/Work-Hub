@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   fetchQuestEmails, syncQuestEmails, markQuestEmailRead,
   assignQuestEmailCharacter, applyQuestEmailLabel, dismissQuestEmail,
@@ -8,12 +8,26 @@ import {
 } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
 import { speakLine, taskContext } from '../../../src/model/dialogue.js'
+import { resolveLabelChips } from '../../../src/model/gmailLabels.js'
 import TradingCard from '../lib/TradingCard.jsx'
 import { fmtAge, LinkedText, DocLinks } from '../lib.jsx'
 
 function initials(name) {
   if (!name) return '?'
   return name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+}
+
+// The Gmail labels a transmission carries, as small chips. Noise (INBOX/UNREAD/
+// CATEGORY_*/…) is filtered by resolveLabelChips; user `Label_*` ids resolve
+// through nameById (the same list that feeds the "Label…" picker).
+function LabelChips({ labelIds, nameById }) {
+  const chips = resolveLabelChips(labelIds, nameById)
+  if (!chips.length) return null
+  return (
+    <div className="labelChips">
+      {chips.map((c) => <span key={c.id} className="labelChip">🏷 {c.name}</span>)}
+    </div>
+  )
 }
 
 const isUrl = (s) => /^https?:\/\//i.test((s || '').trim())
@@ -104,6 +118,13 @@ export default function Transmissions({ onNavigate } = {}) {
   const [affection, setAffection] = useState([])
   const importRef = useRef(null)
   const importTaskRef = useRef(null) // which task's import button opened the picker
+
+  // id→name for the user's own Gmail labels, for resolving chips (system
+  // labels resolve from a static map inside resolveLabelChips).
+  const labelNameById = useMemo(
+    () => Object.fromEntries(gmailLabels.map((l) => [l.id, l.name])),
+    [gmailLabels],
+  )
 
   function load() {
     fetchQuestEmails().then(setReview).catch((e) => setErr(e.message))
@@ -558,6 +579,7 @@ export default function Transmissions({ onNavigate } = {}) {
                           </div>
                         </div>
                         <div className="holoSubject">{e.subject}</div>
+                        <LabelChips labelIds={e.labelIds} nameById={labelNameById} />
                         <p className="holoSnippet">{e.snippet}</p>
                         {e.dismissed && (
                           <div className="holoActions">
@@ -685,6 +707,7 @@ export default function Transmissions({ onNavigate } = {}) {
                       <span>From: {e.fromName || e.fromAddress || 'unknown'}</span>
                     </div>
                     <div className="holoSubject">{e.subject}</div>
+                    <LabelChips labelIds={e.labelIds} nameById={labelNameById} />
                     {e.note && <div className="ledgerNote">📌 {e.note}</div>}
                     <DocLinks docType="EMAIL" docNumber={e.id} selfLabel={e.subject} />
                   {isOpen && (

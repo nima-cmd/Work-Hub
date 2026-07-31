@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS fulfillments (
 
 ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS actual_ship_date DATE;
 
+-- Carrier tracking numbers on the IF (2026-07-30), pulled from NetSuite's
+-- TrackingNumberMap → trackingnumber join. An array because a multi-box shipment
+-- carries several (IF7285 and IF7268 each have two). These power two checks Nima
+-- asked for: an IF that HAS tracking but is still "Packed" was labelled and
+-- physically shipped and just never got marked shipped in NetSuite (that's the
+-- SO12288/SO12293 case) — while a packed IF with NO tracking is one that still
+-- genuinely needs a label.
+ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[];
+
 -- ── Invoices linked to an order ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS invoices (
   inv_number       TEXT PRIMARY KEY,
@@ -71,6 +80,15 @@ CREATE TABLE IF NOT EXISTS invoices (
   ship_date        DATE,
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
+
+-- Invoice TOTAL, distinct from amount_remaining (2026-07-30). The shipped-$
+-- credit (stampShippedValue) valued a shipment by what was still OWED at ship
+-- time — fine while Naghedi ships FOB/pre-payment and we observe it unpaid, but
+-- it credits $0 for any shipment we first see after payment landed (exactly the
+-- recently-closed orders the live NetSuite pull now surfaces). The total is the
+-- stable value, so it's the fallback. Populated from the live pull's
+-- `foreigntotal`; nullable for rows that predate this.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS amount_total NUMERIC;
 
 -- ── Purchase Orders (inbound supply) — from the PO-receiving saved search ─────
 CREATE TABLE IF NOT EXISTS purchase_orders (
@@ -152,16 +170,12 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;
 
--- ── Activity log per order — follow-ups, handoffs, inquiries ──────────────────
--- Drives the "lost visibility" fix (explicit warehouse handoff + acknowledgment)
--- and gives an audit trail of who chased what, when.
-CREATE TABLE IF NOT EXISTS order_activity (
-  id               SERIAL PRIMARY KEY,
-  so_number        TEXT REFERENCES orders(so_number) ON DELETE CASCADE,
-  kind             TEXT,                         -- 'handoff' | 'ack' | 'inquiry' | 'note'
-  note             TEXT,
-  created_at       TIMESTAMPTZ DEFAULT now()
-);
+-- ── order_activity: REMOVED 2026-08-02 ───────────────────────────────────────
+-- An early sketch of a per-order audit trail that was never wired up: it held 0
+-- rows and had no reader or writer anywhere in the codebase. `order_events`
+-- below is the real ledger and does the job properly. Dropped so a future reader
+-- can't mistake this for the ledger and build against an empty table.
+DROP TABLE IF EXISTS order_activity;
 
 -- ── Import snapshots — one row per CSV import ────────────────────────────────
 -- Lets us detect stalls ("stuck N imports in a row") that a single search can't show.
@@ -592,10 +606,45 @@ ON CONFLICT (key) DO NOTHING;
 -- Custody rows are append-only on purpose: re-handoffs happen (an IF can go
 -- back out after a fix), so state = the LATEST OUT vs latest IN, and the full
 -- history stays queryable.
+--
+-- ── The document-transition spine (2026-08-02) ───────────────────────────────
+-- The "join later" above is now done. src/model/orderEvents.js derives the rest
+-- of the pipeline from synced document state, and deriveOrderEvents() in
+-- src/ingest/loadToDb.js writes it at the end of every sync (CSV import, live
+-- NetSuite pull, and the CLI ingest alike). Full event vocabulary:
+--
+--   SO_IMPORTED       SO   orders.first_seen
+--   IF_CREATED        IF   fulfillments.if_date
+--   CUSTODY_OUT/IN    IF   QR scans          (written by the scan handlers)
+--   PACKED            IF   status = Packed   — observed, see below
+--   INVOICED          INV  invoice exists    — observed
+--   REACHED_APPROVED  IF   packed_status     (written by stampApprovedForShipping)
+--   PAID              INV  status = Paid In Full — observed
+--   ROUTED            DC   routing_shipment.bol_generated_at
+--   DEPARTED          IF   fulfillments.actual_ship_date
+--   ASN_SENT          PO   856 OUT/LIVE transmitted to Orderful
+--   INVOICE_SENT      PO   810 OUT/LIVE transmitted to Orderful
+--
+-- Two other event types predate the spine and are written elsewhere:
+-- SHIPPED_VALUE (a shipment's dollar value, note = the amount) and
+-- CUSTODY_CLEARED (departure cleanup; pinned to the ship date).
+--
+-- ⚠️ occurred_at is NOT uniformly trustworthy, and that is deliberate. Most
+-- events carry a real date from the source row. PACKED / INVOICED / PAID have no
+-- recorded date anywhere in NetSuite's saved-search shape — we only ever see the
+-- state a document is in right now — so their occurred_at is when the sync first
+-- OBSERVED that state, accurate to within one sync interval. The backfill refuses
+-- to write those at all rather than date 98 invoices "today" and invent a history
+-- that never happened. Anything reading this table for a precise date should
+-- prefer the events above that are not marked observed.
+--
+-- Idempotent by (event_type, doc_type, doc_number) — enforced in code rather than
+-- by a unique constraint, because the CUSTODY_* rows are legitimately repeatable
+-- (an IF can go back out to the warehouse after a fix).
 CREATE TABLE IF NOT EXISTS order_events (
   id          SERIAL PRIMARY KEY,
-  event_type  TEXT NOT NULL,        -- 'CUSTODY_OUT' | 'CUSTODY_IN' | (later: 'STAGE_CHANGE' …)
-  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO'
+  event_type  TEXT NOT NULL,        -- see the vocabulary above
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC'
   doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
   so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
   note        TEXT,
@@ -605,6 +654,7 @@ CREATE TABLE IF NOT EXISTS order_events (
 CREATE INDEX IF NOT EXISTS idx_order_events_doc      ON order_events(doc_type, doc_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_so       ON order_events(so_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_occurred ON order_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_order_events_type     ON order_events(event_type);
 
 -- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
 -- When a packed IF is scanned back IN from the warehouse, the scanner may
@@ -693,6 +743,57 @@ CREATE TABLE IF NOT EXISTS edi_packages (
 CREATE INDEX IF NOT EXISTS idx_edi_packages_po ON edi_packages(po_number);
 CREATE INDEX IF NOT EXISTS idx_edi_packages_dc ON edi_packages(dc);
 
+-- edi_fulfillment_pack (Nima, 2026-08-02): the pack check. edi_packages above is
+-- PO-DC grain, which is what a BOL needs but is useless for "WHICH fulfilment is
+-- short" — the rollup has already summed that away. This keeps the per-IF pair:
+-- units the fulfilment says it ships vs units actually in its cartons.
+--
+-- Packing EDI freight is manual and a missed item is otherwise invisible: the
+-- cartons ship, the 856 claims quantities that aren't in the boxes, and it
+-- surfaces as a chargeback weeks later. See src/model/packCheck.js for why this
+-- is checked per-IF and not against the sales order.
+--
+-- REPLACED wholesale by each sync, exactly like edi_packages — an IF absent from
+-- the pull has shipped and must not linger and re-flag a closed shipment.
+CREATE TABLE IF NOT EXISTS edi_fulfillment_pack (
+  if_number     TEXT PRIMARY KEY,
+  po_dc         TEXT NOT NULL,      -- "50073677-799"; joins to edi_packages.po_dc
+  po_number     TEXT,
+  dc            TEXT,
+  if_units      INTEGER,            -- POSITIVE InvtPart lines only (see ifUnitsSql)
+  packed_units  INTEGER,            -- summed across this IF's carton records
+  cartons       INTEGER,
+  updated_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_edi_fulfillment_pack_podc ON edi_fulfillment_pack(po_dc);
+
+-- fulfillment_dc (Nima, 2026-08-02): which PO and destination DC each item
+-- fulfilment belongs to — the durable IF↔BOL link.
+--
+-- Why this exists separately from edi_fulfillment_pack above: that table is
+-- REPLACED every sync and only ever holds UNSHIPPED fulfilments, so the moment
+-- freight departs its DC is forgotten. That's precisely when we need it, because
+-- a departure is counted per BOL and the BOL is identified by (partner, DC, POs).
+--
+-- The number this fixes: 2026-07-30 shows 50 fulfilments shipped, which reads as
+-- 50 shipments. It was 8 — seven Bloomingdale's BOLs plus one parcel. Each DC on
+-- an EDI PO gets its own IF, so counting IFs inflates departures roughly 6×.
+-- Nima: "each DC has multiple IF … that inflates the number … we should be able
+-- to associate the IF with the BOL and consolidate them as one big massive
+-- shipment."
+--
+-- UPSERT, never deleted — unlike every other EDI table here. A fulfilment that
+-- has shipped keeps its row forever; that is the entire point.
+CREATE TABLE IF NOT EXISTS fulfillment_dc (
+  if_number   TEXT PRIMARY KEY,
+  po_dc       TEXT NOT NULL,   -- raw custbody_po_cd_identifier, e.g. "7590875-SC"
+  po_number   TEXT,
+  dc          TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_dc_po ON fulfillment_dc(po_number);
+CREATE INDEX IF NOT EXISTS idx_fulfillment_dc_dc ON fulfillment_dc(dc);
+
 -- BOL number sequence — the "never reuse a BOL" guarantee. A Postgres sequence
 -- never hands out the same value twice, even across rollbacks or deletes, so a
 -- voided shipment can never recycle its number. Base is arbitrary/readability
@@ -752,6 +853,11 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS seal_number    TEXT;
 -- FedEx pickup confirmation number (Nima, 2026-07-27): goes on the routing guide
 -- / BOL. Per-shipment; the master carries its own on the auth (below).
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
+-- shipped_at (Nima, 2026-07-29): stamped when the physical shipment leaves. The
+-- record is KEPT (BOL number never reused), but a shipped shipment moves out of
+-- the active Routing queue into a "Shipped" archive tab so gone BOLs stop
+-- cluttering the board. Explicit "Mark shipped" action — nothing auto-ships.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
@@ -885,3 +991,78 @@ CREATE INDEX IF NOT EXISTS idx_po_item            ON purchase_orders(item);
 CREATE INDEX IF NOT EXISTS idx_oc_item             ON order_confirmations(item);
 CREATE INDEX IF NOT EXISTS idx_ocpo_oc            ON oc_po_links(oc_number);
 CREATE INDEX IF NOT EXISTS idx_ocpo_po            ON oc_po_links(po_number);
+
+-- ── The EDI paper trail for a routed shipment (Nima, 2026-08-01) ────────────
+-- "We want the BOL information archived, saved, linked with that 850 and 856,
+-- all for reference if we need to go back to it."
+--
+-- The lineage is derivable today — an outbound 856's business_number IS the BOL
+-- number, and edi_document_po_refs ties that ASN back to the member POs, whose
+-- own inbound 850s carry the PO number as their business_number. But derivation
+-- alone is not an archive: the Orderful sync works over a moving window, so a
+-- transaction that ages out takes the reference with it, and the business_number
+-- convention is a partner habit, not a contract. So the lineage is SNAPSHOTTED
+-- when the shipment is archived — ids and timestamps frozen at that moment.
+--
+-- One row per shipment. po_links is [{ po, transactionId, businessNumber,
+-- createdAt }] for the 850s — jsonb rather than a child table because it is
+-- written once, read whole, and never queried by PO.
+CREATE TABLE IF NOT EXISTS routing_shipment_edi (
+  shipment_id          INTEGER PRIMARY KEY REFERENCES routing_shipment(id) ON DELETE CASCADE,
+  bol_number           TEXT,
+  asn_transaction_id   TEXT,      -- the 856's Orderful transaction id
+  asn_business_number  TEXT,      -- = the BOL number, as transmitted
+  asn_created_at       TIMESTAMPTZ,
+  asn_delivery_status  TEXT,
+  asn_ack_status       TEXT,
+  po_links             JSONB DEFAULT '[]'::jsonb,
+  captured_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_edi_tx_business ON edi_transactions(business_number);
+
+-- What UPS actually BILLED, per shipment, harvested from ShipStation.
+--
+-- This exists because the wholesale UPS account (C6J610 "Big Box") cannot be
+-- rate-quoted through ShipStation right now — its carrier connection is broken and
+-- only Nima can reconnect it. But thousands of labels WERE bought on that account
+-- through ShipStation (2023 → 2026-06-29), and each recorded the real billed cost
+-- next to the weight, dimensions and destination. That is the only true wholesale
+-- pricing reachable today, and an actual invoice beats an estimate in every way
+-- except age. See src/model/upsRates.js.
+--
+-- ups_account is DERIVED from the 1Z tracking number, which embeds the six-char UPS
+-- shipper number. The shipment record itself only says carrierCode "ups", so
+-- tracking is the sole signal for which of the two accounts paid.
+--
+-- Keyed on the tracking number so re-pulling an overlapping date window upserts,
+-- and a label voided after the fact corrects itself instead of inflating a median.
+CREATE TABLE IF NOT EXISTS ups_shipment_cost (
+  tracking_number  TEXT PRIMARY KEY,
+  ups_account      TEXT,            -- 'C6J610' (wholesale) | '18GE01' (ecom) | NULL if unparseable
+  shipstation_id   BIGINT,
+  order_number     TEXT,
+  carrier_code     TEXT,
+  service_code     TEXT,            -- 'ups_ground', 'ups_2nd_day_air', …
+  ship_date        DATE,
+  create_date      TIMESTAMPTZ,
+  weight_lb        NUMERIC,         -- normalized to POUNDS at ingest (the API mixes oz and lb)
+  length_in        NUMERIC,
+  width_in         NUMERIC,
+  height_in        NUMERIC,
+  dest_postal      TEXT,
+  dest_state       TEXT,
+  dest_city        TEXT,
+  dest_residential BOOLEAN,
+  shipment_cost    NUMERIC,         -- what UPS billed
+  insurance_cost   NUMERIC,
+  voided           BOOLEAN DEFAULT false,
+  store_id         INTEGER,
+  synced_at        TIMESTAMPTZ DEFAULT now()
+);
+
+-- The rate lookup always filters account + service, then matches on geography and
+-- weight, so index that path.
+CREATE INDEX IF NOT EXISTS idx_ups_cost_acct_svc ON ups_shipment_cost(ups_account, service_code);
+CREATE INDEX IF NOT EXISTS idx_ups_cost_state ON ups_shipment_cost(dest_state);
+CREATE INDEX IF NOT EXISTS idx_ups_cost_weight ON ups_shipment_cost(weight_lb);

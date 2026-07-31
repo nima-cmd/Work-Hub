@@ -1,9 +1,10 @@
 // src/ingest/googleCalendar.js — pulls events from the Google Calendar REST API
 // (same raw-fetch style as gmail.js; reuses its OAuth refresh-token flow). Read
 // only (calendar.readonly). A Zoom or Google Meet link on an event makes it a
-// "holocall" (Nima, 2026-07-21). Fails soft: if the refresh token predates the
-// calendar scope, Google returns 403 and we surface {configured:false} rather
-// than throwing, so the app works before the re-auth and lights up after it.
+// "holocall" (Nima, 2026-07-21). Fails soft: a 403/401 surfaces
+// {configured:false} rather than throwing, distinguishing a missing scope
+// (needsReauth) from a disabled Calendar API in the Cloud project (apiDisabled)
+// so the app can prompt the right fix, and works before/after either is fixed.
 
 import { getAccessToken } from './gmail.js'
 
@@ -66,7 +67,15 @@ export async function fetchCalendarEvents({ timeMin, timeMax } = {}) {
   if (timeMax) params.set('timeMax', timeMax)
   const res = await fetch(`${CAL_API}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
   if (res.status === 403 || res.status === 401) {
-    // token doesn't carry calendar scope yet — re-auth needed, not an error
+    // Two very different 403s hide here, and conflating them sends you down the
+    // wrong fix (Nima, 2026-07-29): a MISSING SCOPE means re-auth, but a
+    // DISABLED API ("accessNotConfigured" / "has not been used in project")
+    // means enabling the Calendar API in the Google Cloud console — re-auth
+    // won't touch it. Parse the reason so the app can say the right thing.
+    const body = await res.text().catch(() => '')
+    if (/accessNotConfigured|has not been used in project|is disabled/i.test(body)) {
+      return { configured: false, apiDisabled: true, events: [] }
+    }
     return { configured: false, needsReauth: true, events: [] }
   }
   if (!res.ok) throw new Error(`Google Calendar ${res.status}: ${await res.text().catch(() => '')}`)

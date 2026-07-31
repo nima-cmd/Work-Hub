@@ -176,6 +176,14 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .badge.transmission { background: rgba(59,130,246,0.18); color: var(--lo); border: 1px solid rgba(59,130,246,0.5); }
 .krow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 
+/* Gmail label chips on a transmission */
+.labelChips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 2px; }
+.labelChip {
+  font-size: 11px; padding: 2px 8px; border-radius: 11px;
+  background: rgba(88,166,255,0.12); color: #a9c8ff; border: 1px solid rgba(88,166,255,0.4);
+  white-space: nowrap;
+}
+
 /* calendar (agenda) */
 .calendar { max-width: 980px; }
 .calGroup { margin-bottom: 22px; }
@@ -934,13 +942,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   grid-template-areas:
     "attn core tasks"
     "comms core tasks"
+    "ship ship ship"
     "launch custody edi"
     "pipe pipe pipe";
   align-items: stretch;
 }
 .sectorGrid.radial .sector { grid-column: unset; } /* areas own placement now */
 @media (max-width: 1100px) {
-  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "attn" "comms" "tasks" "pipe" "launch" "custody" "edi"; }
+  .sectorGrid.radial { grid-template-columns: 1fr; grid-template-areas: "core" "ship" "attn" "comms" "tasks" "pipe" "launch" "custody" "edi"; }
 }
 @media (min-width: 1800px) {
   .sectorGrid.radial { grid-template-columns: minmax(380px, 1fr) minmax(460px, 560px) minmax(380px, 1fr); }
@@ -1840,6 +1849,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* ── EDI Routing (Nima, 2026-07-22) ──────────────────────────────────────── */
 .routing { padding: 4px 2px 40px; }
 .rt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.rt-headActions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.rt-pull { white-space: nowrap; }
 .rt-head h2 { margin: 0 0 4px; font-size: 20px; }
 .rt-sub { font-size: 13px; max-width: 640px; line-height: 1.4; }
 .rt-empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); }
@@ -1868,11 +1879,34 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
 
+/* Pack check (2026-08-02) — every unit on the IF vs every unit in a carton. */
+.rt-pack { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; border-radius: 6px; padding: 5px 8px; }
+.rt-pack.good { color: #7ee787; background: rgba(126,231,135,0.08); border: 1px solid rgba(126,231,135,0.3); }
+.rt-pack.bad  { color: #ff9d9d; background: rgba(255,107,107,0.1);  border: 1px solid rgba(255,107,107,0.45); }
+.rt-pack.idle { color: var(--muted); background: var(--panel2); border: 1px solid var(--line); }
+.rt-packMark { font-weight: 800; }
+.rt-packText { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rt-packIf { font-variant-numeric: tabular-nums; background: rgba(255,107,107,0.16); border-radius: 4px; padding: 1px 6px; }
+.rt-packIf em { font-style: normal; opacity: 0.8; }
+
 .rt-assign { align-self: flex-start; }
 .rt-bol { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px dashed var(--line); }
 .rt-bol.assigned .rt-bolLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .rt-bolNum { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; color: #7ee787; }
 .rt-detached .rt-card { opacity: 0.85; }
+
+/* shipped/unshipped split (2026-07-29) */
+.rt-tabs { display: flex; gap: 8px; margin: 4px 0 16px; }
+.rt-tabs .tab { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.rt-tabs .tab.active { border-color: var(--accent); color: var(--accent); }
+.rt-tabs .tab .count { margin-left: 6px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.rt-shipBtn { align-self: flex-start; }
+.rt-shipBtn.on { border-color: rgba(126,231,135,0.5); color: #7ee787; }
+/* Mark-routed checkmark — cyan so it reads as a step BEFORE the green
+   departure, not a second way of saying "shipped". */
+.rt-routedBtn { align-self: flex-start; }
+.rt-routedBtn.on { border-color: rgba(88,199,224,0.55); color: #58c7e0; }
+.rt-shippedTag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(126,231,135,0.14); color: #7ee787; border: 1px solid rgba(126,231,135,0.4); }
 
 /* ── EDI Routing phase 2: refs + auth ────────────────────────────────────── */
 .rt-status { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
@@ -1946,6 +1980,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-gapChip { font-size: 12px; font-variant-numeric: tabular-nums; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); }
 .rt-gapChip.miss { color: var(--hi); border-color: rgba(248,81,73,0.5); background: rgba(248,81,73,0.08); }
 .rt-gapChip.stale { color: var(--mid); border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.08); }
+
+/* Short-pack warning (2026-08-02) — one row per shipment, its DC leading. */
+.rt-packWarn .rt-packRow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rt-packRowDc {
+  font-family: var(--display); font-weight: 800; font-size: 13px; color: var(--hi);
+  min-width: 3.5ch; letter-spacing: 0.04em;
+}
 
 /* ── Routing manual PO hold (Nima, 2026-07-22) ───────────────────────────── */
 .rt-memberPos { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -2137,3 +2178,280 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .fpReorder { grid-column: 4; }
 }
 
+
+/* Scan Bay: mode toggle + Scan→Drive (Nima, 2026-07-29) */
+.bayModeToggle { display: flex; gap: 8px; margin-bottom: 14px; }
+.bayModeBtn {
+  background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.bayModeBtn.active { color: var(--text); background: var(--panel2); border-color: var(--accent); }
+
+.scanToDrive { max-width: 760px; }
+.s2dHead h3 { margin: 0 0 4px; }
+.s2dHead .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.s2dPick { display: inline-block; }
+.s2dFile { color: var(--muted); font-size: 13px; margin: 8px 0; }
+.s2dPlan { margin-top: 16px; }
+.s2dMaster {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.s2dRowHead { font-weight: 600; margin: 10px 0 6px; }
+.s2dRowHead .muted, .s2dPlan .muted, .s2dResult .muted { color: var(--muted); font-weight: 400; }
+.s2dBolInput { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); margin-top: 8px; max-width: 340px; }
+.s2dBolInput input {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  padding: 7px 10px; border-radius: 7px; font-size: 14px;
+}
+.s2dTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 14px; }
+.s2dTable th, .s2dTable td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.s2dTable th { color: var(--muted); font-weight: 500; }
+.s2dResults { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.s2dResult { font-size: 13px; padding: 6px 10px; border-radius: 7px; background: var(--panel); border: 1px solid var(--line); }
+.s2dResult.ok { border-color: #2ea04366; }
+.s2dResult.error { border-color: var(--hi); }
+.s2dResult.skipped { opacity: 0.7; }
+.s2dLink { color: var(--accent); margin-left: 6px; }
+
+/* ═══ SHIP DESK — the label-gap surfaces (Nima, 2026-07-31) ═════════════════
+   Two surfaces over /api/label-gaps. The visual rule everywhere: the two
+   PARCEL lanes are loud and opposite-coloured, freight is present but dimmed.
+   They must never read as one number — that lumping is what hid SO12293. */
+
+/* ── app-wide "whose court" strip ───────────────────────────────────────── */
+.courtStrip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  margin: 0 0 12px; padding: 8px 12px;
+  background: linear-gradient(90deg, rgba(248,81,73,0.10), rgba(22,27,34,0.92) 42%);
+  border: 1px solid rgba(248,81,73,0.32); border-left: 3px solid var(--hi);
+  border-radius: 10px;
+}
+.courtStrip.collapsed {
+  background: rgba(22,27,34,0.9); border-color: var(--line); border-left-color: var(--mid);
+  padding: 4px 12px;
+}
+.courtGroup { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.courtNestor { padding-left: 14px; border-left: 1px solid var(--line); }
+.courtLabel {
+  font-family: var(--display); font-size: 10px; letter-spacing: 0.14em;
+  color: var(--muted); font-weight: 700; margin-right: 2px; white-space: nowrap;
+}
+/* Crew voice on the strip (2026-08-02) — a face and a line instead of a label.
+   Capped width so a long line can never push the chips off screen. */
+.courtVoice { display: flex; align-items: center; gap: 7px; margin-right: 4px; min-width: 0; }
+.courtVoiceFace {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line);
+}
+.courtVoiceFace img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Wraps rather than truncates — the line IS the feature, and an ellipsised
+   "start the…" tells Nima nothing. The strip already wraps, so a two-line
+   voice just pushes chips onto the next row instead of hiding words. */
+.courtVoiceText {
+  font-size: 12px; color: var(--text); opacity: 0.92; line-height: 1.3;
+  max-width: 30ch; white-space: normal;
+}
+.courtNestor .courtVoiceText { max-width: 24ch; color: var(--muted); }
+
+.courtChip {
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+  padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--text);
+}
+.courtChip b { font-size: 13px; margin-right: 3px; }
+.courtChip:hover { background: rgba(255,255,255,0.10); }
+.courtChip.ct-bad  { border-color: rgba(248,81,73,0.55); color: #ffb3ad; background: rgba(248,81,73,0.12); }
+.courtChip.ct-warn { border-color: rgba(217,130,43,0.55); color: #f0c08a; background: rgba(217,130,43,0.10); }
+.courtChip.ct-info { border-color: rgba(59,130,246,0.45); color: #9dc0f5; }
+.courtChip.ct-ok   { border-color: rgba(46,160,67,0.50); color: #85d996; }
+.courtChip.ct-cyan { border-color: rgba(79,209,255,0.45); color: #92dcff; }
+
+/* The oldest item, named — the "impossible to miss" piece. Pushed right so it
+   reads as the strip's conclusion rather than another chip in the list. */
+.courtOldest {
+  margin-left: auto; font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+  padding: 3px 10px; border-radius: 7px; color: #ffd3cf;
+  background: rgba(248,81,73,0.16); border: 1px solid rgba(248,81,73,0.5);
+}
+.courtOldest:hover { background: rgba(248,81,73,0.26); }
+.courtOldest b { color: #fff; }
+.courtOldest em { font-style: normal; font-weight: 700; color: var(--hi); }
+.courtToggle {
+  font: inherit; font-size: 11px; cursor: pointer; color: var(--muted);
+  background: none; border: none; padding: 2px 4px;
+}
+.courtToggle:hover { color: var(--text); }
+.courtHide { margin-left: 4px; }
+
+/* ── Command Center sector: three lanes side by side ─────────────────────── */
+.shipDesk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 1100px) { .shipDesk { grid-template-columns: 1fr; } }
+.deskCol { min-width: 0; padding: 10px; border-radius: 9px; background: rgba(0,0,0,0.18); border: 1px solid var(--line); }
+.deskAct { background: rgba(0,0,0,0.26); }
+.deskFreight { opacity: 0.72; }        /* present, but never out-shouting the parcel lanes */
+.deskFreight:hover { opacity: 1; }
+.deskHead {
+  font-family: var(--display); font-size: 11px; letter-spacing: 0.1em; font-weight: 700;
+  display: flex; align-items: center; gap: 7px; margin-bottom: 4px;
+}
+.deskHead.bad { color: var(--hi); }
+.deskHead.warn { color: var(--mid); }
+.deskHead.info { color: var(--lo); }
+.deskWhy { font-size: 11px; color: var(--muted); margin-bottom: 9px; line-height: 1.35; }
+
+.gapRow { padding: 6px 8px; margin-bottom: 6px; border-radius: 7px; background: rgba(255,255,255,0.03); border-left: 3px solid var(--line); }
+.gapRow.sev-hi  { border-left-color: var(--hi);  background: rgba(248,81,73,0.09); }
+.gapRow.sev-mid { border-left-color: var(--mid); background: rgba(217,130,43,0.07); }
+.gapRow.sev-lo  { border-left-color: var(--lo); }
+.gapTop { display: flex; align-items: baseline; gap: 8px; }
+.gapIf { font-weight: 700; color: var(--text); }
+.gapSo { font-size: 11px; color: var(--muted); }
+.gapAge { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--muted); }
+.gapRow.sev-hi .gapAge { color: var(--hi); }
+.gapRow.sev-mid .gapAge { color: var(--mid); }
+.gapCust { font-size: 12px; color: #cfe3ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tracking numbers: click to copy — the next step is pasting them somewhere. */
+.trkList { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.trk {
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer;
+  padding: 2px 6px; border-radius: 5px; color: #92dcff;
+  background: rgba(79,209,255,0.10); border: 1px solid rgba(79,209,255,0.30);
+}
+.trk:hover { background: rgba(79,209,255,0.22); }
+.trkCopied { color: #85d996; border-color: rgba(46,160,67,0.5); background: rgba(46,160,67,0.16); }
+
+/* Freight roll-up: partner + count instead of one row per DC. */
+.freightRoll { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+.freightPartner {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  padding: 3px 8px; border-radius: 999px; color: #9dc0f5;
+  background: rgba(59,130,246,0.10); border: 1px solid rgba(59,130,246,0.30);
+}
+.freightPartner b { color: #fff; }
+.deskGo { font-size: 11px; }
+.trkSelect { color: #f0c08a; border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.16); }
+
+/* ── EDI paper trail on a routed shipment (850 → BOL → 856) ───────────────── */
+/* Reference material, so it reads quieter than the actionable rows above it. */
+.rt-ediTrail { font-size: 11px; }
+.rt-ediTrail.none { color: #f0a0a0; padding: 2px 0; }
+.rt-ediToggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px;
+  background: none; border: none; color: var(--muted, #8b949e); cursor: pointer;
+  font: inherit; border-radius: 5px;
+}
+.rt-ediToggle:hover { color: #c9d1d9; background: rgba(255,255,255,0.05); }
+.rt-ediChip {
+  padding: 1px 6px; border-radius: 5px; font-variant-numeric: tabular-nums;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
+}
+.rt-ediChip.asn.ok { background: rgba(126,231,135,0.12); border-color: rgba(126,231,135,0.35); color: #7ee787; }
+.rt-ediChip.asn.pending { background: rgba(217,180,43,0.12); border-color: rgba(217,180,43,0.35); color: #d9b42b; }
+.rt-ediChip.asn.bad { background: rgba(248,81,73,0.14); border-color: rgba(248,81,73,0.4); color: #ff8b84; }
+.rt-ediBody { display: flex; flex-direction: column; gap: 3px; padding: 4px 0 2px 14px; }
+.rt-ediRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-variant-numeric: tabular-nums; }
+.rt-ediKind {
+  min-width: 30px; text-align: center; padding: 1px 4px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+}
+.rt-ediKind.out { background: rgba(59,130,246,0.14); border: 1px solid rgba(59,130,246,0.35); color: #79b8ff; }
+.rt-ediKind.in  { background: rgba(163,113,247,0.14); border: 1px solid rgba(163,113,247,0.35); color: #c39bff; }
+.rt-ediNum { color: #c9d1d9; }
+.rt-ediMissing { color: #f0a0a0; }
+.rt-ediSnap { padding-top: 2px; font-size: 10px; }
+
+/* An 856 went out ahead of NetSuite marking the IFs shipped — a real gap. */
+.rt-asnAhead {
+  font-size: 11px; padding: 2px 8px; border-radius: 6px;
+  background: rgba(217,180,43,0.14); color: #d9b42b; border: 1px solid rgba(217,180,43,0.4);
+}
+
+/* Live-sync alarm (2026-07-31) — shown only when a sync has stopped arriving. */
+.syncAlarm {
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+  padding: 7px 12px; border-radius: 8px; margin-bottom: 10px;
+  background: rgba(217,130,43,0.10); border: 1px solid rgba(217,130,43,0.45); color: var(--mid);
+}
+.syncAlarm.stale, .syncAlarm.never {
+  background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.5); color: var(--hi);
+}
+.syncAlarmMark { font-size: 13px; }
+
+/* ── Ledger: order history (rebuilt 2026-07-31) ───────────────────────────── */
+.lgHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.lgHead h2 { margin: 0 0 4px; font-size: 20px; }
+.lgSub { font-size: 12px; max-width: 62ch; }
+.lgModes { display: flex; gap: 6px; flex: 0 0 auto; }
+.lgModes .btnGhost.on { border-color: var(--accent); color: var(--accent); }
+
+.lgBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.lgSelect {
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 8px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+}
+.lgCount { font-size: 12px; }
+.lgObsNote { font-style: normal; color: var(--mid); }
+
+.lgTypes { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 16px; }
+.lgType {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 3px 9px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+}
+.lgType.on { color: var(--text); border-color: currentColor; background: rgba(255,255,255,0.05); }
+
+/* One event. Tone says what KIND of moment it is; the dot carries the colour so
+   the row text stays readable. */
+.lgRows { display: flex; flex-direction: column; }
+.lgRow {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 5px 8px; border-left: 2px solid var(--line); font-size: 12.5px;
+}
+.lgRow:hover { background: rgba(255,255,255,0.03); }
+.lgWhen { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 5.5ch; font-size: 11.5px; }
+.lgDot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+.d-arrive { background: #58c7e0; }
+.d-hands  { background: #d9822b; }
+.d-money  { background: #7ee787; }
+.d-go     { background: #a371f7; }
+.d-edi    { background: #e3b341; }
+.lgLabel { font-weight: 600; }
+.lgDoc { font-variant-numeric: tabular-nums; color: var(--mid); }
+.lgSo {
+  font: inherit; font-size: 12px; cursor: pointer; padding: 1px 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.lgSo:hover { border-color: var(--accent); color: var(--accent); }
+.lgNote { color: var(--muted); font-style: italic; }
+
+/* An `observed` row is a different KIND of fact — a first sighting, not a
+   source timestamp. Dashed and muted so it can never be read as the real day.
+   Same discipline as wholesaleFigure() refusing to substitute an account. */
+.lgRow.observed { border-left-style: dashed; opacity: 0.78; }
+.lgRow.observed .lgWhen em { font-style: italic; }
+.lgObsTag {
+  font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 6px;
+}
+
+/* Order timeline — the spine, with the gaps left visible. */
+.lgOrder { max-width: 900px; }
+.lgOrderHead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.lgOrderHead h3 { margin: 0; font-size: 22px; font-variant-numeric: tabular-nums; }
+.lgSpine { display: flex; flex-direction: column; }
+.lgStage {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-left: 2px solid var(--line); font-size: 13px;
+}
+.lgStage.done { border-left-color: currentColor; }
+.lgStage.pending { opacity: 0.4; }
+/* Reached a later stage without this one — a real gap, not "not yet". */
+.lgStage.skipped { opacity: 0.55; border-left-style: dashed; }
+.lgStage.skipped .lgStageWhen { color: var(--hi); }
+.lgStageLabel { font-weight: 600; min-width: 22ch; }
+.lgStageWhen { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lgStageHit { color: var(--mid); }
+.lgStageHit.observed { border-bottom: 1px dashed var(--line); opacity: 0.8; }

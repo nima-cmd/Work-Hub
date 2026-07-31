@@ -10,12 +10,22 @@
     "migrate": "node --env-file=.env.local scripts/migrate.js",
     "ingest": "node --env-file=.env.local scripts/ingest.js",
     "match:review": "node --env-file=.env.local scripts/match-review.js",
+    "sync:netsuite": "node --env-file=.env.local scripts/sync-netsuite.js",
+    "sync:packages": "node --env-file=.env.local scripts/sync-edi-packages.js",
+    "sync:ups-costs": "node --env-file=.env.local scripts/sync-ups-costs.js",
+    "backfill:events": "node --env-file=.env.local scripts/backfill-events.js",
+    "ups:rate": "node --env-file=.env.local scripts/ups-rate.js",
+    "check:netsuite": "node --env-file=.env.local scripts/check-netsuite.js",
+    "check:shipstation": "node --env-file=.env.local scripts/check-shipstation.js",
+    "zpl": "node scripts/zpl-print.js",
+    "zpl:watch": "node scripts/zpl-print.js --watch",
     "server": "node --env-file=.env.local server/index.js",
     "start": "node server/index.js",
     "recurring-check": "node scripts/recurring-check.js",
     "client:build": "npm --prefix client install && npm --prefix client run build",
     "dev": "concurrently \"npm --prefix client run dev\" \"npm run server\"",
-    "print-agent": "node --env-file=.env.local scripts/print-agent.js"
+    "print-agent": "node --env-file=.env.local scripts/print-agent.js",
+    "backfill:fulfillment-dc": "node --env-file=.env.local scripts/backfill-fulfillment-dc.js"
   },
   "dependencies": {
     "concurrently": "^10.0.3",

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
 import { recordCustodyScan, fetchOrderEvents, recordFulfillmentBox, deleteCustodyScan } from '../api.js'
 import { LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
+// Lazy so pdfjs (~1.2MB worker) only loads when someone opens Scan→Drive.
+const ScanToDrive = lazy(() => import('./ScanToDrive.jsx'))
 
 // Scan Bay (Nima, 2026-07-17) — the custody checkpoint. Every IF's cargo tag
 // is scanned OUT when handed to the warehouse and IN when
@@ -12,6 +14,10 @@ import { LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 const COOLDOWN_MS = 4000 // ignore re-reads of the same code while it's still in frame
 
 export default function ScanBay() {
+  // Bay mode (Nima, 2026-07-29): the camera custody flow (OUT/IN) vs the
+  // Scan→Drive document-filing flow (upload a multi-page scan, split by QR,
+  // file to Drive). Kept as a top-level switch so custody scanning is untouched.
+  const [bayMode, setBayMode] = useState('custody')
   const [mode, setMode] = useState('OUT')
   const [cameraOn, setCameraOn] = useState(false)
   const [camErr, setCamErr] = useState(null)
@@ -133,6 +139,20 @@ export default function ScanBay() {
   const custodyToday = todayEvents.filter((e) => e.eventType === 'CUSTODY_OUT' || e.eventType === 'CUSTODY_IN')
 
   return (
+    <>
+      <div className="bayModeToggle">
+        <button className={'bayModeBtn' + (bayMode === 'custody' ? ' active' : '')} onClick={() => setBayMode('custody')}>
+          📇 Custody scanner
+        </button>
+        <button className={'bayModeBtn' + (bayMode === 'file' ? ' active' : '')} onClick={() => setBayMode('file')}>
+          📄 Scan → Drive
+        </button>
+      </div>
+      {bayMode === 'file' ? (
+        <Suspense fallback={<div className="banner">Loading scanner…</div>}>
+          <ScanToDrive />
+        </Suspense>
+      ) : (
     <div className="scanbay">
       <div className="scanMain">
         <div className="scanModes">
@@ -258,6 +278,8 @@ export default function ScanBay() {
         {!custodyToday.length && <div className="empty">No scans yet today — the bay is quiet.</div>}
       </div>
     </div>
+      )}
+    </>
   )
 }
 

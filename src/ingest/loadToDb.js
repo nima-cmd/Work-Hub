@@ -5,6 +5,7 @@
 
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
+import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
 // so we can later flag "stuck N days in the same stage".
@@ -26,7 +27,11 @@ export async function loadOrders(orders, db = pool) {
          po_number       = COALESCE(EXCLUDED.po_number, orders.po_number),
          dc              = COALESCE(EXCLUDED.dc, orders.dc),
          store_number    = COALESCE(EXCLUDED.store_number, orders.store_number),
-         is_ats          = EXCLUDED.is_ats,
+         -- COALESCE (2026-07-30): the CSV mapper always sends a real boolean, so
+         -- this is a no-op there — but the live NetSuite pull can't read the ATS
+         -- custom field yet and sends null, which would otherwise WIPE a known
+         -- value on every sync.
+         is_ats          = COALESCE(EXCLUDED.is_ats, orders.is_ats),
          source          = COALESCE(EXCLUDED.source, orders.source),
          so_status       = COALESCE(EXCLUDED.so_status, orders.so_status),
          qty_ordered     = COALESCE(EXCLUDED.qty_ordered, orders.qty_ordered),
@@ -67,9 +72,10 @@ export async function loadFulfillments(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO fulfillments
-         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, tracking_numbers, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
        ON CONFLICT (if_number) DO UPDATE SET
+         tracking_numbers = COALESCE(EXCLUDED.tracking_numbers, fulfillments.tracking_numbers),
          so_number        = COALESCE(EXCLUDED.so_number, fulfillments.so_number),
          status           = COALESCE(EXCLUDED.status, fulfillments.status),
          packed_status    = COALESCE(EXCLUDED.packed_status, fulfillments.packed_status),
@@ -81,11 +87,35 @@ export async function loadFulfillments(records, db = pool) {
       [
         r.ifNumber, so, r.ifStatus || r.packedStatus || null, r.packedStatus || null,
         r.daysPending ?? null, r.invoice || null, r.date || null, r.actualShipDate || null,
+        r.trackingNumbers && r.trackingNumbers.length ? r.trackingNumbers : null,
       ],
     )
     n++
   }
   return n
+}
+
+// Reconcile fulfillments against a LIVE authoritative list (Nima, 2026-07-30).
+// The CSV path only ever upserts, so an Item Fulfillment deleted or voided in
+// NetSuite lingers in our DB forever and keeps inflating the picked/packed
+// queues — e.g. IF7406 sat on SO12293 as "Picked" though it no longer exists in
+// NetSuite (two IFs were created off that SO and one was removed).
+//
+// SCOPED ON PURPOSE: only rows whose so_number is in `soNumbers` are considered,
+// and `liveIfNumbers` must be the complete IF set for exactly those SOs. That
+// way a partial sync can never delete fulfillments belonging to orders it didn't
+// look at — unlike prune-by-absence over the whole table.
+export async function reconcileFulfillments(soNumbers, liveIfNumbers, db = pool) {
+  const sos = [...new Set((soNumbers || []).filter((s) => s && s !== 'UNLINKED'))]
+  if (!sos.length) return 0
+  const live = [...new Set((liveIfNumbers || []).filter(Boolean))]
+  const { rowCount } = await db.query(
+    `DELETE FROM fulfillments
+      WHERE so_number = ANY($1::text[])
+        AND if_number <> ALL($2::text[])`,
+    [sos, live.length ? live : ['__none__']],
+  )
+  return rowCount
 }
 
 // Stamp the FIRST time an IF is observed cleared for shipping ("Approved to
@@ -124,16 +154,22 @@ export async function loadInvoices(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO invoices
-         (inv_number, so_number, status, shipping_status, amount_remaining, ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())
+         (inv_number, so_number, status, shipping_status, amount_remaining, amount_total, ship_date, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
        ON CONFLICT (inv_number) DO UPDATE SET
          so_number        = COALESCE(EXCLUDED.so_number, invoices.so_number),
          status           = COALESCE(EXCLUDED.status, invoices.status),
          shipping_status  = COALESCE(EXCLUDED.shipping_status, invoices.shipping_status),
-         amount_remaining = COALESCE(EXCLUDED.amount_remaining, invoices.amount_remaining),
+         -- amount_remaining legitimately goes to 0 when an invoice is paid, so
+         -- it must NOT be COALESCE-protected (that would freeze it at the first
+         -- non-null we ever saw). Only skip when the source didn't supply it.
+         amount_remaining = CASE WHEN $5::numeric IS NULL THEN invoices.amount_remaining
+                                 ELSE EXCLUDED.amount_remaining END,
+         amount_total     = COALESCE(EXCLUDED.amount_total, invoices.amount_total),
          ship_date        = COALESCE(EXCLUDED.ship_date, invoices.ship_date),
          updated_at       = now()`,
-      [inv, so, r.invoiceStatus || r.soStatus || null, r.shippingStatus || null, r.amountRemaining ?? null, r.shipDate || null],
+      [inv, so, r.invoiceStatus || r.soStatus || null, r.shippingStatus || null,
+       r.amountRemaining ?? null, r.amountTotal ?? null, r.shipDate || null],
     )
     n++
   }
@@ -376,6 +412,31 @@ export async function loadEdiPackages(rows, db = pool) {
   return n
 }
 
+// Per-IF pack reconciliation (Nima, 2026-08-02). REPLACE, not upsert, for the
+// same reason edi_packages is replaced: an IF missing from the pull has shipped,
+// and a stale row would keep flagging a shipment that already left. Callers run
+// this inside the sync's transaction so a failure can't leave the table empty.
+export async function loadFulfilmentPack(rows, db = pool) {
+  await db.query('DELETE FROM edi_fulfillment_pack')
+  let n = 0
+  for (const r of rows) {
+    if (!r.ifNumber || !r.poDc) continue
+    await db.query(
+      `INSERT INTO edi_fulfillment_pack
+         (if_number, po_dc, po_number, dc, if_units, packed_units, cartons, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+       ON CONFLICT (if_number) DO UPDATE SET
+         po_dc = EXCLUDED.po_dc, po_number = EXCLUDED.po_number, dc = EXCLUDED.dc,
+         if_units = EXCLUDED.if_units, packed_units = EXCLUDED.packed_units,
+         cartons = EXCLUDED.cartons, updated_at = now()`,
+      [r.ifNumber, r.poDc, r.poNumber || null, r.dc || null,
+        r.ifUnits ?? 0, r.packedUnits ?? 0, r.cartons ?? 0],
+    )
+    n++
+  }
+  return n
+}
+
 // ── Product catalogue (uploaded SKU master) ─────────────────────────────────
 export async function loadCatalogueSkus(rows, db = pool) {
   let n = 0
@@ -472,6 +533,48 @@ export async function fetchEdiPackages(db = pool) {
   return rows
 }
 
+// The durable IF → (PO, DC) link. UPSERT and never delete: a fulfilment that has
+// shipped must keep its DC, because that is when a departure count needs it.
+export async function loadFulfillmentDc(rows, db = pool) {
+  let n = 0
+  for (const r of rows) {
+    if (!r.ifNumber || !r.poDc) continue
+    await db.query(
+      `INSERT INTO fulfillment_dc (if_number, po_dc, po_number, dc, updated_at)
+       VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (if_number) DO UPDATE SET
+         po_dc = EXCLUDED.po_dc, po_number = EXCLUDED.po_number,
+         dc = EXCLUDED.dc, updated_at = now()`,
+      [r.ifNumber, r.poDc, r.poNumber || null, r.dc || null],
+    )
+    n++
+  }
+  return n
+}
+
+export async function fetchFulfillmentDc(db = pool) {
+  const { rows } = await db.query(
+    `SELECT if_number AS "ifNumber", po_dc AS "poDc", po_number AS "poNumber", dc FROM fulfillment_dc`,
+  )
+  return new Map(rows.map((r) => [r.ifNumber, r]))
+}
+
+// The pack check's per-IF rows, grouped by PO-DC so a routing group covering
+// several POs can gather each one's fulfilments in a single pass.
+export async function fetchFulfilmentPack(db = pool) {
+  const { rows } = await db.query(
+    `SELECT if_number AS "ifNumber", po_dc AS "poDc", po_number AS "poNumber", dc,
+            if_units AS "ifUnits", packed_units AS "packedUnits", cartons
+     FROM edi_fulfillment_pack ORDER BY if_number`,
+  )
+  const byPoDc = new Map()
+  for (const r of rows) {
+    if (!byPoDc.has(r.poDc)) byPoDc.set(r.poDc, [])
+    byPoDc.get(r.poDc).push(r)
+  }
+  return byPoDc
+}
+
 // ── Routing shipments + BOL minting ──────────────────────────────────────────
 // The dc_po_key makes BOL assignment idempotent: re-assigning the SAME
 // (partner, DC, PO-set) returns the existing shipment (and its BOL) rather than
@@ -531,12 +634,187 @@ export async function fetchRoutingShipments(db = pool) {
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
-            fedex_pickup_number AS "fedexPickupNumber",
+            fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
   )
   return rows
+}
+
+// Mark a shipment shipped (it physically left) or un-ship it. Sets/clears
+// shipped_at; the record itself is never removed — it just moves to the
+// Shipped archive tab in the Routing view.
+export async function markShipmentShipped(id, shipped = true, db = pool) {
+  const { rows } = await db.query(
+    `UPDATE routing_shipment SET shipped_at = ${shipped ? 'now()' : 'NULL'}, updated_at = now()
+     WHERE id = $1 RETURNING id`,
+    [id],
+  )
+  return rows[0] || null
+}
+
+// Per-PO item-fulfilment tallies for the routing verdict: how many IFs on that
+// customer PO's store SOs exist, and how many NetSuite says are Shipped. Scoped
+// to the POs asked for, so this never scans the whole table.
+export async function fetchIfStatusByPo(poNumbers = [], db = pool) {
+  const pos = [...new Set(poNumbers.map((p) => String(p)).filter(Boolean))]
+  if (!pos.length) return {}
+  const { rows } = await db.query(
+    `SELECT o.po_number AS po,
+            count(f.if_number)::int AS total,
+            count(*) FILTER (WHERE f.status = 'Shipped')::int AS shipped
+       FROM orders o JOIN fulfillments f ON f.so_number = o.so_number
+      WHERE o.po_number = ANY($1::text[])
+      GROUP BY o.po_number`,
+    [pos],
+  )
+  return Object.fromEntries(rows.map((r) => [String(r.po), { shipped: r.shipped, total: r.total }]))
+}
+
+// The EDI paper trail for a set of BOLs, derived live: the outbound 856 whose
+// business_number IS the BOL number, plus the inbound 850 behind each member PO.
+// Keyed by BOL. See routing_shipment_edi in db/schema.sql for why we snapshot it
+// rather than relying on this derivation forever.
+export async function fetchShipmentEdiLineage(bolNumbers = [], db = pool) {
+  const bols = [...new Set(bolNumbers.map((b) => String(b || '').trim()).filter(Boolean))]
+  if (!bols.length) return {}
+  const { rows: asns } = await db.query(
+    `SELECT t.id, t.business_number AS "businessNumber", t.created_at AS "createdAt",
+            t.delivery_status AS "deliveryStatus", t.acknowledgment_status AS "ackStatus",
+            t.validation_status AS "validationStatus", t.trading_partner AS "tradingPartner",
+            array_remove(array_agg(DISTINCT r.po_number), NULL) AS "poRefs"
+       FROM edi_transactions t
+       LEFT JOIN edi_document_po_refs r ON r.transaction_id = t.id
+      WHERE t.type LIKE '856%' AND t.direction = 'OUT' AND t.business_number = ANY($1::text[])
+      GROUP BY t.id, t.business_number, t.created_at, t.delivery_status,
+               t.acknowledgment_status, t.validation_status, t.trading_partner`,
+    [bols],
+  )
+  const pos = [...new Set(asns.flatMap((a) => a.poRefs || []).map(String))]
+  const { rows: orders850 } = pos.length
+    ? await db.query(
+        `SELECT id, business_number AS "businessNumber", created_at AS "createdAt",
+                delivery_status AS "deliveryStatus", acknowledgment_status AS "ackStatus",
+                line_count AS "lineCount", total_units AS "totalUnits"
+           FROM edi_transactions
+          WHERE type LIKE '850%' AND direction = 'IN' AND business_number = ANY($1::text[])`,
+        [pos],
+      )
+    : { rows: [] }
+  const by850 = new Map(orders850.map((o) => [String(o.businessNumber), o]))
+  const out = {}
+  for (const a of asns) {
+    out[String(a.businessNumber)] = {
+      asn: {
+        transactionId: a.id, businessNumber: a.businessNumber, createdAt: a.createdAt,
+        deliveryStatus: a.deliveryStatus, ackStatus: a.ackStatus,
+        validationStatus: a.validationStatus, tradingPartner: a.tradingPartner,
+      },
+      poRefs: (a.poRefs || []).map(String).sort(),
+      po850: (a.poRefs || []).map(String).sort().map((po) => {
+        const t = by850.get(po)
+        return t
+          ? { po, transactionId: t.id, businessNumber: t.businessNumber, createdAt: t.createdAt,
+              deliveryStatus: t.deliveryStatus, ackStatus: t.ackStatus,
+              lineCount: t.lineCount, totalUnits: t.totalUnits }
+          : { po, transactionId: null }
+      }),
+    }
+  }
+  return out
+}
+
+// Freeze a shipment's EDI lineage. Idempotent — re-archiving refreshes the
+// snapshot rather than duplicating it.
+export async function saveShipmentEdiLineage(shipmentId, bolNumber, lineage, db = pool) {
+  if (!lineage?.asn) return null
+  const { rows } = await db.query(
+    `INSERT INTO routing_shipment_edi
+       (shipment_id, bol_number, asn_transaction_id, asn_business_number,
+        asn_created_at, asn_delivery_status, asn_ack_status, po_links, captured_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb, now())
+     ON CONFLICT (shipment_id) DO UPDATE SET
+       bol_number = EXCLUDED.bol_number,
+       asn_transaction_id = EXCLUDED.asn_transaction_id,
+       asn_business_number = EXCLUDED.asn_business_number,
+       asn_created_at = EXCLUDED.asn_created_at,
+       asn_delivery_status = EXCLUDED.asn_delivery_status,
+       asn_ack_status = EXCLUDED.asn_ack_status,
+       po_links = EXCLUDED.po_links,
+       captured_at = now()
+     RETURNING shipment_id AS "shipmentId"`,
+    [shipmentId, bolNumber, lineage.asn.transactionId, lineage.asn.businessNumber,
+     lineage.asn.createdAt, lineage.asn.deliveryStatus, lineage.asn.ackStatus,
+     JSON.stringify(lineage.po850 || [])],
+  )
+  return rows[0] || null
+}
+
+// Re-freeze snapshots whose 856 is STILL in the Orderful window. Without this a
+// snapshot taken minutes after transmission would pin the ASN at
+// PENDING/NOT_ACKNOWLEDGED forever, even though the partner's 997 lands hours
+// later and the live transaction goes DELIVERED/ACCEPTED. The snapshot is a
+// fallback for when the source ages out — so keep it current while it hasn't.
+export async function refreshShipmentEdiSnapshots(db = pool) {
+  const { rows } = await db.query(
+    `SELECT shipment_id AS "shipmentId", bol_number AS "bolNumber",
+            asn_delivery_status AS "deliveryStatus", asn_ack_status AS "ackStatus"
+       FROM routing_shipment_edi`,
+  )
+  if (!rows.length) return 0
+  const lineages = await fetchShipmentEdiLineage(rows.map((r) => r.bolNumber), db)
+  let n = 0
+  for (const r of rows) {
+    const live = lineages[String(r.bolNumber)]
+    if (!live?.asn) continue // aged out of the window — keep the frozen copy
+    if (live.asn.deliveryStatus === r.deliveryStatus && live.asn.ackStatus === r.ackStatus) continue
+    await saveShipmentEdiLineage(r.shipmentId, r.bolNumber, live, db)
+    n++
+  }
+  return n
+}
+
+export async function fetchShipmentEdiSnapshots(db = pool) {
+  const { rows } = await db.query(
+    `SELECT shipment_id AS "shipmentId", bol_number AS "bolNumber",
+            asn_transaction_id AS "asnTransactionId", asn_business_number AS "asnBusinessNumber",
+            asn_created_at AS "asnCreatedAt", asn_delivery_status AS "asnDeliveryStatus",
+            asn_ack_status AS "asnAckStatus", po_links AS "poLinks", captured_at AS "capturedAt"
+       FROM routing_shipment_edi`,
+  )
+  return Object.fromEntries(rows.map((r) => [r.shipmentId, r]))
+}
+
+// Archive every un-shipped routing shipment whose member POs are ALL fully
+// shipped per NetSuite (see netsuiteShippedVerdict). Runs at the tail of the
+// live sync: the freight physically left days ago, so a BOL still sitting in the
+// active board is stale data, not work. Returns what it archived so the caller
+// can report it rather than silently mutating the board.
+// shipped per NetSuite (see netsuiteShippedVerdict), snapshotting each one's EDI
+// paper trail (850 → BOL → 856) as it goes so the archived record keeps its
+// reference. Returns what it archived so the caller can report it rather than
+// silently mutating the board.
+export async function archiveNetsuiteShippedShipments(db = pool) {
+  const { netsuiteShippedVerdict } = await import('../model/routing.js')
+  const shipments = (await fetchRoutingShipments(db)).filter((s) => !s.shippedAt)
+  if (!shipments.length) return []
+  const ifsByPo = await fetchIfStatusByPo(shipments.flatMap((s) => s.memberPos || []), db)
+  const lineages = await fetchShipmentEdiLineage(shipments.map((s) => s.bolNumber), db)
+  const archived = []
+  for (const s of shipments) {
+    const v = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
+    if (!v.confirmed) continue
+    await markShipmentShipped(s.id, true, db)
+    const lineage = lineages[String(s.bolNumber)] || null
+    if (lineage) await saveShipmentEdiLineage(s.id, s.bolNumber, lineage, db)
+    archived.push({
+      id: s.id, bolNumber: s.bolNumber, partner: s.partner, dc: s.dc, memberPos: s.memberPos,
+      asn: lineage?.asn?.transactionId || null,
+      po850: (lineage?.po850 || []).filter((p) => p.transactionId).length,
+    })
+  }
+  return archived
 }
 
 export async function fetchRoutingShipmentById(id, db = pool) {
@@ -1038,7 +1316,7 @@ export async function searchEmailsForLink(q, db = pool) {
 export async function searchQuestEmails(q, db = pool) {
   const { rows } = await db.query(
     `SELECT id, from_address AS "fromAddress", from_name AS "fromName", subject, snippet, note,
-            received_at AS "receivedAt", is_unread AS "isUnread", dismissed, character_id AS "characterId"
+            received_at AS "receivedAt", is_unread AS "isUnread", dismissed, label_ids AS "labelIds", character_id AS "characterId"
      FROM quest_emails
      WHERE subject ILIKE $1 OR snippet ILIKE $1 OR body ILIKE $1 OR note ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
      ORDER BY received_at DESC LIMIT 100`,
@@ -1071,6 +1349,12 @@ export async function assignQuestEmailCharacter({ id, characterId, fromAddress }
 // Called after a successful Gmail-side markMessageRead so local state mirrors it.
 export async function markQuestEmailReadLocal(id, db = pool) {
   await db.query('UPDATE quest_emails SET is_unread = false WHERE id = $1', [id])
+}
+
+// Overwrite the stored label_ids for a message — used right after an apply so
+// the new label is visible without waiting for the next full inbox sync.
+export async function setQuestEmailLabelsLocal(id, labelIds, db = pool) {
+  await db.query('UPDATE quest_emails SET label_ids = $2 WHERE id = $1', [id, labelIds || []])
 }
 
 // App-only hide — never touches Gmail. Mirrors dismissOrderConfirmation/dismissPurchaseOrder.
@@ -1388,10 +1672,22 @@ export async function stampShippedValue(records, db = pool) {
     )
     if (exists.rowCount) continue
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
+    // Value of the shipment. Was BROKEN (fixed 2026-07-30): the second branch
+    // read `orders.amount_remaining`, a column that does not exist — Postgres
+    // rejects the statement at parse time regardless of COALESCE, so this threw
+    // whenever a record carried an actualShipDate. It never surfaced only
+    // because the current 2-search CSV model never sets actualShipDate (which is
+    // also why no SHIPPED_VALUE credit has ever been stamped). The live NetSuite
+    // pull DOES supply ship dates, so it had to be fixed first.
+    // Prefer what was owed at ship time (Naghedi ships FOB/pre-payment, so that
+    // ≈ full value); fall back to the invoice TOTAL when it's already paid — a
+    // recently-closed order would otherwise credit $0 — then the order's paid
+    // amount.
     const { rows: amt } = await db.query(
       `SELECT COALESCE(
-         (SELECT amount_remaining FROM invoices WHERE inv_number = $1),
-         (SELECT amount_remaining FROM orders   WHERE so_number  = $2),
+         NULLIF((SELECT amount_remaining FROM invoices WHERE inv_number = $1), 0),
+         (SELECT amount_total     FROM invoices WHERE inv_number = $1),
+         (SELECT amount_paid      FROM orders   WHERE so_number  = $2),
          0) AS value`,
       [r.invoice || null, so],
     )
@@ -1403,6 +1699,82 @@ export async function stampShippedValue(records, db = pool) {
     n++
   }
   return n
+}
+
+// ── The order-event spine (2026-08-02) ───────────────────────────────────────
+// Turns `order_events` from a custody log into the ledger item A always called
+// for. Derivation rules and the honest-timestamp policy live in
+// src/model/orderEvents.js; this half only reads state and writes rows.
+//
+// Reads current document state rather than the import's `records`, which is
+// deliberate: it means the CSV importer, the live NetSuite sync and the backfill
+// all share one code path, and the backfill needs no logic of its own.
+
+// Everything the spine derives from, camelCased for the model.
+export async function fetchEventSnapshot(db = pool) {
+  const [orders, fulfillments, invoices, routing, edi] = await Promise.all([
+    db.query(`SELECT so_number AS "soNumber", first_seen AS "firstSeen" FROM orders`),
+    db.query(`SELECT if_number AS "ifNumber", so_number AS "soNumber", status,
+                     if_date AS "ifDate", actual_ship_date AS "actualShipDate"
+                FROM fulfillments`),
+    db.query(`SELECT inv_number AS "invNumber", so_number AS "soNumber", status FROM invoices`),
+    db.query(`SELECT rs.dc_po_key AS "dcPoKey", rs.bol_number AS "bolNumber",
+                     rs.auth_number AS "authNumber", rs.bol_generated_at AS "bolGeneratedAt",
+                     ra.created_at AS "authorizedAt"
+                FROM routing_shipment rs
+                LEFT JOIN routing_auth ra ON ra.auth_number = rs.auth_number
+               WHERE rs.bol_generated_at IS NOT NULL OR ra.created_at IS NOT NULL`),
+    db.query(`SELECT type, direction, stream, business_number AS "businessNumber",
+                     trading_partner AS "tradingPartner", created_at AS "createdAt"
+                FROM edi_transactions
+               WHERE direction = 'OUT' AND stream = 'LIVE' AND (type LIKE '856%' OR type LIKE '810%')`),
+  ])
+  return {
+    orders: orders.rows,
+    fulfillments: fulfillments.rows,
+    invoices: invoices.rows,
+    routing: routing.rows,
+    edi: edi.rows,
+  }
+}
+
+// The (type, doc) pairs already recorded, so a re-run is a no-op. Scoped to the
+// types this module owns — custody scans and REACHED_APPROVED are written by
+// other code and must not be touched.
+async function fetchKnownEventKeys(db = pool) {
+  const { rows } = await db.query(
+    `SELECT DISTINCT event_type, doc_type, doc_number FROM order_events WHERE event_type = ANY($1)`,
+    [DERIVED_TYPES],
+  )
+  return new Set(rows.map((r) => `${r.event_type}|${r.doc_type}|${r.doc_number}`))
+}
+
+// Derive and insert. `mode` is 'sync' (default) or 'backfill' — see the
+// honest-timestamp note in the model. `dryRun` reports without writing.
+// Returns { inserted, byType, mode }.
+export async function deriveOrderEvents({ mode = 'sync', dryRun = false, batchSize = 500 } = {}, db = pool) {
+  const snapshot = await fetchEventSnapshot(db)
+  const known = await fetchKnownEventKeys(db)
+  const toInsert = pendingEvents(deriveEvents(snapshot), known, { mode })
+  const byType = summarize(toInsert)
+  if (dryRun || !toInsert.length) return { inserted: 0, byType, mode, dryRun }
+
+  for (let i = 0; i < toInsert.length; i += batchSize) {
+    const chunk = toInsert.slice(i, i + batchSize)
+    const params = []
+    const tuples = chunk.map((e) => {
+      const vals = [e.eventType, e.docType, e.docNumber, e.soNumber, e.note, e.occurredAt]
+      const start = params.length
+      params.push(...vals)
+      return `(${vals.map((_, k) => `$${start + k + 1}`).join(',')}, 'derived')`
+    })
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, occurred_at, source)
+       VALUES ${tuples.join(',')}`,
+      params,
+    )
+  }
+  return { inserted: toInsert.length, byType, mode, dryRun: false }
 }
 
 // ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ──────────

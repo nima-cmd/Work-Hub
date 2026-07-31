@@ -534,6 +534,16 @@ export async function fetchQuestActivity(date) {
   return res.json()
 }
 
+// Departures counted as SHIPMENTS — one BOL is one departure however many item
+// fulfilments it covers. Without this the Calendar showed 50 departures on
+// 2026-07-30 when eight trucks left.
+export async function fetchDepartures(opts = {}) {
+  const qs = new URLSearchParams(Object.entries(opts).filter(([, v]) => v)).toString()
+  const res = await fetch('/api/departures' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return (await res.json()).departures || []
+}
+
 // Upcoming Google Calendar events (in-app calendar + holocalls).
 export async function fetchCalendarEvents() {
   const res = await fetch('/api/calendar/events')
@@ -637,6 +647,15 @@ export async function fetchRouting() {
   return res.json()
 }
 
+// Pull the carton feed straight from NetSuite, then hand back the refreshed
+// board. Returns { synced, routing } — the caller wants both: the board to
+// render, and what changed to report.
+export async function refreshRoutingFeed() {
+  const res = await fetch('/api/routing/refresh', { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 export async function assignRoutingBol(shipment) {
   const res = await fetch('/api/routing/assign-bol', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -657,6 +676,15 @@ export async function setShipmentRefs(id, fields) {
   const res = await fetch(`/api/routing/shipment/${id}/refs`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(fields),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+export async function setShipmentShipped(id, shipped = true) {
+  const res = await fetch(`/api/routing/shipment/${id}/shipped`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipped }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()
@@ -745,6 +773,25 @@ export async function fetchPoDcs() {
   return res.json()
 }
 
+// Label / shipped-status reconciliation (Nima, 2026-07-30). Splits the Packed
+// queue into its two OPPOSITE actions — "you already shipped this, go mark it"
+// vs "this is still here, make a label" — plus the freight/BOL lane, which is
+// kept separate because it never carries a parcel tracking number.
+export async function fetchLabelGaps() {
+  const res = await fetch('/api/label-gaps')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Outbound EDI documents that never reached the partner (Nima, 2026-08-01).
+// NetSuite marks the fulfilment 856-synced while Orderful still holds the
+// transaction undelivered, so nothing complains — this is the only place it shows.
+export async function fetchEdiDeliveryGaps() {
+  const res = await fetch('/api/edi-delivery-gaps')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Catalogue upload tracking (Nima, 2026-07-27)
 export async function fetchCatalogueGaps() {
   const res = await fetch('/api/catalogue/gaps')
@@ -753,3 +800,63 @@ export async function fetchCatalogueGaps() {
 }
 export const catalogueAddFileUrl = () => '/api/catalogue/add-file.csv'
 
+// Scanner → Drive (Nima, 2026-07-29). Segment the scan client-side, ask the
+// server for the filing plan, then upload each split.
+export async function planScanFiling(segments) {
+  const res = await fetch('/api/scan/plan', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segments }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64 }) {
+  const res = await fetch('/api/scan/file-to-drive', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ partner, pos, filename, pdfBase64 }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
+
+// Did the scheduled syncs actually RUN? Distinct from fetchFreshness, which
+// reports how old the source data is — a stopped sync looks like a quiet day.
+export async function fetchSyncHealth() {
+  const res = await fetch('/api/sync-health')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// The order ledger. Window mode: { from, to, type[], docType, q, limit }.
+export async function fetchLedger(opts = {}) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(opts)) {
+    if (v == null || v === '') continue
+    if (Array.isArray(v)) v.forEach((x) => p.append(k, x))
+    else p.set(k, v)
+  }
+  const qs = p.toString()
+  const res = await fetch('/api/ledger' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// One order's complete history — every event naming the SO or any document
+// hanging off it, oldest first.
+export async function fetchOrderLedger(soNumber) {
+  const res = await fetch('/api/ledger?so=' + encodeURIComponent(soNumber))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Per-day ledger counts for the Calendar's dots.
+export async function fetchLedgerDaily({ from = null, to = null } = {}) {
+  const p = new URLSearchParams()
+  if (from) p.set('from', from)
+  if (to) p.set('to', to)
+  const qs = p.toString()
+  const res = await fetch('/api/ledger/daily' + (qs ? `?${qs}` : ''))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

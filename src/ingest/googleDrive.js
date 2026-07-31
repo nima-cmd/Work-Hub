@@ -58,6 +58,41 @@ async function ensurePath(segments, headers) {
   return { id: parent }
 }
 
+// Upload one PDF buffer into an already-resolved folder. Shared by the BOL and
+// scanned-doc uploaders. A same-named file in the folder is OVERWRITTEN (update
+// in place) so re-filing a corrected scan doesn't leave duplicates.
+async function putPdf(folderId, filename, buffer, headers) {
+  const q = [
+    'trashed=false',
+    `name='${filename.replace(/'/g, "\\'")}'`,
+    `'${folderId}' in parents`,
+  ].join(' and ')
+  const existRes = await fetch(`${FILES}?q=${encodeURIComponent(q)}&fields=files(id)`, { headers })
+  if (existRes.status === 403 || existRes.status === 401) return { needsReauth: true }
+  const existingId = existRes.ok ? (await existRes.json()).files?.[0]?.id : null
+
+  const boundary = 'wkhub' + buffer.length.toString(36)
+  const meta = existingId ? {} : { name: filename, parents: [folderId] }
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`),
+    buffer,
+    Buffer.from(`\r\n--${boundary}--`),
+  ])
+  const url = existingId
+    ? `${UPLOAD}/${existingId}?uploadType=multipart&fields=id,webViewLink`
+    : `${UPLOAD}?uploadType=multipart&fields=id,webViewLink`
+  const res = await fetch(url, {
+    method: existingId ? 'PATCH' : 'POST',
+    headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  })
+  if (res.status === 403 || res.status === 401) return { needsReauth: true }
+  if (!res.ok) throw new Error(`Drive upload ${res.status}: ${await res.text().catch(() => '')}`)
+  const file = await res.json()
+  return { id: file.id, link: file.webViewLink }
+}
+
 // Upload a PDF buffer to /Work-Hub BOLs/<partner>/<po>/<filename>. When a
 // shipment consolidates multiple POs, it's filed under each PO's folder so it's
 // findable from any of them (the manual process filed per PO too).
@@ -75,24 +110,18 @@ export async function uploadBolPdf({ partner, pos, filename, buffer }) {
   for (const po of poList) {
     const folder = await ensurePath([partner, String(po)], headers)
     if (folder.needsReauth) return { ok: false, needsReauth: true }
-
-    const meta = { name: filename, parents: [folder.id] }
-    const boundary = 'wkhub' + buffer.length.toString(36)
-    const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`),
-      Buffer.from(`--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`),
-      buffer,
-      Buffer.from(`\r\n--${boundary}--`),
-    ])
-    const res = await fetch(`${UPLOAD}?uploadType=multipart&fields=id,webViewLink`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
-      body,
-    })
-    if (res.status === 403 || res.status === 401) return { ok: false, needsReauth: true }
-    if (!res.ok) throw new Error(`Drive upload ${res.status}: ${await res.text().catch(() => '')}`)
-    const file = await res.json()
-    uploaded.push({ po, id: file.id, link: file.webViewLink })
+    const put = await putPdf(folder.id, filename, buffer, headers)
+    if (put.needsReauth) return { ok: false, needsReauth: true }
+    uploaded.push({ po, id: put.id, link: put.link })
   }
   return { ok: true, uploaded }
+}
+
+// File a scanned document (a split off the multi-page scan) to Drive, into the
+// SAME /Work-Hub BOLs/<partner>/<po>/ tree the digital BOLs use (Nima, 2026-07-29
+// — signed paper sits next to the app's PDFs). `pos` is the list of PO folders to
+// drop the file into (one for a per-DC IF split; all covered POs for a master
+// BOL). Returns per-PO Drive links. Mirrors uploadBolPdf's soft-fail contract.
+export async function uploadScannedPdf({ partner, pos, filename, buffer }) {
+  return uploadBolPdf({ partner, pos, filename, buffer })
 }
