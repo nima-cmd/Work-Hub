@@ -915,3 +915,49 @@ CREATE TABLE IF NOT EXISTS routing_shipment_edi (
 );
 
 CREATE INDEX IF NOT EXISTS idx_edi_tx_business ON edi_transactions(business_number);
+
+-- What UPS actually BILLED, per shipment, harvested from ShipStation.
+--
+-- This exists because the wholesale UPS account (C6J610 "Big Box") cannot be
+-- rate-quoted through ShipStation right now — its carrier connection is broken and
+-- only Nima can reconnect it. But thousands of labels WERE bought on that account
+-- through ShipStation (2023 → 2026-06-29), and each recorded the real billed cost
+-- next to the weight, dimensions and destination. That is the only true wholesale
+-- pricing reachable today, and an actual invoice beats an estimate in every way
+-- except age. See src/model/upsRates.js.
+--
+-- ups_account is DERIVED from the 1Z tracking number, which embeds the six-char UPS
+-- shipper number. The shipment record itself only says carrierCode "ups", so
+-- tracking is the sole signal for which of the two accounts paid.
+--
+-- Keyed on the tracking number so re-pulling an overlapping date window upserts,
+-- and a label voided after the fact corrects itself instead of inflating a median.
+CREATE TABLE IF NOT EXISTS ups_shipment_cost (
+  tracking_number  TEXT PRIMARY KEY,
+  ups_account      TEXT,            -- 'C6J610' (wholesale) | '18GE01' (ecom) | NULL if unparseable
+  shipstation_id   BIGINT,
+  order_number     TEXT,
+  carrier_code     TEXT,
+  service_code     TEXT,            -- 'ups_ground', 'ups_2nd_day_air', …
+  ship_date        DATE,
+  create_date      TIMESTAMPTZ,
+  weight_lb        NUMERIC,         -- normalized to POUNDS at ingest (the API mixes oz and lb)
+  length_in        NUMERIC,
+  width_in         NUMERIC,
+  height_in        NUMERIC,
+  dest_postal      TEXT,
+  dest_state       TEXT,
+  dest_city        TEXT,
+  dest_residential BOOLEAN,
+  shipment_cost    NUMERIC,         -- what UPS billed
+  insurance_cost   NUMERIC,
+  voided           BOOLEAN DEFAULT false,
+  store_id         INTEGER,
+  synced_at        TIMESTAMPTZ DEFAULT now()
+);
+
+-- The rate lookup always filters account + service, then matches on geography and
+-- weight, so index that path.
+CREATE INDEX IF NOT EXISTS idx_ups_cost_acct_svc ON ups_shipment_cost(ups_account, service_code);
+CREATE INDEX IF NOT EXISTS idx_ups_cost_state ON ups_shipment_cost(dest_state);
+CREATE INDEX IF NOT EXISTS idx_ups_cost_weight ON ups_shipment_cost(weight_lb);

@@ -24,6 +24,8 @@ npm run ingest         # load NetSuite saved-search CSV exports into the DB
 npm run server         # API + built UI at http://localhost:3001
 npm run dev            # live-editing (Vite + API)
 npm run analyze        # CLI attention list straight from CSVs (no DB)
+npm run ups:rate       # what a big box costs on the WHOLESALE UPS account
+npm run sync:ups-costs # harvest real UPS billed costs from ShipStation
 ```
 
 ## Data flow
@@ -50,6 +52,11 @@ NetSuite saved searches ──(manual CSV export)──▶ src/ingest ──▶ 
 - **ATS vs non-ATS shortage:** ATS short = real stock exception (act now);
   non-ATS short = normal (presold, awaiting its PO). See `src/model/pipeline.js`.
 - **EDI = ShopBop, Nordstrom, Bloomingdale's** (`src/model/source.js`).
+- **Two UPS accounts, and they are NOT interchangeable.** Boutique/wholesale
+  freight bills to **C6J610** ("Big Box"); **18GE01** ("Small") is ecom and is the
+  API *primary*, so anything that doesn't name an account gets the wrong one. The
+  tracking numbers prove it (`1Z**C6J610**…`). `src/model/upsRates.js` refuses to
+  present an 18GE01 figure as wholesale — never loosen that.
 - **IF ↔ Invoice** is derived via the shared SO (no manual entry).
 - **OC ↔ PO** has no native NetSuite link — the app will own that mapping
   (`oc_po_links` table).
@@ -66,10 +73,13 @@ src/ingest/loadToDb.js   upserts into Postgres
 src/model/stages.js      pipeline stages + next-action per stage
 src/model/pipeline.js    merge sources → order; aging + ATS-aware flags
 src/model/source.js      EDI vs boutique classification
+src/model/upsRates.js    UPS wholesale rates + the never-mislabel-the-account rule
+src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
+src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client
 client/src/views/        Dashboard · Kanban · TableView · Calendar
-scripts/                 analyze / migrate / ingest entry points
+scripts/                 analyze / migrate / ingest / sync / rate entry points
 docs/                    NetSuite saved-search design + document-linking strategy
 ```
 
