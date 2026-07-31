@@ -75,3 +75,42 @@ export function segmentPages(pageResults, { knownPos } = {}) {
   }
   return { documents, orphanPages }
 }
+
+// ── filing names ─────────────────────────────────────────────────────────────
+// ⚠️ THE PO+DC PAIR IS THE FOLDER, NOT THE DOCUMENT (measured 2026-07-31).
+// One PO routinely ships several fulfilments to the SAME DC — the real
+// Bloomingdale's scan, PO 7776940, is 15 fulfilments over 5 DCs (JP×4, ST×4,
+// CI×3, SC×3, CL×1). The old name `<po>-<dc>.pdf` therefore produced 5 names
+// for 15 documents, and `putPdf` UPDATES a same-named file in place, so each
+// later slip would have silently replaced an earlier one **while reporting
+// success** — data loss shaped exactly like a clean run.
+//
+// The IF number is the document's identity, so it belongs in the name. Keeping
+// `<po>-<dc>-` as the prefix means a DC's slips still sort together in the
+// folder. A `DC:<po>:<dc>` cargo-tag QR carries no IF, so that form falls back
+// to the old name — one tag per shipment, so it doesn't collide with itself.
+export function scanFilename({ po, dc, ifNumber }) {
+  const stem = dc ? `${po}-${dc}` : `${po}`
+  return ifNumber ? `${stem}-${ifNumber}.pdf` : `${stem}.pdf`
+}
+
+// Two documents in ONE scan that resolve to the same Drive path would overwrite
+// each other, and both would report `ok`. Detect it at plan time — before any
+// bytes move — so the run can refuse instead of quietly losing a slip.
+//
+// Within a single scan a repeat is never legitimate: `segmentPages` already
+// merges consecutive copies of the same slip into one document, so two
+// documents sharing a path means two DIFFERENT slips claimed one name.
+// Returns the colliding docs keyed by path, `[]` when clean.
+export function findFilingCollisions(documents = []) {
+  const byPath = new Map()
+  for (const d of documents) {
+    if (d?.skip || !d?.filename) continue
+    const path = `${d.root || ''}/${d.partner || ''}/${(d.pos && d.pos[0]) || ''}/${d.filename}`
+    if (!byPath.has(path)) byPath.set(path, [])
+    byPath.get(path).push(d)
+  }
+  return [...byPath.entries()]
+    .filter(([, ds]) => ds.length > 1)
+    .map(([path, ds]) => ({ path, filename: ds[0].filename, documents: ds }))
+}

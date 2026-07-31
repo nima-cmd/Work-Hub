@@ -63,21 +63,34 @@ export default function ScanToDrive() {
           // can: "IF7441" waiting on a sync is a different problem from a QR we
           // don't recognise at all.
           push({
-            name: d.ifNumber ? `${d.ifNumber}${d.customer ? ` · ${d.customer}` : ''}` : `${d.raw} (unrecognised)`,
+            name: d.collision
+              ? `${d.ifNumber || d.qr || 'document'} → ${d.collision}`
+              : d.ifNumber ? `${d.ifNumber}${d.customer ? ` · ${d.customer}` : ''}` : `${d.raw} (unrecognised)`,
             status: 'skipped',
-            note: d.ifNumber && d.known === false
-              ? 'not in the app yet — press ↻ Refresh NetSuite and re-scan'
-              : 'couldn’t resolve its customer and order — not filed rather than filed wrong',
+            note: d.collision
+              ? `another document in this scan already files as ${d.collision} — held instead of overwriting it`
+              : d.ifNumber && d.known === false
+                ? 'not in the app yet — press ↻ Refresh NetSuite and re-scan'
+                : 'couldn’t resolve its customer and order — not filed rather than filed wrong',
           })
           continue
         }
         const bytes = bytesByPage[d.pageNums[0]]
         if (!bytes) { push({ name: d.filename, status: 'error', note: 'no bytes for this document' }); continue }
-        const r = await fileScannedDoc({
-          partner: d.partner, pos: d.pos, filename: d.filename,
-          pdfBase64: bytesToBase64(bytes), root: d.root,
-        })
-        push(mapResult(d.filename, `${d.partner}/${d.pos[0]}`, r))
+        // ⚠️ EACH DOCUMENT IS ISOLATED (2026-07-31). This try used to sit OUTSIDE
+        // the loop, so the first document that threw ended the whole run: a real
+        // 15-slip Bloomingdale's scan filed 3 and silently abandoned 12, and two
+        // DCs were never attempted at all. One bad document must cost one row,
+        // never the remaining stack.
+        try {
+          const r = await fileScannedDoc({
+            partner: d.partner, pos: d.pos, filename: d.filename,
+            pdfBase64: bytesToBase64(bytes), root: d.root,
+          })
+          push(mapResult(d.filename, `${d.partner}/${d.pos[0]}`, r))
+        } catch (err) {
+          push({ name: d.filename, status: 'error', note: err.message || 'upload failed — the rest of the stack continued' })
+        }
       }
       // Master BOL — needs a confirmed number (no QR to read it from).
       if (plan.master && masterBytes) {
@@ -85,8 +98,12 @@ export default function ScanToDrive() {
           push({ name: 'Master BOL', status: 'skipped', note: 'enter the BOL # to file it' })
         } else {
           const filename = `${masterBol.trim()} master BOL.pdf`
-          const r = await fileScannedDoc({ partner: plan.master.partner, pos: plan.master.pos, filename, pdfBase64: bytesToBase64(masterBytes) })
-          push(mapResult(filename, `${plan.master.partner}/${plan.master.pos.length} PO folders`, r))
+          try {
+            const r = await fileScannedDoc({ partner: plan.master.partner, pos: plan.master.pos, filename, pdfBase64: bytesToBase64(masterBytes) })
+            push(mapResult(filename, `${plan.master.partner}/${plan.master.pos.length} PO folders`, r))
+          } catch (err) {
+            push({ name: filename, status: 'error', note: err.message || 'upload failed' })
+          }
         }
       }
       setPhase('done')
@@ -95,11 +112,27 @@ export default function ScanToDrive() {
     }
   }
 
+  // Say what actually went wrong. This used to collapse every failure to
+  // "upload failed" and every 403 to "re-auth needed" — but Drive returns 403
+  // for rate limits too, so a throttled upload told Nima to go re-authorise
+  // something that was working fine.
   function mapResult(name, where, r) {
-    if (r.ok) return { name, status: 'ok', note: where, links: r.uploaded }
-    if (r.needsReauth) return { name, status: 'error', note: 'Drive re-auth needed — run scripts/connect-gmail.js' }
+    if (r.ok) {
+      const replaced = r.uploaded?.some((u) => u.replaced)
+      return { name, status: 'ok', note: replaced ? `${where} (replaced an existing file)` : where, links: r.uploaded }
+    }
     if (r.configured === false) return { name, status: 'error', note: 'Drive not configured (no refresh token)' }
-    return { name, status: 'error', note: 'upload failed' }
+    if (r.needsReauth) {
+      return { name, status: 'error', note: `Drive refused this (${r.reason || 'forbidden'}) — re-run scripts/connect-gmail.js` }
+    }
+    const rate = r.reason && /rate|quota/i.test(r.reason)
+    return {
+      name,
+      status: 'error',
+      note: rate
+        ? `Drive throttled this${r.where ? ` on ${r.where}` : ''} even after retries — file it again in a moment`
+        : `${r.where || 'upload'} failed${r.status ? ` (${r.status}` : ''}${r.reason ? ` ${r.reason}` : ''}${r.status ? ')' : ''}`,
+    }
   }
 
   const edi = plan?.documents?.filter((d) => d.kind === 'edi') || []

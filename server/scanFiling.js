@@ -10,6 +10,7 @@
 import { pool } from '../src/db.js'
 import { parseDcToken, partnerForDc } from '../src/model/dc.js'
 import { uploadScannedPdf, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
+import { scanFilename, findFilingCollisions } from '../src/model/scanSegments.js'
 
 // A Drive folder name can't carry a slash, and a customer name legitimately can
 // ("Wexner: Joseph - Jackson"). Strip only what Drive/paths can't take, and keep
@@ -155,9 +156,13 @@ export async function planScanFiling(segments = []) {
     }
     if (!c.partner) warnings.push(`PO ${c.po}: couldn't resolve partner — will file under _Unresolved.`)
     const partner = c.partner || '_Unresolved'
-    const filename = c.dc ? `${c.po}-${c.dc}.pdf` : `${c.po}.pdf`
+    // The IF goes IN the name — PO+DC is only the folder, and one PO/DC pair
+    // carries several fulfilments (see scanFilename). Without it, PO 7776940's
+    // 15 slips shared 5 names and would have overwritten each other silently.
+    const filename = scanFilename({ po: c.po, dc: c.dc, ifNumber: c.ifNumber })
     documents.push({
       kind: 'edi', po: c.po, dc: c.dc, partner, pos: [c.po], filename,
+      root: DRIVE_ROOT_BOLS,
       pageNums: seg.pageNums, qr: seg.qr, ifNumber: c.ifNumber || null,
     })
   }
@@ -181,6 +186,23 @@ export async function planScanFiling(segments = []) {
     }
     if (partners.length > 1) warnings.push('Master BOL spans multiple partners — filing under ' + partner + '.')
     if (!suggestedBol) warnings.push('No matching master BOL number found — enter it from the page before filing.')
+  }
+
+  // Two documents aiming at one path would overwrite each other and BOTH report
+  // success. Catch it before any bytes move, and mark the later ones so the
+  // upload refuses them — a lost slip that looked filed is the worst outcome
+  // here, worse than a slip that says it needs attention.
+  for (const clash of findFilingCollisions(documents)) {
+    const [keep, ...rest] = clash.documents
+    for (const d of rest) {
+      d.skip = true
+      d.collision = clash.filename
+    }
+    warnings.push(
+      `${clash.documents.length} documents resolve to the same file "${clash.filename}" — ` +
+      `filing the first (${keep.qr || keep.ifNumber || 'page ' + keep.pageNums?.[0]}) and holding the rest ` +
+      `rather than overwriting. Check whether the same slip was scanned twice.`,
+    )
   }
 
   return { documents, master, warnings }
