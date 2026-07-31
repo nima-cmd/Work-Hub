@@ -283,6 +283,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
     loadOrders, loadFulfillments, loadInvoices, recordSnapshot,
     stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
     reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
+    deriveOrderEvents,
   } = await import('./loadToDb.js')
 
   const ROLLBACK = Symbol('dry-run rollback')
@@ -305,8 +306,10 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
       // Keep already-frozen EDI snapshots current while their 856 is still in
       // the Orderful window (a fresh ASN is PENDING for hours before the 997).
       const nEdiRefreshed = await refreshShipmentEdiSnapshots(db)
+      // Last, because it reads the tables everything above has just written.
+      const { inserted: nEvents } = await deriveOrderEvents({ mode: 'sync' }, db)
       await recordSnapshot('netsuiteLive', orders.length, new Date(), db)
-      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed }
+      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents }
       if (dryRun) {
         const e = new Error('dry run')
         e.code = ROLLBACK

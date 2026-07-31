@@ -170,16 +170,12 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;
 
--- ── Activity log per order — follow-ups, handoffs, inquiries ──────────────────
--- Drives the "lost visibility" fix (explicit warehouse handoff + acknowledgment)
--- and gives an audit trail of who chased what, when.
-CREATE TABLE IF NOT EXISTS order_activity (
-  id               SERIAL PRIMARY KEY,
-  so_number        TEXT REFERENCES orders(so_number) ON DELETE CASCADE,
-  kind             TEXT,                         -- 'handoff' | 'ack' | 'inquiry' | 'note'
-  note             TEXT,
-  created_at       TIMESTAMPTZ DEFAULT now()
-);
+-- ── order_activity: REMOVED 2026-08-02 ───────────────────────────────────────
+-- An early sketch of a per-order audit trail that was never wired up: it held 0
+-- rows and had no reader or writer anywhere in the codebase. `order_events`
+-- below is the real ledger and does the job properly. Dropped so a future reader
+-- can't mistake this for the ledger and build against an empty table.
+DROP TABLE IF EXISTS order_activity;
 
 -- ── Import snapshots — one row per CSV import ────────────────────────────────
 -- Lets us detect stalls ("stuck N imports in a row") that a single search can't show.
@@ -588,10 +584,45 @@ ON CONFLICT (key) DO NOTHING;
 -- Custody rows are append-only on purpose: re-handoffs happen (an IF can go
 -- back out after a fix), so state = the LATEST OUT vs latest IN, and the full
 -- history stays queryable.
+--
+-- ── The document-transition spine (2026-08-02) ───────────────────────────────
+-- The "join later" above is now done. src/model/orderEvents.js derives the rest
+-- of the pipeline from synced document state, and deriveOrderEvents() in
+-- src/ingest/loadToDb.js writes it at the end of every sync (CSV import, live
+-- NetSuite pull, and the CLI ingest alike). Full event vocabulary:
+--
+--   SO_IMPORTED       SO   orders.first_seen
+--   IF_CREATED        IF   fulfillments.if_date
+--   CUSTODY_OUT/IN    IF   QR scans          (written by the scan handlers)
+--   PACKED            IF   status = Packed   — observed, see below
+--   INVOICED          INV  invoice exists    — observed
+--   REACHED_APPROVED  IF   packed_status     (written by stampApprovedForShipping)
+--   PAID              INV  status = Paid In Full — observed
+--   ROUTED            DC   routing_shipment.bol_generated_at
+--   DEPARTED          IF   fulfillments.actual_ship_date
+--   ASN_SENT          PO   856 OUT/LIVE transmitted to Orderful
+--   INVOICE_SENT      PO   810 OUT/LIVE transmitted to Orderful
+--
+-- Two other event types predate the spine and are written elsewhere:
+-- SHIPPED_VALUE (a shipment's dollar value, note = the amount) and
+-- CUSTODY_CLEARED (departure cleanup; pinned to the ship date).
+--
+-- ⚠️ occurred_at is NOT uniformly trustworthy, and that is deliberate. Most
+-- events carry a real date from the source row. PACKED / INVOICED / PAID have no
+-- recorded date anywhere in NetSuite's saved-search shape — we only ever see the
+-- state a document is in right now — so their occurred_at is when the sync first
+-- OBSERVED that state, accurate to within one sync interval. The backfill refuses
+-- to write those at all rather than date 98 invoices "today" and invent a history
+-- that never happened. Anything reading this table for a precise date should
+-- prefer the events above that are not marked observed.
+--
+-- Idempotent by (event_type, doc_type, doc_number) — enforced in code rather than
+-- by a unique constraint, because the CUSTODY_* rows are legitimately repeatable
+-- (an IF can go back out to the warehouse after a fix).
 CREATE TABLE IF NOT EXISTS order_events (
   id          SERIAL PRIMARY KEY,
-  event_type  TEXT NOT NULL,        -- 'CUSTODY_OUT' | 'CUSTODY_IN' | (later: 'STAGE_CHANGE' …)
-  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO'
+  event_type  TEXT NOT NULL,        -- see the vocabulary above
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC'
   doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
   so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
   note        TEXT,
@@ -601,6 +632,7 @@ CREATE TABLE IF NOT EXISTS order_events (
 CREATE INDEX IF NOT EXISTS idx_order_events_doc      ON order_events(doc_type, doc_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_so       ON order_events(so_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_occurred ON order_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_order_events_type     ON order_events(event_type);
 
 -- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
 -- When a packed IF is scanned back IN from the warehouse, the scanner may
