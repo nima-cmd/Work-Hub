@@ -2045,3 +2045,106 @@ export async function getEdiDeliveryGaps() {
   const txns = await fetchEdiTransactions()
   return computeEdiDeliveryGaps(txns)
 }
+
+// ── What will the big box cost on the WHOLESALE UPS account? (Nima, 2026-08-02) ──
+//
+// Nima's ask: "if we can get the rate for the big boxes in ShipStation or anywhere
+// it would be great." Two sources are combined here, and they are never blended:
+//
+//   1. A LIVE quote on C6J610, the wholesale account. This is the number he wants,
+//      and it is unavailable until he reconnects that carrier in ShipStation —
+//      /v2/rates against it answers "the connection appears to be invalid". The
+//      code path is complete and switches on by itself the moment it's fixed.
+//   2. What C6J610 was ACTUALLY BILLED for comparable boxes, harvested from the
+//      years of labels bought on it through ShipStation (npm run sync:ups-costs).
+//      Real invoiced wholesale money, available today, with the caveat that older
+//      actuals predate UPS's annual increases.
+//
+// A live 18GE01 quote is also fetched, but ONLY as a cross-check — it is the ecom
+// account, and boutique freight bills to C6J610 (the tracking numbers prove it),
+// so wholesaleFigure() refuses to substitute it. See src/model/upsRates.js.
+export async function getUpsRate({ ifNumber, destination, serviceCode = 'ups_ground', residential = false } = {}) {
+  const { fetchFulfillmentBoxes } = await import('../src/ingest/loadToDb.js')
+  const { fetchActuals } = await import('../src/ingest/shipstationCosts.js')
+  const { quoteAccount } = await import('../src/ingest/shipstationRates.js')
+  const { WHOLESALE_ACCOUNT, quoteFromActuals, rateAnswerForBox, liveFigure } = await import('../src/model/upsRates.js')
+
+  const boxes = await fetchFulfillmentBoxes(ifNumber)
+  if (!boxes.length) {
+    return { ifNumber, boxes: [], error: `no scanned-in boxes captured for ${ifNumber} — the rate comes off the box dims recorded at scan-in` }
+  }
+
+  // One history read for the whole shipment; the model does the per-box matching.
+  const actuals = await fetchActuals({ account: WHOLESALE_ACCOUNT, serviceCode }, pool)
+  const asOfDate = new Date().toISOString().slice(0, 10)
+
+  const results = []
+  let liveWholesaleError = null
+  for (const box of boxes) {
+    const figures = []
+
+    // 1. Live wholesale — the real answer, when the connection is up.
+    const wholesaleLive = await quoteAccount({ account: WHOLESALE_ACCOUNT, box, destination, residential })
+    if (wholesaleLive.ok) {
+      const pick = wholesaleLive.figures.find((f) => f.serviceCode === serviceCode) || wholesaleLive.figures[0]
+      if (pick) figures.push(pick)
+    } else {
+      liveWholesaleError = wholesaleLive.error
+    }
+
+    // 2. Wholesale billed history — works today.
+    const hist = quoteFromActuals(
+      actuals,
+      { account: WHOLESALE_ACCOUNT, serviceCode, weightLb: Number(box.weightLb), destPostal: destination?.postalCode, destState: destination?.state },
+      { asOfDate },
+    )
+    if (hist) figures.push(hist)
+
+    // 3. The ecom account, cross-check only.
+    const ecomLive = await quoteAccount({ account: '18GE01', box, destination, residential })
+    if (ecomLive.ok) {
+      const pick = ecomLive.figures.find((f) => f.serviceCode === serviceCode) || ecomLive.figures[0]
+      if (pick) figures.push(pick)
+    }
+
+    results.push(rateAnswerForBox(box, figures, { liveWholesaleError }))
+  }
+
+  // Shipment total, only when EVERY box produced a wholesale figure — a partial sum
+  // would read as the shipment's cost while silently omitting boxes.
+  const perBox = results.map((r) => (r.wholesale ? (r.wholesale.total ?? r.wholesale.median) : null))
+  const complete = perBox.every((v) => typeof v === 'number')
+  const total = complete ? Math.round(perBox.reduce((a, b) => a + b, 0) * 100) / 100 : null
+
+  return {
+    ifNumber,
+    serviceCode,
+    destination,
+    account: WHOLESALE_ACCOUNT,
+    boxes: results,
+    wholesaleTotal: total,
+    wholesaleTotalBasis: complete ? results[0].wholesale.basis : null,
+    incompleteReason: complete ? null 
+      : `no wholesale figure for ${perBox.filter((v) => typeof v !== 'number').length} of ${perBox.length} box(es) — a partial total would understate the shipment`,
+    liveWholesaleError,
+    historyRows: actuals.length,
+    fix: liveWholesaleError
+      ? 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect. Then GET /api/ups/connection to confirm.'
+      : null,
+  }
+}
+
+// Rate-tests the wholesale carrier. Deliberately does NOT trust /v2/carriers — the
+// broken connection still advertises 23 healthy services from cache, which is what
+// made this look fine for weeks. One free quote is the only honest check.
+export async function getUpsConnection() {
+  const { checkConnection } = await import('../src/ingest/shipstationRates.js')
+  const { WHOLESALE_ACCOUNT } = await import('../src/model/upsRates.js')
+  const [wholesale, ecom] = await Promise.all([checkConnection(WHOLESALE_ACCOUNT), checkConnection('18GE01')])
+  return {
+    wholesale,
+    ecom,
+    ready: wholesale.healthy,
+    fix: wholesale.healthy ? null : 'ShipStation → Settings → Shipping → Carriers → NAGHEDI UPS (C6J610) Big Box → reconnect/re-authorize.',
+  }
+}

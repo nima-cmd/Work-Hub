@@ -16,7 +16,7 @@ import {
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
-  streamMasterBol, fileMasterToDrive, getLabelGaps,
+  streamMasterBol, fileMasterToDrive, getLabelGaps, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
@@ -327,6 +327,45 @@ app.post('/api/edi/arrivals/dismiss', async (req, res) => {
 app.get('/api/label-gaps', async (_req, res) => {
   try {
     res.json(await getLabelGaps())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── UPS wholesale rates ──────────────────────────────────────────────────────
+// The rate for the big boxes, off the dims already captured at scan-in.
+//   GET /api/ups/rate?if=IF7228&postal=02554&state=MA&city=Nantucket
+// Destination is passed in because Neon doesn't hold a boutique ship-to address.
+// A quote is a READ — ShipStation charges nothing for it and nothing here buys a
+// label. See getUpsRate in queries.js for why two sources are kept separate.
+app.get('/api/ups/rate', async (req, res) => {
+  try {
+    const ifNumber = String(req.query.if || '').trim()
+    if (!ifNumber) return res.status(400).json({ error: 'pass ?if=IF#####' })
+    const postalCode = String(req.query.postal || '').trim()
+    if (!postalCode) return res.status(400).json({ error: 'pass ?postal= — UPS ground price is driven by distance, so a rate without a destination is meaningless' })
+    res.json(await getUpsRate({
+      ifNumber,
+      destination: {
+        postalCode,
+        state: String(req.query.state || '').trim() || null,
+        city: String(req.query.city || '').trim() || null,
+        country: String(req.query.country || 'US').trim(),
+      },
+      serviceCode: String(req.query.service || 'ups_ground').trim(),
+      residential: req.query.residential === 'true',
+    }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Did the reconnect work? Rate-tests both accounts. Run this right after fixing it.
+app.get('/api/ups/connection', async (_req, res) => {
+  try {
+    res.json(await getUpsConnection())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
