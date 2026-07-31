@@ -140,17 +140,28 @@ async function ensureFolder(name, parentId, headers) {
   return { id }
 }
 
-// The two output trees. BOLs are freight; packing slips are boutique/parcel and
-// deliberately live OUTSIDE that tree (Nima, 2026-07-31) so "BOLs" keeps meaning
-// freight — a boutique slip filed in there would read as a missing BOL.
-export const DRIVE_ROOT_BOLS = 'Work-Hub BOLs'
-export const DRIVE_ROOT_SLIPS = 'Packing Slips'
+// Everything the app files lives under ONE parent, so Drive has a single
+// Work-Hub-owned folder instead of two loose roots (Nima, 2026-07-31).
+export const DRIVE_PARENT = 'Work-Hub Shipping Documents'
+
+// The two output trees, both under that parent. BOLs are freight; boutique slips
+// live OUTSIDE that tree so "BOLs" keeps meaning freight — a boutique slip filed
+// in there would read as a missing BOL.
+//
+// ⚠️ RENAMING EITHER OF THESE IS A MIGRATION, NOT A CONSTANT CHANGE. ensureFolder
+// resolves folders BY NAME, so changing a name alone makes the app create a fresh
+// empty root and silently orphan everything already filed. Rename the live folder
+// too — `npm run migrate:drive` does both trees and is idempotent. Drive keeps a
+// folder's ID across a rename, so existing files and their webViewLinks survive.
+export const DRIVE_ROOT_BOLS = 'BOLs'
+export const DRIVE_ROOT_SLIPS = 'Boutiques'
 
 // Resolve a nested folder path (["Bloomingdale's", "7527064"]) under a root,
 // creating each level. Defaults to the BOL tree so existing callers are unchanged.
 async function ensurePath(segments, headers, root = DRIVE_ROOT_BOLS) {
   let parent = null
-  for (const seg of [root, ...segments]) {
+  // DRIVE_PARENT first — both trees hang off the one Work-Hub folder.
+  for (const seg of [DRIVE_PARENT, root, ...segments]) {
     const r = await ensureFolder(seg, parent, headers)
     if (r.failure) return { failure: r.failure }
     parent = r.id

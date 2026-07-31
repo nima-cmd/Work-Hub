@@ -8,6 +8,7 @@
     "test": "node --test",
     "analyze": "node scripts/analyze.js",
     "migrate": "node --env-file=.env.local scripts/migrate.js",
+    "migrate:drive": "node --env-file=.env.local scripts/migrate-drive-folders.js",
     "ingest": "node --env-file=.env.local scripts/ingest.js",
     "match:review": "node --env-file=.env.local scripts/match-review.js",
     "sync:netsuite": "node --env-file=.env.local scripts/sync-netsuite.js",
