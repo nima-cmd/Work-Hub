@@ -36,7 +36,9 @@ import {
   fetchEmailLinks, addEmailLink, deleteEmailLink, searchEmailsForLink,
   fetchCatalogueSkus, fetchIfStatusByPo,
   fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
+  fetchFulfilmentPack,
 } from '../src/ingest/loadToDb.js'
+import { checkGroupPack } from '../src/model/packCheck.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
@@ -1032,9 +1034,15 @@ export async function getRouting() {
   const byKey = new Map()
   for (const s of shipments) byKey.set(s.dcPoKey, s)
 
+  // Pack check (Nima, 2026-08-02): every unit on a fulfilment must be in a
+  // carton before its group can ship. Keyed by PO-DC so a group covering several
+  // POs picks up each one's fulfilments.
+  const packByPoDc = await fetchFulfilmentPack()
+
   const consolidated = groups.map((g) => {
     const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
-    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null }
+    const members = g.memberPos.flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
+    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
   })
 
   const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
@@ -1048,6 +1056,9 @@ export async function getRouting() {
   return {
     packages, consolidated, shipments, detached, auths, gaps,
     held, heldKeys: [...heldSet], packageCount: packages.length,
+    // Flat, like `packages`: the view re-consolidates over a PO subset
+    // client-side and must be able to recompute the pack check to match.
+    fulfilmentPack: [...packByPoDc.values()].flat(),
   }
 }
 

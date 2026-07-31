@@ -1828,6 +1828,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* ── EDI Routing (Nima, 2026-07-22) ──────────────────────────────────────── */
 .routing { padding: 4px 2px 40px; }
 .rt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.rt-headActions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.rt-pull { white-space: nowrap; }
 .rt-head h2 { margin: 0 0 4px; font-size: 20px; }
 .rt-sub { font-size: 13px; max-width: 640px; line-height: 1.4; }
 .rt-empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; padding: 20px; color: var(--muted); }
@@ -1856,6 +1858,16 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
 
+/* Pack check (2026-08-02) — every unit on the IF vs every unit in a carton. */
+.rt-pack { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; border-radius: 6px; padding: 5px 8px; }
+.rt-pack.good { color: #7ee787; background: rgba(126,231,135,0.08); border: 1px solid rgba(126,231,135,0.3); }
+.rt-pack.bad  { color: #ff9d9d; background: rgba(255,107,107,0.1);  border: 1px solid rgba(255,107,107,0.45); }
+.rt-pack.idle { color: var(--muted); background: var(--panel2); border: 1px solid var(--line); }
+.rt-packMark { font-weight: 800; }
+.rt-packText { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rt-packIf { font-variant-numeric: tabular-nums; background: rgba(255,107,107,0.16); border-radius: 4px; padding: 1px 6px; }
+.rt-packIf em { font-style: normal; opacity: 0.8; }
+
 .rt-assign { align-self: flex-start; }
 .rt-bol { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px dashed var(--line); }
 .rt-bol.assigned .rt-bolLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
@@ -1869,6 +1881,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-tabs .tab .count { margin-left: 6px; opacity: 0.7; font-variant-numeric: tabular-nums; }
 .rt-shipBtn { align-self: flex-start; }
 .rt-shipBtn.on { border-color: rgba(126,231,135,0.5); color: #7ee787; }
+/* Mark-routed checkmark — cyan so it reads as a step BEFORE the green
+   departure, not a second way of saying "shipped". */
+.rt-routedBtn { align-self: flex-start; }
+.rt-routedBtn.on { border-color: rgba(88,199,224,0.55); color: #58c7e0; }
 .rt-shippedTag { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(126,231,135,0.14); color: #7ee787; border: 1px solid rgba(126,231,135,0.4); }
 
 /* ── EDI Routing phase 2: refs + auth ────────────────────────────────────── */
@@ -1943,6 +1959,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-gapChip { font-size: 12px; font-variant-numeric: tabular-nums; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); }
 .rt-gapChip.miss { color: var(--hi); border-color: rgba(248,81,73,0.5); background: rgba(248,81,73,0.08); }
 .rt-gapChip.stale { color: var(--mid); border-color: rgba(217,130,43,0.5); background: rgba(217,130,43,0.08); }
+
+/* Short-pack warning (2026-08-02) — one row per shipment, its DC leading. */
+.rt-packWarn .rt-packRow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rt-packRowDc {
+  font-family: var(--display); font-weight: 800; font-size: 13px; color: var(--hi);
+  min-width: 3.5ch; letter-spacing: 0.04em;
+}
 
 /* ── Routing manual PO hold (Nima, 2026-07-22) ───────────────────────────── */
 .rt-memberPos { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -2193,6 +2216,24 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   font-family: var(--display); font-size: 10px; letter-spacing: 0.14em;
   color: var(--muted); font-weight: 700; margin-right: 2px; white-space: nowrap;
 }
+/* Crew voice on the strip (2026-08-02) — a face and a line instead of a label.
+   Capped width so a long line can never push the chips off screen. */
+.courtVoice { display: flex; align-items: center; gap: 7px; margin-right: 4px; min-width: 0; }
+.courtVoiceFace {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; font-size: 13px;
+  background: var(--panel2); border: 1px solid var(--line);
+}
+.courtVoiceFace img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Wraps rather than truncates — the line IS the feature, and an ellipsised
+   "start the…" tells Nima nothing. The strip already wraps, so a two-line
+   voice just pushes chips onto the next row instead of hiding words. */
+.courtVoiceText {
+  font-size: 12px; color: var(--text); opacity: 0.92; line-height: 1.3;
+  max-width: 30ch; white-space: normal;
+}
+.courtNestor .courtVoiceText { max-width: 24ch; color: var(--muted); }
+
 .courtChip {
   font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
   padding: 3px 9px; border-radius: 999px;

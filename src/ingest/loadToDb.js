@@ -412,6 +412,31 @@ export async function loadEdiPackages(rows, db = pool) {
   return n
 }
 
+// Per-IF pack reconciliation (Nima, 2026-08-02). REPLACE, not upsert, for the
+// same reason edi_packages is replaced: an IF missing from the pull has shipped,
+// and a stale row would keep flagging a shipment that already left. Callers run
+// this inside the sync's transaction so a failure can't leave the table empty.
+export async function loadFulfilmentPack(rows, db = pool) {
+  await db.query('DELETE FROM edi_fulfillment_pack')
+  let n = 0
+  for (const r of rows) {
+    if (!r.ifNumber || !r.poDc) continue
+    await db.query(
+      `INSERT INTO edi_fulfillment_pack
+         (if_number, po_dc, po_number, dc, if_units, packed_units, cartons, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+       ON CONFLICT (if_number) DO UPDATE SET
+         po_dc = EXCLUDED.po_dc, po_number = EXCLUDED.po_number, dc = EXCLUDED.dc,
+         if_units = EXCLUDED.if_units, packed_units = EXCLUDED.packed_units,
+         cartons = EXCLUDED.cartons, updated_at = now()`,
+      [r.ifNumber, r.poDc, r.poNumber || null, r.dc || null,
+        r.ifUnits ?? 0, r.packedUnits ?? 0, r.cartons ?? 0],
+    )
+    n++
+  }
+  return n
+}
+
 // ── Product catalogue (uploaded SKU master) ─────────────────────────────────
 export async function loadCatalogueSkus(rows, db = pool) {
   let n = 0
@@ -506,6 +531,22 @@ export async function fetchEdiPackages(db = pool) {
      ORDER BY po_number, dc`,
   )
   return rows
+}
+
+// The pack check's per-IF rows, grouped by PO-DC so a routing group covering
+// several POs can gather each one's fulfilments in a single pass.
+export async function fetchFulfilmentPack(db = pool) {
+  const { rows } = await db.query(
+    `SELECT if_number AS "ifNumber", po_dc AS "poDc", po_number AS "poNumber", dc,
+            if_units AS "ifUnits", packed_units AS "packedUnits", cartons
+     FROM edi_fulfillment_pack ORDER BY if_number`,
+  )
+  const byPoDc = new Map()
+  for (const r of rows) {
+    if (!byPoDc.has(r.poDc)) byPoDc.set(r.poDc, [])
+    byPoDc.get(r.poDc).push(r)
+  }
+  return byPoDc
 }
 
 // ── Routing shipments + BOL minting ──────────────────────────────────────────

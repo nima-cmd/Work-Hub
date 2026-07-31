@@ -936,7 +936,7 @@ test('fromOpenSalesOrders leaves dc null when neither column nor DC in name', ()
 // the freight weight (411 freight + 1 pallet = 454). Pallets are counted ONLY
 // on the master (Nima, 2026-07-29): per-DC child BOLs — and a master before its
 // count is entered — show NO pallet count and plain freight weight.
-import { palletWeight } from '../server/bolPdf.js'
+import { palletWeight, dcTag } from '../server/bolPdf.js'
 
 test('palletWeight: master BOL uses the manual count and adds 43 lb tare per pallet', () => {
   assert.deepEqual(palletWeight({ isMaster: true, palletCount: 1, weightLb: 411 }),
@@ -959,6 +959,31 @@ test('palletWeight: a per-DC child BOL never shows pallets — blank H.U. + plai
   // Even a stray palletCount off the master is ignored — pallets are master-only.
   assert.deepEqual(palletWeight({ isMaster: false, palletCount: 5, weightLb: 90 }),
     { hu: '', weight: 90, manual: false })
+})
+
+// The big header DC callout (Nima, 2026-08-02) — on a Bloomingdale's BOL the
+// ship-to ADDRESS is the merge center, so before this the destination DC only
+// appeared in a small line inside the address box, and matching cartons to the
+// right BOL at labelling time was error-prone.
+test('dcTag: a Bloomingdale\'s DC prints its code AND its name', () => {
+  assert.equal(dcTag('CG', 'final'), 'FINAL DC: CG — China Grove DC')
+  assert.equal(dcTag('SC', 'final'), 'FINAL DC: SC — Secaucus')
+})
+
+test('dcTag: a numeric Nordstrom DC prints the bare code, not "DC DC 799"', () => {
+  // dcLabel('799') is already "DC 799", so echoing it would read "FINAL DC: DC 799".
+  assert.equal(dcTag('799', 'final'), 'FINAL DC: 799')
+  assert.equal(dcTag('089', 'final'), 'FINAL DC: 089')
+})
+
+test('dcTag: a master BOL names NO single DC — it aggregates several', () => {
+  // Printing one DC on a master would actively mislabel the shipment.
+  assert.equal(dcTag('CG', 'master'), 'MASTER BOL — MULTIPLE DCs')
+})
+
+test('dcTag: no DC yields no callout rather than a stray "FINAL DC:" label', () => {
+  assert.equal(dcTag('', 'final'), '')
+  assert.equal(dcTag(null, 'final'), '')
 })
 
 // ── EDI 850 ship-window date extraction (Phase D, 2026-07-28) ────────────────
@@ -1143,4 +1168,125 @@ test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
     { ...asn({ id: '2', deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }), stream: 'TEST' },
   ], NOW)
   assert.equal(g.counts.asnStuck, 0) // a test ASN must never raise a real alert
+})
+
+// ── Pack check (Nima, 2026-08-02) ────────────────────────────────────────────
+// "We just need to make sure every unit on an IF is packed, and if not we need
+// to go to that IF and pack them." Checked per-FULFILMENT, not per sales order:
+// an IF can be legitimately short against its SO (partial fulfilment), so an
+// SO-level check would cry wolf on every split shipment.
+import { checkFulfilmentPack, checkGroupPack, packSummary } from '../src/model/packCheck.js'
+
+test('packCheck: units on the IF all in cartons → ok', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7420', ifUnits: 12, packedUnits: 12, cartons: 3 })
+  assert.equal(r.status, 'ok')
+  assert.equal(r.short, 0)
+})
+
+test('packCheck: a missed item shows as short, with the exact count to go pack', () => {
+  // Live case 2026-08-02: IF7350 on Nordstrom DC 584.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7350', ifUnits: 141, packedUnits: 82, cartons: 3 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.short, 59)
+  assert.equal(r.blankCartons, false)
+})
+
+test('packCheck: cartons made but no quantities entered is flagged distinctly', () => {
+  // Live case: IF7439 — one carton with a real weight but a blank qty field.
+  // The fix differs from a normal shortage: fill in the box you already made.
+  const r = checkFulfilmentPack({ ifNumber: 'IF7439', ifUnits: 10, packedUnits: 0, cartons: 1 })
+  assert.equal(r.status, 'short')
+  assert.equal(r.blankCartons, true)
+})
+
+test('packCheck: nothing packed yet is NOT an error — mid-pack that is normal', () => {
+  const r = checkFulfilmentPack({ ifNumber: 'IF7351', ifUnits: 70, packedUnits: 0, cartons: 0 })
+  assert.equal(r.status, 'not_started')
+  assert.equal(r.short, 0, 'not_started must not report a shortage or the check becomes noise')
+})
+
+test('packCheck: packing MORE than the IF says is caught too', () => {
+  const r = checkFulfilmentPack({ ifUnits: 10, packedUnits: 12, cartons: 2 })
+  assert.equal(r.status, 'over')
+  assert.equal(r.over, 2)
+})
+
+test('packCheck: one short IF makes the whole group not ready — the 856 is per group', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 50, packedUnits: 50, cartons: 2 },
+    { ifNumber: 'IF2', ifUnits: 38, packedUnits: 0, cartons: 1 },
+  ])
+  assert.equal(g.status, 'short')
+  assert.equal(g.ready, false)
+  assert.equal(g.shortUnits, 38)
+  assert.deepEqual(g.problems.map((p) => p.ifNumber), ['IF2'])
+})
+
+test('packCheck: a group whose every IF reconciles is ready to route', () => {
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 34, packedUnits: 34, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 42, packedUnits: 42, cartons: 2 },
+  ])
+  assert.equal(g.status, 'ok')
+  assert.equal(g.ready, true)
+  assert.equal(packSummary(g), '76/76 units')
+})
+
+test('packCheck: a part-packed group reads as in_progress, not short', () => {
+  // Some IFs done, others untouched — real shortages must stay distinguishable
+  // from work simply not begun, or the warning gets ignored.
+  const g = checkGroupPack([
+    { ifNumber: 'IF1', ifUnits: 20, packedUnits: 20, cartons: 1 },
+    { ifNumber: 'IF2', ifUnits: 30, packedUnits: 0, cartons: 0 },
+  ])
+  assert.equal(g.status, 'in_progress')
+  assert.equal(g.ready, false)
+  assert.equal(g.problems.length, 0)
+})
+
+test('packSummary: always shows both numbers so a clean group proves it was checked', () => {
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 4, cartons: 1 }])), '4/10 units — 6 short')
+  assert.equal(packSummary(checkGroupPack([{ ifUnits: 10, packedUnits: 0, cartons: 0 }])), '0/10 units — not packed yet')
+})
+
+// ── Court strip voice (Nima, 2026-08-02) ─────────────────────────────────────
+// A crew member says what to pick up next instead of a "⚑ OUR COURT" label.
+// It must never invent or blend numbers — the never-lump rule still governs the
+// strip; this only ever repeats one count the chips already show.
+import { courtLine, warehouseLine } from '../src/model/courtVoice.js'
+
+test('courtVoice: picks the lane Nima can finish himself, not the biggest number', () => {
+  // 61 stuck invoices would drown out 4 labels every single day.
+  const line = courtLine([
+    { key: 'invoiceStuck', n: 61, label: 'invoices never sent' },
+    { key: 'needsLabel', n: 4, label: 'need a label' },
+  ])
+  assert.match(line, /4 parcels need a label/)
+})
+
+test('courtVoice: an item aging past a week overrides the lane order', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF7228', ageDays: 41 })
+  assert.match(line, /IF7228 has been sitting 41 days/)
+})
+
+test('courtVoice: a fresh oldest item does NOT override — no false alarm', () => {
+  const line = courtLine([{ key: 'needsLabel', n: 4, label: 'need a label' }],
+    { ifNumber: 'IF9999', ageDays: 2 })
+  assert.match(line, /need a label/)
+})
+
+test('courtVoice: singular reads properly — no "1 parcels"', () => {
+  assert.match(courtLine([{ key: 'needsLabel', n: 1, label: 'need a label' }]), /One parcel needs a label/)
+  assert.match(courtLine([{ key: 'canShip', n: 1, label: 'can ship' }]), /One order is/)
+})
+
+test('courtVoice: an empty board says so rather than rendering nothing', () => {
+  assert.equal(courtLine([]), "Board's clear. Enjoy it.")
+})
+
+test('courtVoice: the warehouse line is empty at zero so the group can hide', () => {
+  assert.equal(warehouseLine(0), '')
+  assert.match(warehouseLine(1), /one of ours/)
+  assert.match(warehouseLine(3), /Got 3 of ours/)
 })

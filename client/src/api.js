@@ -637,6 +637,15 @@ export async function fetchRouting() {
   return res.json()
 }
 
+// Pull the carton feed straight from NetSuite, then hand back the refreshed
+// board. Returns { synced, routing } — the caller wants both: the board to
+// render, and what changed to report.
+export async function refreshRoutingFeed() {
+  const res = await fetch('/api/routing/refresh', { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 export async function assignRoutingBol(shipment) {
   const res = await fetch('/api/routing/assign-bol', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

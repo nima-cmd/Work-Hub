@@ -45,6 +45,22 @@ export const ifSql = () => `
      AND custbody_po_cd_identifier IS NOT NULL
      AND status <> 'C'`
 
+// How many units the fulfilment itself says it is shipping — the other half of
+// the pack check (Nima, 2026-08-02).
+//
+// ⚠️ An Item Fulfilment writes THREE transactionlines per item (-qty, +qty,
+// -qty) to record the inventory movement, so SUM(ABS(quantity)) triples every
+// count. Verified on IF7420: 21 lines across 7 items summing to 36 by ABS, but
+// 12 real units. Only the POSITIVE InvtPart lines are the shipped quantity.
+// itemtype also excludes the ShipItem line (the 'LTL' freight line).
+export const ifUnitsSql = (ifIds) => `
+  SELECT tl.transaction AS if_id, SUM(tl.quantity) AS if_units
+    FROM transactionline tl
+   WHERE tl.itemtype = 'InvtPart'
+     AND tl.quantity > 0
+     AND tl.transaction IN (${ifIds.join(',')})
+   GROUP BY tl.transaction`
+
 // The carton rows for those fulfilments. BUILTIN.DF resolves the Package
 // Definition reference to its display name, which is the box's dimensions.
 export const packageSql = (ifIds) => `
@@ -81,16 +97,35 @@ export function splitPoDc(poDc) {
 // Pure: SuiteQL rows → the same record shape fromEdiPackagesVolume emits, so the
 // existing loadEdiPackages and the whole routing model stay untouched.
 // Kept free of network/DB so it's unit-testable.
-export function mapEdiPackageRows({ ifs = [], packages = [] } = {}) {
+export function mapEdiPackageRows({ ifs = [], packages = [], ifUnits = [] } = {}) {
   const poDcOfIf = new Map()
   for (const r of ifs) poDcOfIf.set(String(r.id), r.po_dc ?? r.poDc)
+
+  // Per-fulfilment pack reconciliation (Nima, 2026-08-02). Built alongside the
+  // PO-DC rollup because both need the same carton rows; the rollup sums them
+  // away, and "which IF is short" is only answerable before that happens.
+  const unitsOfIf = new Map()
+  for (const r of ifUnits) unitsOfIf.set(String(r.if_id ?? r.ifId), Number(r.if_units ?? r.ifUnits) || 0)
+  const perIf = new Map()
+  for (const r of ifs) {
+    const parts = splitPoDc(r.po_dc ?? r.poDc)
+    if (!parts) continue // no usable PO-DC → not EDI-routed, nothing to reconcile
+    perIf.set(String(r.id), {
+      ifNumber: r.tranid ?? null, poDc: r.po_dc ?? r.poDc,
+      poNumber: parts.poNumber, dc: parts.dc,
+      ifUnits: unitsOfIf.get(String(r.id)) || 0, packedUnits: 0, cartons: 0,
+    })
+  }
 
   const agg = new Map()
   const unparseableBoxes = new Set()
   let orphanCartons = 0
 
   for (const p of packages) {
-    const key = poDcOfIf.get(String(p.if_id ?? p.ifId))
+    const ifId = String(p.if_id ?? p.ifId)
+    const f = perIf.get(ifId)
+    if (f) { f.cartons++; f.packedUnits += Number(p.units) || 0 }
+    const key = poDcOfIf.get(ifId)
     const parts = key ? splitPoDc(key) : null
     if (!parts) { orphanCartons++; continue }
     let e = agg.get(key)
@@ -114,7 +149,8 @@ export function mapEdiPackageRows({ ifs = [], packages = [] } = {}) {
 
   const rows = [...agg.values()].map((e) => ({ ...e, cubicFeetRaw: round1(e.cubicFeetRaw) }))
   rows.sort((a, b) => a.poDc.localeCompare(b.poDc))
-  return { rows, unparseableBoxes: [...unparseableBoxes], orphanCartons }
+  const fulfilments = [...perIf.values()].sort((a, b) => String(a.ifNumber).localeCompare(String(b.ifNumber)))
+  return { rows, fulfilments, unparseableBoxes: [...unparseableBoxes], orphanCartons }
 }
 
 export async function fetchEdiPackagesLive() {
@@ -123,10 +159,21 @@ export async function fetchEdiPackagesLive() {
   if (!ifs.ok) return { ok: false, error: `fulfilments: ${ifs.error || 'failed'}`, rows: [] }
   const ids = ifs.rows.map((r) => r.id).filter(Boolean)
   if (!ids.length) return { ok: true, rows: [], unparseableBoxes: [], orphanCartons: 0, ifCount: 0 }
+  // Deliberately SEQUENTIAL, not Promise.all (Nima, 2026-08-02). NetSuite
+  // governs SuiteTalk by CONCURRENT requests, and that allowance is shared with
+  // Celigo, whose integrations outrank this app. Running one query at a time
+  // means we never occupy more than a single slot; the extra second costs a
+  // background sync nothing.
   const pk = await runSuiteQL(packageSql(ids))
   if (!pk.ok) return { ok: false, error: `cartons: ${pk.error || 'failed'}`, rows: [] }
-  const out = mapEdiPackageRows({ ifs: ifs.rows, packages: pk.rows })
-  return { ok: true, ...out, ifCount: ids.length, cartonCount: pk.rows.length }
+  const un = await runSuiteQL(ifUnitsSql(ids))
+  // The pack check is an add-on: if the line query fails, the carton feed (and
+  // therefore routing) must still load — the check just can't be shown.
+  const out = mapEdiPackageRows({ ifs: ifs.rows, packages: pk.rows, ifUnits: un.ok ? un.rows : [] })
+  return {
+    ok: true, ...out, ifCount: ids.length, cartonCount: pk.rows.length,
+    unitsError: un.ok ? null : (un.error || 'if-unit query failed'),
+  }
 }
 
 // Pull and REPLACE the feed. dryRun rolls the transaction back after exercising
@@ -141,7 +188,7 @@ export async function syncEdiPackagesLive({ dryRun = false } = {}) {
   }
 
   const { withTransaction, pool } = await import('../db.js')
-  const { loadEdiPackages, recordSnapshot } = await import('./loadToDb.js')
+  const { loadEdiPackages, loadFulfilmentPack, recordSnapshot } = await import('./loadToDb.js')
   const { rows: existing } = await pool.query('SELECT po_dc FROM edi_packages')
   const incoming = new Set(pulled.rows.map((r) => r.poDc))
   const removed = existing.map((r) => r.po_dc).filter((k) => !incoming.has(k))
@@ -151,6 +198,9 @@ export async function syncEdiPackagesLive({ dryRun = false } = {}) {
     const loaded = await withTransaction(async (db) => {
       await db.query('DELETE FROM edi_packages')
       const n = await loadEdiPackages(pulled.rows, db)
+      // Same transaction as the carton feed: the pack check compares against
+      // those exact cartons, so the two must never be written apart.
+      await loadFulfilmentPack(pulled.fulfilments || [], db)
       await recordSnapshot('ediPackagesLive', n, new Date(), db)
       if (dryRun) { const e = new Error('dry run'); e.code = ROLLBACK; e.partial = n; throw e }
       return n

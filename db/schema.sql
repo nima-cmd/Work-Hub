@@ -721,6 +721,30 @@ CREATE TABLE IF NOT EXISTS edi_packages (
 CREATE INDEX IF NOT EXISTS idx_edi_packages_po ON edi_packages(po_number);
 CREATE INDEX IF NOT EXISTS idx_edi_packages_dc ON edi_packages(dc);
 
+-- edi_fulfillment_pack (Nima, 2026-08-02): the pack check. edi_packages above is
+-- PO-DC grain, which is what a BOL needs but is useless for "WHICH fulfilment is
+-- short" — the rollup has already summed that away. This keeps the per-IF pair:
+-- units the fulfilment says it ships vs units actually in its cartons.
+--
+-- Packing EDI freight is manual and a missed item is otherwise invisible: the
+-- cartons ship, the 856 claims quantities that aren't in the boxes, and it
+-- surfaces as a chargeback weeks later. See src/model/packCheck.js for why this
+-- is checked per-IF and not against the sales order.
+--
+-- REPLACED wholesale by each sync, exactly like edi_packages — an IF absent from
+-- the pull has shipped and must not linger and re-flag a closed shipment.
+CREATE TABLE IF NOT EXISTS edi_fulfillment_pack (
+  if_number     TEXT PRIMARY KEY,
+  po_dc         TEXT NOT NULL,      -- "50073677-799"; joins to edi_packages.po_dc
+  po_number     TEXT,
+  dc            TEXT,
+  if_units      INTEGER,            -- POSITIVE InvtPart lines only (see ifUnitsSql)
+  packed_units  INTEGER,            -- summed across this IF's carton records
+  cartons       INTEGER,
+  updated_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_edi_fulfillment_pack_podc ON edi_fulfillment_pack(po_dc);
+
 -- BOL number sequence — the "never reuse a BOL" guarantee. A Postgres sequence
 -- never hands out the same value twice, even across rollbacks or deletes, so a
 -- voided shipment can never recycle its number. Base is arbitrary/readability
