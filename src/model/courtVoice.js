@@ -14,8 +14,16 @@
 
 // Who plays whom. Both are meant to be swapped freely — the ids just have to
 // exist in src/model/characters.js and have art in client/src/assets/characters.
-export const COURT_VOICE_ID = 'poe-dameron'   // speaks for Nima's own queue
-export const WAREHOUSE_VOICE_ID = 'din-djarin' // stands in for the warehouse side
+//
+// Casting (Nima, 2026-08-02): Jessica Henwick is the standing top pick, and the
+// roster carries her four times over — bugs (The Matrix Resurrections),
+// colleen-wing, nymeria-sand and jessika-pava are all swap-in candidates here.
+// Bugs takes the encouraging seat because that IS her part: the one who finds
+// you and tells you what you're capable of. Yor Forger has the warehouse side —
+// a protector, which is the "they've got our back" note Nima asked for. His
+// other favourites: frieren, fern, anya-forger.
+export const COURT_VOICE_ID = 'bugs'          // speaks for Nima's own queue
+export const WAREHOUSE_VOICE_ID = 'yor-forger' // stands in for the warehouse side
 
 // Which lane to speak about, most-worth-starting-with first. Ordered by how
 // directly Nima can finish it: a label is his hands, an ASN is a re-send, a
@@ -54,5 +62,5 @@ export function courtLine(chips = [], oldest = null) {
 // What the warehouse-side crew member says about cargo that's out of our hands.
 export function warehouseLine(n = 0) {
   if (!n) return ''
-  return n === 1 ? "Got one of ours — he'll bring it back." : `Got ${n} of ours — they're covered.`
+  return n === 1 ? "Got one of ours — it's in safe hands." : `Got ${n} of ours — they're in safe hands.`
 }
