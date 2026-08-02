@@ -381,6 +381,24 @@ test('foldOrderConfirmationLines: sums an item repeated across lines', () => {
   assert.equal(out.find((r) => r.item === 'SN02264NB-TEAK').qty, 58)
 })
 
+test('foldOrderConfirmationLines: freight and tax are not demand a PO can fund', () => {
+  // Real OC1552/OC1554 shape. `UPS® Ground` and `US_TX_NL` can never match a PO,
+  // so they sat permanently in unassignedOcs (296 open lines) and led the list.
+  // An unknown itemtype still counts, same DENY-list reasoning as the SO fold.
+  const out = foldOrderConfirmationLines([
+    { oc_number: 'OC1554', item: 'SN37043UG-LINEN', quantity: '-8', itemtype: 'InvtPart' },
+    { oc_number: 'OC1554', item: 'UPS® Ground', quantity: '-1', itemtype: 'ShipItem' },
+    { oc_number: 'OC1554', item: 'CA_NL', quantity: '-1', itemtype: 'TaxItem' },
+    { oc_number: 'OC1554', item: 'EU Distributor', quantity: '-1', itemtype: 'Discount' },
+    { oc_number: 'OC1554', item: 'SN-KIT', quantity: '-2', itemtype: 'Kit' },
+  ])
+  assert.deepEqual(out.map((r) => r.item).sort(), ['SN-KIT', 'SN37043UG-LINEN'])
+})
+
+test('orderConfirmationSql selects the line item type it filters on', () => {
+  assert.match(orderConfirmationSql(), /tl\.itemtype/)
+})
+
 test('foldOrderConfirmationLines: drops Memorized templates and keyless rows', () => {
   // "Memorized" rows are recurring-transaction TEMPLATES, not real dated OCs —
   // the same filter fromOcPipeline applies, so both paths agree on what counts.

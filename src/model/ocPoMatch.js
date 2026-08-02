@@ -4,9 +4,9 @@
 // (OC) vs item + destination (PO), see naghedi-locations memory — and splits
 // EVERY still-open line into exactly one bucket, so nothing silently drops
 // out of view:
-//   - suggestedMatches: unambiguous 1:1, fully covered — ready to commit
-//   - candidates: CONTENTION (>1 OC or >1 PO sharing a key) or SHORTAGE
-//     (1:1 but the PO can't fully cover) — needs a human decision
+//   - suggestedMatches: supply covers the demand on that key — ready to commit
+//   - candidates: SHORTAGE — the open POs can't cover the open OCs on that key.
+//     The only genuine human decision: who gets the units, or buy more.
 //   - unmatchedOcs / unmatchedPos: open demand/supply with no counterpart at
 //     all yet — nothing to commit, but still an open task (wait, or dismiss)
 //
@@ -70,23 +70,44 @@ export function computeOcPoMatches({ ocs = [], pos = [], links = [] } = {}) {
     }
     visitedPoKeys.add(k)
 
-    if (ocLines.length === 1 && poLines.length === 1) {
-      const [oc] = ocLines
-      const [po] = poLines
-      if (po.remaining >= oc.remaining) {
+    // One incoming PO is SUPPOSED to cover several order confirmations (Nima,
+    // 2026-08-02) — that's how non-ATS demand is funded, not a conflict. So the
+    // question on a key is only ever "does the open supply cover the open
+    // demand?", never "how many OCs are there?". Treating multi-OC as contention
+    // filed 166 of 212 candidates (78%) as decisions that had nothing to decide,
+    // and hid the 46 real shortages inside the same bucket.
+    const demand = ocLines.reduce((sum, o) => sum + o.remaining, 0)
+    const supply = poLines.reduce((sum, p) => sum + p.remaining, 0)
+
+    if (supply < demand) {
+      candidates.push({
+        item: ocLines[0].item, location: ocLines[0].location, reason: 'SHORTAGE',
+        demand, supply, shortBy: demand - supply, ocs: ocLines, pos: poLines,
+      })
+      continue
+    }
+
+    // Covered. Draw each OC's units from the POs arriving soonest, so the
+    // earliest container funds the earliest need and a suggestion names a real
+    // PO rather than an aggregate. Still only a SUGGESTION — nothing writes to
+    // oc_po_links without an explicit human action (decision, 2026-07-09).
+    const supplyQueue = [...poLines]
+      .sort((a, b) => String(a.expectedReceipt || '9999').localeCompare(String(b.expectedReceipt || '9999')))
+      .map((p) => ({ po: p, left: p.remaining }))
+    const oneToOne = ocLines.length === 1 && poLines.length === 1
+    for (const oc of ocLines) {
+      let need = oc.remaining
+      for (const slot of supplyQueue) {
+        if (need <= 0) break
+        if (slot.left <= 0) continue
+        const take = Math.min(need, slot.left)
+        slot.left -= take
+        need -= take
         suggestedMatches.push({
-          ocNumber: oc.ocNumber, poNumber: po.poNumber, item: oc.item,
-          allocatedQty: oc.remaining, reason: 'UNAMBIGUOUS_1TO1',
-        })
-      } else {
-        candidates.push({
-          item: oc.item, location: oc.location, reason: 'SHORTAGE', ocs: ocLines, pos: poLines,
+          ocNumber: oc.ocNumber, poNumber: slot.po.poNumber, item: oc.item,
+          allocatedQty: take, reason: oneToOne ? 'UNAMBIGUOUS_1TO1' : 'COVERED_BY_INCOMING',
         })
       }
-    } else {
-      candidates.push({
-        item: ocLines[0].item, location: ocLines[0].location, reason: 'CONTENTION', ocs: ocLines, pos: poLines,
-      })
     }
   }
 

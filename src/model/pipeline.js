@@ -228,12 +228,14 @@ export function computeFlags(o, today) {
   // Shortage, read through ATS (see the warehouse-order-lifecycle notes):
   //  - ATS order short      → real STOCK exception; ATS is supposed to ship from
   //                           on-hand stock, so a shortfall means inquire now.
-  //  - Non-ATS order short  → NORMAL. Non-ATS is presold against a PO, so it's
-  //                           just waiting on its inbound container. Not an alert.
-  //
-  // TODO (needs a PO-receiving CSV): upgrade a Non-ATS shortage whose PO has
-  // already been RECEIVED to a real stall (severity 3) — that's the
-  // lost-visibility case (container is in, order still isn't fulfilled).
+  //  - Non-ATS order short  → NOT REPORTED HERE AT ALL. The sales order is the
+  //    wrong object to ask (Nima, 2026-08-02): non-ATS demand originates on an
+  //    Order Confirmation and is funded by an incoming PO, one PO typically
+  //    covering several OCs. That question is answered against item + destination
+  //    in src/model/ocPoMatch.js, where both sides are visible; and once the PO
+  //    is received the units are simply stock, so there is nothing left to track
+  //    at PO level. The old `AWAITING_PO` flag asserted "awaiting PO (normal)"
+  //    without ever checking that a PO existed — a promise this object can't keep.
   //
   // Shortage is only an actionable question while the order is still OPEN —
   // i.e. "do we have stock to fulfill this?". Once an Item Fulfillment exists
@@ -243,12 +245,8 @@ export function computeFlags(o, today) {
   // Hold orders (which sit below OPEN and can't be acted on yet).
   if (o.stage === STAGE.OPEN && o.qtyOrdered != null) {
     const shortBy = o.qtyOrdered - (o.qtyAllocated ?? 0) - (o.qtyFulfilled ?? 0)
-    if (shortBy > 0) {
-      if (o.isAts) {
-        flags.push({ key: 'STOCK_SHORT', label: `ATS stock short ${shortBy} — inquire`, severity: 3 })
-      } else {
-        flags.push({ key: 'AWAITING_PO', label: `Non-ATS short ${shortBy} — awaiting PO (normal)`, severity: 0 })
-      }
+    if (shortBy > 0 && o.isAts) {
+      flags.push({ key: 'STOCK_SHORT', label: `ATS stock short ${shortBy} — inquire`, severity: 3 })
     }
   }
 

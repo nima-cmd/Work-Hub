@@ -13,6 +13,7 @@ import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
+import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeAffection } from '../src/model/affection.js'
 import { groupOrdersByPo } from '../src/model/poGroups.js'
 import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.js'
@@ -96,11 +97,14 @@ test('computeFlags reads shortage through ATS (only while Open)', () => {
   )
   assert.ok(ats.some((f) => f.key === 'STOCK_SHORT'))
 
+  // A non-ATS shortfall gets NO sales-order flag at all — the SO can't see the
+  // OC that created the demand or the PO that funds it, so it was asserting
+  // "awaiting PO" without ever checking one existed. Answered in ocPoMatch.
   const nonAts = computeFlags(
     { stage: STAGE.OPEN, isAts: false, qtyOrdered: 10, qtyAllocated: 2, qtyFulfilled: 0, fulfillments: [] },
     today,
   )
-  assert.ok(nonAts.some((f) => f.key === 'AWAITING_PO'))
+  assert.ok(!nonAts.some((f) => f.key === 'AWAITING_PO'))
   assert.ok(!nonAts.some((f) => f.key === 'STOCK_SHORT'))
 })
 
@@ -214,7 +218,9 @@ test('computeOcPoMatches surfaces an unambiguous 1:1 fully-covered match as a su
   assert.deepEqual(suggestedMatches[0], { ocNumber: 'OC1', poNumber: 'PO1', item: 'SKU1', allocatedQty: 10, reason: 'UNAMBIGUOUS_1TO1' })
 })
 
-test('computeOcPoMatches flags contention instead of guessing which OC wins', () => {
+test('computeOcPoMatches covers several OCs from one incoming PO', () => {
+  // The normal shape of non-ATS demand (Nima, 2026-08-02): one PO funds several
+  // order confirmations. Not a decision — everyone gets their units.
   const { suggestedMatches, candidates } = computeOcPoMatches({
     ocs: [
       { ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 10, status: 'Open', dismissed: false },
@@ -223,10 +229,78 @@ test('computeOcPoMatches flags contention instead of guessing which OC wins', ()
     pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 20, dismissed: false }],
     links: [],
   })
+  assert.equal(candidates.length, 0)
+  assert.equal(suggestedMatches.length, 2)
+  assert.deepEqual(suggestedMatches.map((m) => [m.ocNumber, m.poNumber, m.allocatedQty]), [
+    ['OC1', 'PO1', 10],
+    ['OC2', 'PO1', 5],
+  ])
+  assert.ok(suggestedMatches.every((m) => m.reason === 'COVERED_BY_INCOMING'))
+})
+
+test('computeOcPoMatches draws from the PO arriving soonest first', () => {
+  const { suggestedMatches } = computeOcPoMatches({
+    ocs: [{ ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 12, status: 'Open', dismissed: false }],
+    pos: [
+      { poNumber: 'LATE', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 10, expectedReceipt: '2026-10-15', dismissed: false },
+      { poNumber: 'SOON', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 8, expectedReceipt: '2026-08-15', dismissed: false },
+    ],
+    links: [],
+  })
+  assert.deepEqual(suggestedMatches.map((m) => [m.poNumber, m.allocatedQty]), [
+    ['SOON', 8],
+    ['LATE', 4],
+  ])
+})
+
+test('computeContainerView judges shortage on all supply for the key, not one PO line', () => {
+  // Two containers each bringing 12 to a key claiming 20: covered. Judging each
+  // line against its own openQty called BOTH short — the read that counted 527
+  // shortage items where the matcher found 45.
+  const args = {
+    ocs: [{ ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 20, status: 'Open', dismissed: false }],
+    pos: [
+      { poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 12, dismissed: false },
+      { poNumber: 'PO2', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 12, dismissed: false },
+    ],
+    links: [],
+  }
+  const { containers } = computeContainerView(args)
+  assert.deepEqual(containers.flatMap((c) => c.items.map((i) => i.status)), ['READY', 'READY'])
+  assert.equal(containers.reduce((s, c) => s + c.shortItemCount, 0), 0)
+  // …and the matcher agrees, which is the whole point of keeping both lenses.
+  assert.equal(computeOcPoMatches(args).candidates.length, 0)
+})
+
+test('computeContainerView calls several OCs on one PO covered, not a decision', () => {
+  const { containers } = computeContainerView({
+    ocs: [
+      { ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 6, status: 'Open', dismissed: false },
+      { ocNumber: 'OC2', item: 'SKU1', location: 'Warehouse', qty: 4, status: 'Open', dismissed: false },
+    ],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 25, dismissed: false }],
+    links: [],
+  })
+  assert.equal(containers[0].items[0].status, 'COVERED')
+  assert.equal(containers[0].shortItemCount, 0)
+})
+
+test('computeOcPoMatches reports a multi-OC shortage with the gap', () => {
+  // The real non-ATS shortage, previously buried inside CONTENTION.
+  const { suggestedMatches, candidates } = computeOcPoMatches({
+    ocs: [
+      { ocNumber: 'OC1', item: 'SKU1', location: 'Warehouse', qty: 50, status: 'Open', dismissed: false },
+      { ocNumber: 'OC2', item: 'SKU1', location: 'Warehouse', qty: 23, status: 'Open', dismissed: false },
+    ],
+    pos: [{ poNumber: 'PO1', item: 'SKU1', destination: 'Warehouse', qtyRemaining: 20, dismissed: false }],
+    links: [],
+  })
   assert.equal(suggestedMatches.length, 0)
   assert.equal(candidates.length, 1)
-  assert.equal(candidates[0].reason, 'CONTENTION')
-  assert.equal(candidates[0].ocs.length, 2)
+  assert.equal(candidates[0].reason, 'SHORTAGE')
+  assert.equal(candidates[0].demand, 73)
+  assert.equal(candidates[0].supply, 20)
+  assert.equal(candidates[0].shortBy, 53)
 })
 
 test('computeOcPoMatches flags a shortage instead of partially matching', () => {

@@ -462,7 +462,7 @@ export function orderConfirmationSql() {
   return `SELECT t.tranid AS oc_number, BUILTIN.DF(t.entity) AS customer,
                  BUILTIN.DF(t.status) AS status, t.otherrefnum AS po_check_number,
                  TO_CHAR(t.startdate,'YYYY-MM-DD') AS startdate,
-                 BUILTIN.DF(tl.item) AS item, tl.quantity,
+                 BUILTIN.DF(tl.item) AS item, tl.quantity, tl.itemtype,
                  COALESCE(lloc.fullname, hloc.fullname) AS location
           FROM transaction t
           JOIN transactionline tl ON tl.transaction = t.id
@@ -513,6 +513,14 @@ export function foldOrderConfirmationLines(rows = []) {
   for (const row of rows) {
     const r = mapOrderConfirmationRow(row)
     if (!r.ocNumber || r.ocNumber === 'Memorized' || !r.item) continue
+    // Freight, tax and discount lines are money on the OC, not goods anyone can
+    // put on a container — so they can never match a PO and only ever surface as
+    // permanent "unassigned demand" (296 open lines led by `UPS® Ground`,
+    // `US_TX_NL`, `CA_NL`). Same DENY list as the sales-order roll-up: an unknown
+    // itemtype still counts as an item, so a new Assembly or Kit lands in demand
+    // rather than vanishing. Dropping them here rather than at read time means
+    // pruneOrderConfirmations clears the rows already in the table.
+    if (NON_ITEM_LINE_TYPES.includes(String(row.itemtype || '').trim())) continue
     const k = `${r.ocNumber}@@${r.item}`
     const seen = byKey.get(k)
     if (!seen) { byKey.set(k, r); continue }
