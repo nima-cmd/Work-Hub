@@ -11,6 +11,8 @@ import { pool } from '../src/db.js'
 import { parseDcToken, partnerForDc } from '../src/model/dc.js'
 import { uploadScannedPdf, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
 import { scanFilename, findFilingCollisions } from '../src/model/scanSegments.js'
+import { filingTarget, filingNote, FILED_EVENT } from '../src/model/filing.js'
+import { insertOrderEvent } from '../src/ingest/loadToDb.js'
 
 // A Drive folder name can't carry a slash, and a customer name legitimately can
 // ("Wexner: Joseph - Jackson"). Strip only what Drive/paths can't take, and keep
@@ -210,13 +212,69 @@ export async function planScanFiling(segments = []) {
 
 // Upload one already-resolved split to Drive. Called once per document so each
 // stays well under the JSON body limit and the UI can show per-file progress.
-//   { partner, pos: [poFolders], filename, pdfBase64 }
-export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root }) {
+//   { partner, pos: [poFolders], filename, pdfBase64, ifNumber, soNumber, po, dc }
+//
+// The identity fields are the ones `planScanFiling` already resolved and handed
+// the client; they come back so the filing can be recorded against the right
+// document. They are re-checked here rather than trusted — see recordFiling.
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root, ...doc }) {
   if (!partner || !pos?.length || !filename || !pdfBase64) {
     throw new Error('partner, pos, filename and pdfBase64 are required')
   }
   // Only the two known trees — never a caller-supplied path.
   const target = root === DRIVE_ROOT_SLIPS ? DRIVE_ROOT_SLIPS : DRIVE_ROOT_BOLS
   const buffer = Buffer.from(pdfBase64, 'base64')
-  return uploadScannedPdf({ partner, pos, filename, buffer, root: target })
+  const result = await uploadScannedPdf({ partner, pos, filename, buffer, root: target })
+  // ⚠️ ONLY on a real success. uploadScannedPdf SOFT-FAILS — it returns
+  // `{ ok:false, … }` instead of throwing (that's the #25 resilience layer), so
+  // an `await` that didn't throw is NOT evidence the bytes landed. Recording a
+  // filing off a soft failure would mark a shipment done and remove it from the
+  // very queue meant to catch it. This is the "grep the callers for
+  // else-assumes-success" trap from [[packing-slip-qr]], one round later.
+  if (result?.ok) {
+    const filed = await recordFiling({ ...doc, partner, pos, filename })
+    if (filed) result.filed = filed
+  }
+  return result
+}
+
+// Write the FILED event for one uploaded document.
+//
+// Never throws: the paper is already in Drive by the time we get here, and a
+// bookkeeping failure must not turn a successful upload into a red row the user
+// will re-scan. A missed event shows up as a still-unfiled shipment, which is
+// the safe direction to be wrong in.
+async function recordFiling(doc) {
+  try {
+    const target = filingTarget(doc)
+    if (!target) return null // master BOL, or a document with no resolvable identity
+    // Don't invent a document. The client supplies these, and while the server
+    // resolved them a moment ago in planScanFiling, an event pointing at an IF
+    // that doesn't exist would sit in the ledger forever with nothing to join to.
+    if (target.docType === 'IF') {
+      const { rows } = await pool.query(
+        'SELECT so_number FROM fulfillments WHERE if_number = $1', [target.docNumber])
+      if (!rows.length) return null
+      target.soNumber = target.soNumber || rows[0].so_number || null
+    }
+    // One FILED per document, ever. Re-filing a corrected scan overwrites the
+    // Drive file (and the UI says "replaced an existing file"), but the paper
+    // was already filed — a second event would just double-count the day's work.
+    const exists = await pool.query(
+      `SELECT 1 FROM order_events WHERE event_type = $1 AND doc_type = $2 AND doc_number = $3`,
+      [FILED_EVENT, target.docType, target.docNumber],
+    )
+    if (exists.rowCount) return { ...target, repeat: true }
+    const event = await insertOrderEvent({
+      eventType: FILED_EVENT,
+      docType: target.docType,
+      docNumber: target.docNumber,
+      soNumber: target.soNumber,
+      note: filingNote(doc),
+      source: 'scan',
+    })
+    return { ...target, occurredAt: event.occurredAt }
+  } catch {
+    return null
+  }
 }

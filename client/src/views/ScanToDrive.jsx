@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { processScan, bytesToBase64 } from '../lib/scanPipeline.js'
-import { planScanFiling, fileScannedDoc } from '../api.js'
+import { planScanFiling, fileScannedDoc, fetchUnfiledPaper } from '../api.js'
 
 // Scan → Drive (Nima, 2026-07-29). Takes ONE multi-page scan (signed Master BOL
 // + all the IFs, one Brother pass), segments it by the QR tags, and files each
@@ -9,6 +9,71 @@ import { planScanFiling, fileScannedDoc } from '../api.js'
 // proven on the real 50-page Bloomingdale's scan (see scanPipeline.js).
 
 const DPI = 150 // enough for reliable QR decode off a scan; keeps split files small
+
+// What still owes paper (step 7). Two lists, never one number.
+//
+// `due` is the live obligation and starts at zero — filing only became a
+// recorded fact on the epoch date, so anything older has no event simply because
+// none was ever written, not because the paper is missing. `backlog` is those
+// older shipments: real work, but an archive project rather than something you
+// are behind on, and collapsed by default so it can't read as a to-do list you
+// are failing. See src/model/filing.js for the full argument.
+function UnfiledPanel({ unfiled, open, onToggle }) {
+  if (!unfiled) return null
+  const { due = [], backlog = [], since } = unfiled
+  if (!due.length && !backlog.length) return null
+
+  const row = (s) => (
+    <tr key={s.ifNumber}>
+      <td><b>{s.ifNumber}</b></td>
+      <td>{s.customer || <span className="muted">—</span>}</td>
+      <td>{s.channel === 'edi' ? `EDI${s.dc ? ` · ${s.dc}` : ''}` : 'Boutique'}</td>
+      <td>{s.shippedAt ? new Date(s.shippedAt).toLocaleDateString() : <span className="muted">no ship date</span>}</td>
+      <td>{s.ageDays == null ? <span className="muted">—</span> : `${s.ageDays}d`}</td>
+    </tr>
+  )
+  const table = (rows) => (
+    <table className="s2dTable">
+      <thead><tr><th>IF</th><th>Customer</th><th>Channel</th><th>Shipped</th><th>Age</th></tr></thead>
+      <tbody>{rows.map(row)}</tbody>
+    </table>
+  )
+
+  return (
+    <div className="s2dUnfiled">
+      {due.length > 0 ? (
+        <>
+          <div className="s2dRowHead">
+            ⚠ {due.length} shipment(s) left with no paper filed
+            <span className="muted"> — scan the slips and drop them below</span>
+          </div>
+          {table(due)}
+        </>
+      ) : (
+        <div className="banner good">✓ Every shipment since {since} has its paper filed.</div>
+      )}
+
+      {backlog.length > 0 && (
+        <>
+          <button className="linkBtn" onClick={onToggle}>
+            {open ? '▾' : '▸'} {backlog.length} older shipment(s) from before filing was recorded
+          </button>
+          {open && (
+            <>
+              <div className="hint">
+                These shipped before {since}, when the app started recording filings. Most
+                will already have paper — in a binder, or in Drive from a run that predates
+                the log. Nothing here is overdue; it is only unrecorded. Scanning one files
+                it and marks it, same as any other slip.
+              </div>
+              {table(backlog)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 export default function ScanToDrive() {
   const [phase, setPhase] = useState('idle') // idle | decoding | plan | uploading | done
@@ -20,6 +85,13 @@ export default function ScanToDrive() {
   const [results, setResults] = useState([]) // per-file upload outcome
   const [error, setError] = useState(null)
   const [fileName, setFileName] = useState('')
+  const [unfiled, setUnfiled] = useState(null)
+  const [showBacklog, setShowBacklog] = useState(false)
+
+  // What still owes paper. Re-read after a filing run so the list shrinks as you
+  // work rather than lying until the next page load.
+  const loadUnfiled = () => fetchUnfiledPaper().then(setUnfiled).catch(() => setUnfiled(null))
+  useEffect(() => { loadUnfiled() }, [])
 
   async function onFile(e) {
     const f = e.target.files?.[0]
@@ -86,6 +158,7 @@ export default function ScanToDrive() {
           const r = await fileScannedDoc({
             partner: d.partner, pos: d.pos, filename: d.filename,
             pdfBase64: bytesToBase64(bytes), root: d.root,
+            ifNumber: d.ifNumber, soNumber: d.soNumber, po: d.po, dc: d.dc,
           })
           push(mapResult(d.filename, `${d.partner}/${d.pos[0]}`, r))
         } catch (err) {
@@ -107,6 +180,7 @@ export default function ScanToDrive() {
         }
       }
       setPhase('done')
+      loadUnfiled()
     } catch (err) {
       setError(err.message); setPhase('plan')
     }
@@ -148,6 +222,8 @@ export default function ScanToDrive() {
           then drop the PDF here. It splits by QR and files to Google Drive — nothing is kept on the server.
         </p>
       </div>
+
+      <UnfiledPanel unfiled={unfiled} open={showBacklog} onToggle={() => setShowBacklog((o) => !o)} />
 
       <label className="importBtn big s2dPick">
         {phase === 'decoding' ? 'Reading…' : 'Choose scan PDF'}

@@ -27,6 +27,7 @@ import {
   fetchLinksFor, addDocLink, deleteDocLink,
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
+import { splitUnfiled } from '../src/model/filing.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -691,6 +692,41 @@ export async function getLaunchBay({ today = new Date() } = {}) {
     const delayed = state === 'approved' && floatingDays >= 1
     return { ...r, state, floating: state === 'approved', floatingDays, delayed }
   })
+}
+
+// Step 7: shipments whose signed paper has never been filed.
+//
+// The last step of Nima's flow had no surface at all — the scan→Drive pipeline
+// worked, but filing wrote nothing down, so there was no way to ask which
+// shipments still owed paper. This is that question.
+//
+// Keyed on the FULFILMENT, because the fulfilment is the thing that physically
+// left and its packing slip is the paper. The old bare-PO tags file at DC level
+// instead (see filingTarget) and so can't clear an IF here — that only affects
+// documents scanned before the slips carried an IF QR, which are all pre-epoch
+// backlog anyway.
+//
+// The due/backlog split lives in the model (splitUnfiled); this just supplies
+// the shipped-and-unfiled set. No LIMIT: `fulfillments` carries the open window
+// only (91 shipped rows today, oldest 2026-06-05), so the whole set is small.
+export async function getUnfiledPaper({ now = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
+           f.actual_ship_date AS "shippedAt",
+           o.customer, o.po_number AS "poNumber",
+           CASE WHEN fd.if_number IS NOT NULL THEN 'edi' ELSE 'boutique' END AS channel,
+           fd.dc
+    FROM fulfillments f
+    LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN fulfillment_dc fd ON fd.if_number = f.if_number
+    WHERE f.status ILIKE '%shipped%'
+      AND NOT EXISTS (
+        SELECT 1 FROM order_events e
+        WHERE e.event_type = 'FILED' AND e.doc_type = 'IF' AND e.doc_number = f.if_number
+      )
+    ORDER BY f.actual_ship_date DESC NULLS LAST
+  `)
+  return splitUnfiled(rows, { now })
 }
 
 // Data-freshness: how old is the underlying export data? Uses the most recent

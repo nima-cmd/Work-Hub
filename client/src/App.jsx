@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -157,6 +157,7 @@ export default function App() {
   const [labelGaps, setLabelGaps] = useState(null)
   const [ediGaps, setEdiGaps] = useState(null)
   const [asnCartons, setAsnCartons] = useState(null)
+  const [unfiled, setUnfiled] = useState(null)
   // Manual NetSuite refresh (Nima, 2026-07-31). `nsBusy` is NOT an error state:
   // it means Celigo is mid-run and holds the concurrency, which has priority.
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
@@ -187,6 +188,8 @@ export default function App() {
     // Cartons that shipped with no delivered ASN. A Neon read of the last
     // scheduled run — never the run itself, which reads NetSuite and Orderful.
     fetchAsnCartons().then(setAsnCartons).catch(() => setAsnCartons(null))
+    // Shipments that left with no signed paper filed (step 7).
+    fetchUnfiledPaper().then(setUnfiled).catch(() => setUnfiled(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
@@ -359,7 +362,7 @@ export default function App() {
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
         <SyncAlarm health={syncHealth} />
-        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} onNavigate={setView} />
+        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS}

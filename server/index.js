@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getCredits, getAffection,
+  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getLedger, getOrderLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -624,6 +624,18 @@ app.post('/api/routing/auth/:authNumber/master-to-drive', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// Step 7's queue: shipments that left with no signed paper filed. `due` is the
+// live obligation (shipped since filing became a recorded fact); `backlog` is
+// everything older, kept separate so it can't drown the actionable number.
+app.get('/api/filing/unfiled', async (_req, res) => {
+  try {
+    res.json(await getUnfiledPaper())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 
