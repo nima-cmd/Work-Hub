@@ -9,6 +9,7 @@ import {
   SO_STATUS, IF_STATUS, INV_STATUS, SO_OPEN_CODES, SO_TERMINAL_CODES,
   APPROVAL_ON_HOLD, APPROVAL_APPROVED,
   mapPurchaseOrderRow, foldPurchaseOrderLines, purchaseOrderSql, PO_OPEN_CODES,
+  mapOrderConfirmationRow, foldOrderConfirmationLines, orderConfirmationSql, OC_OPEN_CODES,
 } from '../src/ingest/netsuiteSync.js'
 import { STAGE } from '../src/model/stages.js'
 
@@ -299,6 +300,93 @@ test('foldPurchaseOrderLines: skips rows missing either key half', () => {
   const out = foldPurchaseOrderLines([
     { po_number: '', item: 'SN-A', quantity: '5' },
     { po_number: 'PO1', item: '', quantity: '5' },
+  ])
+  assert.deepEqual(out, [])
+})
+
+// ── order confirmations (pre-SO demand) ──────────────────────────────────────
+
+test('mapOrderConfirmationRow: matches what the CSV path writes', () => {
+  // Real OC1558 line, measured live 2026-08-02 against the frozen CSV row.
+  const r = mapOrderConfirmationRow({
+    oc_number: 'OC1558',
+    customer: '509 Kapok',
+    status: 'Order Confirmation : Open',
+    po_check_number: 'hol/res  bags',
+    startdate: '2026-11-15',
+    item: 'SN04023QJ-LINEN',
+    quantity: '-12',
+    location: 'Warehouse',
+  })
+  assert.equal(r.ocNumber, 'OC1558')
+  assert.equal(r.item, 'SN04023QJ-LINEN')
+  // Estimate lines store the quantity NEGATIVE; the CSV column carried +12.
+  assert.equal(r.qty, 12)
+  // BUILTIN.DF prefixes the (renamed) record type; the CSV carried bare "Open".
+  assert.equal(r.status, 'Open')
+  assert.equal(r.customer, 'Kapok') // entity id stripped
+  assert.equal(r.location, 'Warehouse')
+  assert.equal(r.poCheckNumber, 'hol/res  bags')
+  assert.equal(r.orderStartDate, '2026-11-15')
+  assert.equal(r.source, 'OcPipeline')
+})
+
+test('mapOrderConfirmationRow: a null quantity stays null, never 0', () => {
+  // Non-item lines (OC1596's "EU Distributor" discount) genuinely have no
+  // quantity. The upsert COALESCEs, so a 0 here would overwrite a real number
+  // while a null correctly leaves the stored value alone.
+  const r = mapOrderConfirmationRow({
+    oc_number: 'OC1596', item: 'EU Distributor', quantity: null, status: 'Order Confirmation : Open',
+  })
+  assert.equal(r.qty, null)
+})
+
+test('orderConfirmationSql: takes the location FULL path, never the leaf', () => {
+  const sql = orderConfirmationSql()
+  // Same trap as purchase_orders.destination — this is the other half of the
+  // OC↔PO match key and holds "Warehouse Bulk : Nordstrom".
+  assert.match(sql, /COALESCE\(lloc\.fullname, hloc\.fullname\) AS location/)
+  assert.match(sql, /LEFT JOIN location lloc/)
+  // An OC with no location must still come through, not be joined away.
+  assert.doesNotMatch(sql, /INNER JOIN location/)
+})
+
+test('orderConfirmationSql: scopes to the not-yet-converted statuses only', () => {
+  const sql = orderConfirmationSql()
+  // The record is renamed "Order Confirmation" in this account but is still an
+  // Estimate underneath.
+  assert.match(sql, /t\.type='Estimate'/)
+  assert.match(sql, /tl\.mainline='F'/)
+  for (const c of OC_OPEN_CODES) assert.match(sql, new RegExp(`'${c}'`))
+  // B (Processed) = converted to a Sales Order. Including it would double-count
+  // real orders as open demand.
+  assert.deepEqual(OC_OPEN_CODES, ['A', 'X'])
+  // ⚠️ And deliberately NO lastmodifieddate window, unlike purchaseOrderSql: a
+  // converted OC must LEAVE the table, so widening the net would pull it back.
+  assert.doesNotMatch(sql, /lastmodifieddate/)
+})
+
+test('foldOrderConfirmationLines: sums an item repeated across lines', () => {
+  // Real OC1596 shape: line 7 orders 53 of SN02264NB-TEAK and an amendment
+  // appends 5 more at line 120. The frozen CSV table records 5 — the
+  // row-at-a-time upsert let the later line overwrite the earlier one. Both
+  // lines are open demand for the same SKU, so 58 is the honest figure.
+  const out = foldOrderConfirmationLines([
+    { oc_number: 'OC1596', item: 'SN02264NB-TEAK', quantity: '-53' },
+    { oc_number: 'OC1596', item: 'SN02264NB-TEAK', quantity: '-5' },
+    { oc_number: 'OC1596', item: 'SN-B', quantity: '-7' },
+  ])
+  assert.equal(out.length, 2)
+  assert.equal(out.find((r) => r.item === 'SN02264NB-TEAK').qty, 58)
+})
+
+test('foldOrderConfirmationLines: drops Memorized templates and keyless rows', () => {
+  // "Memorized" rows are recurring-transaction TEMPLATES, not real dated OCs —
+  // the same filter fromOcPipeline applies, so both paths agree on what counts.
+  const out = foldOrderConfirmationLines([
+    { oc_number: 'Memorized', item: 'SN-A', quantity: '-5' },
+    { oc_number: '', item: 'SN-A', quantity: '-5' },
+    { oc_number: 'OC1', item: '', quantity: '-5' },
   ])
   assert.deepEqual(out, [])
 })

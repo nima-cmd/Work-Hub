@@ -283,14 +283,39 @@ export async function prunePurchaseOrders(keepPairs, db = pool) {
 // Order confirmations (pre-SO demand) — one row per (OC#, item) line.
 // `dismissed`/`dismissed_note` are deliberately absent from this INSERT/UPDATE
 // so re-imports never clear a manually-set "ignore until closed" flag.
+//
+// Batched for the same reason as loadPurchaseOrders: the live pull sends ~1,718
+// lines every cycle, and a round trip per row costs Neon well over a minute —
+// enough on its own to push a full sync past the ~100s where Render cuts the
+// request.
+const OC_BATCH = 200
+
 export async function loadOrderConfirmations(records, db = pool) {
-  let n = 0
+  // Deduplicate on the conflict target first — Postgres rejects a multi-row
+  // upsert that hits the same key twice. Last wins, which is exactly what the
+  // old row-at-a-time loop did. The LIVE path never relies on that: it has
+  // already summed duplicate lines in foldOrderConfirmationLines, because
+  // last-wins silently understated demand on amended OCs (see that comment).
+  const byKey = new Map()
   for (const r of records) {
     if (!r.ocNumber || !r.item) continue
+    byKey.set(`${r.ocNumber}@@${r.item}`, r)
+  }
+  const rows = [...byKey.values()]
+  const COLS = 9
+  for (let i = 0; i < rows.length; i += OC_BATCH) {
+    const chunk = rows.slice(i, i + OC_BATCH)
+    const values = chunk
+      .map((_, j) => `(${Array.from({ length: COLS }, (_, c) => `$${j * COLS + c + 1}`).join(',')}, now())`)
+      .join(',')
+    const params = chunk.flatMap((r) => [
+      r.ocNumber, r.item, r.customer || null, r.shipTo || null, r.location || null,
+      r.status || null, r.qty ?? null, r.poCheckNumber || null, r.orderStartDate || null,
+    ])
     await db.query(
       `INSERT INTO order_confirmations
          (oc_number, item, customer, ship_to, location, status, qty, po_check_number, order_start_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       VALUES ${values}
        ON CONFLICT (oc_number, item) DO UPDATE SET
          customer         = COALESCE(EXCLUDED.customer, order_confirmations.customer),
          ship_to          = COALESCE(EXCLUDED.ship_to, order_confirmations.ship_to),
@@ -300,14 +325,10 @@ export async function loadOrderConfirmations(records, db = pool) {
          po_check_number  = COALESCE(EXCLUDED.po_check_number, order_confirmations.po_check_number),
          order_start_date = COALESCE(EXCLUDED.order_start_date, order_confirmations.order_start_date),
          updated_at       = now()`,
-      [
-        r.ocNumber, r.item, r.customer || null, r.shipTo || null, r.location || null,
-        r.status || null, r.qty ?? null, r.poCheckNumber || null, r.orderStartDate || null,
-      ],
+      params,
     )
-    n++
   }
-  return n
+  return rows.length
 }
 
 // Prune OC lines no longer in the current OC export (converted-to-SO or
