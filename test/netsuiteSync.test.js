@@ -503,3 +503,26 @@ test('foldOrderLines: a closed line is cancelled demand, not a shortage', () => 
 test('orderLineSql: selects isclosed so cancelled lines can be dropped', () => {
   assert.match(orderLineSql('2026-07-01'), /tl\.isclosed/)
 })
+
+test('mapOrderRow: the DC and store number come off the customer, blank-safe', () => {
+  // The DC decides which cargo tags a PO prints. `custentity_dc_location` is the
+  // only one of the three DC fields SuiteQL can actually read (the two
+  // custbody_* ones are NOT_EXPOSED) and it already carries the app's own code.
+  const r = mapOrderRow({ tranid: 'so12375', status: 'B', otherrefnum: '8040313',
+    dc_code: 'SC', store_number: '0001' })
+  assert.equal(r.dc, 'SC')
+  assert.equal(r.storeNumber, '0001')
+  // '' must become null, never '' — loadOrders COALESCEs both columns, so an
+  // empty string would overwrite a known DC with blank.
+  const blank = mapOrderRow({ tranid: 'SO1', status: 'B', dc_code: '  ', store_number: '' })
+  assert.equal(blank.dc, null)
+  assert.equal(blank.storeNumber, null)
+})
+
+test('orderSql: selects the customer DC over a LEFT JOIN so no order can vanish', () => {
+  const sql = orderSql('2026-01-01')
+  assert.match(sql, /custentity_dc_location/)
+  assert.match(sql, /custentity_store_number/)
+  // LEFT, not inner — a missing customer row must not drop the sales order.
+  assert.match(sql, /LEFT JOIN customer c ON c\.id = t\.entity/)
+})

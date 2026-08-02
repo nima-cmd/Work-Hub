@@ -84,6 +84,13 @@ const nOrNull = (v) => {
   return Number.isFinite(n) ? n : null
 }
 
+// Trim to a real string, or null. Never '' — the loader COALESCEs these columns,
+// and an empty string is a value, so it would overwrite a known one with blank.
+const strOrNull = (v) => {
+  const s = String(v ?? '').trim()
+  return s || null
+}
+
 // 'YYYY-MM-DD' N days before today (UTC-ish; a day either side is harmless for a
 // look-back window). Injectable `now` keeps it testable.
 export function windowStart(days, now = new Date()) {
@@ -149,6 +156,11 @@ export function mapOrderRow(row) {
     // recently-closed window able to close an order out instead of losing it.
     billingStatus: terminal ? 'Fully Billed' : null,
     netsuiteStatusCode: code,
+    // Which DC this store consolidates through, and its store number — the pair
+    // getPoDcs calls its "primary + best source". Trimmed to null rather than ''
+    // so loadOrders' COALESCE can't blank a known value with an empty string.
+    dc: strOrNull(row.dc_code),
+    storeNumber: strOrNull(row.store_number),
     isPlaceholder,
     terminal,
   }
@@ -198,14 +210,33 @@ export function mapInvoiceRow(row) {
 const openOrRecent = (since) =>
   `(t.status IN (${SO_OPEN_CODES.map((c) => `'${c}'`).join(',')}) OR t.lastmodifieddate >= TO_DATE('${since}','YYYY-MM-DD'))`
 
+// ⚠️ THE DC COMES OFF THE CUSTOMER, NOT THE ORDER (Nima, 2026-08-02).
+// An EDI sales order is one store, and which distribution center that store
+// consolidates through is what lets us print one cargo tag per DC. Three places
+// hold it and only one is reachable from here:
+//   · `custbody_if_dc_code` (sales order)    — NOT_EXPOSED to SuiteQL SEARCH
+//   · `custbody_pkg_distribution_center`     — NOT_EXPOSED either
+//   · `custentity_dc_location` (customer)    — EXPOSED, and already carries the
+//     exact code the app uses: Bloomingdale's SC/ST/JP/CI/CL/HA/CG, Nordstrom
+//     799/699/584/…, Shopbop SBX2. Verified 131/131 sales orders on every open
+//     EDI PO — no gaps, no mapping needed.
+// Same NOT_EXPOSED trap as `quantityfulfilled`: the field is real and visible on
+// the record, it just isn't searchable, and SuiteQL says "not found" rather than
+// "not searchable". Check the REST record before believing a field is absent.
+//
+// LEFT JOIN, not JOIN: a sales order must never disappear from the sync because
+// its customer row didn't come back.
 export function orderSql(since) {
   return `SELECT t.tranid, BUILTIN.DF(t.entity) AS customer, t.status,
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
                  t.foreigntotal, t.otherrefnum,
                  t.custbody_approval_status AS approval_status,
-                 t.custbody_is_placeholder AS is_placeholder
+                 t.custbody_is_placeholder AS is_placeholder,
+                 c.custentity_dc_location AS dc_code,
+                 c.custentity_store_number AS store_number
           FROM transaction t
+          LEFT JOIN customer c ON c.id = t.entity
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
