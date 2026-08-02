@@ -89,6 +89,12 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   const age850 = daysSince(
     order.transactions?.find((t) => t.type === '850_PURCHASE_ORDER')?.createdAt, today,
   )
+  // Every sales order on this PO, not just the first — an EDI PO is one SO per
+  // store/DC. Falls back to the singular for callers still passing old shapes.
+  const sos = order.netsuiteOrders?.length
+    ? order.netsuiteOrders
+    : (order.netsuiteOrder ? [order.netsuiteOrder] : [])
+  const unshippedSos = sos.filter((o) => o.stage !== 'SHIPPED')
 
   // ── closed? ────────────────────────────────────────────────────────────────
   // Manual close always wins. Nothing closes silently anymore (Nima, 2026-07-28,
@@ -190,9 +196,13 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     needed = `Progress ${r.netsuiteRef} — linked manually, not shipped yet`
   } else if (order.stageRank <= 2 && !order.netsuiteOrder) {
     needed = 'Enter in NetSuite (no matching order yet)'
-  } else if (order.stageRank <= 2 && order.netsuiteOrder && order.netsuiteOrder.stage !== 'SHIPPED') {
-    needed = `Fulfill & ship — ${order.netsuiteOrder.soNumber} ${order.netsuiteOrder.nextAction ? '· ' + order.netsuiteOrder.nextAction : ''}`.trim()
-  } else if (order.netsuiteOrder?.stage === 'SHIPPED' && order.stageRank < 3) {
+  } else if (order.stageRank <= 2 && order.netsuiteOrder && unshippedSos.length) {
+    // An EDI PO fans out to one SO per store, so name the count rather than
+    // whichever single SO happened to be first — see ediPipeline's netsuiteOrders.
+    const lead = unshippedSos[0]
+    const more = unshippedSos.length > 1 ? ` (+${unshippedSos.length - 1} more SO${unshippedSos.length > 2 ? 's' : ''})` : ''
+    needed = `Fulfill & ship — ${lead.soNumber}${more} ${lead.nextAction ? '· ' + lead.nextAction : ''}`.trim()
+  } else if (sos.some((o) => o.stage === 'SHIPPED') && order.stageRank < 3) {
     needed = 'Send the 856 ASN — NetSuite shows it shipped'; needs856 = true
   } else if (order.stageRank === 3) {
     needed = 'Send the 810 invoice'; needs810 = true

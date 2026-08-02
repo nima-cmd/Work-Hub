@@ -7,6 +7,7 @@ import {
   fetchAsnCartons, refreshAsnCartons, fetchPoLedger,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
+import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
 import { poTimelineSteps } from '../../../src/model/orderEvents.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
@@ -597,6 +598,13 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   const cancelledPos = scope.filter((o) => o.work.closedBy === 'cancelled')
   const closedPos = scope.filter((o) => o.work.closed && o.work.closedBy !== 'cancelled')
 
+  // The four per-partner questions (Nima, 2026-08-02) — computed off `scope`,
+  // so every count already respects the selected partner. Note the unit shifts:
+  // 1 and 4 are per PO, 2 is per sales order, 3 is per fulfilment. That's
+  // deliberate — an EDI PO is one sales order per store, and rolling those up
+  // would report "1 thing to do" for 25 stores' worth of picking.
+  const flow = computeEdiPartnerTabs(scope)
+
   return (
     <div className="ediBoard">
       {err && <div className="banner error">⚠ {err}</div>}
@@ -671,10 +679,122 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
             )}
             <button className={'tab' + (ediTab === 'review' ? ' active' : '')} onClick={() => setEdiTab('review')}>Parked <span className="count">{reviewPos.length}</span></button>
             <button className={'tab' + (ediTab === 'ready' ? ' active' : '')} onClick={() => setEdiTab('ready')}>Ready to close <span className="count">{readyPos.length}</span></button>
+            <button className={'tab' + (ediTab === 'noSo' ? ' active' : '')} onClick={() => setEdiTab('noSo')}>① No sales order <span className="count">{flow.noSalesOrder.length}</span></button>
+            <button className={'tab' + (ediTab === 'noIf' ? ' active' : '')} onClick={() => setEdiTab('noIf')}>② No fulfilment <span className="count">{flow.noFulfillment.length}</span></button>
+            <button className={'tab' + (ediTab === 'inFlow' ? ' active' : '')} onClick={() => setEdiTab('inFlow')}>③ In flow <span className="count">{flow.notShipped.length}</span></button>
+            <button className={'tab' + (ediTab === 'noAsn' ? ' active' : '')} onClick={() => setEdiTab('noAsn')}>④ No ASN <span className="count">{flow.noAsn.length}</span></button>
             <button className={'tab' + (ediTab === 'orphans' ? ' active' : '')} onClick={() => setEdiTab('orphans')}>Unassigned 856/810 <span className="count">{orphans.length}</span></button>
             <button className={'tab' + (ediTab === 'cancelled' ? ' active' : '')} onClick={() => setEdiTab('cancelled')}>Cancelled <span className="count">{cancelledPos.length}</span></button>
             <button className={'tab' + (ediTab === 'closed' ? ' active' : '')} onClick={() => setEdiTab('closed')}>Closed <span className="count">{closedPos.length}</span></button>
           </div>
+
+          {/* ── ① an 850 landed and no sales order exists ── */}
+          {ediTab === 'noSo' && (
+            flow.noSalesOrder.length === 0
+              ? <div className="empty">Every 850{selectedPartner ? ' for this partner' : ''} has a sales order behind it. 🎉</div>
+              : (
+                <>
+                  <p className="hint">A purchase order arrived over EDI and nothing was ever entered in NetSuite. Only POs with no 856 and no 810 are listed — if we announced or invoiced it, an order plainly existed and it has just aged out of the sync window.</p>
+                  <table className="grid" style={{ marginTop: 8 }}>
+                    <thead><tr><th>PO</th><th>Partner</th><th>850 age</th><th>Ship window</th><th>Cancel after</th><th></th></tr></thead>
+                    <tbody>
+                      {flow.noSalesOrder.map((r) => (
+                        <tr key={r.businessNumber}>
+                          <td className="mono">{r.businessNumber}</td>
+                          <td className="cust">{r.partner}</td>
+                          <td>{r.age850 == null ? '—' : <span className={'flag ' + (r.missed ? 'sev-hi' : 'sev-lo')}>{r.age850}d{r.missed ? ' · missed?' : ''}</span>}</td>
+                          <td className="cust">{fmtD(r.shipNotBefore)}</td>
+                          <td className="cust">{fmtD(r.cancelAfter)}</td>
+                          <td>{r.manuallyLinked && <span className="flag sev-mid">manual ref</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+          )}
+
+          {/* ── ② a sales order with no item fulfilment ── */}
+          {ediTab === 'noIf' && (
+            flow.noFulfillment.length === 0
+              ? <div className="empty">Every EDI sales order{selectedPartner ? ' for this partner' : ''} has at least one fulfilment started. 🎉</div>
+              : (
+                <>
+                  <p className="hint">Entered in NetSuite, nothing picked yet. One row per <b>sales order</b>, not per PO — an EDI PO fans out to one order per store, so {flow.noFulfillment.length} rows can sit behind only a handful of POs.</p>
+                  <table className="grid" style={{ marginTop: 8 }}>
+                    <thead><tr><th>SO</th><th>PO</th><th>Partner</th><th>Stage</th><th>Next action</th><th>Cancel after</th></tr></thead>
+                    <tbody>
+                      {flow.noFulfillment.map((r) => (
+                        <tr key={r.soNumber + r.businessNumber}>
+                          <td className="mono">{r.soNumber}</td>
+                          <td className="mono">{r.businessNumber}</td>
+                          <td className="cust">{r.partner}</td>
+                          <td className="cust">{r.stageLabel}</td>
+                          <td className="cust">{r.nextAction || '—'}</td>
+                          <td className="cust">{fmtD(r.cancelAfter)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+          )}
+
+          {/* ── ③ fulfilments not yet marked shipped — what's in flow ── */}
+          {ediTab === 'inFlow' && (
+            flow.notShipped.length === 0
+              ? <div className="empty">Nothing in flow{selectedPartner ? ' for this partner' : ''} — every fulfilment is marked shipped.</div>
+              : (
+                <>
+                  <p className="hint">Picked or packed, not yet marked shipped — the work physically in the building right now. Shipped means a real <code>actual ship date</code>, not a status word.</p>
+                  <table className="grid" style={{ marginTop: 8 }}>
+                    <thead><tr><th>IF</th><th>SO</th><th>PO</th><th>Partner</th><th>Status</th><th>Invoice</th></tr></thead>
+                    <tbody>
+                      {flow.notShipped.map((r) => (
+                        <tr key={r.ifNumber}>
+                          <td className="mono">{r.ifNumber}</td>
+                          <td className="mono">{r.soNumber}</td>
+                          <td className="mono">{r.businessNumber}</td>
+                          <td className="cust">{r.partner}</td>
+                          <td><span className="flag sev-lo">{r.status || '—'}</span></td>
+                          <td className="cust">{r.invoiceNumber || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+          )}
+
+          {/* ── ④ shipped, but the 856 never landed at the partner ── */}
+          {ediTab === 'noAsn' && (
+            flow.noAsn.length === 0
+              ? <div className="empty">Nothing shipped{selectedPartner ? ' for this partner' : ''} is unannounced — every shipment has an 856 that was delivered and accepted. 🎉</div>
+              : (
+                <>
+                  <p className="hint">The shipment left but the partner was never told, which is the chargeback surface. <b>none</b> = no 856 exists, send one. <b>undelivered</b> = it exists in Orderful but was never pushed (auto-send is off, the final transmit is manual). <b>refused</b> = it arrived and was rejected — that one needs reading, not re-sending.</p>
+                  <table className="grid" style={{ marginTop: 8 }}>
+                    <thead><tr><th>PO</th><th>Partner</th><th>856</th><th>Detail</th><th>Shipped</th><th>Last ship</th></tr></thead>
+                    <tbody>
+                      {flow.noAsn.map((r) => (
+                        <tr key={r.businessNumber}>
+                          <td className="mono">{r.businessNumber}</td>
+                          <td className="cust">{r.partner}</td>
+                          <td><span className={'flag ' + (r.state === 'none' ? 'sev-hi' : r.state === 'undelivered' ? 'sev-mid' : 'sev-lo')}>{r.state}</span></td>
+                          <td className="cust">{r.detail}</td>
+                          <td className="cust">
+                            {r.evidence === 'asn'
+                              ? <span title="Its sales orders have aged out of the sync window — the ASN itself is the evidence it shipped">via the ASN</span>
+                              : `${r.shippedCount} fulfilment${r.shippedCount === 1 ? '' : 's'}`}
+                          </td>
+                          <td className="cust">{r.lastShipDate ? `${fmtD(r.lastShipDate)}${r.daysSinceShip != null ? ` · ${r.daysSinceShip}d` : ''}` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+          )}
 
           {ediTab === 'orphans' && orphans.length === 0 && <div className="empty">No unassigned 856/810 documents{selectedPartner ? ' for this partner' : ''} — everything resolves to an 850. 🎉</div>}
           {ediTab === 'orphans' && orphans.length > 0 && (

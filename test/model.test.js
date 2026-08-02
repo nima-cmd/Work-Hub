@@ -21,6 +21,8 @@ import { CHARACTERS, resolveCharacterForSender } from '../src/model/characters.j
 import { SHIPS, resolveShipForKey } from '../src/model/ships.js'
 import { DIALOGUE, speakLine, taskContext } from '../src/model/dialogue.js'
 import { deriveWork, computeEdiWork, MISSED_AFTER_DAYS } from '../src/model/ediWork.js'
+import { computeEdiPipeline } from '../src/model/ediPipeline.js'
+import { computeEdiPartnerTabs } from '../src/model/ediPartnerTabs.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
@@ -1988,3 +1990,97 @@ test('shipWindow: a shipped order has no deadline left to miss', () => {
   assert.deepEqual(
     shipWindowFlags({ ...late, fulfillments: [{ actualShipDate: '2026-06-09' }] }, AUG2), [])
 })
+
+// ── EDI per-partner flow tabs (Nima, 2026-08-02) ─────────────────────────────
+// The four questions: 850-with-no-SO · SO-with-no-IF · IF-not-shipped ·
+// shipped-but-no-856. Built 2026-08-02 alongside the fan-out fix below.
+
+test('computeEdiPipeline: an EDI PO keeps ALL its sales orders, one per store', () => {
+  // The regression this guards: netsuiteByPoNumber used to be po -> order, so
+  // the LAST sales order won and the other 24 vanished. Live, PO 50073677 has
+  // 25 SOs and the board showed 1 — 111 of 129 EDI sales orders invisible.
+  const txns = [{ id: 't1', type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Nordstrom', createdAt: '2026-07-01', lastUpdatedAt: '2026-07-01', direction: 'IN' }]
+  const nsOrders = [
+    { poNumber: 'PO1', soNumber: 'SO3', stage: 'OPEN_NEEDS_FULFILLMENT', itemFulfillments: [], invoices: [] },
+    { poNumber: 'PO1', soNumber: 'SO1', stage: 'SHIPPED', itemFulfillments: [{ ifNumber: 'IF1', actualShipDate: '2026-07-10' }], invoices: [] },
+    { poNumber: 'PO1', soNumber: 'SO2', stage: 'PICKED_NEEDS_PACK', itemFulfillments: [{ ifNumber: 'IF2', actualShipDate: null }], invoices: [] },
+  ]
+  const { orders } = computeEdiPipeline(txns, [], nsOrders, [], [], [])
+  const po = orders.find((o) => o.businessNumber === 'PO1')
+  assert.equal(po.netsuiteOrders.length, 3)
+  assert.equal(po.netsuiteOrder.soNumber, 'SO1')   // sorted, and still the singular
+  // ANY sales order having shipped makes an ASN due — a shipped DC is an
+  // unannounced shipment whether or not its siblings have moved.
+  assert.equal(po.bucket, 'NEEDS_ASN')
+})
+
+test('ediPartnerTabs: the four lists split by the right unit — PO, SO, IF, PO', () => {
+  const txns = [{ id: 't1', type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Nordstrom', createdAt: new Date(T0 - 30 * DAY_MS).toISOString(), lastUpdatedAt: '2026-07-01', direction: 'IN' }]
+  const nsOrders = [
+    { poNumber: 'PO1', soNumber: 'SO1', stage: 'OPEN_NEEDS_FULFILLMENT', itemFulfillments: [], invoices: [] },
+    { poNumber: 'PO1', soNumber: 'SO2', stage: 'OPEN_NEEDS_FULFILLMENT', itemFulfillments: [], invoices: [] },
+    { poNumber: 'PO1', soNumber: 'SO3', stage: 'PICKED_NEEDS_PACK', itemFulfillments: [{ ifNumber: 'IF1', status: 'Picked', actualShipDate: null }], invoices: [] },
+  ]
+  const { orders } = computeEdiPipeline(txns, [], nsOrders, [], [], [])
+  const work = computeEdiWork(orders, [], T0)
+  const tabs = computeEdiPartnerTabs(work.orders, { today: T0 })
+  assert.equal(tabs.noSalesOrder.length, 0)     // it HAS sales orders
+  assert.equal(tabs.noFulfillment.length, 2)    // per SO, not per PO
+  assert.equal(tabs.notShipped.length, 1)       // per IF
+  assert.equal(tabs.noAsn.length, 0)            // nothing shipped yet
+})
+
+test('ediPartnerTabs: an 850 with no SO only counts while no 856/810 was ever sent', () => {
+  const mk = (extra) => ({
+    businessNumber: 'PO1', tradingPartner: 'Saks', bucket: 'NEEDS_IMPORT',
+    transactions: [], netsuiteOrders: [], cancelAfter: null, shipNotBefore: null,
+    work: { age850: 40, closed: false, parked: false }, ...extra,
+  })
+  // never announced, never invoiced → genuinely nobody entered it
+  assert.equal(computeEdiPartnerTabs([mk({ stageRank: 1 })], { today: T0 }).noSalesOrder.length, 1)
+  assert.equal(computeEdiPartnerTabs([mk({ stageRank: 1 })], { today: T0 }).noSalesOrder[0].missed, true)
+  // an 856 exists → an order plainly existed; it has just aged out of the sync
+  // window, so this is NOT a missing sales order.
+  assert.equal(computeEdiPartnerTabs([mk({ stageRank: 3 })], { today: T0 }).noSalesOrder.length, 0)
+  // closed and parked POs are out of scope entirely
+  assert.equal(computeEdiPartnerTabs([mk({ stageRank: 1, work: { age850: 40, closed: true } })], { today: T0 }).noSalesOrder.length, 0)
+  assert.equal(computeEdiPartnerTabs([mk({ stageRank: 1, work: { age850: 40, parked: true } })], { today: T0 }).noSalesOrder.length, 0)
+})
+
+test('ediPartnerTabs: a re-sent ASN does not make a delivered PO look unannounced', () => {
+  // The false positive this guards: "any 856 not DELIVERED" counts a PO that
+  // ALSO has a good delivered copy. Live that read 14 gaps against a true 0.
+  const shipped = { poNumber: 'PO1', soNumber: 'SO1', stage: 'SHIPPED', itemFulfillments: [{ ifNumber: 'IF1', actualShipDate: '2026-07-10' }], invoices: [] }
+  const base = (asns) => {
+    const txns = [
+      { id: 't1', type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Bloomies', createdAt: '2026-07-01', lastUpdatedAt: '2026-07-01', direction: 'IN' },
+      ...asns,
+    ]
+    const { orders } = computeEdiPipeline(txns, [], [shipped], [], [], [])
+    return computeEdiPartnerTabs(computeEdiWork(orders, [], T0).orders, { today: T0 })
+  }
+  const asn = (id, delivery, ack) => ({ id, type: '856_SHIP_NOTICE_MANIFEST', businessNumber: 'PO1', direction: 'OUT', deliveryStatus: delivery, acknowledgmentStatus: ack, createdAt: '2026-07-11', lastUpdatedAt: '2026-07-11' })
+
+  assert.equal(base([asn('a1', 'PENDING', 'NOT_ACKNOWLEDGED'), asn('a2', 'DELIVERED', 'ACCEPTED')]).noAsn.length, 0)
+  assert.equal(base([]).noAsn[0].state, 'none')
+  assert.equal(base([asn('a1', 'PENDING', 'NOT_ACKNOWLEDGED')]).noAsn[0].state, 'undelivered')
+  // delivered then rejected needs READING, not a re-send — its own state
+  assert.equal(base([asn('a1', 'DELIVERED', 'REJECTED')]).noAsn[0].state, 'refused')
+})
+
+test('ediPartnerTabs: an undelivered ASN counts even when its sales orders aged out', () => {
+  // An 856 is itself proof we shipped. Gating on a visible shipped fulfilment
+  // would hide exactly the shipments whose orders left the sync window.
+  const txns = [
+    { id: 't1', type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Bloomies', createdAt: '2026-07-01', lastUpdatedAt: '2026-07-01', direction: 'IN' },
+    { id: 'a1', type: '856_SHIP_NOTICE_MANIFEST', businessNumber: 'PO1', direction: 'OUT', deliveryStatus: 'PENDING', acknowledgmentStatus: 'NOT_ACKNOWLEDGED', createdAt: '2026-07-11', lastUpdatedAt: '2026-07-11' },
+  ]
+  const { orders } = computeEdiPipeline(txns, [], [], [], [], [])   // no NetSuite orders at all
+  const tabs = computeEdiPartnerTabs(computeEdiWork(orders, [], T0).orders, { today: T0 })
+  assert.equal(tabs.noAsn.length, 1)
+  assert.equal(tabs.noAsn[0].evidence, 'asn')
+  assert.equal(tabs.noAsn[0].shippedCount, 0)
+  // and it must NOT also be filed as a missing sales order — we shipped it
+  assert.equal(tabs.noSalesOrder.length, 0)
+})
+

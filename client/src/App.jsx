@@ -178,8 +178,23 @@ export default function App() {
     // best-effort: the app still works if either fails to load.
     fetchQuestTasks().then(setTasks).catch(() => {})
     fetchQuestActivity().then(setActivity).catch(() => {})
-    // Order-events ledger (custody scans) — folds into Calendar's day grid.
-    fetchOrderEvents().then(setEvents).catch(() => {})
+    // Order-events ledger — folds into Calendar's day grid.
+    //
+    // TWO fetches on purpose. The plain feed is the latest 500 of the whole
+    // ledger, which is what a scrollable history should be. But the Kanban reads
+    // the same array to decide whether a carton is physically with the warehouse,
+    // and custody is STATE — a carton scanned out in July is still out today. At
+    // 3,129 events the window cut off mid-July and POs that had been scanned back
+    // in silently reverted to "with us · not shipped" (Nima spotted it on the
+    // Mission Quests board, 2026-08-02). Custody is pulled in full and merged.
+    Promise.all([
+      fetchOrderEvents().catch(() => []),
+      fetchOrderEvents({ types: 'CUSTODY_OUT,CUSTODY_IN,CUSTODY_CLEARED' }).catch(() => []),
+    ]).then(([feed, custody]) => {
+      const byId = new Map()
+      for (const e of [...feed, ...custody]) byId.set(e.id, e)
+      setEvents([...byId.values()].sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt)))
+    }).catch(() => {})
     // Is the live data still arriving at all? Best-effort like the rest.
     fetchSyncHealth().then(setSyncHealth).catch(() => setSyncHealth(null))
     // Ship desk / court strip. Best-effort like the rest: a failure just means

@@ -51,6 +51,11 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
         // A temp order holding stock until the real one arrives. Excluded from
         // getOrders, so it never surfaces as work — see db/schema.sql.
         isPlaceholder: false,
+        // Which DC this store consolidates through, and its store number. An
+        // EDI PO is one sales order per store, and the DC is what groups them
+        // into one cargo tag per PO-DC (Nima, 2026-08-02).
+        dc: null,
+        storeNumber: null,
       })
     }
     return orders.get(key)
@@ -62,7 +67,7 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     'shippingStatus', 'soStatus', 'amountPaid', 'shipDate', 'startDate',
     'endDate', 'cancelDate', 'notes', 'qtyOrdered', 'qtyAllocated',
     'qtyFulfilled', 'isAts', 'invoice', 'approvalStatus', 'actualShipDate',
-    'billingStatus', 'isPlaceholder',
+    'billingStatus', 'isPlaceholder', 'dc', 'storeNumber',
   ]
 
   for (const rec of allRecords) {
