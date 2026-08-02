@@ -10,6 +10,7 @@ import {
 } from '../src/ingest/savedSearches.js'
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
+import { shipWindow, shipWindowFlags, isoDay } from '../src/model/shipWindow.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -1857,4 +1858,133 @@ test('asn: a blank-SSCC carton still records WHICH fulfilment to go fix', () => 
   assert.equal(blank.length, 1)
   assert.equal(blank[0].sscc, null)
   assert.equal(blank[0].ifNumber, 'IF7439')
+})
+
+// ── Ship windows (src/model/shipWindow.js) ───────────────────────────────────
+// The measured case that motivated the module: on 12 of 12 open EDI POs the
+// sales order's ship date disagreed with the partner's 850, and on 8 of them it
+// promised a date the partner had already cancelled on. PO 8040313 is real —
+// 13 SOs, SO says Aug 21, Bloomingdale's cancels Aug 10.
+
+const AUG2 = new Date(2026, 7, 2) // 2026-08-02, local midnight
+
+test('shipWindow: the partner 850 sets the deadline, not the sales order', () => {
+  const w = shipWindow({
+    customer: "Bloomingdale's - 059", shipDate: '2026-08-21',
+    ediWindow: { shipNotBefore: '2026-07-27', cancelAfter: '2026-08-10' },
+  }, AUG2)
+  assert.equal(w.source, 'edi')
+  assert.equal(isoDay(w.mustShipBy), '2026-08-10')  // NOT the SO's 8/21
+  assert.equal(w.daysToShip, 8)
+  assert.equal(w.soPastCancel, true)
+})
+
+test('shipWindow: a boutique order still runs on its own ship date', () => {
+  const w = shipWindow({ customer: 'Some Boutique', shipDate: '2026-08-05' }, AUG2)
+  assert.equal(w.source, 'so')
+  assert.equal(w.daysToShip, 3)
+  assert.equal(w.soPastCancel, false)  // no 850 → nothing to disagree with
+})
+
+test("shipWindow: Bloomingdale's may start a week before its DC start date", () => {
+  const bloomies = {
+    customer: "Bloomingdale's - 059",
+    ediWindow: { shipNotBefore: '2026-08-06', cancelAfter: '2026-08-20' },
+  }
+  const w = shipWindow(bloomies, AUG2)
+  assert.equal(w.headstartDays, 7)
+  assert.equal(isoDay(w.opens), '2026-07-30')
+  assert.equal(w.notOpenYet, false)   // already workable on 8/2
+
+  // Nordstrom is rigid: the same dates, no headstart, so it is NOT workable yet.
+  const nord = shipWindow({ ...bloomies, customer: 'Nordstrom - 599' }, AUG2)
+  assert.equal(nord.headstartDays, 0)
+  assert.equal(isoDay(nord.opens), '2026-08-06')
+  assert.equal(nord.notOpenYet, true)
+})
+
+test('shipWindow: a headstart never drags the cancel date earlier', () => {
+  // Only the OPEN side moves — inferring an earlier deadline would invent
+  // urgency the partner never asked for.
+  const w = shipWindow({
+    customer: "Bloomingdale's", ediWindow: { shipNotBefore: '2026-08-06', cancelAfter: '2026-08-20' },
+  }, AUG2)
+  assert.equal(isoDay(w.mustShipBy), '2026-08-20')
+})
+
+test('shipWindow: no honest date anywhere → no window, never a guessed one', () => {
+  assert.equal(shipWindow({ customer: 'X' }, AUG2), null)
+  assert.equal(shipWindow({ customer: 'X', ediWindow: {} }, AUG2), null)
+})
+
+test('shipWindowFlags: graduated by how much runway is left', () => {
+  const at = (shipDate) => shipWindowFlags({ customer: 'B', shipDate }, AUG2).map((f) => f.key)
+  assert.deepEqual(at('2026-07-30'), ['OVERDUE'])    // 3d past
+  assert.deepEqual(at('2026-08-02'), ['DUE_TODAY'])
+  assert.deepEqual(at('2026-08-04'), ['PACK_NOW'])   // inside the 2d pack lead
+  assert.deepEqual(at('2026-08-08'), ['DUE_SOON'])   // within the 7d watch
+  assert.deepEqual(at('2026-08-28'), [])             // far out — stays quiet
+})
+
+test('shipWindowFlags: severities match the legend (3 act now / 2 caution / 1 watch)', () => {
+  const sev = (shipDate, key) =>
+    shipWindowFlags({ customer: 'B', shipDate }, AUG2).find((f) => f.key === key).severity
+  assert.equal(sev('2026-07-30', 'OVERDUE'), 3)
+  assert.equal(sev('2026-08-02', 'DUE_TODAY'), 2)
+  assert.equal(sev('2026-08-04', 'PACK_NOW'), 2)
+  assert.equal(sev('2026-08-08', 'DUE_SOON'), 1)
+})
+
+test('shipWindowFlags: the SO promising a date past the partner cancel is its own flag', () => {
+  // The bug this whole module exists for: SO 8/21 reads as comfortably future,
+  // so before this the board showed NOTHING while the cancel date was 8/10.
+  const flags = shipWindowFlags({
+    customer: "Bloomingdale's", shipDate: '2026-08-21',
+    ediWindow: { shipNotBefore: '2026-07-27', cancelAfter: '2026-08-10' },
+  }, AUG2)
+  // 8/10 is 8 days out — one day past the watch tier, so no urgency flag fires
+  // yet. SO_PAST_CANCEL is what surfaces it anyway, and that's the point: the
+  // disagreement is worth naming BEFORE the real date gets close, because the
+  // fix is in NetSuite and takes a human.
+  assert.deepEqual(flags.map((f) => f.key), ['SO_PAST_CANCEL'])
+  // Ranked off the SO date alone it would have raised nothing at all.
+  assert.deepEqual(shipWindowFlags({ customer: "Bloomingdale's", shipDate: '2026-08-21' }, AUG2), [])
+})
+
+test('shipWindowFlags: a window that has not opened says so at severity 0', () => {
+  const f = shipWindowFlags({
+    customer: 'Nordstrom', ediWindow: { shipNotBefore: '2026-08-20', cancelAfter: '2026-08-30' },
+  }, AUG2).find((x) => x.key === 'WINDOW_NOT_OPEN')
+  assert.equal(f.severity, 0)   // not a problem — the reason not to pull it forward
+})
+
+test('computeFlags: an EDI order inherits the window flags through the pipeline', () => {
+  const keys = computeFlags({
+    customer: "Bloomingdale's", shipDate: '2026-08-21', fulfillments: [],
+    ediWindow: { shipNotBefore: '2026-07-27', cancelAfter: '2026-08-10' },
+  }, AUG2).map((f) => f.key)
+  assert.ok(keys.includes('SO_PAST_CANCEL'))
+})
+
+test('poGroups: a PO group takes the TIGHTEST deadline of its members', () => {
+  const mk = (soNumber, shipDate) => ({
+    soNumber, poNumber: '8040313', customer: "Bloomingdale's", source: 'edi',
+    stage: 'OPEN_NEEDS_FULFILLMENT', shipDate, fulfillments: [], invoices: [],
+    shipWindow: shipWindow({ customer: "Bloomingdale's", shipDate }, AUG2),
+  })
+  const [g] = groupOrdersByPo([mk('SO1', '2026-08-21'), mk('SO2', '2026-08-09')])
+  assert.equal(g.isGroup, true)
+  assert.equal(isoDay(g.shipWindow.mustShipBy), '2026-08-09')
+})
+
+test('shipWindow: a shipped order has no deadline left to miss', () => {
+  const late = { customer: 'Boutique', shipDate: '2026-06-10' }
+  // Still open → 53 days overdue, correctly loud.
+  assert.equal(shipWindowFlags(late, AUG2)[0].key, 'OVERDUE')
+  // Shipped → silent. The window was met; it is not a window missed.
+  assert.equal(shipWindow({ ...late, stage: 'SHIPPED' }, AUG2).shipped, true)
+  assert.deepEqual(shipWindowFlags({ ...late, stage: 'SHIPPED' }, AUG2), [])
+  // An actual ship date on any fulfilment counts too, whatever the stage says.
+  assert.deepEqual(
+    shipWindowFlags({ ...late, fulfillments: [{ actualShipDate: '2026-06-09' }] }, AUG2), [])
 })

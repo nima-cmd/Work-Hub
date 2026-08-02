@@ -5,6 +5,7 @@
 // flags.
 
 import { STAGE, furthestStage } from './stages.js'
+import { shipWindowFlags } from './shipWindow.js'
 
 const DAY = 86_400_000
 
@@ -122,7 +123,6 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
 export function computeFlags(o, today) {
   const flags = []
   const ss = (o.shippingStatus || '').toLowerCase()
-  const shipDay = o.shipDate ? daysBetween(today, o.shipDate) : null
 
   const waitingOnPayment =
     ss.includes('pending payment') ||
@@ -136,11 +136,12 @@ export function computeFlags(o, today) {
     flags.push({ key: 'FOB_HOLD', label: 'FOB pending approval — verify before shipping', severity: 2 })
   }
 
-  if (shipDay != null && shipDay < 0) {
-    flags.push({ key: 'OVERDUE', label: `Ship date ${-shipDay}d overdue`, severity: 3 })
-  } else if (shipDay === 0) {
-    flags.push({ key: 'DUE_TODAY', label: 'Ship date is today', severity: 2 })
-  }
+  // The ship window (src/model/shipWindow.js). For a boutique order this is the
+  // sales order's own ship date, as before. For an EDI order the binding date is
+  // the partner's 850 cancel-after instead — the SO date disagreed with it on
+  // 12 of 12 open EDI POs, usually by promising a date the partner had already
+  // cancelled on, which produced no flag at all.
+  flags.push(...shipWindowFlags(o, today))
 
   if (o.daysPending != null && o.daysPending >= 14) {
     flags.push({ key: 'STALE', label: `${o.daysPending}d pending — chase it`, severity: 3 })

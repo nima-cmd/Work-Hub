@@ -2534,3 +2534,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .containerPos { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .containerDest { font-size: 12px; margin-top: 2px; }
 .oldContainers { margin-top: 12px; }
+
+/* ship window — when we may start → when it must ship (src/model/shipWindow.js).
+   Always shown when a window exists, even on a quiet card: "ships 8/28" is
+   context, while the matching Flags entry only appears once it's actionable. */
+.shipWin { font-size: 11px; font-variant-numeric: tabular-nums; margin: 3px 0 1px; cursor: help; }
+.shipWin.sev-none { color: var(--muted); }
+.shipWin.sev-lo   { color: #a9c8ff; }
+.shipWin.sev-mid  { color: #ffd08a; }
+.shipWin.sev-hi   { color: #ffb3ad; font-weight: 600; }
+.shipWin .winDelta { opacity: 0.75; }

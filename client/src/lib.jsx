@@ -385,6 +385,51 @@ export const STAGE_SHORT = {
 export const sevClass = (s) =>
   s >= 3 ? 'sev-hi' : s >= 2 ? 'sev-mid' : s >= 1 ? 'sev-lo' : 'sev-none'
 
+// The ship window as one compact line: when we may start → when it must ship.
+// Rendered separately from Flags because the window is always true, while a
+// flag only fires when the window is close enough to act on — the card should
+// still say "ships Aug 28" on a quiet order that raises nothing.
+//
+// The arrow's left side is deliberately the date we may START (the partner's
+// start date, minus Bloomingdale's DC headstart), not the raw start date —
+// that's the number that answers "can I pull this forward?".
+export function ShipWindow({ window: w }) {
+  // Shipped → the deadline is history. The Ship Departures view owns what
+  // actually left and when; a red "53d late" on a card that already went out is
+  // just wrong.
+  if (!w || w.shipped || w.mustShipBy == null) return null
+  const d = w.daysToShip
+  const sev = d == null ? 0 : d < 0 ? 3 : d <= 2 ? 2 : d <= 7 ? 1 : 0
+  const left = w.notOpenYet ? `opens ${md(w.opens)} → ` : ''
+  const verb = w.source === 'edi' ? 'cancels' : 'ships'
+  return (
+    <div className={'shipWin ' + sevClass(sev)} title={windowTitle(w)}>
+      {left}{verb} {md(w.mustShipBy)}
+      {d != null && <span className="winDelta"> · {d < 0 ? `${-d}d late` : d === 0 ? 'today' : `${d}d`}</span>}
+    </div>
+  )
+}
+
+function windowTitle(w) {
+  const bits = []
+  if (w.shipNotBefore != null) bits.push(`Partner start date ${md(w.shipNotBefore)}`)
+  if (w.headstartDays) bits.push(`${w.headstartDays}d DC headstart → may start ${md(w.opens)}`)
+  bits.push(w.source === 'edi'
+    ? `Partner cancels after ${md(w.mustShipBy)} (from their 850)`
+    : `Sales order ship date ${md(w.mustShipBy)}`)
+  if (w.startBy != null) bits.push(`Start packing by ${md(w.startBy)}`)
+  if (w.soPastCancel) bits.push(`⚠ SO ship date ${md(w.soShipDate)} is AFTER the partner's cancel date`)
+  return bits.join('\n')
+}
+
+// shipWindow hands back epoch-ms day stamps, already local-midnight — so build
+// the label off the Date's local parts rather than re-slicing an ISO string.
+function md(t) {
+  if (t == null) return ''
+  const d = new Date(t)
+  return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()}`
+}
+
 export function Flags({ flags }) {
   if (!flags?.length) return null
   return (
