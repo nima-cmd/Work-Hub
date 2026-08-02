@@ -674,12 +674,29 @@ function dcRowsFor(group, dcList) {
   // dcList (from getPoDcs) carries a real store count once the order-level DC is
   // available, plus feed cartons. Prefer stores; fall back to the member parse.
   if (dcList && dcList.length) return dcList.map((d) => ({ dc: d.dc, abbrev: d.dc, stores: d.stores || 0, cartons: d.cartons || 0 }))
-  return dcBreakdown(group?.members || []).filter((r) => r.abbrev)
+  const rows = dcBreakdown(group?.members || [])
+  const withDc = rows.filter((r) => r.abbrev)
+  if (withDc.length) return withDc
+  // ⚠️ NO DC KNOWN YET → ONE PO-LEVEL TAG. DcTagButtons' own contract says "a PO
+  // with no DC yet prints a single PO-level tag", and the whole stack supports
+  // it — buildDcPdf guards every DC field, the QR degrades to `DC:<po>:`, and
+  // recordCustodyScan reads that back as PO-level custody. But this used to end
+  // in `.filter(r => r.abbrev)`, which dropped the no-DC bucket and returned
+  // [], so the button rendered NOTHING instead of the fallback tag.
+  //
+  // That is not a rare edge: `parseDc` wants a hierarchical ship-to
+  // ("… : Bloomingdale's DC - Secaucus : …") and the live NetSuite sync sends
+  // BUILTIN.DF(t.entity), which is the store name alone. Measured 2026-08-02:
+  // **0 of 129** EDI orders parse. So every PO outside the routing feed had no
+  // tag button at all.
+  return rows.length ? [{ dc: null, abbrev: null, stores: rows.reduce((n, r) => n + r.stores, 0), cartons: 0 }] : []
 }
 
 // The DC split of a PO group, shown inline: "SC · ST · JP · CI".
 export function DcBreakdown({ group, dcList }) {
-  const rows = dcRowsFor(group, dcList)
+  // Only the real DC split is worth a chip row — the no-DC fallback row exists
+  // so a tag can still be printed, not so an empty chip renders.
+  const rows = dcRowsFor(group, dcList).filter((r) => r.abbrev)
   if (!rows.length) return null
   return (
     <span className="dcBreakdown" title="Distribution centers on this PO">
@@ -704,6 +721,10 @@ export function DcTagButtons({ group, dcList }) {
   const available = ['4x6', '2.25x1.25'].filter((s) => sizes[s])
   if (!available.length || !breakdown.length) return null
   const n = breakdown.length
+  // Name it for what it actually prints: a per-DC consolidation tag, or the
+  // single PO-level tag used before the DC is assigned.
+  const noDc = n === 1 && !breakdown[0].abbrev
+  const what = noDc ? 'PO tag' : `${n} DC tag${n === 1 ? '' : 's'}`
 
   // EDI labels carry the warehouse location as the customer (Nima, 2026-07-22)
   // — the trailing segment of "Warehouse Bulk : Bloomingdale's" reads as the
@@ -723,9 +744,11 @@ export function DcTagButtons({ group, dcList }) {
     <span className="tagBtns">
       {available.map((s) => (
         <button key={s} className="linkBtn" disabled={busy === s}
-                title={`Print ${n} per-DC cargo tag${n === 1 ? '' : 's'} for PO ${group.poNumber} (${SIZE_LABEL[s]})`}
+                title={noDc
+                  ? `No DC assigned yet — print one PO-level cargo tag for PO ${group.poNumber} (${SIZE_LABEL[s]}). Scans as PO-level custody.`
+                  : `Print ${n} per-DC cargo tag${n === 1 ? '' : 's'} for PO ${group.poNumber} (${SIZE_LABEL[s]})`}
                 onClick={() => printAll(s)}>
-          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${n} DC tag${n === 1 ? '' : 's'} (${SIZE_LABEL[s]})`}
+          🖨 {busy === s ? `${SIZE_LABEL[s]}…` : `${what} (${SIZE_LABEL[s]})`}
         </button>
       ))}
       {err && <span className="tagErr">⚠ {err}</span>}
@@ -742,9 +765,23 @@ export function DcTagButtons({ group, dcList }) {
 // to the member parse when no dcList is supplied.
 export function cardCustody(card, events = [], dcList) {
   const ediDcs = (dcList && dcList.length ? dcList.map((d) => d.dc) : dcBreakdown(card?.members || []).filter((r) => r.abbrev).map((r) => r.abbrev))
+  const dcDocs = ediDcs.map((dc) => ({ type: 'DC', num: `${card.poNumber}:${dc}` }))
+  const ifDocs = (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
+  const hasEvents = (ds) => ds.some((d) => events.some((e) => e.docType === d.type && e.docNumber === d.num))
+
+  // ⚠️ AN EDI SHIPMENT CAN BE SCANNED TWO WAYS, and the board has to honour both
+  // (found 2026-08-02). Scan Bay accepts our printed per-DC cargo tag
+  // (`DC:<po>:<abbrev>`) AND the NetSuite packing slip's own `IF####` QR — see
+  // recordCustodyScan. This used to read DC tokens ONLY for an EDI group, so
+  // Bloomingdale's PO 8040313 had all 13 of its fulfilments scanned OUT and the
+  // card still read "with us · not shipped" and sat in Picked. The scans were in
+  // the ledger the whole time; the card just wasn't looking at them.
+  //
+  // Whichever evidence the crew actually produced wins, and the denominator
+  // follows it so the "3/5" fraction keeps counting the same kind of thing.
   const docs = card?.isGroup && card.source === 'edi'
-    ? ediDcs.map((dc) => ({ type: 'DC', num: `${card.poNumber}:${dc}` }))
-    : (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
+    ? (hasEvents(dcDocs) || !hasEvents(ifDocs) ? dcDocs : ifDocs)
+    : ifDocs
   if (!docs.length) return null
   let out = 0, scanned = 0
   for (const d of docs) {
