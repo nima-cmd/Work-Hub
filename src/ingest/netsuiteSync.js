@@ -348,6 +348,102 @@ export function foldPurchaseOrderLines(rows = []) {
   return [...byKey.values()].filter((r) => r.qtyRemaining > 0)
 }
 
+// ── pre-SO demand: order confirmations ───────────────────────────────────────
+// The last table still frozen at the 2026-07-29 CSV export once purchase_orders
+// went live. In this account the Estimate record is RENAMED "Order Confirmation"
+// (BUILTIN.DF returns "Order Confirmation : Open"), so `type='Estimate'` is the
+// right filter despite the app calling them OCs everywhere else.
+//
+// Scope is the two statuses that mean "no Sales Order created from this yet":
+//   A Open · X Expired  (B Processed = converted, and is what the saved search
+// excluded so OCs never double-count against `orders`).
+// Verified live 2026-08-02: 58 A + 26 X = 84 OCs, exactly the 84 the frozen CSV
+// copy held, and every one of its 1,712 lines is still inside this scope — the
+// pull is a superset, so nothing legitimate gets pruned on the first run.
+//
+// ⚠️ Deliberately NO `since` window, unlike purchaseOrderSql. A PO stays the
+// same record when it closes, so the PO query widens the net to catch recently
+// closed ones and let the prune retire them. An OC that converts flips to B and
+// must simply LEAVE the table — widening the window here would pull converted
+// OCs back in and double-count real sales orders as open demand. The scope is
+// small enough (1,733 lines) to pull whole every cycle, which is also what makes
+// pruneOrderConfirmations safe: it is always diffing against a complete set.
+export const OC_OPEN_CODES = ['A', 'X']
+
+// ⚠️ `location` must be the location's FULL path, the same trap as
+// purchase_orders.destination — this column is the other half of the OC↔PO match
+// key and holds values like "Warehouse Bulk : Nordstrom". `fullname` gives the
+// path; the leaf alone would silently match nothing. Line location wins over the
+// header's: verified live to reproduce the CSV copy exactly, including all 109
+// rows where both are empty.
+//
+// `ship_to` is NOT selected. It is 100% NULL across all 1,712 CSV-loaded rows —
+// the export never populated it — so there is nothing to reproduce and no
+// NetSuite field that reliably means it (same conclusion as purchase_orders).
+// The upsert COALESCEs, so any value already in the column survives.
+export function orderConfirmationSql() {
+  return `SELECT t.tranid AS oc_number, BUILTIN.DF(t.entity) AS customer,
+                 BUILTIN.DF(t.status) AS status, t.otherrefnum AS po_check_number,
+                 TO_CHAR(t.startdate,'YYYY-MM-DD') AS startdate,
+                 BUILTIN.DF(tl.item) AS item, tl.quantity,
+                 COALESCE(lloc.fullname, hloc.fullname) AS location
+          FROM transaction t
+          JOIN transactionline tl ON tl.transaction = t.id
+          LEFT JOIN location lloc ON lloc.id = tl.location
+          LEFT JOIN location hloc ON hloc.id = t.location
+          WHERE t.type='Estimate' AND tl.mainline='F'
+            AND t.status IN (${OC_OPEN_CODES.map((c) => `'${c}'`).join(',')})`
+}
+
+// SuiteQL row → the same partial-record shape fromOcPipeline emits, so it flows
+// through loadOrderConfirmations untouched.
+//
+// ⚠️ Estimate line quantities come back NEGATIVE (-6 for an order of 6) — the
+// CSV column carried the positive figure, so this takes the absolute value.
+// A null quantity stays null rather than collapsing to 0: non-item lines (the
+// "EU Distributor" discount) genuinely have none, and the upsert COALESCEs, so
+// a 0 would overwrite a real number while a null leaves it alone.
+export function mapOrderConfirmationRow(row) {
+  const q = row.quantity == null || row.quantity === '' ? null : Math.abs(Number(row.quantity))
+  return {
+    source: 'OcPipeline',
+    ocNumber: String(row.oc_number || '').trim(),
+    item: String(row.item || '').trim(),
+    customer: cleanName(row.customer || ''),
+    location: row.location || '',
+    status: String(row.status || '').replace(/^Order Confirmation\s*:\s*/i, '').trim(),
+    qty: Number.isFinite(q) ? q : null,
+    poCheckNumber: row.po_check_number || '',
+    orderStartDate: row.startdate || null,
+  }
+}
+
+// Collapse the line rows to one record per (OC#, item) — the table's primary key.
+//
+// ⚠️ Summing here FIXES a silent undercount the CSV path has been carrying. An OC
+// can list the same item on several lines (an amendment appends to the original
+// order), and `loadOrderConfirmations` upserts row-by-row, so the later line
+// simply overwrote the earlier one. Live proof: OC1596 lists SN02264NB-TEAK at
+// line 7 (53 units) and again at line 120 (5 units); the frozen table records
+// **5**, not 58. 15 items on that OC were understated the same way. Both lines
+// are open demand for the same SKU, so the total is the honest figure.
+//
+// The "Memorized" filter mirrors fromOcPipeline's: those are recurring-transaction
+// TEMPLATES, not real dated OCs. None appear in the live scope today; the guard
+// stays so both paths agree on what counts as a row.
+export function foldOrderConfirmationLines(rows = []) {
+  const byKey = new Map()
+  for (const row of rows) {
+    const r = mapOrderConfirmationRow(row)
+    if (!r.ocNumber || r.ocNumber === 'Memorized' || !r.item) continue
+    const k = `${r.ocNumber}@@${r.item}`
+    const seen = byKey.get(k)
+    if (!seen) { byKey.set(k, r); continue }
+    if (r.qty != null) seen.qty = (seen.qty ?? 0) + r.qty
+  }
+  return [...byKey.values()]
+}
+
 // ── the pull ─────────────────────────────────────────────────────────────────
 // Returns { ok, records, soNumbers, ifNumbers, counts, truncated, warnings }.
 // `records` is the flat partial-record list to hand to buildPipeline.
@@ -475,6 +571,24 @@ export async function fetchPurchaseOrderLines({ closedWithinDays = 30, now } = {
   }
 }
 
+// Pre-SO demand. Separate query for the same reason as the PO one: a different
+// transaction type sharing no join with the SO chain, so it soft-fails on its own
+// rather than taking the outbound sync down with it.
+export async function fetchOrderConfirmationLines() {
+  if (!netsuiteConfigured()) return { ok: false, configured: false, records: [] }
+  const r = await runSuiteQL(orderConfirmationSql())
+  if (!r.ok) {
+    return { ok: false, configured: true, records: [], error: r.needsAuth ? 'auth rejected' : r.error || 'failed' }
+  }
+  return {
+    ok: true,
+    records: foldOrderConfirmationLines(r.rows),
+    // Same rule as the PO pull: a truncated result must never reach the prune,
+    // or lines that merely fell off the last page get deleted as "converted".
+    truncated: !!r.truncated,
+  }
+}
+
 export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false } = {}) {
   const pulled = await fetchOrderLifecycle({ closedWithinDays })
   if (!pulled.ok) return { ok: false, configured: pulled.configured, error: pulled.error }
@@ -489,12 +603,18 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
   if (!pos.ok && pos.configured !== false) warnings.push(`purchase orders: ${pos.error}`)
   if (pos.truncated) warnings.push('purchase orders: hit the page cap — result is INCOMPLETE, not pruning')
 
+  // Pre-SO demand, soft-failing on the same terms.
+  const ocs = await fetchOrderConfirmationLines()
+  if (!ocs.ok && ocs.configured !== false) warnings.push(`order confirmations: ${ocs.error}`)
+  if (ocs.truncated) warnings.push('order confirmations: hit the page cap — result is INCOMPLETE, not pruning')
+
   const { withTransaction } = await import('../db.js')
   const {
     loadOrders, loadFulfillments, loadInvoices, recordSnapshot,
     stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
     reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
     deriveOrderEvents, loadPurchaseOrders, prunePurchaseOrders,
+    loadOrderConfirmations, pruneOrderConfirmations,
   } = await import('./loadToDb.js')
 
   const ROLLBACK = Symbol('dry-run rollback')
@@ -526,10 +646,20 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
         nPos = await loadPurchaseOrders(pos.records, db)
         if (!pos.truncated) nPosPruned = await prunePurchaseOrders(pos.records, db)
       }
+      // Pre-SO demand. Pruning matters more here than anywhere else: an OC that
+      // converts to a Sales Order leaves the scope entirely, and if its lines
+      // lingered the app would count the same demand twice — once as an open OC
+      // and again as the real order.
+      let nOcs = 0
+      let nOcsPruned = 0
+      if (ocs.ok && ocs.records.length) {
+        nOcs = await loadOrderConfirmations(ocs.records, db)
+        if (!ocs.truncated) nOcsPruned = await pruneOrderConfirmations(ocs.records, db)
+      }
       // Last, because it reads the tables everything above has just written.
       const { inserted: nEvents } = await deriveOrderEvents({ mode: 'sync' }, db)
       await recordSnapshot('netsuiteLive', orders.length, new Date(), db)
-      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents, nPos, nPosPruned }
+      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents, nPos, nPosPruned, nOcs, nOcsPruned }
       if (dryRun) {
         const e = new Error('dry run')
         e.code = ROLLBACK
