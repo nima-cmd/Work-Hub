@@ -38,6 +38,12 @@ export const SO_STATUS = {
 export const SO_OPEN_CODES = ['A', 'B', 'D', 'E', 'F']
 export const SO_TERMINAL_CODES = ['G', 'H']
 
+// Purchase Order — inbound supply. Measured live 2026-08-02 across 681 POs:
+// B "Pending Receipt" (57) · D "Partially Received" (28) · F "Pending Bill" (1)
+// are still awaiting or mid-receipt; G "Fully Billed" (589) and H "Closed" (6)
+// are done. Same letters as the SO map, DIFFERENT meanings — don't share them.
+export const PO_OPEN_CODES = ['B', 'D', 'F']
+
 // The real hold signal in this account: the custom list `custbody_approval_status`
 // on the sales order. Measured live 2026-07-31 across the 135 open SOs — 108
 // read 1 "Approved", 27 read 2 "On Hold". The native Pending-Approval status is
@@ -265,6 +271,83 @@ export function invoiceSql(since) {
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
+// ── inbound supply: purchase orders ──────────────────────────────────────────
+// The last substantive CSV-only table (the "PO Warehouse View" saved search).
+// It was still frozen at the 2026-07-29 export while every outbound table went
+// live, and nothing surfaced the staleness because no screen ages inbound.
+//
+// ⚠️ `destination` MUST be the location's FULL path. This column is the OC↔PO
+// match key and joins to order_confirmations.location, which stores the full
+// hierarchical name ("Warehouse Bulk : Nordstrom"). BUILTIN.DF on the custom
+// field returns only the LEAF ("Nordstrom"), so joining to the location record
+// for `fullname` is load-bearing, not cosmetic — the leaf form silently matches
+// nothing, and it is also what the Naghedi-Warehouse app reads to aim its
+// Inventory Transfer CSVs (a leaf would transfer stock to the wrong location).
+//
+// `ship_to` is deliberately NOT synced. The saved search's "Ship To" is an
+// addressee that doesn't map to any single line of `transaction.shipaddress`
+// (PO1745 has it on line 2, under "Retail Receiving"), and line-parsing an
+// address to guess it would be a fabricated value. The upsert COALESCEs, so
+// values already loaded from CSV survive untouched; the schema itself calls
+// ship_to a secondary signal, never the match key.
+export function purchaseOrderSql(since) {
+  return `SELECT t.tranid AS po_number, BUILTIN.DF(t.entity) AS vendor,
+                 BUILTIN.DF(t.status) AS status,
+                 TO_CHAR(t.duedate,'YYYY-MM-DD') AS duedate,
+                 loc.fullname AS destination,
+                 BUILTIN.DF(tl.item) AS item,
+                 tl.quantity, tl.quantityshiprecv
+          FROM transaction t
+          JOIN transactionline tl ON tl.transaction = t.id
+          LEFT JOIN location loc ON loc.id = t.custbody_acs_final_destination
+          WHERE t.type='PurchOrd' AND tl.mainline='F'
+            AND (t.status IN (${PO_OPEN_CODES.map((c) => `'${c}'`).join(',')})
+                 OR t.lastmodifieddate >= TO_DATE('${since}','YYYY-MM-DD'))`
+}
+
+// SuiteQL row → the same partial-record shape fromPoReceiving emits, so it
+// flows through loadPurchaseOrders untouched. BUILTIN.DF prefixes the status
+// with the record type ("Purchase Order : Pending Receipt"); the CSV column
+// carries only the bare status, so strip it to keep both paths writing the
+// same string.
+export function mapPurchaseOrderRow(row) {
+  const ordered = Number(row.quantity) || 0
+  const received = Number(row.quantityshiprecv) || 0
+  return {
+    source: 'PoReceiving',
+    poNumber: String(row.po_number || '').trim(),
+    item: String(row.item || '').trim(),
+    vendor: cleanName(row.vendor || ''),
+    destination: row.destination || '',
+    status: String(row.status || '').replace(/^Purchase Order\s*:\s*/i, '').trim(),
+    expectedReceipt: row.duedate || null,
+    qtyOrdered: ordered,
+    qtyReceived: received,
+    qtyRemaining: ordered - received,
+  }
+}
+
+// Collapse the line rows to one record per (PO#, item) — the table's primary
+// key. A PO can legitimately list the same item on several lines, and the
+// upsert would otherwise keep only whichever arrived last instead of the total.
+// Summed in JS rather than SQL because SuiteQL 500s on GROUP BY over BUILTIN.DF.
+export function foldPurchaseOrderLines(rows = []) {
+  const byKey = new Map()
+  for (const row of rows) {
+    const r = mapPurchaseOrderRow(row)
+    if (!r.poNumber || !r.item) continue
+    const k = `${r.poNumber}@@${r.item}`
+    const seen = byKey.get(k)
+    if (!seen) { byKey.set(k, r); continue }
+    seen.qtyOrdered += r.qtyOrdered
+    seen.qtyReceived += r.qtyReceived
+    seen.qtyRemaining += r.qtyRemaining
+  }
+  // Only lines still owing units, mirroring the saved search's own scope —
+  // every row the CSV path ever wrote had a remaining quantity.
+  return [...byKey.values()].filter((r) => r.qtyRemaining > 0)
+}
+
 // ── the pull ─────────────────────────────────────────────────────────────────
 // Returns { ok, records, soNumbers, ifNumbers, counts, truncated, warnings }.
 // `records` is the flat partial-record list to hand to buildPipeline.
@@ -371,6 +454,27 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
 //
 // dryRun rolls the transaction back at the end, so every statement is exercised
 // against real data and nothing persists.
+//
+// The purchase-order pull is a SEPARATE query kept off the order-lifecycle path:
+// it reads a different transaction type and shares no join with the SO chain, so
+// a PO failure has no business killing the outbound sync. It soft-fails into a
+// warning for the same reason.
+export async function fetchPurchaseOrderLines({ closedWithinDays = 30, now } = {}) {
+  if (!netsuiteConfigured()) return { ok: false, configured: false, records: [] }
+  const since = windowStart(closedWithinDays, now)
+  const r = await runSuiteQL(purchaseOrderSql(since))
+  if (!r.ok) {
+    return { ok: false, configured: true, records: [], error: r.needsAuth ? 'auth rejected' : r.error || 'failed' }
+  }
+  return {
+    ok: true,
+    records: foldPurchaseOrderLines(r.rows),
+    // A truncated PO pull must NOT reach prunePurchaseOrders — pruning against a
+    // partial set would delete live lines that simply fell off the last page.
+    truncated: !!r.truncated,
+  }
+}
+
 export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false } = {}) {
   const pulled = await fetchOrderLifecycle({ closedWithinDays })
   if (!pulled.ok) return { ok: false, configured: pulled.configured, error: pulled.error }
@@ -378,12 +482,19 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
   const orders = buildPipeline(pulled.records, { today: new Date() })
   for (const o of orders) o.source = deriveSource(o.customer, o.location)
 
+  // Inbound supply. Soft-fails into a warning: a broken PO query should leave the
+  // outbound sync — and the existing PO rows — exactly as they were.
+  const pos = await fetchPurchaseOrderLines({ closedWithinDays })
+  const warnings = [...(pulled.warnings || [])]
+  if (!pos.ok && pos.configured !== false) warnings.push(`purchase orders: ${pos.error}`)
+  if (pos.truncated) warnings.push('purchase orders: hit the page cap — result is INCOMPLETE, not pruning')
+
   const { withTransaction } = await import('../db.js')
   const {
     loadOrders, loadFulfillments, loadInvoices, recordSnapshot,
     stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
     reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
-    deriveOrderEvents,
+    deriveOrderEvents, loadPurchaseOrders, prunePurchaseOrders,
   } = await import('./loadToDb.js')
 
   const ROLLBACK = Symbol('dry-run rollback')
@@ -406,10 +517,19 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
       // Keep already-frozen EDI snapshots current while their 856 is still in
       // the Orderful window (a fresh ASN is PENDING for hours before the 997).
       const nEdiRefreshed = await refreshShipmentEdiSnapshots(db)
+      // Inbound supply. Prune only on a complete pull, and only ever against a
+      // non-empty set (prunePurchaseOrders guards that too) — a received PO drops
+      // out of the open window, so its lines should drop off the table with it.
+      let nPos = 0
+      let nPosPruned = 0
+      if (pos.ok && pos.records.length) {
+        nPos = await loadPurchaseOrders(pos.records, db)
+        if (!pos.truncated) nPosPruned = await prunePurchaseOrders(pos.records, db)
+      }
       // Last, because it reads the tables everything above has just written.
       const { inserted: nEvents } = await deriveOrderEvents({ mode: 'sync' }, db)
       await recordSnapshot('netsuiteLive', orders.length, new Date(), db)
-      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents }
+      const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents, nPos, nPosPruned }
       if (dryRun) {
         const e = new Error('dry run')
         e.code = ROLLBACK
@@ -420,10 +540,10 @@ export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false }
     })
   } catch (e) {
     if (e?.code === ROLLBACK) {
-      return { ok: true, dryRun: true, ...e.partial, counts: pulled.counts, since: pulled.since, warnings: pulled.warnings, rolledBack: true }
+      return { ok: true, dryRun: true, ...e.partial, counts: pulled.counts, since: pulled.since, warnings, rolledBack: true }
     }
     return { ok: false, error: e?.message || String(e) }
   }
 
-  return { ok: true, ...result, counts: pulled.counts, since: pulled.since, warnings: pulled.warnings }
+  return { ok: true, ...result, counts: pulled.counts, since: pulled.since, warnings }
 }
