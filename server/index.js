@@ -263,8 +263,8 @@ app.post('/api/custody/delete', async (req, res) => {
 // Order-events ledger feed (?date=YYYY-MM-DD, ?docNumber=IF123, ?soNumber=SO123)
 app.get('/api/events', async (req, res) => {
   try {
-    const { date, docNumber, soNumber } = req.query
-    res.json(await getOrderEventsFeed({ date, docNumber, soNumber }))
+    const { date, docNumber, soNumber, types } = req.query
+    res.json(await getOrderEventsFeed({ date, docNumber, soNumber, types }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

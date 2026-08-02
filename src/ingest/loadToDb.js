@@ -1941,13 +1941,28 @@ export async function clearDepartedCustody(records, db = pool) {
 
 // Ledger feed — the Calendar's "what occurred every day" and the searchable
 // history. date scopes to one day (same convention as fetchTaskActivity).
-export async function fetchOrderEvents({ date, docNumber, soNumber } = {}, db = pool) {
+export async function fetchOrderEvents({ date, docNumber, soNumber, types } = {}, db = pool) {
   const conds = []
   const params = []
   if (date) { params.push(date); conds.push(`e.occurred_at::date = $${params.length}::date`) }
   if (docNumber) { params.push(docNumber); conds.push(`e.doc_number = $${params.length}`) }
   if (soNumber) { params.push(soNumber); conds.push(`e.so_number = $${params.length}`) }
+  // ⚠️ A STATE FEED MUST NOT BE A RECENCY FEED (Nima, 2026-08-02).
+  // The unfiltered form is a "latest 500 of the whole ledger" scroll, which is
+  // right for the Ledger and Calendar. But the Kanban reads the SAME feed to
+  // decide physical custody, and custody is state, not news — a carton scanned
+  // out in July is still out today. With 3,129 events the window cut off at
+  // 2026-07-29, so 23 of 31 DC scan-ins vanished and POs that had been scanned
+  // back in read "with us · not shipped" again. PO 7817926's scans sat at ranks
+  // 596/601; 7527064's at 495/496 — five rows decided which POs looked done.
+  // Every sync writes more events, so it silently got worse over time.
+  //
+  // Asking for types lifts the cap: the custody vocabulary is bounded by how
+  // much has physically been scanned (~124 rows), not by ledger growth.
+  const typeList = String(types || '').split(',').map((t) => t.trim()).filter(Boolean)
+  if (typeList.length) { params.push(typeList); conds.push(`e.event_type = ANY($${params.length})`) }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+  const limit = typeList.length ? 5000 : 500
   const { rows } = await db.query(
     `SELECT e.id, e.event_type AS "eventType", e.doc_type AS "docType", e.doc_number AS "docNumber",
             e.so_number AS "soNumber", e.note, e.source, e.occurred_at AS "occurredAt",
@@ -1960,7 +1975,7 @@ export async function fetchOrderEvents({ date, docNumber, soNumber } = {}, db = 
      FROM order_events e LEFT JOIN orders o ON o.so_number = e.so_number
      ${where}
      ORDER BY e.occurred_at DESC
-     LIMIT 500`,
+     LIMIT ${limit}`,
     params,
   )
   return rows

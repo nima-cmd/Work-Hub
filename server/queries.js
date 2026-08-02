@@ -282,8 +282,8 @@ export async function recordCustodyScan({ docNumber, direction, note, allowResca
 
 // The ledger feed — custody scans (and future derived transitions), scoped to
 // a day for the Calendar or unscoped for a recent-history view.
-export async function getOrderEventsFeed({ date, docNumber, soNumber } = {}) {
-  return fetchOrderEvents({ date, docNumber, soNumber })
+export async function getOrderEventsFeed({ date, docNumber, soNumber, types } = {}) {
+  return fetchOrderEvents({ date, docNumber, soNumber, types })
 }
 
 // ── Box capture (Nima, 2026-07-17) — the IN-scan carton measurement ──────────
