@@ -8,6 +8,7 @@ import {
   windowStart, orderSql, fulfillmentSql, invoiceSql, invoiceBySo,
   SO_STATUS, IF_STATUS, INV_STATUS, SO_OPEN_CODES, SO_TERMINAL_CODES,
   APPROVAL_ON_HOLD, APPROVAL_APPROVED,
+  mapPurchaseOrderRow, foldPurchaseOrderLines, purchaseOrderSql, PO_OPEN_CODES,
 } from '../src/ingest/netsuiteSync.js'
 import { STAGE } from '../src/model/stages.js'
 
@@ -213,4 +214,91 @@ test('mapOrderRow: an absent placeholder field is null, NOT false', () => {
 
 test('orderSql: asks for the placeholder field too', () => {
   assert.match(orderSql('2026-06-30'), /custbody_is_placeholder/)
+})
+
+// ── purchase orders (inbound supply) ─────────────────────────────────────────
+
+test('mapPurchaseOrderRow: matches what the CSV path writes', () => {
+  // Real PO1754 line, measured live 2026-08-02 against the frozen CSV row.
+  const r = mapPurchaseOrderRow({
+    po_number: 'PO1754',
+    vendor: 'Guangzhou Fantasy Leather Factory (Chelly)',
+    status: 'Purchase Order : Pending Receipt',
+    duedate: '2026-07-15',
+    destination: 'Virtual Warehouse',
+    item: 'SN13012LD-MIAMI-PINK',
+    quantity: '75',
+    quantityshiprecv: '0',
+  })
+  assert.equal(r.poNumber, 'PO1754')
+  assert.equal(r.item, 'SN13012LD-MIAMI-PINK')
+  assert.equal(r.expectedReceipt, '2026-07-15')
+  assert.equal(r.qtyOrdered, 75)
+  assert.equal(r.qtyRemaining, 75)
+  // BUILTIN.DF prefixes the record type; the CSV column carries the bare status.
+  assert.equal(r.status, 'Pending Receipt')
+  assert.equal(r.source, 'PoReceiving')
+})
+
+test('mapPurchaseOrderRow: remaining is ordered minus received', () => {
+  const r = mapPurchaseOrderRow({
+    po_number: 'PO1738', item: 'SN01-BLACK', quantity: '100', quantityshiprecv: '30',
+  })
+  assert.equal(r.qtyReceived, 30)
+  assert.equal(r.qtyRemaining, 70)
+})
+
+test('purchaseOrderSql: takes the location FULL path, never the leaf', () => {
+  const sql = purchaseOrderSql('2026-07-03')
+  // The OC↔PO match key joins to order_confirmations.location, which stores
+  // "Warehouse Bulk : Nordstrom". BUILTIN.DF on the custom field returns only
+  // "Nordstrom" and would silently match nothing — and would also aim the
+  // warehouse app's Inventory Transfer CSVs at the wrong location.
+  assert.match(sql, /loc\.fullname AS destination/)
+  assert.doesNotMatch(sql, /BUILTIN\.DF\(t\.custbody_acs_final_destination\)/)
+  assert.match(sql, /LEFT JOIN location loc/)
+  // A PO with no destination set must still come through — those 16 POs are a
+  // real finding to surface, not rows to drop.
+  assert.doesNotMatch(sql, /INNER JOIN location/)
+})
+
+test('purchaseOrderSql: scopes to open POs or recent changes', () => {
+  const sql = purchaseOrderSql('2026-07-03')
+  assert.match(sql, /t\.type='PurchOrd'/)
+  assert.match(sql, /tl\.mainline='F'/)
+  for (const c of PO_OPEN_CODES) assert.match(sql, new RegExp(`'${c}'`))
+  assert.match(sql, /2026-07-03/)
+})
+
+test('foldPurchaseOrderLines: sums an item repeated across lines', () => {
+  // (po_number, item) is the primary key, so two lines for one item must be
+  // added together — the upsert would otherwise keep only the last one.
+  const out = foldPurchaseOrderLines([
+    { po_number: 'PO1', item: 'SN-A', quantity: '10', quantityshiprecv: '0' },
+    { po_number: 'PO1', item: 'SN-A', quantity: '5', quantityshiprecv: '0' },
+    { po_number: 'PO1', item: 'SN-B', quantity: '7', quantityshiprecv: '0' },
+  ])
+  assert.equal(out.length, 2)
+  const a = out.find((r) => r.item === 'SN-A')
+  assert.equal(a.qtyOrdered, 15)
+  assert.equal(a.qtyRemaining, 15)
+})
+
+test('foldPurchaseOrderLines: drops fully received lines, keeps partials', () => {
+  // Mirrors the saved search's own scope: every row the CSV path wrote still
+  // owed units. A fully received line is supply that no longer exists.
+  const out = foldPurchaseOrderLines([
+    { po_number: 'PO1', item: 'DONE', quantity: '10', quantityshiprecv: '10' },
+    { po_number: 'PO1', item: 'PART', quantity: '10', quantityshiprecv: '4' },
+  ])
+  assert.deepEqual(out.map((r) => r.item), ['PART'])
+  assert.equal(out[0].qtyRemaining, 6)
+})
+
+test('foldPurchaseOrderLines: skips rows missing either key half', () => {
+  const out = foldPurchaseOrderLines([
+    { po_number: '', item: 'SN-A', quantity: '5' },
+    { po_number: 'PO1', item: '', quantity: '5' },
+  ])
+  assert.deepEqual(out, [])
 })

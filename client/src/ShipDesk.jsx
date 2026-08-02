@@ -107,7 +107,7 @@ function Tracking({ numbers = [] }) {
 // chip sitting next to a "73" reads as noise, which is the same failure that
 // buried SO12293. Volume already lives in the Command Center stage strip; this
 // strip is only the small, aging, someone-must-act set.
-export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnCartons, unfiled, onNavigate }) {
+export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnCartons, unfiled, inbound, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false)
   if (!labelGaps) return null
 
@@ -135,6 +135,11 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   // 91 and can only be cleared by scanning two months of paper, which is exactly
   // the kind of number that gets a strip collapsed and ignored.
   const unfiledDue = unfiled?.counts?.due ?? 0
+  // The one INBOUND chip on an otherwise entirely outbound strip: containers
+  // past their arrival date that still owe most of their units. Only the `late`
+  // half — the older `unreconciled` tail is a bookkeeping project that can't be
+  // cleared by chasing a factory, exactly like filing's pre-epoch backlog.
+  const inboundLate = inbound?.counts?.late ?? 0
 
   // The oldest ACTIONABLE parcel item, named. Freight is excluded on purpose —
   // an un-BOL'd freight shipment isn't a label problem and would only inflate
@@ -159,6 +164,8 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
       title: 'Outbound 810s that never reached the partner — billed in NetSuite but never actually transmitted' },
     { key: 'unfiledDue', n: unfiledDue, label: 'paper to file', tone: 'warn', to: 'scan',
       title: 'These shipments left and their signed paper was never scanned. Kept apart from the older backlog on the Scan → Drive page — this number is only what you have fallen behind on since filing started being recorded' },
+    { key: 'inboundLate', n: inboundLate, label: 'containers late', tone: 'warn', to: 'allocations',
+      title: 'Purchase orders grouped by their due date — which is what a container is here. These are past their arrival date and most of their units still have not been received, so either the container has not landed or its Item Receipt was never imported. Older open lines are kept separate on the Inbound page: they most likely landed long ago and were never closed out, so they are unreconciled rather than overdue' },
     { key: 'canShip', n: canShip, label: 'can ship', tone: 'ok', to: 'launch',
       title: 'Cleared to launch — ready to go out' },
   ].filter((c) => c.n)

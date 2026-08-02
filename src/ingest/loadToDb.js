@@ -211,15 +211,41 @@ export async function loadInvoices(records, db = pool) {
 }
 
 // Purchase orders — inbound supply, one row per (PO#, item) line.
+//
+// Written in BATCHES, unlike its neighbours: the live NetSuite pull sends ~1,390
+// lines every cycle (the CSV path sent a comparable number), and one round trip
+// per row cost ~110s against Neon — that alone more than doubled a full sync,
+// which matters because Render cuts a request near 100s. Same upsert, same
+// COALESCE semantics, ~200 rows per statement.
+const PO_BATCH = 200
+
 export async function loadPurchaseOrders(records, db = pool) {
-  let n = 0
+  // Deduplicate on the conflict target FIRST. Postgres rejects a multi-row
+  // upsert that hits the same key twice ("cannot affect row a second time"),
+  // and the CSV path can legitimately send one — the old row-at-a-time loop
+  // just overwrote. Last wins, preserving that behaviour exactly.
+  const byKey = new Map()
   for (const r of records) {
     if (!r.poNumber || !r.item) continue
+    byKey.set(`${r.poNumber}@@${r.item}`, r)
+  }
+  const rows = [...byKey.values()]
+  const COLS = 10
+  for (let i = 0; i < rows.length; i += PO_BATCH) {
+    const chunk = rows.slice(i, i + PO_BATCH)
+    const values = chunk
+      .map((_, j) => `(${Array.from({ length: COLS }, (_, c) => `$${j * COLS + c + 1}`).join(',')}, now())`)
+      .join(',')
+    const params = chunk.flatMap((r) => [
+      r.poNumber, r.item, r.vendor || null, r.shipTo || null, r.destination || null,
+      r.status || null, r.expectedReceipt || null, r.qtyOrdered ?? null,
+      r.qtyReceived ?? null, r.qtyRemaining ?? null,
+    ])
     await db.query(
       `INSERT INTO purchase_orders
          (po_number, item, vendor, ship_to, destination, status, expected_receipt,
           qty_ordered, qty_received, qty_remaining, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+       VALUES ${values}
        ON CONFLICT (po_number, item) DO UPDATE SET
          vendor           = COALESCE(EXCLUDED.vendor, purchase_orders.vendor),
          ship_to          = COALESCE(EXCLUDED.ship_to, purchase_orders.ship_to),
@@ -230,14 +256,10 @@ export async function loadPurchaseOrders(records, db = pool) {
          qty_received     = COALESCE(EXCLUDED.qty_received, purchase_orders.qty_received),
          qty_remaining    = COALESCE(EXCLUDED.qty_remaining, purchase_orders.qty_remaining),
          updated_at       = now()`,
-      [
-        r.poNumber, r.item, r.vendor || null, r.shipTo || null, r.destination || null,
-        r.status || null, r.expectedReceipt || null, r.qtyOrdered ?? null,
-        r.qtyReceived ?? null, r.qtyRemaining ?? null,
-      ],
+      params,
     )
-    n++
   }
+  const n = rows.length
   return n
 }
 
@@ -317,7 +339,12 @@ export async function fetchOrderConfirmations(db = pool) {
 
 export async function fetchPurchaseOrders(db = pool) {
   const { rows } = await db.query(
+    // qty_ordered/qty_received are needed as well as qty_remaining: the inbound
+    // container view derives "has this landed yet" from received-vs-ordered, and
+    // without them every container reads 0% received, so a fully-receipted one
+    // reports as a missing shipment (PO1738: 790 of 800 in, shown as late).
     `SELECT po_number AS "poNumber", item, vendor, destination, status, expected_receipt AS "expectedReceipt",
+            qty_ordered AS "qtyOrdered", qty_received AS "qtyReceived",
             qty_remaining AS "qtyRemaining", dismissed, dismissed_note AS "dismissedNote"
      FROM purchase_orders`,
   )
