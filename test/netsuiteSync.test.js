@@ -10,6 +10,7 @@ import {
   APPROVAL_ON_HOLD, APPROVAL_APPROVED,
   mapPurchaseOrderRow, foldPurchaseOrderLines, purchaseOrderSql, PO_OPEN_CODES,
   mapOrderConfirmationRow, foldOrderConfirmationLines, orderConfirmationSql, OC_OPEN_CODES,
+  orderLineSql, foldOrderLines, NON_ITEM_LINE_TYPES,
 } from '../src/ingest/netsuiteSync.js'
 import { STAGE } from '../src/model/stages.js'
 
@@ -389,4 +390,98 @@ test('foldOrderConfirmationLines: drops Memorized templates and keyless rows', (
     { oc_number: 'OC1', item: '', quantity: '-5' },
   ])
   assert.deepEqual(out, [])
+})
+
+// ── SO line quantities ───────────────────────────────────────────────────────
+
+test('foldOrderLines: freight and tax lines are NOT goods', () => {
+  // Real SO12419, measured live 2026-08-02: seven item lines totalling 14 units,
+  // all 14 committed — plus a ShipItem and a TaxItem that each carry quantity 1
+  // and no quantitycommitted. The CSV's "Sum of Quantity" counted all nine, so
+  // the app stored 16 ordered / 14 allocated and flagged the order "short 2".
+  // It was never short. That one pattern produced 87% of the shortage flags.
+  const rows = [
+    ...[3, 1, 2, 2, 2, 2, 2].map((q) => ({
+      tranid: 'SO12419', itemtype: 'InvtPart',
+      quantity: String(-q), quantitycommitted: String(q), quantityshiprecv: '0',
+    })),
+    { tranid: 'SO12419', itemtype: 'ShipItem', quantity: '-1', quantitycommitted: null, quantityshiprecv: '0' },
+    { tranid: 'SO12419', itemtype: 'TaxItem', quantity: '-1', quantitycommitted: null, quantityshiprecv: '0' },
+  ]
+  const q = foldOrderLines(rows).get('SO12419')
+  assert.deepEqual(q, { qtyOrdered: 14, qtyAllocated: 14, qtyFulfilled: 0 })
+  // The whole point: no shortage left to report.
+  assert.equal(q.qtyOrdered - q.qtyAllocated - q.qtyFulfilled, 0)
+})
+
+test('foldOrderLines: ABS the ordered quantity but not the other two', () => {
+  // Sales-order lines come back NEGATIVE (−3 for an order of 3) exactly as
+  // Estimate lines do — 1,884 of 1,884 open lines, zero positive. Committed and
+  // ship/recv are already positive and must pass through untouched.
+  const q = foldOrderLines([
+    { tranid: 'SO1', itemtype: 'InvtPart', quantity: '-3', quantitycommitted: '1', quantityshiprecv: '2' },
+  ]).get('SO1')
+  assert.deepEqual(q, { qtyOrdered: 3, qtyAllocated: 1, qtyFulfilled: 2 })
+})
+
+test('foldOrderLines: an unknown item type still counts as goods', () => {
+  // A DENY list, not an allow list of InvtPart: the day an Assembly or Kit line
+  // shows up its units must land in demand rather than silently vanish.
+  const q = foldOrderLines([
+    { tranid: 'SO1', itemtype: 'Assembly', quantity: '-4', quantitycommitted: '4', quantityshiprecv: '0' },
+  ]).get('SO1')
+  assert.equal(q.qtyOrdered, 4)
+  assert.ok(!NON_ITEM_LINE_TYPES.includes('Assembly'))
+})
+
+test('foldOrderLines: seen-but-uncountable is 0; never-seen is absent', () => {
+  // The two must not be conflated. An order whose lines are all closed or all
+  // freight/tax HAS an answer, and it is zero open units — writing it stops a
+  // stale CSV figure (freight and tax included) from living on through COALESCE.
+  // An order the pull never returned has NO answer, so it must stay absent and
+  // let COALESCE keep whatever was known.
+  const out = foldOrderLines([
+    { tranid: 'SO1', itemtype: 'ShipItem', quantity: '-1', quantitycommitted: null, quantityshiprecv: '0', isclosed: 'F' },
+    { tranid: 'SO2', itemtype: 'InvtPart', quantity: '-9', quantitycommitted: null, quantityshiprecv: '0', isclosed: 'T' },
+    { tranid: '', itemtype: 'InvtPart', quantity: '-9', quantitycommitted: '9', quantityshiprecv: '0', isclosed: 'F' },
+  ])
+  assert.deepEqual(out.get('SO1'), { qtyOrdered: 0, qtyAllocated: 0, qtyFulfilled: 0 })
+  assert.deepEqual(out.get('SO2'), { qtyOrdered: 0, qtyAllocated: 0, qtyFulfilled: 0 })
+  assert.equal(out.has('SO3'), false) // never seen — the record carries no qty keys
+  assert.equal(out.size, 2)
+})
+
+test('foldOrderLines: sums repeated lines for the same SO', () => {
+  const q = foldOrderLines([
+    { tranid: 'SO1', itemtype: 'InvtPart', quantity: '-5', quantitycommitted: '5', quantityshiprecv: '0' },
+    { tranid: 'so1', itemtype: 'InvtPart', quantity: '-6', quantitycommitted: '0', quantityshiprecv: '6' },
+  ]).get('SO1')
+  assert.deepEqual(q, { qtyOrdered: 11, qtyAllocated: 5, qtyFulfilled: 6 })
+})
+
+test('orderLineSql: line grain only, and the same open-or-recent window', () => {
+  const sql = orderLineSql('2026-07-01')
+  // mainline='F' drops the header row, which has a null itemtype and no quantity.
+  assert.match(sql, /tl\.mainline='F'/)
+  // quantityfulfilled is NOT_EXPOSED to SuiteQL; quantityshiprecv is the one that works.
+  assert.match(sql, /quantityshiprecv/)
+  assert.doesNotMatch(sql, /quantityfulfilled/)
+  assert.match(sql, /lastmodifieddate >= TO_DATE\('2026-07-01'/)
+})
+
+test('foldOrderLines: a closed line is cancelled demand, not a shortage', () => {
+  // Real SO12159, partially fulfilled, two closed lines totalling 18 units.
+  // A closed line can never be committed and can never ship — measured live, all
+  // 76 in the window carry 0 committed and 0 ship/recv — so leaving it in
+  // `ordered` manufactures a shortage with nothing that could ever clear it.
+  const q = foldOrderLines([
+    { tranid: 'SO12159', itemtype: 'InvtPart', quantity: '-10', quantitycommitted: '10', quantityshiprecv: '0', isclosed: 'F' },
+    { tranid: 'SO12159', itemtype: 'InvtPart', quantity: '-4', quantitycommitted: null, quantityshiprecv: '0', isclosed: 'T' },
+    { tranid: 'SO12159', itemtype: 'InvtPart', quantity: '-14', quantitycommitted: null, quantityshiprecv: '0', isclosed: 'T' },
+  ]).get('SO12159')
+  assert.deepEqual(q, { qtyOrdered: 10, qtyAllocated: 10, qtyFulfilled: 0 })
+})
+
+test('orderLineSql: selects isclosed so cancelled lines can be dropped', () => {
+  assert.match(orderLineSql('2026-07-01'), /tl\.isclosed/)
 })

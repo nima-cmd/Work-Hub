@@ -217,6 +217,83 @@ export function locationSql(since) {
           WHERE t.type='SalesOrd' AND tl.mainline='F' AND ${openOrRecent(since)}`
 }
 
+// ── SO line quantities ───────────────────────────────────────────────────────
+// The order HEADER carries no quantity, so ordered/committed/fulfilled have to be
+// rolled up off the lines. Until now they came ONLY from the openSalesOrders CSV,
+// which made them the last frozen FIELDS in the app after the last frozen table
+// went live — and `loadOrders` COALESCEs, so a stale value outlived its export.
+//
+// ⚠️ THE ARTIFACT THIS FIXES — the CSV was also counting freight and tax as goods.
+// "Sum of Quantity" totals EVERY line, and the ShipItem / TaxItem lines carry a
+// quantity of 1 but NO quantitycommitted. So
+// `shortBy = ordered - allocated - fulfilled` read exactly 2 on any order with
+// both a ship line and a tax line, and 1 on those with one of them — 141 and 27
+// of the 194 orders with quantities, 87%, none of them actually short. Measured
+// live 2026-08-02: SO12419 orders 14 units and has all 14 committed, yet the app
+// read 16/14. Nima's instinct in [[order-qty-shortage-stale]] was right: "we were
+// not short, and I think all sales orders have at least 1 unit shortage."
+// Rolling up ITEM lines only is the whole fix.
+//
+// ⚠️ `tl.quantity` comes back NEGATIVE on a sales order (−3 for an order of 3),
+// exactly as on an Estimate — 1,884 of 1,884 open lines, zero positive. ABS it.
+// `quantitycommitted` and `quantityshiprecv` are already positive; ABSing those
+// too would silently hide a credit line if one ever appeared.
+//
+// ⚠️ `quantityfulfilled` is NOT_EXPOSED to SuiteQL ("Not available for channel
+// SEARCH"). `quantityshiprecv` is the exposed equivalent and does track
+// fulfilment — verified on SO11975, partially fulfilled, where it matches
+// quantitybilled line for line.
+export function orderLineSql(since) {
+  return `SELECT t.tranid, tl.itemtype, tl.quantity, tl.isclosed,
+                 tl.quantitycommitted, tl.quantityshiprecv
+          FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
+          WHERE t.type='SalesOrd' AND tl.mainline='F' AND ${openOrRecent(since)}`
+}
+
+// Line types that are money on the order but not goods on the shelf. Excluded
+// from every quantity roll-up.
+//
+// Deliberately a DENY list, not an allow list of 'InvtPart'. An unknown itemtype
+// counts as an item, so the day an Assembly or Kit line appears its units land in
+// demand instead of vanishing — an overcount announces itself, an undercount is
+// the bug we just spent a session finding. Live spread on the open orders:
+// InvtPart 1617 · ShipItem 141 · TaxItem 126 · Discount 5.
+export const NON_ITEM_LINE_TYPES = ['ShipItem', 'TaxItem', 'Discount', 'Subtotal', 'Markup']
+
+// Line rows → one {qtyOrdered, qtyAllocated, qtyFulfilled} per SO. Summed in JS
+// for the same reason as the PO and OC folds: SuiteQL 500s on GROUP BY here.
+// An SO with no item lines at all is absent from the map rather than present with
+// zeroes, so it writes nulls and COALESCE keeps whatever was known.
+//
+// ⚠️ A CLOSED LINE IS CANCELLED DEMAND, and counting it is the same phantom
+// shortage in a second costume: it can never be committed and can never ship, so
+// its units sit in `ordered` forever with nothing to subtract them. Measured live
+// 2026-08-02, ALL 76 closed lines in the window carry 0 committed AND 0
+// ship/recv — so dropping them whole loses no fulfilment history, it only stops
+// the overcount. SO12159 is the live case: partially fulfilled, two closed lines,
+// 18 units that would otherwise read as still-open.
+// The entry is seeded by SEEING the SO, not by counting a line, and the
+// distinction is load-bearing. "This order's lines are all closed" is a real
+// answer of zero open units; "the pull returned nothing for this order" is an
+// absence of knowledge. Only the second may fall through to COALESCE. Seeding on
+// the excluded line too means the 4 fully-closed orders in the window get an
+// honest 0 instead of keeping a CSV number that still counts freight and tax.
+export function foldOrderLines(rows = []) {
+  const bySo = new Map()
+  for (const row of rows) {
+    const so = String(row.tranid || '').toUpperCase()
+    if (!so) continue
+    let seen = bySo.get(so)
+    if (!seen) { seen = { qtyOrdered: 0, qtyAllocated: 0, qtyFulfilled: 0 }; bySo.set(so, seen) }
+    if (NON_ITEM_LINE_TYPES.includes(String(row.itemtype || '').trim())) continue
+    if (String(row.isclosed || '') === 'T') continue
+    seen.qtyOrdered += Math.abs(Number(row.quantity) || 0)
+    seen.qtyAllocated += Number(row.quantitycommitted) || 0
+    seen.qtyFulfilled += Number(row.quantityshiprecv) || 0
+  }
+  return bySo
+}
+
 export function fulfillmentSql(since) {
   return `SELECT DISTINCT c.tranid AS if_number, t.tranid AS so_number, c.status,
                  TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate
@@ -464,6 +541,8 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
   if (orders.fail) return { ok: false, error: orders.fail, records: [] }
   const locs = await run('locations', locationSql(since))
   if (locs.fail) return { ok: false, error: locs.fail, records: [] }
+  const lines = await run('order lines', orderLineSql(since))
+  if (lines.fail) return { ok: false, error: lines.fail, records: [] }
   const ifs = await run('fulfillments', fulfillmentSql(since))
   if (ifs.fail) return { ok: false, error: ifs.fail, records: [] }
   const invs = await run('invoices', invoiceSql(since))
@@ -511,9 +590,19 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
     warnings.push(`${ambiguousSos.length} SO(s) have several invoices — their IFs are left unlinked rather than guessed`)
   }
 
-  const orderRecords = orders.rows.map((r) =>
-    mapOrderRow({ ...r, location: locBySo.get(String(r.tranid || '').toUpperCase()) || '' }),
-  )
+  // Quantities are merged ON TOP of the mapped record rather than passed into
+  // mapOrderRow, because they come from a different query with a different grain
+  // (one row per line vs one per order). An SO the line pull didn't cover simply
+  // gets no quantity keys — undefined, not zero, so the loader's COALESCE keeps
+  // the last known value instead of blanking the order to 0 units.
+  const qtyBySo = foldOrderLines(lines.rows)
+  const orderRecords = orders.rows.map((r) => {
+    const so = String(r.tranid || '').toUpperCase()
+    return {
+      ...mapOrderRow({ ...r, location: locBySo.get(so) || '' }),
+      ...(qtyBySo.get(so) || {}),
+    }
+  })
   const ifRecords = ifs.rows.map(mapFulfillmentRow).map((f) => ({
     ...f,
     trackingNumbers: trackByIf.get(f.ifNumber) || null,
@@ -528,6 +617,8 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
     ifNumbers: ifRecords.map((f) => f.ifNumber),
     counts: {
       orders: orderRecords.length,
+      orderLines: lines.rows.length,
+      quantified: orderRecords.filter((o) => o.qtyOrdered != null).length,
       terminal: orderRecords.filter((o) => o.terminal).length,
       fulfillments: ifRecords.length,
       invoices: invRecords.length,
