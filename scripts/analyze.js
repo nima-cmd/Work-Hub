@@ -37,13 +37,11 @@ Object.keys(STAGE_LABEL)
     if (byStage[s]) console.log(`  ${String(byStage[s]).padStart(3)}  ${STAGE_LABEL[s]}`)
   })
 
-// ATS-aware shortage split: stock exceptions vs. normal presold-awaiting-PO
+// ATS stock exceptions only. Non-ATS shortage is answered on the OC↔PO side
+// (npm run server → Allocations), not against the sales order — see the note in
+// src/model/pipeline.js.
 const stockShort = orders.filter((o) => o.flags.some((f) => f.key === 'STOCK_SHORT'))
-const awaitingPo = orders.filter((o) => o.flags.some((f) => f.key === 'AWAITING_PO'))
-console.log(
-  `\n  ${stockShort.length} ATS stock-short (exception · inquire)   ` +
-    `${awaitingPo.length} non-ATS short (normal · awaiting PO)`,
-)
+console.log(`\n  ${stockShort.length} ATS stock-short (exception · inquire)`)
 
 // ── Needs attention (highest severity + longest waiting first) ───────────────
 const flagged = orders

@@ -46,11 +46,22 @@ export function computeContainerView({ ocs = [], pos = [], links = [] } = {}) {
       return { ...p, originalQty, allocated, openQty: Math.max(0, originalQty - allocated) }
     })
 
+  // Open supply per item+destination key, across EVERY PO carrying it. A line's
+  // status has to be judged against this, not against its own openQty: two POs
+  // bringing 12 each to a key claiming 20 is covered, but per-line each looks
+  // short. That read counted 527 "shortage items" against the matcher's 45.
+  const supplyByKey = new Map()
+
   // ── Containers: one per PO number ──────────────────────────────────────────
   const containersByPo = new Map()
   for (const p of poLines) {
     if (!containersByPo.has(p.poNumber)) containersByPo.set(p.poNumber, [])
     containersByPo.get(p.poNumber).push(p)
+  }
+
+  for (const p of poLines) {
+    const k = key(p.item, p.destination)
+    supplyByKey.set(k, (supplyByKey.get(k) || 0) + p.openQty)
   }
 
   const containers = [...containersByPo.entries()].map(([poNumber, lines]) => {
@@ -59,11 +70,15 @@ export function computeContainerView({ ocs = [], pos = [], links = [] } = {}) {
       const contendingOcs = (ocsByKey.get(key(p.item, p.destination)) || [])
         .map((o) => ({ ocNumber: o.ocNumber, customer: o.customer, remaining: o.remaining }))
       const demand = contendingOcs.reduce((sum, o) => sum + o.remaining, 0)
+      // `COVERED` (was CONTENTION) — several OCs drawing on one incoming PO is
+      // the normal shape of non-ATS demand, not a conflict to resolve. Only
+      // SHORTAGE, where the open supply on the key genuinely can't cover what's
+      // claimed against it, is a decision. Mirrors computeOcPoMatches' buckets.
       const status =
         p.openQty <= 0 ? 'FULL' :
         contendingOcs.length === 0 ? 'NO_DEMAND' :
-        demand > p.openQty ? 'SHORTAGE' :
-        contendingOcs.length === 1 ? 'READY' : 'CONTENTION'
+        demand > (supplyByKey.get(key(p.item, p.destination)) || 0) ? 'SHORTAGE' :
+        contendingOcs.length === 1 ? 'READY' : 'COVERED'
       return { item: p.item, originalQty: p.originalQty, allocated: p.allocated, openQty: p.openQty, contendingOcs, status }
     })
     const totalCapacity = items.reduce((sum, i) => sum + i.originalQty, 0)

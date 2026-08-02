@@ -4,16 +4,19 @@ import { SeasonBadge } from '../lib.jsx'
 
 const keyOf = (...parts) => parts.join('|')
 
+// COVERED is deliberately NOT an alert: one incoming PO funding several order
+// confirmations is how non-ATS demand normally works. Only SHORTAGE — the
+// container can't cover what's claimed against it — is a decision.
 const STATUS_FLAG = {
   SHORTAGE: 'sev-hi',
-  CONTENTION: 'sev-mid',
+  COVERED: 'sev-lo',
   READY: 'sev-lo',
   FULL: '',
   NO_DEMAND: '',
 }
 const STATUS_LABEL = {
-  SHORTAGE: 'shortage',
-  CONTENTION: 'needs a decision',
+  SHORTAGE: 'short — decide or buy more',
+  COVERED: 'covered by this PO',
   READY: 'ready to commit',
   FULL: 'fully allocated',
   NO_DEMAND: 'no demand yet',
