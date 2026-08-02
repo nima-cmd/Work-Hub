@@ -8,10 +8,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  SPINE, SPINE_ORDER, DERIVED_TYPES, eventKey,
+  SPINE, SPINE_ORDER, SPINE_LABEL, DERIVED_TYPES, eventKey,
   eventsFromOrders, eventsFromFulfillments, eventsFromInvoices,
-  eventsFromRouting, eventsFromEdi,
-  deriveEvents, pendingEvents, summarize, timeline,
+  eventsFromRouting, eventsFromEdi, invNumberFrom810,
+  deriveEvents, pendingEvents, summarize, timeline, poTimelineSteps,
 } from '../src/model/orderEvents.js'
 
 const find = (events, type) => events.filter((e) => e.eventType === type)
@@ -137,19 +137,55 @@ test('ROUTED prefers the authorization date over BOL generation', () => {
   assert.equal(only.note, 'auth 99')
 })
 
-test('EDI: outbound LIVE 856/810 only, at PO level', () => {
+test('EDI: each document is keyed as what it actually is', () => {
+  // Real business numbers from Orderful (2026-08-02): the 856 carries a BOL and
+  // the 810 our own invoice number. Only the 850's is a PO.
   const events = eventsFromEdi([
-    { type: '856', direction: 'OUT', stream: 'LIVE', businessNumber: 'PO900', createdAt: '2026-07-20T12:00:00Z', tradingPartner: "Bloomingdale's" },
-    { type: '810', direction: 'OUT', stream: 'LIVE', businessNumber: 'PO900', createdAt: '2026-07-21T12:00:00Z' },
-    { type: '850', direction: 'IN', stream: 'LIVE', businessNumber: 'PO900', createdAt: '2026-07-01T12:00:00Z' }, // inbound
-    { type: '856', direction: 'OUT', stream: 'TEST', businessNumber: 'PO901', createdAt: '2026-07-20T12:00:00Z' }, // test stream
-    { type: '997', direction: 'OUT', stream: 'LIVE', businessNumber: 'PO900', createdAt: '2026-07-20T12:00:00Z' }, // not a spine event
+    { type: '850_PURCHASE_ORDER', direction: 'IN', stream: 'LIVE', businessNumber: '8170366', createdAt: '2026-07-01T12:00:00Z', tradingPartner: "Bloomingdale's" },
+    { type: '856_SHIP_NOTICE_MANIFEST', direction: 'OUT', stream: 'LIVE', businessNumber: 'NB1731231', createdAt: '2026-07-20T12:00:00Z', tradingPartner: "Bloomingdale's" },
+    { type: '810_INVOICE', direction: 'OUT', stream: 'LIVE', businessNumber: '11398', createdAt: '2026-07-21T12:00:00Z' },
+    { type: '856', direction: 'OUT', stream: 'TEST', businessNumber: 'NB9', createdAt: '2026-07-20T12:00:00Z' }, // test stream
+    { type: '997', direction: 'OUT', stream: 'LIVE', businessNumber: 'X', createdAt: '2026-07-20T12:00:00Z' }, // not a spine event
   ])
-  assert.deepEqual(events.map((e) => e.eventType), ['ASN_SENT', 'INVOICE_SENT'])
-  assert.equal(events[0].docType, 'PO')
-  assert.equal(events[0].docNumber, 'PO900')
+  assert.deepEqual(
+    events.map((e) => [e.eventType, e.docType, e.docNumber]),
+    [
+      ['PO_RECEIVED', 'PO', '8170366'],
+      ['ASN_SENT', 'ASN', 'NB1731231'],
+      // 'INV11398', not 'PO'/'11398' — so the 810 lands on the same document as
+      // the INVOICED/PAID events and joins the SO ledger for free.
+      ['INVOICE_SENT', 'INV', 'INV11398'],
+    ],
+  )
   assert.equal(events[0].note, "Bloomingdale's")
-  assert.equal(events[0].tsQuality, 'actual')
+  assert.equal(events[1].tsQuality, 'actual')
+})
+
+test('the 850 counts only inbound; 856/810 only outbound', () => {
+  const events = eventsFromEdi([
+    // Us as the buyer — the purchasing side, not this pipeline.
+    { type: '850_PURCHASE_ORDER', direction: 'OUT', stream: 'LIVE', businessNumber: 'P1', createdAt: '2026-07-01T12:00:00Z' },
+    // A partner's inbound ASN is their event, not ours.
+    { type: '856_SHIP_NOTICE_MANIFEST', direction: 'IN', stream: 'LIVE', businessNumber: 'NB1', createdAt: '2026-07-02T12:00:00Z' },
+  ])
+  assert.deepEqual(events, [])
+})
+
+test('an 810 business number that already carries INV is not double-prefixed', () => {
+  assert.equal(invNumberFrom810('11398'), 'INV11398')
+  assert.equal(invNumberFrom810('INV11398'), 'INV11398')
+  assert.equal(invNumberFrom810('inv11398'), 'INV11398')
+})
+
+test('one ASN announcing several POs is still ONE event', () => {
+  // The PO fan-out is resolved at query time through edi_document_po_refs. If it
+  // were fanned out here instead, every window report would double-count the
+  // transmission — 936 PO-pairs across 818 real ASNs, live 2026-08-02.
+  const events = eventsFromEdi([
+    { type: '856_SHIP_NOTICE_MANIFEST', direction: 'OUT', stream: 'LIVE', businessNumber: 'NB1731231', createdAt: '2026-07-20T12:00:00Z' },
+  ])
+  assert.equal(events.length, 1)
+  assert.equal(events[0].docNumber, 'NB1731231')
 })
 
 test('the TEST stream can never reach the ledger', () => {
@@ -192,13 +228,70 @@ test('deriveEvents survives an entirely empty snapshot', () => {
 })
 
 test('every derived type is in the spine, and none is written elsewhere', () => {
-  const spineKeys = new Set(SPINE.map((s) => s.key))
-  for (const t of DERIVED_TYPES) assert.ok(spineKeys.has(t), `${t} missing from SPINE`)
+  // Checked against the derived MAPS rather than SPINE alone: the spine is in two
+  // pieces (PO_SPINE holds the 850, which precedes every SO event), and what a
+  // derived type actually needs is a label to render and a position to sort by.
+  for (const t of DERIVED_TYPES) {
+    assert.ok(SPINE_LABEL.has(t), `${t} has no label`)
+    assert.ok(SPINE_ORDER.has(t), `${t} has no sort position`)
+  }
+  // PO_RECEIVED sorts ahead of the whole SO spine — the 850 is what causes the
+  // sales order, so it can never render below SO_IMPORTED on a same-day tie.
+  assert.ok(SPINE_ORDER.get('PO_RECEIVED') < SPINE_ORDER.get('SO_IMPORTED'))
   // These belong to the scan handlers and stampApprovedForShipping — deriving
   // them here too would double-write them.
   for (const t of ['CUSTODY_OUT', 'CUSTODY_IN', 'REACHED_APPROVED']) {
     assert.ok(!DERIVED_TYPES.includes(t), `${t} must not be derived`)
   }
+})
+
+test('a PO timeline collapses to one row per step, reporting its span', () => {
+  const steps = poTimelineSteps([
+    { eventType: 'PO_RECEIVED', docType: 'PO', docNumber: '7776940', occurredAt: '2026-07-11', label: '850 received' },
+    { eventType: 'IF_CREATED', docType: 'IF', docNumber: 'IF7332', occurredAt: '2026-07-30' },
+    { eventType: 'IF_CREATED', docType: 'IF', docNumber: 'IF7333', occurredAt: '2026-07-30' },
+    { eventType: 'IF_CREATED', docType: 'IF', docNumber: 'IF7334', occurredAt: '2026-08-01' },
+    { eventType: 'ASN_SENT', docType: 'ASN', docNumber: 'NB1731234', occurredAt: '2026-07-30' },
+  ])
+  assert.deepEqual(steps.map((s) => [s.eventType, s.docs.length]), [
+    ['PO_RECEIVED', 1], ['IF_CREATED', 3], ['ASN_SENT', 1],
+  ])
+  // The span is the point: three fulfilments over three days, not one date.
+  const ifs = steps.find((s) => s.eventType === 'IF_CREATED')
+  assert.equal(new Date(ifs.first).toISOString().slice(0, 10), '2026-07-30')
+  assert.equal(new Date(ifs.last).toISOString().slice(0, 10), '2026-08-01')
+  assert.deepEqual(ifs.docs, ['IF7332', 'IF7333', 'IF7334'])
+})
+
+test('a step is only observed when every event in it is', () => {
+  // One real date makes the span's edges real — the UI must not hedge a date it
+  // actually knows just because a sibling was a first-sighting.
+  const [step] = poTimelineSteps([
+    { eventType: 'INVOICED', docNumber: 'INV1', occurredAt: '2026-07-30', observed: true },
+    { eventType: 'INVOICED', docNumber: 'INV2', occurredAt: '2026-07-31', observed: false },
+  ])
+  assert.equal(step.observed, false)
+  const [allObserved] = poTimelineSteps([
+    { eventType: 'INVOICED', docNumber: 'INV1', occurredAt: '2026-07-30', observed: true },
+  ])
+  assert.equal(allObserved.observed, true)
+})
+
+test('a PO timeline orders by when each step started, not by the expected shape', () => {
+  // An 810 that went out before the 856 is a real anomaly. Sorting by spine
+  // position would silently tidy it into the order we expected to see.
+  const steps = poTimelineSteps([
+    { eventType: 'ASN_SENT', docNumber: 'NB1', occurredAt: '2026-07-30' },
+    { eventType: 'INVOICE_SENT', docNumber: 'INV1', occurredAt: '2026-07-20' },
+  ])
+  assert.deepEqual(steps.map((s) => s.eventType), ['INVOICE_SENT', 'ASN_SENT'])
+})
+
+test('the pre-spine event types still get a label rather than rendering raw', () => {
+  // SHIPPED_VALUE and CUSTODY_CLEARED are written outside the deriver but do
+  // reach the ledger, so they appear in PO and SO timelines.
+  assert.equal(SPINE_LABEL.get('SHIPPED_VALUE'), 'Shipped value recorded')
+  assert.equal(SPINE_LABEL.get('CUSTODY_CLEARED'), 'Custody register cleared')
 })
 
 test('timeline breaks same-day ties on spine order, not insertion order', () => {

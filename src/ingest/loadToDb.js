@@ -1806,10 +1806,15 @@ export async function fetchEventSnapshot(db = pool) {
                 FROM routing_shipment rs
                 LEFT JOIN routing_auth ra ON ra.auth_number = rs.auth_number
                WHERE rs.bol_generated_at IS NOT NULL OR ra.created_at IS NOT NULL`),
+    // The inbound 850 is in scope on purpose: it is the EDI trail's starting gun
+    // and the only PO-keyed document of the three (see eventsFromEdi). The model
+    // re-checks direction per type, so the wider net here can't let an outbound
+    // 850 or an inbound 856 through.
     db.query(`SELECT type, direction, stream, business_number AS "businessNumber",
                      trading_partner AS "tradingPartner", created_at AS "createdAt"
                 FROM edi_transactions
-               WHERE direction = 'OUT' AND stream = 'LIVE' AND (type LIKE '856%' OR type LIKE '810%')`),
+               WHERE stream = 'LIVE'
+                 AND (type LIKE '850%' OR type LIKE '856%' OR type LIKE '810%')`),
   ])
   return {
     orders: orders.rows,

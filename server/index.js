@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs'
 import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
-  getLedger, getOrderLedger, getLedgerDailyCounts,
+  getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
@@ -130,12 +130,14 @@ app.get('/api/affection', async (_req, res) => {
 
 // ── The ledger (2026-08-02) ──────────────────────────────────────────────────
 // /api/ledger?so=SO12293                one order's full history, oldest first
+// /api/ledger?po=7776940                one PO's 850→SO→IF→856→810 trail
 // /api/ledger?from=…&to=…&type=…&q=…    a window / search, newest first
 // /api/ledger/daily?from=…&to=…         per-day counts for the Calendar
 app.get('/api/ledger', async (req, res) => {
   try {
-    const { so, from, to, type, docType, q, limit } = req.query
+    const { so, po, from, to, type, docType, q, limit } = req.query
     if (so) return res.json(await getOrderLedger(so))
+    if (po) return res.json(await getPoLedger(po))
     res.json({
       events: await getLedger({
         from: from || null,

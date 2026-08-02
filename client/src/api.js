@@ -906,6 +906,14 @@ export async function fetchOrderLedger(soNumber) {
   return res.json()
 }
 
+// One PO's complete document trail — the dated 850 → SO → IF → 856 → 810 story,
+// resolved across both the NetSuite and the EDI sides.
+export async function fetchPoLedger(poNumber) {
+  const res = await fetch('/api/ledger?po=' + encodeURIComponent(poNumber))
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Per-day ledger counts for the Calendar's dots.
 export async function fetchLedgerDaily({ from = null, to = null } = {}) {
   const p = new URLSearchParams()
