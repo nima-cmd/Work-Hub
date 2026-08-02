@@ -107,7 +107,7 @@ function Tracking({ numbers = [] }) {
 // chip sitting next to a "73" reads as noise, which is the same failure that
 // buried SO12293. Volume already lives in the Command Center stage strip; this
 // strip is only the small, aging, someone-must-act set.
-export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnCartons, onNavigate }) {
+export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnCartons, unfiled, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false)
   if (!labelGaps) return null
 
@@ -129,6 +129,12 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   // different fixes — one 856 is stuck in transport, the other was never sent for
   // that carton at all. Summing them would hide which one you're looking at.
   const cartonsUnannounced = asnCartons?.counts?.undeclared ?? 0
+  // Step 7: shipped, paper never scanned. ONLY the `due` half — shipments that
+  // left since filing became a recorded fact. The pre-epoch `backlog` is a
+  // deliberate archive project and lives on the Scan page, not here: it opens at
+  // 91 and can only be cleared by scanning two months of paper, which is exactly
+  // the kind of number that gets a strip collapsed and ignored.
+  const unfiledDue = unfiled?.counts?.due ?? 0
 
   // The oldest ACTIONABLE parcel item, named. Freight is excluded on purpose —
   // an un-BOL'd freight shipment isn't a label problem and would only inflate
@@ -151,6 +157,8 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
       title: 'These cartons shipped and are on no delivered ASN — the partner received boxes it was never told about. The box is already gone, so the fix is sending the 856' },
     { key: 'invoiceStuck', n: invoiceStuck, label: 'invoices never sent', tone: 'warn', to: 'edi',
       title: 'Outbound 810s that never reached the partner — billed in NetSuite but never actually transmitted' },
+    { key: 'unfiledDue', n: unfiledDue, label: 'paper to file', tone: 'warn', to: 'scan',
+      title: 'These shipments left and their signed paper was never scanned. Kept apart from the older backlog on the Scan → Drive page — this number is only what you have fallen behind on since filing started being recorded' },
     { key: 'canShip', n: canShip, label: 'can ship', tone: 'ok', to: 'launch',
       title: 'Cleared to launch — ready to go out' },
   ].filter((c) => c.n)

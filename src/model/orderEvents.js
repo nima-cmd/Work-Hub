@@ -47,14 +47,18 @@ export const SPINE = [
   { key: 'DEPARTED', docType: 'IF', label: 'Departed' },
   { key: 'ASN_SENT', docType: 'PO', label: '856 transmitted' },
   { key: 'INVOICE_SENT', docType: 'PO', label: '810 transmitted' },
+  { key: 'FILED', docType: 'IF', label: 'Signed paper filed' },
 ]
 
 export const SPINE_ORDER = new Map(SPINE.map((s, i) => [s.key, i]))
 export const SPINE_LABEL = new Map(SPINE.map((s) => [s.key, s.label]))
 
-// Event types this module owns. CUSTODY_* and REACHED_APPROVED are in the spine
-// for display but are written elsewhere (scan handlers, stampApprovedForShipping)
-// — deriving them here too would double-write them.
+// Event types this module owns. CUSTODY_*, REACHED_APPROVED and FILED are in the
+// spine for display but are written elsewhere (scan handlers,
+// stampApprovedForShipping, the scan→Drive filing path) — deriving them here too
+// would double-write them. FILED especially: it is not derivable from any
+// synced table at all, because nothing in NetSuite or Orderful knows the paper
+// exists. Its only source is the upload actually succeeding.
 export const DERIVED_TYPES = [
   'SO_IMPORTED', 'IF_CREATED', 'PACKED', 'INVOICED',
   'PAID', 'ROUTED', 'DEPARTED', 'ASN_SENT', 'INVOICE_SENT',
