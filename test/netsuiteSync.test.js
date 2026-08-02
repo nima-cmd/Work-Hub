@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 
 import {
   mapOrderRow, mapFulfillmentRow, mapInvoiceRow,
-  windowStart, orderSql, fulfillmentSql, invoiceSql,
+  windowStart, orderSql, fulfillmentSql, invoiceSql, invoiceBySo,
   SO_STATUS, IF_STATUS, INV_STATUS, SO_OPEN_CODES, SO_TERMINAL_CODES,
   APPROVAL_ON_HOLD, APPROVAL_APPROVED,
 } from '../src/ingest/netsuiteSync.js'
@@ -92,6 +92,58 @@ test('mapInvoiceRow: unpaid vs paid amounts (credit correctness)', () => {
   const bare = mapInvoiceRow({ inv_number: 'INV1', so_number: 'SO1', status: 'A' })
   assert.equal(bare.amountRemaining, null)
   assert.equal(bare.amountTotal, null)
+})
+
+test('mapInvoiceRow: the approved-to-ship gate is decoded from the custom list', () => {
+  // Nima's step 5. These four codes were queried live 2026-07-31; the strings
+  // must match EXACTLY, because server/queries.js launchState substring-matches
+  // them ('approved', 'pending payment') and pipeline.js computeFlags matches
+  // 'fob'. A renamed string breaks the gate silently.
+  const approved = mapInvoiceRow({ inv_number: 'INV11361', so_number: 'SO12267', status: 'A', invoice_status: 3 })
+  assert.equal(approved.shippingStatus, 'Approved For Shipping')
+  assert.equal(mapInvoiceRow({ inv_number: 'I', invoice_status: 1 }).shippingStatus, 'Pending Payment')
+  assert.equal(mapInvoiceRow({ inv_number: 'I', invoice_status: 4 }).shippingStatus, 'Shipped')
+  assert.equal(mapInvoiceRow({ inv_number: 'I', invoice_status: 5 }).shippingStatus, 'FOB Pending Approval')
+
+  // SuiteQL returns THIS custom list as a number while the SO's approval list
+  // arrives as a string — so the mapper must not care which it gets.
+  assert.equal(mapInvoiceRow({ inv_number: 'I', invoice_status: '3' }).shippingStatus, 'Approved For Shipping')
+
+  // An unset or unknown code must be '' so loadInvoices' COALESCE preserves what
+  // we already knew, rather than writing a wrong gate value.
+  assert.equal(mapInvoiceRow({ inv_number: 'I' }).shippingStatus, '')
+  assert.equal(mapInvoiceRow({ inv_number: 'I', invoice_status: 2 }).shippingStatus, '')
+
+  // The gate must NOT set a stage: stageFromShipping would promote every
+  // 'Shipped'/'Approved' invoice's order and reshuffle the Kanban queues, which
+  // is a separate decision from making the gate live.
+  assert.equal(approved.stage, undefined)
+})
+
+test('invoiceSql: asks for the gate field — step 5 is dead without it', () => {
+  assert.match(invoiceSql('2026-06-30'), /custbody_invoice_status/)
+})
+
+test('invoiceBySo: links an IF to its invoice, and refuses to guess', () => {
+  // Without this the live path never wrote fulfillments.invoice_number (148 of
+  // 156 rows null), so getLaunchBay's `invoices ON inv_number = f.invoice_number`
+  // join matched nothing and every bay row read "awaiting invoice" — including
+  // three whose invoice was already in the same database.
+  const { bySo, ambiguous } = invoiceBySo([
+    { so_number: 'SO12267', inv_number: 'INV11361' },
+    { so_number: 'SO12373', inv_number: 'INV11412' },
+    // the same invoice twice (the SuiteQL link table is LINE-level) is not a conflict
+    { so_number: 'SO12267', inv_number: 'INV11361' },
+    // two genuinely different invoices on one SO — unknowable, so unlinked
+    { so_number: 'SO12292', inv_number: 'INV11411' },
+    { so_number: 'SO12292', inv_number: 'INV11500' },
+    { so_number: '', inv_number: 'INV9' },        // unlinked invoice, ignored
+  ])
+  assert.equal(bySo.get('SO12267'), 'INV11361')
+  assert.equal(bySo.get('SO12373'), 'INV11412')
+  assert.equal(bySo.has('SO12292'), false, 'an ambiguous SO must get no link at all')
+  assert.deepEqual(ambiguous, ['SO12292'])
+  assert.equal(bySo.size, 2)
 })
 
 test('queries scope to open OR the recent window, and are SELECT-only', () => {

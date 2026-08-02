@@ -233,15 +233,43 @@ function CrewVoice({ id, line }) {
 
 // ── the Command Center sector (the detail you act from) ──────────────────────
 
-function GapRow({ i, showTracking }) {
+// WHICH DATE to type into NetSuite (Nima's step 6). The date is the headline and
+// the evidence is named beside it, because a bare date invites the reader to
+// believe the app watched the truck leave — it did not. It knows when the goods
+// were last physically scanned, and says so.
+function ShipDate({ advice }) {
+  if (!advice) return null
+  if (!advice.suggestedDate) {
+    return <div className="gapDate gapDateNone" title={advice.advice}>no scan — date it yourself</div>
+  }
+  const tone = advice.impossible ? 'gapDateBad'
+    : advice.crossesMonthClose ? 'gapDateBad'
+      : advice.severity >= 2 ? 'gapDateWarn' : 'gapDateOk'
   return (
-    <div className={'gapRow ' + ageTone(i.ageDays ?? 0)}>
+    <div className={'gapDate ' + tone} title={advice.advice}>
+      <span className="gapDateWhen">{advice.suggestedDate}</span>
+      <span className="gapDateWhy">{advice.basisLabel}</span>
+      {advice.impossible && <span className="gapDateTag">date impossible</span>}
+      {!advice.impossible && advice.crossesMonthClose && <span className="gapDateTag">wrong month</span>}
+      {!advice.impossible && !advice.crossesMonthClose && advice.driftDays > 0 &&
+        <span className="gapDateDrift">{advice.driftDays}d back</span>}
+    </div>
+  )
+}
+
+function GapRow({ i, showTracking }) {
+  // A month-crossing date outranks age for the row's colour: two days across the
+  // close costs a re-dated month, nine days inside one costs nothing.
+  const tone = i.advice?.crossesMonthClose || i.advice?.impossible ? 'sev-hi' : ageTone(i.ageDays ?? 0)
+  return (
+    <div className={'gapRow ' + tone}>
       <div className="gapTop">
         <span className="gapIf">{i.ifNumber}</span>
         <span className="gapSo">{i.soNumber}</span>
         <span className="gapAge">{i.ageDays != null ? `${i.ageDays}d` : ''}</span>
       </div>
       <div className="gapCust">{i.customer || 'unknown customer'}</div>
+      <ShipDate advice={i.advice} />
       {showTracking && <Tracking numbers={i.trackingNumbers} />}
     </div>
   )
@@ -250,7 +278,11 @@ function GapRow({ i, showTracking }) {
 export function ShipDeskSector({ labelGaps, onNavigate }) {
   if (!labelGaps) return <div className="empty">Reading the ship desk…</div>
 
-  const marked = [...(labelGaps.labelledNotShipped || [])].sort(byAgeDesc)
+  // NOT re-sorted by age: the server already ranked these by month-close, which
+  // is the order that matters. Sorting by age here would bury a 1-day shipment
+  // that lands in last month's books under a 9-day one that doesn't.
+  const marked = labelGaps.labelledNotShipped || []
+  const monthClose = labelGaps.counts?.monthClose ?? 0
   const unlabelled = [...(labelGaps.needsLabel || [])].sort(byAgeDesc)
   const freight = labelGaps.freight || []
 
@@ -266,7 +298,15 @@ export function ShipDeskSector({ labelGaps, onNavigate }) {
         <div className="deskHead bad">
           ✈ MARK IT SHIPPED <span className="sectorCount">{marked.length}</span>
         </div>
-        <div className="deskWhy">Has tracking but still Packed — it went out; flip the status in NetSuite.</div>
+        <div className="deskWhy">
+          Has tracking but still Packed — it went out; flip the status in NetSuite,
+          <b> using the date shown</b>, not today's.
+          {monthClose > 0 && (
+            <span className="deskAlarm">
+              {monthClose === 1 ? '1 belongs' : `${monthClose} belong`} in a closed month — do these first.
+            </span>
+          )}
+        </div>
         {marked.map((i) => <GapRow key={i.ifNumber} i={i} showTracking />)}
         {!marked.length && <div className="empty">None — every labelled IF is marked shipped.</div>}
       </div>

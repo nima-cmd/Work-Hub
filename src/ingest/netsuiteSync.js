@@ -52,6 +52,26 @@ export const IF_STATUS = { A: 'Picked', B: 'Packed', C: 'Shipped' }
 // Invoice.
 export const INV_STATUS = { A: 'Open', B: 'Paid In Full' }
 
+// The approved-to-ship gate (Nima's step 5). This is a CUSTOM field, not a
+// NetSuite status: `custbody_invoice_status` on the invoice, a custom list whose
+// codes were queried live 2026-07-31. Value 2 is defined but unused — 5,883
+// invoices across all history read 1/3/4/5 only, and NONE is null, which is why
+// the COALESCE in loadInvoices can't freeze a stale value here.
+//
+// Why this exists at all: the app matched these exact strings in
+// server/queries.js `launchState`, but read them off `invoices.shipping_status`,
+// which ONLY the CSV path ever wrote (last `invoicedPending` import 2026-07-09).
+// So the gate was not merely stale — it was DEAD: with no writer, every bay row
+// fell through to "awaiting invoice", and the `delayed`/floating-days nudge
+// (which requires state 'approved') could never fire once. Neon still claims 19
+// "Approved For Shipping"; NetSuite says 4 in the entire account.
+export const INV_SHIPPING_STATUS = {
+  1: 'Pending Payment',
+  3: 'Approved For Shipping',
+  4: 'Shipped',
+  5: 'FOB Pending Approval',
+}
+
 const nOrNull = (v) => {
   if (v === null || v === undefined || v === '') return null
   const n = Number(v)
@@ -154,6 +174,10 @@ export function mapInvoiceRow(row) {
     soNumber: String(row.so_number || '').toUpperCase(),
     invoice: String(row.inv_number || '').toUpperCase(),
     invoiceStatus: INV_STATUS[code] || code || '',
+    // The approved-to-ship gate. SuiteQL hands a custom list back as a number
+    // here (unlike custbody_approval_status on the SO, which arrives as a
+    // string), so normalise before the lookup rather than trusting either.
+    shippingStatus: INV_SHIPPING_STATUS[Number(row.invoice_status)] || '',
     amountRemaining: nOrNull(row.foreignamountunpaid),
     amountTotal: nOrNull(row.foreigntotal),
     shipDate: row.shipdate || null,
@@ -210,8 +234,29 @@ export function trackingSql(since) {
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
+// SO → its ONE invoice, for deriving the IF ↔ Invoice link (see the call site in
+// fetchOrderLifecycle for why the shared SO is the only available link). An SO
+// with several invoices is reported as ambiguous and deliberately gets NO entry:
+// a wrong invoice on a fulfilment puts the payment gate on the wrong shipment,
+// which is worse than an honest blank.
+export function invoiceBySo(invRows = []) {
+  const bySo = new Map()
+  const ambiguous = new Set()
+  for (const r of invRows) {
+    const so = String(r.so_number || '').toUpperCase()
+    const inv = String(r.inv_number || '').toUpperCase()
+    if (!so || !inv) continue
+    const seen = bySo.get(so)
+    if (seen && seen !== inv) ambiguous.add(so)
+    else bySo.set(so, inv)
+  }
+  for (const so of ambiguous) bySo.delete(so)
+  return { bySo, ambiguous: [...ambiguous] }
+}
+
 export function invoiceSql(since) {
   return `SELECT DISTINCT c.tranid AS inv_number, t.tranid AS so_number, c.status,
+                 c.custbody_invoice_status AS invoice_status,
                  c.foreigntotal, c.foreignamountunpaid,
                  TO_CHAR(c.shipdate,'YYYY-MM-DD') AS shipdate
           FROM transaction t
@@ -264,12 +309,36 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
     if (!arr.includes(r.trackingnumber)) arr.push(r.trackingnumber)
   }
 
+  // IF → Invoice, derived via the shared SO. There is NO direct link to use:
+  // probed live 2026-07-31, PreviousTransactionLineLink returns ZERO ItemShip →
+  // CustInvc rows, because invoices are billed off the sales order, not the
+  // fulfilment. The shared SO is the documented derivation (see CLAUDE.md).
+  //
+  // Why this is needed: mapFulfillmentRow can't know about invoices, so the live
+  // path never wrote `fulfillments.invoice_number` — 148 of 156 rows were null
+  // (the 8 survivors are CSV leftovers). getLaunchBay joins
+  // `invoices i ON i.inv_number = f.invoice_number`, so the join matched almost
+  // nothing and the step-5 gate read "awaiting invoice" even for IFs whose
+  // invoice was sitting in the same database. Decoding custbody_invoice_status
+  // alone would NOT have fixed the gate.
+  //
+  // Only an UNAMBIGUOUS SO gets the link. When an SO has several invoices we
+  // cannot know which one covers which fulfilment, and guessing would put a
+  // payment gate on the wrong shipment — so it stays null and reads as unknown,
+  // which is the multi-document decision applied one field down. Rare in
+  // practice: 93 of 94 invoiced SOs carry exactly one invoice.
+  const { bySo: invBySo, ambiguous: ambiguousSos } = invoiceBySo(invs.rows)
+  if (ambiguousSos.length) {
+    warnings.push(`${ambiguousSos.length} SO(s) have several invoices — their IFs are left unlinked rather than guessed`)
+  }
+
   const orderRecords = orders.rows.map((r) =>
     mapOrderRow({ ...r, location: locBySo.get(String(r.tranid || '').toUpperCase()) || '' }),
   )
   const ifRecords = ifs.rows.map(mapFulfillmentRow).map((f) => ({
     ...f,
     trackingNumbers: trackByIf.get(f.ifNumber) || null,
+    invoice: invBySo.get(f.soNumber) || null,
   }))
   const invRecords = invs.rows.map(mapInvoiceRow)
 

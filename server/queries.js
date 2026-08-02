@@ -40,6 +40,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
+import { shipDateAdvice, rankShipDateAdvice, monthCloseCount } from '../src/model/shipDateAdvice.js'
 import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
@@ -1373,10 +1374,23 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            f.tracking_numbers AS "trackingNumbers",
            o.customer, o.source, o.po_number AS "poNumber", o.dc,
            i.status         AS "invoiceStatus",
-           i.amount_total   AS "invoiceTotal"
+           i.amount_total   AS "invoiceTotal",
+           c.custody_in     AS "custodyIn",
+           c.custody_out    AS "custodyOut"
     FROM fulfillments f
     LEFT JOIN orders   o ON o.so_number = f.so_number
     LEFT JOIN invoices i ON i.inv_number = f.invoice_number
+    -- The custody scans are the ONLY honest evidence of when the goods were
+    -- physically ready to leave, which is what dates the "mark it shipped"
+    -- action (see src/model/shipDateAdvice.js for why DEPARTED and the UPS
+    -- label history are both useless for this).
+    LEFT JOIN (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_IN')  AS custody_in,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_OUT') AS custody_out
+      FROM order_events WHERE doc_type = 'IF' AND event_type IN ('CUSTODY_IN','CUSTODY_OUT')
+      GROUP BY doc_number
+    ) c ON c.doc_number = f.if_number
     -- Packed but not yet shipped. actual_ship_date is the belt-and-suspenders:
     -- anything with a real ship date has already departed.
     WHERE f.actual_ship_date IS NULL
@@ -1402,6 +1416,12 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       lane,
       kind: labelled ? 'LABELLED_NOT_SHIPPED' : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
       ageDays,
+      // WHICH DATE to type when marking it shipped (Nima's step 6). Only the
+      // labelled ones get it: an IF with no label hasn't gone anywhere, so
+      // dating its departure would be fiction.
+      advice: labelled
+        ? shipDateAdvice({ ifNumber: r.ifNumber, custodyIn: r.custodyIn, custodyOut: r.custodyOut, ifDate: r.ifDate }, { today })
+        : null,
       // A labelled-but-unshipped IF is the more urgent of the two: the customer
       // already has the package while our books say it never left.
       needed: labelled
@@ -1412,7 +1432,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     }
   })
 
-  const labelledNotShipped = items.filter((i) => i.kind === 'LABELLED_NOT_SHIPPED')
+  // Ranked by month-close, not by age: a shipment two days adrift ACROSS the
+  // close costs a re-dated month, while nine days adrift inside one costs
+  // nothing but tidiness. Age still decides ties, via the advice's drift.
+  const labelledNotShipped = rankShipDateAdvice(items.filter((i) => i.kind === 'LABELLED_NOT_SHIPPED'))
   const needsLabel = items.filter((i) => i.kind === 'NEEDS_LABEL')
   const freight = items.filter((i) => i.kind === 'FREIGHT_BOL_LANE')
   return {
@@ -1424,6 +1447,8 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       labelledNotShipped: labelledNotShipped.length,
       needsLabel: needsLabel.length,
       freight: freight.length,
+      // The expensive subset: marking these today books them in the wrong month.
+      monthClose: monthCloseCount(labelledNotShipped),
     },
     // Age the ACTIONABLE items only — a freight shipment awaiting its BOL
     // shouldn't inflate the parcel backlog's headline number.
