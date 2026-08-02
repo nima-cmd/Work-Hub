@@ -82,9 +82,23 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
     docPoRefsByTxnId.get(r.transactionId).add(r.poNumber)
   }
 
+  // ⚠️ ONE EDI PO FANS OUT TO MANY SALES ORDERS — one per store/DC. This was a
+  // `Map` of po_number → order for a long time, i.e. LAST WRITE WINS, so a PO's
+  // other sales orders were silently dropped: PO 50073677 has **25** SOs and the
+  // board showed 1, PO 7242978 has 23 and showed 1. Measured 2026-08-02:
+  // **111 of 129 EDI sales orders were invisible**, and with them 48 of the 53
+  // fulfilments actually in flow. Keep the whole list.
+  //
+  // `netsuiteOrder` (singular) stays as the first one so the PO card's header
+  // keeps working; anything COUNTING must read `netsuiteOrders`.
   const netsuiteByPoNumber = new Map()
   for (const o of netsuiteOrders) {
-    if (o.poNumber) netsuiteByPoNumber.set(o.poNumber, o)
+    if (!o.poNumber) continue
+    if (!netsuiteByPoNumber.has(o.poNumber)) netsuiteByPoNumber.set(o.poNumber, [])
+    netsuiteByPoNumber.get(o.poNumber).push(o)
+  }
+  for (const list of netsuiteByPoNumber.values()) {
+    list.sort((a, b) => String(a.soNumber || '').localeCompare(String(b.soNumber || '')))
   }
 
   const manualLinkByTxnId = new Map(manualLinks.map((l) => [l.transactionId, l]))
@@ -117,8 +131,15 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
       .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     const stageRank = sorted.reduce((max, t) => Math.max(max, STAGE_RANK[t.type] || 0), 0)
     const tradingPartner = sorted.find((t) => t.tradingPartner)?.tradingPartner || null
-    const netsuiteOrder = netsuiteByPoNumber.get(businessNumber) || null
-    const netsuiteShipped = netsuiteOrder?.stage === 'SHIPPED'
+    const poNetsuiteOrders = netsuiteByPoNumber.get(businessNumber) || []
+    const netsuiteOrder = poNetsuiteOrders[0] || null
+    // ANY sales order on the PO having shipped is what makes an ASN due — a
+    // shipped DC is an unannounced shipment whether or not its 24 siblings have
+    // moved. (Was the single collapsed order's stage, which is why this read
+    // whichever SO happened to land last.)
+    const netsuiteShipped = poNetsuiteOrders.some((o) => o.stage === 'SHIPPED')
+    const poFulfillments = poNetsuiteOrders.flatMap((o) => o.itemFulfillments || [])
+    const poInvoices = poNetsuiteOrders.flatMap((o) => o.invoices || [])
     // sorted is ascending by createdAt, so the LAST 850 is the current version.
     // A re-sent PO's ship window/units come from the newest 850, not the first
     // (partners re-transmit to change dates or units — 2026-07-29).
@@ -131,11 +152,11 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
     // it's already shipped/closed and aged out of the open pipeline, not a
     // real linking failure (see [[orderful-api-confirmed-shape]] memory).
     const linkGaps = []
-    if (netsuiteOrder) {
-      if (stageRank >= 3 && !netsuiteOrder.itemFulfillments?.length) {
+    if (poNetsuiteOrders.length) {
+      if (stageRank >= 3 && !poFulfillments.length) {
         linkGaps.push('ASN sent, no matching NetSuite fulfillment found')
       }
-      if (stageRank >= 4 && !netsuiteOrder.invoices?.length) {
+      if (stageRank >= 4 && !poInvoices.length) {
         linkGaps.push('Invoice sent, no matching NetSuite invoice found')
       }
     }
@@ -159,6 +180,7 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
       transactions: sorted,
       fulfillments: fulfillmentsByPoNumber.get(businessNumber) || [],
       netsuiteOrder,
+      netsuiteOrders: poNetsuiteOrders,
       linkGaps,
       bucket,
     }
