@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -117,7 +117,7 @@ const VIEWS = [
   { key: 'kanban', label: 'Mission Quests', C: Kanban },
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
-  { key: 'allocations', label: 'OC↔PO', C: Allocations },
+  { key: 'allocations', label: 'Inbound', C: Allocations },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'routing', label: 'Routing', C: Routing },
   { key: 'catalogue', label: 'Catalogue', C: Catalogue },
@@ -158,6 +158,7 @@ export default function App() {
   const [ediGaps, setEdiGaps] = useState(null)
   const [asnCartons, setAsnCartons] = useState(null)
   const [unfiled, setUnfiled] = useState(null)
+  const [inbound, setInbound] = useState(null)
   // Manual NetSuite refresh (Nima, 2026-07-31). `nsBusy` is NOT an error state:
   // it means Celigo is mid-run and holds the concurrency, which has priority.
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
@@ -190,6 +191,8 @@ export default function App() {
     fetchAsnCartons().then(setAsnCartons).catch(() => setAsnCartons(null))
     // Shipments that left with no signed paper filed (step 7).
     fetchUnfiledPaper().then(setUnfiled).catch(() => setUnfiled(null))
+    // Inbound containers past their arrival date (open POs grouped by due date).
+    fetchInboundContainers().then(setInbound).catch(() => setInbound(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
@@ -362,7 +365,7 @@ export default function App() {
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
         <SyncAlarm health={syncHealth} />
-        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} onNavigate={setView} />
+        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} inbound={inbound} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS}

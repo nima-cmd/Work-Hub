@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 
 import {
   getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  getInboundContainers,
   getLedger, getOrderLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -633,6 +634,19 @@ app.post('/api/routing/auth/:authNumber/master-to-drive', async (req, res) => {
 app.get('/api/filing/unfiled', async (_req, res) => {
   try {
     res.json(await getUnfiledPaper())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Inbound containers: open POs grouped by due date, which is what a container
+// is here. `late` is the live obligation; `unreconciled` is the older tail, kept
+// separate for the same reason filing's backlog is — it can't be cleared by
+// working faster, so it must not drive a chip.
+app.get('/api/inbound/containers', async (_req, res) => {
+  try {
+    res.json(await getInboundContainers())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

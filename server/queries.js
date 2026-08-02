@@ -12,6 +12,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeContainerView } from '../src/model/ocPoContainers.js'
+import { groupContainers, lateContainers } from '../src/model/containers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
@@ -852,6 +853,31 @@ export async function getNwFreshness() {
   return { configured: true, appUrl: NW_APP_URL, sources }
 }
 
+// ── inbound containers — the arrival side ────────────────────────────────────
+// Its own endpoint rather than a slice of getOcPoReview: the court strip needs
+// this app-wide on every page, and the allocation review is a much heavier
+// payload to drag along for one count.
+export async function getInboundContainers({ now = new Date() } = {}) {
+  const pos = await fetchPurchaseOrders()
+  const { containers, unreconciled, undated, asOf } = groupContainers(pos, { today: now })
+  const late = lateContainers(containers)
+  return {
+    containers,
+    unreconciled,
+    undated,
+    asOf,
+    counts: {
+      // Never summed — see lateContainers. `late` is the only actionable number.
+      late: late.length,
+      lateUnits: late.reduce((n, c) => n + c.unitsOpen, 0),
+      awaiting: containers.filter((c) => c.state === 'awaiting').length,
+      unreconciled: unreconciled.length,
+      // Open lines with no Final Naghedi Destination, so unmatchable to any OC.
+      unmatchableLines: [...containers, ...unreconciled].reduce((n, c) => n + c.unmatchableLines, 0),
+    },
+  }
+}
+
 // ── OC↔PO allocation review — the "open task" queue ──────────────────────────
 // Kept entirely manual (Nima, 2026-07-09): this reads current state and runs
 // the matcher, but nothing here writes anything. Every OC/PO line that isn't
@@ -866,7 +892,14 @@ export async function getOcPoReview() {
   ])
   const { suggestedMatches, candidates, unmatchedOcs, unmatchedPos } = computeOcPoMatches({ ocs, pos, links })
   const { locations, containers, unassignedOcs } = computeContainerView({ ocs, pos, links })
-  return { suggestedMatches, candidates, unmatchedOcs, unmatchedPos, links, locations, containers, unassignedOcs }
+  // The arrival side: the same PO rows regrouped by due date, which is what a
+  // container is here (see src/model/containers.js). `containers` above is the
+  // OC↔PO allocation lens and keeps its name; this is `inbound`.
+  const inbound = groupContainers(pos, { today: new Date() })
+  return {
+    suggestedMatches, candidates, unmatchedOcs, unmatchedPos, links,
+    locations, containers, unassignedOcs, inbound,
+  }
 }
 
 // ── EDI (Orderful) review — mirrors Airtable's 850 Tracker/856, pulled live

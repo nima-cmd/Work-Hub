@@ -339,7 +339,12 @@ export async function fetchOrderConfirmations(db = pool) {
 
 export async function fetchPurchaseOrders(db = pool) {
   const { rows } = await db.query(
+    // qty_ordered/qty_received are needed as well as qty_remaining: the inbound
+    // container view derives "has this landed yet" from received-vs-ordered, and
+    // without them every container reads 0% received, so a fully-receipted one
+    // reports as a missing shipment (PO1738: 790 of 800 in, shown as late).
     `SELECT po_number AS "poNumber", item, vendor, destination, status, expected_receipt AS "expectedReceipt",
+            qty_ordered AS "qtyOrdered", qty_received AS "qtyReceived",
             qty_remaining AS "qtyRemaining", dismissed, dismissed_note AS "dismissedNote"
      FROM purchase_orders`,
   )
