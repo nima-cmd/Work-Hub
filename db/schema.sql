@@ -622,8 +622,9 @@ ON CONFLICT (key) DO NOTHING;
 --   PAID              INV  status = Paid In Full — observed
 --   ROUTED            DC   routing_shipment.bol_generated_at
 --   DEPARTED          IF   fulfillments.actual_ship_date
---   ASN_SENT          PO   856 OUT/LIVE transmitted to Orderful
---   INVOICE_SENT      PO   810 OUT/LIVE transmitted to Orderful
+--   PO_RECEIVED       PO   850 IN/LIVE arrived from the partner
+--   ASN_SENT          ASN  856 OUT/LIVE transmitted to Orderful
+--   INVOICE_SENT      INV  810 OUT/LIVE transmitted to Orderful
 --
 -- Two other event types predate the spine and are written elsewhere:
 -- SHIPPED_VALUE (a shipment's dollar value, note = the amount) and
@@ -644,17 +645,51 @@ ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS order_events (
   id          SERIAL PRIMARY KEY,
   event_type  TEXT NOT NULL,        -- see the vocabulary above
-  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC'
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC' | 'ASN'
   doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
   so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
   note        TEXT,
   source      TEXT DEFAULT 'scan',  -- 'scan' | 'manual' | 'derived'
   occurred_at TIMESTAMPTZ DEFAULT now()
 );
+-- ⚠️ An EDI event's doc_number is the document's OWN id, NEVER the PO — and
+-- conflating those was a real bug (found and fixed 2026-08-02). Orderful's
+-- `business_number` is the ASN's own shipment reference on an 856 (a BOL from
+-- Bloomingdale's, 'PO+DC' from Nordstrom, the IF number from Shopbop) and our
+-- own invoice number on an 810;
+-- measured overlap with the 850s' actual PO numbers was 2 of 491 and 0 of 1,484,
+-- so 1,975 events sat in this table under keys nothing could join. They are now
+-- keyed as what they are: 850 → 'PO', 856 → 'ASN', 810 → 'INV' (the 810's
+-- business number is our invoice number minus the 'INV' prefix, exact on all 49
+-- EDI invoices held; the other 55 are boutique and correctly have no 810).
+--
+-- There is deliberately NO po_number column. The PO↔document mapping is
+-- many-to-many — one ASN can announce several POs, and 107 of 172 POs ship on
+-- more than one ASN (one on 103) — so a single denormalized column could not
+-- hold it, and keying doc_number to the PO instead would collapse 936 real
+-- announcements into 172 under the (type, doc) dedupe. edi_document_po_refs
+-- already owns that mapping, read out of the message body; getPoLedger() joins
+-- through it at query time rather than storing a second copy to go stale.
 CREATE INDEX IF NOT EXISTS idx_order_events_doc      ON order_events(doc_type, doc_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_so       ON order_events(so_number);
 CREATE INDEX IF NOT EXISTS idx_order_events_occurred ON order_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_order_events_type     ON order_events(event_type);
+
+-- Repair of the mis-keyed EDI events described above (2026-08-02).
+--
+-- Written as an invariant rather than a one-off: a derived ASN_SENT belongs on
+-- an 'ASN' and a derived INVOICE_SENT on an 'INV', so anything else is drift and
+-- gets swept, whatever shape it took. That makes it self-idempotent (after the
+-- first run it matches nothing) AND self-healing if the keying is ever wrong
+-- again. Deleting is safe because these rows are `derived` and carry only source
+-- timestamps: the next sync rebuilds every one of them on the correct key with
+-- the identical occurred_at, since it reads all of edi_transactions rather than
+-- a window. Scoped to source='derived' so a hand-made correction is never
+-- swept up with them.
+DELETE FROM order_events
+ WHERE source = 'derived'
+   AND ((event_type = 'ASN_SENT'     AND doc_type <> 'ASN')
+     OR (event_type = 'INVOICE_SENT' AND doc_type <> 'INV'));
 
 -- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
 -- When a packed IF is scanned back IN from the warehouse, the scanner may

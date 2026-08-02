@@ -4,15 +4,78 @@ import {
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
-  fetchAsnCartons, refreshAsnCartons,
+  fetchAsnCartons, refreshAsnCartons, fetchPoLedger,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
+import { poTimelineSteps } from '../../../src/model/orderEvents.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 const isIssueValue = (v) => ISSUE_STATUSES.has(v)
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString() : '—')
+
+// ── The PO's document trail (roadmap item C) ─────────────────────────────────
+// The card above answers "how far along is this PO". This answers the other
+// question: what actually happened to it, and when.
+//
+// The rest of this view reads the Orderful transaction list, which only knows
+// the EDI documents. This reads the order ledger, which also holds the NetSuite
+// half — so the 850 and the sales orders and fulfilments it caused appear on one
+// dated line, which is the whole point of item C.
+//
+// Loaded on expand rather than with the page: a PO's trail is ~100 events and
+// there are hundreds of POs.
+function PoTimeline({ poNumber }) {
+  const [state, setState] = useState({ loading: true })
+
+  useEffect(() => {
+    let live = true
+    setState({ loading: true })
+    fetchPoLedger(poNumber)
+      .then((r) => { if (live) setState({ loading: false, ...r }) })
+      .catch((e) => { if (live) setState({ loading: false, error: e.message }) })
+    return () => { live = false }
+  }, [poNumber])
+
+  if (state.loading) return <div className="allocPos cust">Loading the document trail…</div>
+  if (state.error) return <div className="allocPos sev-hi">Trail unavailable: {state.error}</div>
+
+  const steps = poTimelineSteps(state.events || [])
+  if (!steps.length) {
+    return (
+      <div className="allocPos cust">
+        No ledger events for this PO yet. The trail fills in as the sync derives
+        them — an 850 that has not produced a sales order has nothing else to show.
+      </div>
+    )
+  }
+
+  return (
+    <div className="allocPos">
+      <div className="cust">Document trail</div>
+      {steps.map((s) => {
+        // One document is named; several are counted, with the span that matters
+        // more than any single date. Compared on the FORMATTED dates, not the raw
+        // timestamps: 15 invoices transmitted minutes apart are one day's work,
+        // and rendering them as '12/5/2024 → 12/5/2024' is just noise.
+        const spans = fmtD(s.first) !== fmtD(s.last)
+        return (
+          <div key={s.eventType}>
+            <b>{s.label}</b>
+            {' · '}
+            {s.docs.length === 1 ? s.docs[0] : `${s.docs.length} ${s.docType || 'doc'}s`}
+            {' · '}
+            {spans ? `${fmtD(s.first)} → ${fmtD(s.last)}` : fmtD(s.first)}
+            {/* An observed date is when the sync first SAW the state, not when it
+                happened — say so rather than letting it read as a known date. */}
+            {s.observed && <span className="cust" title="First seen in this state by the sync — nothing upstream records the real date"> (seen)</span>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const DAY_MS = 86400000
 const sod = (x) => { const d = new Date(x); d.setHours(0, 0, 0, 0); return d.getTime() }
@@ -817,6 +880,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
 
                 {isOpen && (
                   <div className="poDetail">
+                    <PoTimeline poNumber={o.businessNumber} />
                     {/* manual resolution — the NetSuite connection the searches can't see */}
                     <div className="resolveRow">
                       <input className="qtyInput" style={{ width: 150 }} placeholder="NetSuite ref (SO/IF/INV#)"

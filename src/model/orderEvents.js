@@ -45,13 +45,37 @@ export const SPINE = [
   { key: 'PAID', docType: 'INV', label: 'Paid in full' },
   { key: 'ROUTED', docType: 'DC', label: 'Routed (BOL generated)' },
   { key: 'DEPARTED', docType: 'IF', label: 'Departed' },
-  { key: 'ASN_SENT', docType: 'PO', label: '856 transmitted' },
-  { key: 'INVOICE_SENT', docType: 'PO', label: '810 transmitted' },
+  { key: 'ASN_SENT', docType: 'ASN', label: '856 transmitted' },
+  { key: 'INVOICE_SENT', docType: 'INV', label: '810 transmitted' },
   { key: 'FILED', docType: 'IF', label: 'Signed paper filed' },
 ]
 
-export const SPINE_ORDER = new Map(SPINE.map((s, i) => [s.key, i]))
-export const SPINE_LABEL = new Map(SPINE.map((s) => [s.key, s.label]))
+// PO_RECEIVED is the EDI trail's starting gun and predates every SO event, so it
+// sits at the front rather than in the boutique-shaped spine above. Kept out of
+// SPINE's display order deliberately: a boutique order has no 850 and should not
+// render a gap where one would be.
+export const PO_SPINE = [
+  { key: 'PO_RECEIVED', docType: 'PO', label: '850 received' },
+]
+
+// PO_RECEIVED sorts ahead of everything (index −1): the 850 is what causes the
+// sales order, so it can never be later than SO_IMPORTED on a tie.
+export const SPINE_ORDER = new Map([
+  ...PO_SPINE.map((s) => [s.key, -1]),
+  ...SPINE.map((s, i) => [s.key, i]),
+])
+// The two event types that predate the spine and are written elsewhere. They are
+// not derived and have no spine position, but they DO reach the ledger, so
+// without a label they render as a raw 'SHIPPED_VALUE' in the timeline.
+const EXTRA_LABEL = {
+  SHIPPED_VALUE: 'Shipped value recorded',
+  CUSTODY_CLEARED: 'Custody register cleared',
+}
+
+export const SPINE_LABEL = new Map([
+  ...[...PO_SPINE, ...SPINE].map((s) => [s.key, s.label]),
+  ...Object.entries(EXTRA_LABEL),
+])
 
 // Event types this module owns. CUSTODY_*, REACHED_APPROVED and FILED are in the
 // spine for display but are written elsewhere (scan handlers,
@@ -61,12 +85,17 @@ export const SPINE_LABEL = new Map(SPINE.map((s) => [s.key, s.label]))
 // exists. Its only source is the upload actually succeeding.
 export const DERIVED_TYPES = [
   'SO_IMPORTED', 'IF_CREATED', 'PACKED', 'INVOICED',
-  'PAID', 'ROUTED', 'DEPARTED', 'ASN_SENT', 'INVOICE_SENT',
+  'PAID', 'ROUTED', 'DEPARTED', 'PO_RECEIVED', 'ASN_SENT', 'INVOICE_SENT',
 ]
 
 // Identity of an event for dedupe purposes: one of each type per document, ever.
 // Deliberately excludes occurred_at — re-running a sync must not append a second
 // DEPARTED because the ship date was corrected upstream.
+//
+// ⚠️ There is deliberately no PO in this key. One ASN can announce several POs,
+// but it is ONE transmission — fanning it out into an event per PO would
+// double-count the announcement in every window the ledger reports on. The PO
+// fan-out is resolved at query time through edi_document_po_refs.
 export const eventKey = (e) => `${e.eventType}|${e.docType}|${e.docNumber}`
 
 const isShipped = (s) => /shipped/i.test(String(s || ''))
@@ -169,28 +198,73 @@ export function eventsFromRouting(shipments = []) {
   return out
 }
 
-// edi_transactions → ASN_SENT / INVOICE_SENT, at PO level (a business number can
-// span several SOs, so the PO is the honest key — see the roadmap's item C).
+// edi_transactions → PO_RECEIVED / ASN_SENT / INVOICE_SENT.
 //
-// Outbound + LIVE only: an inbound 850's transmission is the partner's event, and
-// the TEST stream must never reach the real ledger.
+// ── Each document is keyed as what it actually IS ────────────────────────────
 //
-// Note "sent" here means transmitted to Orderful, which is NOT the same as
-// delivered to the partner — that gap is precisely the 62-undelivered-ASN problem
-// (see src/model/ediDelivery.js). The ledger records transmission; delivery is a
+// This used to file all three under docType 'PO' with Orderful's
+// `business_number` as the doc_number, on the assumption that a business number
+// is a PO. It is not, except on the 850. Measured 2026-08-02:
+//
+//   850  business_number IS the PO number          → docType 'PO'
+//   856  business_number is the ASN's own shipment reference → docType 'ASN'
+//   810  business_number is OUR invoice number     → docType 'INV'
+//        ('11398' = invoices.inv_number 'INV11398' — exact on all 49 of the EDI
+//        invoices held; the other 55 held are boutique and rightly have no 810)
+//
+// 'ASN' rather than 'BOL' because the 856's reference is only sometimes a BOL —
+// live, Bloomingdale's sends 'NB1731231', Nordstrom '40635887DC799' (PO + DC)
+// and Shopbop 'IF6165' (the fulfilment number). What is always true is that it
+// identifies the ASN, so that is what the doc_type says.
+//
+// Overlap between the 850 PO numbers and the other two was 2 of 491 and 0 of
+// 1,484, so the old keying left 1,975 events under ids nothing could join —
+// which is why the PO-level trail this feeds never assembled. The 810 now lands
+// on its invoice, so it also joins the SO-level ledger for free.
+//
+// The 850 is INBOUND: it is the only event here that is the partner's
+// transmission rather than ours, and excluding it (the old direction filter did)
+// left the EDI trail with no beginning. TEST stream is still excluded from all
+// three — it must never reach the real ledger.
+//
+// Note "sent" means transmitted to Orderful, which is NOT the same as delivered
+// to the partner — that gap is precisely the 62-undelivered-ASN problem (see
+// src/model/ediDelivery.js). The ledger records transmission; delivery is a
 // separate question with its own answer.
 export function eventsFromEdi(transactions = []) {
   const out = []
   for (const t of transactions) {
-    if (String(t.direction || '').toUpperCase() !== 'OUT') continue
     if (String(t.stream || '').toUpperCase() !== 'LIVE') continue
     if (!t.businessNumber) continue
     const type = String(t.type || '')
-    const eventType = type.startsWith('856') ? 'ASN_SENT' : type.startsWith('810') ? 'INVOICE_SENT' : null
-    if (!eventType) continue
-    out.push(evt(eventType, 'PO', t.businessNumber, null, t.createdAt, t.tradingPartner || null))
+    const dir = String(t.direction || '').toUpperCase()
+    const partner = t.tradingPartner || null
+
+    if (type.startsWith('850')) {
+      // Only the partner's own inbound 850 starts a PO. An outbound 850 would be
+      // us acting as the buyer, which is the purchasing side, not this pipeline.
+      if (dir !== 'IN') continue
+      out.push(evt('PO_RECEIVED', 'PO', t.businessNumber, null, t.createdAt, partner))
+      continue
+    }
+    if (dir !== 'OUT') continue
+    if (type.startsWith('856')) {
+      out.push(evt('ASN_SENT', 'ASN', t.businessNumber, null, t.createdAt, partner))
+    } else if (type.startsWith('810')) {
+      // Restore the prefix NetSuite carries so this event sits on the same
+      // doc_number as the INVOICED/PAID events for the same invoice.
+      out.push(evt('INVOICE_SENT', 'INV', invNumberFrom810(t.businessNumber), null, t.createdAt, partner))
+    }
   }
   return out
+}
+
+// Orderful carries the 810's business number bare ('11398'); NetSuite calls the
+// same document 'INV11398'. Already-prefixed values pass through unchanged so a
+// partner that transmits the full number doesn't produce 'INVINV11398'.
+export function invNumberFrom810(businessNumber) {
+  const raw = String(businessNumber || '').trim()
+  return /^INV/i.test(raw) ? raw.toUpperCase() : `INV${raw}`
 }
 
 // ── Assembly ─────────────────────────────────────────────────────────────────
@@ -233,6 +307,49 @@ export function summarize(events = []) {
   const by = {}
   for (const e of events) by[e.eventType] = (by[e.eventType] || 0) + 1
   return by
+}
+
+// A PO's timeline collapsed to one row per step — the shape the EDI view wants.
+//
+// A wholesale PO fans out hard: PO 7776940 is one 850, 15 sales orders, 15
+// fulfilments, 5 ASNs and 15 invoices, which is 96 raw events. Listed flat that
+// is unreadable, and worse, it buries the actual story (which step is the PO on,
+// and when did each one happen) under 15 identical rows.
+//
+// So each step reports its span rather than its rows: how many documents, first
+// and last date. A step spanning several days is itself the signal — 15 invoices
+// transmitted across a week means the PO dribbled out rather than shipping once.
+//
+// `observed` is true only when EVERY event in the step is a first-sighting: one
+// real date in the group means the span's edges are real, and the UI should not
+// hedge a date it actually knows.
+export function poTimelineSteps(events = []) {
+  const steps = new Map()
+  for (const e of timeline(events)) {
+    if (!steps.has(e.eventType)) {
+      steps.set(e.eventType, {
+        eventType: e.eventType,
+        label: e.label || SPINE_LABEL.get(e.eventType) || e.eventType,
+        docType: e.docType,
+        docs: [],
+        first: e.occurredAt,
+        last: e.occurredAt,
+        observed: true,
+      })
+    }
+    const s = steps.get(e.eventType)
+    s.docs.push(e.docNumber)
+    // timeline() already sorted ascending, so the last one seen is the latest.
+    s.last = e.occurredAt
+    if (!e.observed) s.observed = false
+  }
+  // Ordered by when the step STARTED, not by spine position: this is a history,
+  // and a PO whose 810 went out before its 856 should look wrong, not be
+  // silently reordered into the shape we expected.
+  return [...steps.values()].sort(
+    (a, b) => new Date(a.first || 0) - new Date(b.first || 0)
+      || (SPINE_ORDER.get(a.eventType) ?? 99) - (SPINE_ORDER.get(b.eventType) ?? 99),
+  )
 }
 
 // One document's history, oldest first — the shape the Ledger view wants.

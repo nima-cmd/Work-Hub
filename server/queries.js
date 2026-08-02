@@ -527,6 +527,88 @@ export async function getOrderLedger(soNumber) {
   return { soNumber: so, documents: { fulfillments: ifs, invoices: invs }, events: timeline(decorate(rows)) }
 }
 
+// One PO's complete document trail — the roadmap's item C, the dated
+// 850 → SO → IF → 856 → 810 story for a single partner PO.
+//
+// The EDI pipeline view already knows a PO's *state*, but it collapses the whole
+// history into one stage rank. This is the other question: not "how far along is
+// it" but "what happened, and when".
+//
+// Assembling it is a resolution problem, because no EDI event is keyed on the PO
+// except the 850 (see the eventsFromEdi comment — an 856 is keyed on its BOL and
+// an 810 on our invoice number). Four routes in, all of them through a table that
+// already owns the mapping rather than a denormalized copy:
+//
+//   • the 850          — doc_type 'PO', doc_number IS the PO
+//   • its sales orders — orders.po_number, then their IFs and invoices, which
+//                        pulls the whole NetSuite half of the trail in with them
+//   • its ASNs         — edi_document_po_refs → the 856's own reference
+//   • its 810s         — edi_document_po_refs → our invoice number
+//
+// The last two are many-to-many on purpose: one ASN can announce several POs and
+// one PO can ship on several ASNs, so an ASN legitimately appears on more than
+// one PO's timeline. It is still one transmission and one row in order_events.
+export async function getPoLedger(poNumber) {
+  const po = String(poNumber || '').trim()
+  if (!po) return { poNumber: null, documents: {}, events: [] }
+
+  const [{ rows: nsDocs }, { rows: ediDocs }] = await Promise.all([
+    pool.query(
+      `SELECT 'SO' AS doc_type, o.so_number AS doc_number FROM orders o WHERE o.po_number = $1
+       UNION ALL
+       SELECT 'IF', f.if_number FROM fulfillments f
+         JOIN orders o ON o.so_number = f.so_number WHERE o.po_number = $1
+       UNION ALL
+       SELECT 'INV', i.inv_number FROM invoices i
+         JOIN orders o ON o.so_number = i.so_number WHERE o.po_number = $1`,
+      [po],
+    ),
+    // The 810's stored doc_number carries the 'INV' prefix Orderful strips, so
+    // rebuild it here the same way invNumberFrom810 does — including the
+    // already-prefixed case, which is real (invoice 9114 was transmitted once as
+    // '9114' and once as 'INV9114') and produced 'INVINV9114' before this guard.
+    pool.query(
+      `SELECT DISTINCT
+              CASE WHEN t.type LIKE '856%' THEN 'ASN' ELSE 'INV' END AS doc_type,
+              CASE WHEN t.type LIKE '856%'            THEN t.business_number
+                   WHEN t.business_number ILIKE 'INV%' THEN upper(t.business_number)
+                   ELSE 'INV' || t.business_number END               AS doc_number
+         FROM edi_document_po_refs r
+         JOIN edi_transactions t ON t.id = r.transaction_id
+        WHERE r.po_number = $1
+          AND t.direction = 'OUT' AND t.stream = 'LIVE'
+          AND (t.type LIKE '856%' OR t.type LIKE '810%')`,
+      [po],
+    ),
+  ])
+
+  const pick = (rows, type) => [...new Set(rows.filter((d) => d.doc_type === type).map((d) => d.doc_number))]
+  const sos = pick(nsDocs, 'SO')
+  const ifs = pick(nsDocs, 'IF')
+  const asns = pick(ediDocs, 'ASN')
+  // An invoice can arrive from either side — NetSuite's SO join or the 810's own
+  // number — and the two overlap by design. Merge before querying so a shared
+  // invoice doesn't widen the IN list twice.
+  const invs = [...new Set([...pick(nsDocs, 'INV'), ...pick(ediDocs, 'INV')])]
+
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events
+      WHERE (doc_type = 'PO'  AND doc_number = $1)
+         OR (doc_type = 'ASN' AND doc_number = ANY($2))
+         OR (doc_type = 'INV' AND doc_number = ANY($3))
+         OR (doc_type = 'IF'  AND doc_number = ANY($4))
+         OR (doc_type = 'SO'  AND doc_number = ANY($5))
+         OR so_number = ANY($5)`,
+    [po, asns, invs, ifs, sos],
+  )
+
+  return {
+    poNumber: po,
+    documents: { salesOrders: sos, fulfillments: ifs, invoices: invs, asns },
+    events: timeline(decorate(rows)),
+  }
+}
+
 // A window of the ledger, newest first — the Calendar's feed and the general
 // search. `q` matches a document number so "IF7413" finds its whole trail.
 export async function getLedger({ from = null, to = null, type = null, docType = null, q = null, limit = 500 } = {}) {
