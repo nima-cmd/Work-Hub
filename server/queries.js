@@ -4,6 +4,7 @@
 
 import { pool } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
+import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
@@ -98,7 +99,26 @@ export async function getOrders() {
           ) ORDER BY i.inv_number
         )
         FROM invoices i WHERE i.so_number = o.so_number
-      ), '[]'::json) AS invoices
+      ), '[]'::json) AS invoices,
+      -- The partner's own ship window, off their 850. On an 850 (and ONLY an
+      -- 850) business_number IS the PO number, so it joins the sales order
+      -- directly — see [[po-document-timeline]] for why an 856/810 does not.
+      --
+      -- Newest 850 wins: partners re-transmit to move dates or units. Rows with
+      -- no window at all are skipped rather than allowed to win, so a zeroing /
+      -- cancel re-send can't blank a live window (the follow-up PR #12 left).
+      (
+        SELECT json_build_object(
+          'shipNotBefore', TO_CHAR(e.ship_not_before, 'YYYY-MM-DD'),
+          'cancelAfter',   TO_CHAR(e.cancel_after,   'YYYY-MM-DD')
+        )
+        FROM edi_transactions e
+        WHERE e.type = '850_PURCHASE_ORDER'
+          AND e.business_number = o.po_number
+          AND (e.ship_not_before IS NOT NULL OR e.cancel_after IS NOT NULL)
+        ORDER BY e.created_at DESC NULLS LAST
+        LIMIT 1
+      ) AS edi_window
     FROM orders o
     -- Placeholder orders are EXCLUDED here, at the single read path every work
     -- view uses (Nima, 2026-07-31: a temp order holding stock until the real one
@@ -141,7 +161,9 @@ export async function getOrders() {
       amountPaid: num(r.amount_paid),
       fulfillments: r.fulfillments,
       invoices: r.invoices,
+      ediWindow: r.edi_window,
     }
+    o.shipWindow = shipWindow(o, today)
     o.flags = computeFlags(o, today)
     o.severity = o.flags.reduce((m, f) => Math.max(m, f.severity), 0)
     return o

@@ -56,8 +56,18 @@ function mergeGroup(poNumber, members) {
     fulfillments: members.flatMap((m) => m.fulfillments || []),
     invoices: members.flatMap((m) => m.invoices || []),
     flags: mergeFlags(members),
+    // Every SO on a PO shares that PO's 850, so the EDI window is identical
+    // across members — but their sales-order ship dates need not be. Take the
+    // tightest deadline so a group never reads later than one of its members.
+    shipWindow: tightestWindow(members),
     members,
   }
+}
+
+function tightestWindow(members) {
+  const ws = members.map((m) => m.shipWindow).filter((w) => w && w.mustShipBy != null)
+  if (!ws.length) return members.find((m) => m.shipWindow)?.shipWindow || null
+  return ws.reduce((a, b) => (b.mustShipBy < a.mustShipBy ? b : a))
 }
 
 // Returns a flat list: orders with no PO pass through unchanged; POs with >1 SO
