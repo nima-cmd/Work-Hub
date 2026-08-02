@@ -29,7 +29,7 @@ export const WAREHOUSE_VOICE_ID = 'yor-forger' // stands in for the warehouse si
 // directly Nima can finish it: a label is his hands, an ASN is a re-send, a
 // stuck invoice is someone else's process. Deliberately NOT ordered by count —
 // "61 invoices never sent" would drown out the 4 labels every single day.
-const PRIORITY = ['needsLabel', 'markShipped', 'freight', 'canShip', 'needsInvoice', 'asnStuck', 'invoiceStuck']
+const PRIORITY = ['needsLabel', 'markShipped', 'freight', 'canShip', 'needsInvoice', 'asnUnannounced', 'invoiceUnannounced']
 
 // One line per lane. `n` is that lane's count; the phrasing has to read for
 // n === 1 as well, so no bare plurals.
@@ -39,8 +39,12 @@ const LINE = {
   freight: (n) => `${n} freight ${n === 1 ? 'shipment is' : 'shipments are'} waiting on routing — Routing has them lined up.`,
   canShip: (n) => `${n === 1 ? 'One order is' : `${n} orders are`} cleared to go. Nice work getting them here.`,
   needsInvoice: (n) => `${n === 1 ? 'One packed order needs' : `${n} packed orders need`} an invoice before it can move.`,
-  asnStuck: (n) => `${n} ASN${n === 1 ? '' : 's'} never reached the partner — worth clearing before they chargeback.`,
-  invoiceStuck: (n) => `${n} invoice${n === 1 ? '' : 's'} never went out. That's money not yet asked for.`,
+  // Both lanes only ever fire on shipments/invoices with NO accepted copy at all
+  // — superseded re-sends are excluded upstream, so these lines are safe to say
+  // out loud. The invoice line deliberately stops at "never went out": whether it
+  // was paid by some other route is not something this app can see.
+  asnUnannounced: (n) => `${n} shipment${n === 1 ? '' : 's'} the partner was never told about — worth clearing before they chargeback.`,
+  invoiceUnannounced: (n) => `${n} invoice${n === 1 ? '' : 's'} never went out to the partner. Worth a look.`,
 }
 
 // The line the crew member says. `chips` is the strip's own filtered list, so a

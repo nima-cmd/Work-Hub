@@ -4,7 +4,7 @@ import {
   addEdiManualOrder, removeEdiManualOrder, resolveEdiPo, unresolveEdiPo,
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
-  fetchAsnCartons, refreshAsnCartons, fetchPoLedger,
+  fetchAsnCartons, refreshAsnCartons, fetchPoLedger, fetchEdiDeliveryGaps,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
@@ -175,9 +175,18 @@ function AsnCartonPanel() {
       )}
       {err && <div className="banner error">⚠ {err}</div>}
       {!!s.docsUndelivered && (
+        // ⚠️ This used to read "never reached the partner", which is a claim this
+        // number cannot support: it counts 856 DOCUMENTS that aren't DELIVERED,
+        // and most of those are superseded copies of shipments the partner did
+        // accept (62 of 62, measured 2026-08-02 — see src/model/ediDelivery.js).
+        // All this run can honestly say is that an undelivered copy declares no
+        // cartons, so it contributes nothing to the reconciliation. Whether the
+        // shipment went unannounced is tab ④'s question, not this one's.
         <p className="hint">
-          {s.docsUndelivered} of those 856s never reached the partner — those cartons can’t be reconciled here at all.
-          See the “ASNs never sent” chip.
+          {s.docsUndelivered} of those 856s aren’t marked delivered, so they declare no cartons and
+          those boxes can’t be reconciled here. That does <b>not</b> mean the shipment went
+          unannounced — most undelivered copies are re-sends of an 856 the partner already accepted.
+          The <b>④ No ASN</b> tab is what answers that.
         </p>
       )}
 
@@ -329,6 +338,46 @@ function EdiCalendar({ openPos }) {
   )
 }
 
+// Why this tab can honestly read 0 while Orderful holds dozens of undelivered
+// 856s (Nima, 2026-08-02). Every one of those is a SUPERSEDED COPY: the partner
+// re-transmitted, so a twin carrying the same shipment reference already reached
+// DELIVERED + ACCEPTED, and Orderful keeps the dead copy forever. The court strip
+// used to count those copies and call them chargeback exposure — measured 62 of
+// 62 with zero exposure behind them. This note exists so the number is still
+// visible and explained rather than silently gone. See src/model/ediDelivery.js.
+//
+// The refused pile is named here too, because it's the one thing on this screen
+// that IS still owed a human: the partner replied and the reply needs reading.
+function ResendNote({ gaps }) {
+  const c = gaps?.counts
+  if (!c) return null
+  const asn = c.asnResent ?? 0
+  const asnRefs = c.asnResentRefs ?? 0
+  const inv = c.invoiceResent ?? 0
+  const refused = c.asnRefused ?? 0
+  if (!asn && !inv && !refused) return null
+  return (
+    <p className="hint" style={{ marginTop: 8, opacity: 0.85 }}>
+      {asn > 0 && (
+        <>
+          <b>{asn} undelivered 856{asn === 1 ? '' : 's'}</b> are sitting in Orderful across all
+          partners and are deliberately <i>not</i> counted above: each is a superseded copy of one
+          of <b>{asnRefs} shipment{asnRefs === 1 ? '' : 's'}</b> whose 856 the partner already
+          accepted. Stale documents, no chargeback exposure.{' '}
+        </>
+      )}
+      {inv > 0 && <>{inv} undelivered 810{inv === 1 ? '' : 's'} are superseded the same way.{' '}</>}
+      {refused > 0 && (
+        <>
+          <b>{refused} delivered 856{refused === 1 ? '' : 's'} were rejected or never
+          acknowledged</b> — those arrived and the partner said no, so they need reading rather
+          than re-sending, and they are not a re-send count.
+        </>
+      )}
+    </p>
+  )
+}
+
 // EDI command board (rebuilt 2026-07-18 — "EDI is too basic to function as
 // is"). The questions this view answers, in order:
 //   1. Which POs are OPEN, per partner, and what does each need next?
@@ -362,9 +411,13 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
   const [supplyDrafts, setSupplyDrafts] = useState({}) // bn -> {poNumber, note}
   const [supplyBusy, setSupplyBusy] = useState(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  // The document-level delivery split, so tab ④ can answer "the court strip used
+  // to say 62 — where did it go?" without anyone having to open Orderful.
+  const [ediGaps, setEdiGaps] = useState(null)
 
   function load() {
     fetchEdiReview().then(setReview).catch((e) => setErr(e.message))
+    fetchEdiDeliveryGaps().then(setEdiGaps).catch(() => setEdiGaps(null))
     fetchSeasons().then((rows) => setSeasons(Object.fromEntries(rows.map((s) => [`${s.docType}|${s.docNumber}`, s.season])))).catch(() => {})
   }
   useEffect(load, [])
@@ -769,10 +822,16 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
           {/* ── ④ shipped, but the 856 never landed at the partner ── */}
           {ediTab === 'noAsn' && (
             flow.noAsn.length === 0
-              ? <div className="empty">Nothing shipped{selectedPartner ? ' for this partner' : ''} is unannounced — every shipment has an 856 that was delivered and accepted. 🎉</div>
+              ? (
+                <>
+                  <div className="empty">Nothing shipped{selectedPartner ? ' for this partner' : ''} is unannounced — every shipment has an 856 that was delivered and accepted. 🎉</div>
+                  <ResendNote gaps={ediGaps} />
+                </>
+              )
               : (
                 <>
                   <p className="hint">The shipment left but the partner was never told, which is the chargeback surface. <b>none</b> = no 856 exists, send one. <b>undelivered</b> = it exists in Orderful but was never pushed (auto-send is off, the final transmit is manual). <b>refused</b> = it arrived and was rejected — that one needs reading, not re-sending.</p>
+                  <ResendNote gaps={ediGaps} />
                   <table className="grid" style={{ marginTop: 8 }}>
                     <thead><tr><th>PO</th><th>Partner</th><th>856</th><th>Detail</th><th>Shipped</th><th>Last ship</th></tr></thead>
                     <tbody>
