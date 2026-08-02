@@ -6,6 +6,7 @@ import {
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
+import { CARRIERS } from '../../../src/model/bolAddresses.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
 
@@ -131,9 +132,16 @@ export default function Routing() {
   }
   // Group the checkbox-selected BOLs under one dated Master BOL: assign them the
   // auth (created if new), stamp the ship date, mint the master.
-  async function onGroup({ authNumber, shipDate }) {
+  async function onGroup({ authNumber, shipDate, carrier, scac }) {
     const ids = [...groupSel]
-    await run('group', () => saveRoutingAuth({ authNumber, partner: "Bloomingdale's", shipDate, shipmentIds: ids }))
+    // carrier/scac ride along on the same call (Nima, 2026-08-02). saveRoutingAuth
+    // upserts the auth FIRST and then stamps its carrier/SCAC onto every grouped
+    // shipment, so one click sets the master and all its children. Blank means
+    // "unchanged", not "clear" — upsertRoutingAuth COALESCEs, so grouping more
+    // BOLs into an existing auth can't wipe a carrier that's already right.
+    await run('group', () => saveRoutingAuth({
+      authNumber, partner: "Bloomingdale's", shipDate, carrier, scac, shipmentIds: ids,
+    }))
     setGroupSel(new Set())
   }
   function onHold(po, dc) {
@@ -600,13 +608,30 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 function GroupBar({ groups, groupSel, auths, busy, onGroup, onClear }) {
   const [authNumber, setAuthNumber] = useState('')
   const [shipDate, setShipDate] = useState(todayStr())
+  // Carrier/SCAC here too (Nima, 2026-08-02) — they arrive in the same routing
+  // email as the auth #, so typing them on the auth chip afterwards was a second
+  // trip for one piece of information.
+  const [carrier, setCarrier] = useState('')
+  const [scac, setScac] = useState('')
+  // SCAC is the field that gets typo'd, and a wrong one is a chargeback. Picking
+  // a known carrier fills it from the same CARRIERS table the BOL prints from,
+  // so the two can't disagree. Still free text: the map isn't every carrier, and
+  // an unknown name must not be blocked.
+  function pickCarrier(v) {
+    setCarrier(v)
+    if (CARRIERS[v]) setScac(CARRIERS[v])
+  }
   if (!groupSel.size) return null
   const selShips = groups.map((g) => g.shipment).filter((s) => s && groupSel.has(s.id))
   const dcs = selShips.map((s) => s.dc)
   const authSet = new Set(selShips.map((s) => s.authNumber || ''))
   const sharedAuth = authSet.size === 1 ? [...authSet][0] : ''
   const auth = (authNumber || sharedAuth).trim()
+  // What the selection already carries, so the placeholders show what grouping
+  // would leave untouched rather than reading as empty fields you forgot.
+  const existing = auths.find((a) => a.authNumber === auth) || {}
   const canGroup = selShips.length >= 1 && auth
+  const scacKnown = carrier && CARRIERS[carrier]
   return (
     <div className="rt-groupBar">
       <span className="rt-groupCount">{selShips.length} BOL{selShips.length === 1 ? '' : 's'} selected</span>
@@ -615,12 +640,22 @@ function GroupBar({ groups, groupSel, auths, busy, onGroup, onClear }) {
         placeholder={sharedAuth ? `auth ${sharedAuth}` : 'auth # (from routing email)'}
         value={authNumber} onChange={(e) => setAuthNumber(e.target.value)} />
       <datalist id="rt-group-auth-list">{auths.map((a) => <option key={a.authNumber} value={a.authNumber} />)}</datalist>
+      <input list="rt-group-carrier-list" className="rt-authCarrier"
+        placeholder={existing.carrier || 'Carrier'}
+        value={carrier} onChange={(e) => pickCarrier(e.target.value)} />
+      <datalist id="rt-group-carrier-list">{Object.keys(CARRIERS).map((c) => <option key={c} value={c} />)}</datalist>
+      <input className="rt-authScac" placeholder={existing.scac || 'SCAC'}
+        title={scacKnown ? `SCAC for ${carrier} — edit if this shipment differs` : 'Carrier SCAC'}
+        value={scac} onChange={(e) => setScac(e.target.value.toUpperCase())} />
       <label className="rt-groupDate" title="Master BOL ship date">📅<input type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} /></label>
-      <button className="btn" disabled={!canGroup || busy === 'group'} onClick={() => onGroup({ authNumber: auth, shipDate })}>
+      <button className="btn" disabled={!canGroup || busy === 'group'}
+        onClick={() => onGroup({ authNumber: auth, shipDate, carrier: carrier.trim(), scac: scac.trim() })}>
         {busy === 'group' ? 'Grouping…' : 'Group into Master BOL'}
       </button>
       <button className="btnGhost" onClick={onClear}>clear</button>
       {!auth && <span className="muted rt-groupHint">enter the auth # to group these under</span>}
+      {auth && !carrier && !existing.carrier &&
+        <span className="muted rt-groupHint">no carrier yet — the BOL prints a blank CARRIER NAME / SCAC</span>}
     </div>
   )
 }
