@@ -300,6 +300,87 @@ function GapRow({ i, showTracking }) {
   )
 }
 
+// The retro half of step 6: shipments already marked on a date the evidence
+// disagrees with.
+//
+// Nima's ask (2026-08-03) was for something that does NOT nag but can be chipped
+// at little by little, so this is collapsed by default, carries no chip, and its
+// count is never added to the forward columns' — those need a keystroke, these
+// need an accounting correction (see src/model/shipDateAdvice.js).
+//
+// It leads with what it CANNOT see. A clean list would otherwise read as "the
+// whole history is clean" when the custody feed only starts 2026-07-17.
+function RetroAudit({ retro }) {
+  const [open, setOpen] = useState(false)
+  if (!retro) return null
+  const { items = [], counts = {} } = retro
+  const { monthClose = 0, impossible = 0, preCustody = 0, unscanned = 0 } = counts
+  if (!items.length && !preCustody && !unscanned) return null
+
+  // Headline reads as a SCOREBOARD, because today the answer is genuinely good:
+  // zero shipments booked into the wrong month across everything checkable.
+  const headline = monthClose > 0
+    ? `${monthClose} shipment(s) were booked into the wrong month`
+    : impossible > 0
+      ? `no shipment was booked into the wrong month · ${impossible} carries an impossible date`
+      : 'no shipment was booked into the wrong month'
+
+  return (
+    <div className="retroAudit">
+      <button className="linkBtn" onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} Already shipped — {headline}
+        {items.length > 0 && <span className="muted"> · {items.length} worth a look</span>}
+      </button>
+      {open && (
+        <>
+          <div className="hint">
+            These are already on the books, so nothing here is urgent — fixing one is a
+            NetSuite re-date, not a keystroke. Kept apart from the columns above for
+            that reason, and never counted with them.
+            {(preCustody > 0 || unscanned > 0) && (
+              <> This can only check a shipment that carries a scan or a routing authorization —
+                the fulfilment date is copied straight to the ship date, so it cannot audit it.
+                Not checked here:{' '}
+                {preCustody > 0 && <><b>{preCustody}</b> shipped before scanning existed and never can be</>}
+                {preCustody > 0 && unscanned > 0 && ', '}
+                {unscanned > 0 && <><b>{unscanned}</b> shipped since and were never scanned</>}.
+              </>
+            )}
+          </div>
+          {items.length > 0 && (
+            <table className="retroTable">
+              <thead>
+                <tr><th>IF</th><th>Customer</th><th>Marked</th><th>Evidence says</th><th /></tr>
+              </thead>
+              <tbody>
+                {items.map((i) => (
+                  <tr key={i.ifNumber} className={i.advice.severity >= 3 ? 'retroBad' : ''}>
+                    <td><b>{i.ifNumber}</b></td>
+                    <td>{i.customer || <span className="muted">unknown</span>}</td>
+                    <td>{ymdLocal(i.markedDate)}</td>
+                    <td>{i.advice.suggestedDate} <span className="muted">({i.advice.basisLabel})</span></td>
+                    <td>{i.advice.impossible
+                      ? <span className="retroFlag">impossible</span>
+                      : <span className="muted">{i.advice.driftDays}d late</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// The marked date arrives as a timestamp; render the LOCAL calendar day, never
+// toISOString() — that shifts the day for anyone west of UTC.
+function ymdLocal(v) {
+  if (!v) return '—'
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
+}
+
 export function ShipDeskSector({ labelGaps, onNavigate }) {
   if (!labelGaps) return <div className="empty">Reading the ship desk…</div>
 
@@ -315,8 +396,15 @@ export function ShipDeskSector({ labelGaps, onNavigate }) {
   // date honoured. Same cost, different action, different column.
   const freightMonthClose = labelGaps.counts?.freightMonthClose ?? 0
 
+  // A clear desk still shows the retro line — it is a scoreboard, not a queue,
+  // and hiding it on a clear day is exactly when you'd want to see it read zero.
   if (!marked.length && !unlabelled.length && !freight.length) {
-    return <div className="empty">Ship desk clear — nothing packed is waiting on you 🎉</div>
+    return (
+      <>
+        <div className="empty">Ship desk clear — nothing packed is waiting on you 🎉</div>
+        <RetroAudit retro={labelGaps.retro} />
+      </>
+    )
   }
 
   return (
@@ -388,6 +476,8 @@ export function ShipDeskSector({ labelGaps, onNavigate }) {
           <div className="empty">No freight waiting on a BOL.</div>
         )}
       </div>
+
+      <RetroAudit retro={labelGaps.retro} />
     </div>
   )
 }

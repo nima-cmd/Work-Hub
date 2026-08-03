@@ -263,3 +263,101 @@ export function monthCloseCount(items = []) {
   return items.filter((i) => (i.advice?.crossesMonthClose ?? i.crossesMonthClose) ||
                              (i.advice?.impossible ?? i.impossible)).length
 }
+
+// ── The retro half of step 6: shipments ALREADY marked ───────────────────────
+//
+// Everything above answers "what date should I type". This answers the other
+// half: "were the dates I already typed right?" Nima's ask (2026-08-03) was
+// precise — something he can IGNORE so it never nags, but go back and fix little
+// by little. That is exactly filing's due/backlog split (src/model/filing.js),
+// but the axis is different and the difference is load-bearing.
+//
+// Filing splits on an EPOCH: before the app recorded it, nothing is knowable.
+// The equivalent epoch here would be the first custody scan (2026-07-17) — but
+// measured live, every auditable row falls AFTER it, so an epoch split would put
+// all of them in `due` and nag, which is the opposite of what was asked.
+//
+// The honest axis is THE ACTION, which is the never-lump rule's own criterion
+// ([[work-hub-court-strip]]):
+//   • forward — the IF is still Packed. Typing the right date is a keystroke.
+//   • retro   — the IF is on the books. Changing it is an accounting correction.
+// Same evidence, same arithmetic, different court and different cost. So these
+// are returned as their OWN list and their count never joins `monthClose` nor
+// reaches a court-strip chip.
+//
+// ── What can honestly be audited, and what only looks auditable ──────────────
+//
+// Measured live 2026-08-03 over all 91 shipped fulfilments:
+//   • 36 hold nothing but the IF date. IF_DATE is not a custody fact — it is the
+//     weakest last resort — and NetSuite's ship date is routinely copied FROM the
+//     IF date, so auditing one against the other is close to auditing a value
+//     against itself. Excluded, and split by the custody epoch (2026-07-17): 26
+//     shipped before scanning existed and can never be checked by anyone, the
+//     other 10 shipped after and were simply never scanned.
+//   • 55 carry real evidence (49 ROUTING_AUTH, 6 CUSTODY_IN). Of those: ZERO
+//     crossed a month close, 1 is impossible (IF7190, marked 2 days before the
+//     goods came back), 4 drifted ≥2 days inside one month.
+//
+// That 0 is the point of the surface. It is a SCOREBOARD for step 6 before it is
+// a to-do list — the good news made visible — and it gets more informative every
+// day the custody feed runs, since today it can only see back to 07-17.
+export const AUDITABLE_BASES = ['CUSTODY_IN', 'CUSTODY_OUT', 'DC_CUSTODY_IN', 'DC_CUSTODY_OUT', 'ROUTING_AUTH']
+
+// Rows are the shape shipDateAdvice takes, plus `markedDate` (required — an
+// unmarked shipment belongs to the forward list, not here).
+//
+// `custodyEpoch` is the date of the earliest custody scan on record. It splits
+// the UNCHECKABLE rows into two very different things, which is worth the extra
+// argument: a shipment that left before scanning existed can never be checked by
+// anyone, while one that left after and still has no scan is a gap in scanning
+// today. Collapsing them into a single "no evidence" number would let the second
+// hide inside the first. Omit it and everything uncheckable is reported as
+// `unscanned`, which overstates the live gap rather than understating it.
+//
+// Returns the rows worth a second look, the reasons rows were excluded, and
+// nothing that resembles an obligation. `minSeverity` defaults to DRIFT: a mark
+// a day off its scan is normal handling, not an error to chase.
+export function auditMarkedShipments(
+  rows = [],
+  { today = new Date(), minSeverity = SEVERITY.DRIFT, custodyEpoch = null } = {},
+) {
+  const epoch = asDate(custodyEpoch)
+  let preCustody = 0
+  let unscanned = 0
+  const items = []
+
+  for (const row of rows) {
+    const marked = asDate(row.markedDate)
+    if (!marked) continue
+    const advice = shipDateAdvice(row, { today })
+    // No basis at all, or nothing better than the fulfilment date — either way
+    // there is no independent evidence to audit the mark against.
+    if (!advice.basis || !AUDITABLE_BASES.includes(advice.basis)) {
+      if (epoch && marked.getTime() < epoch.getTime()) preCustody += 1
+      else unscanned += 1
+      continue
+    }
+    if (advice.severity < minSeverity) continue
+    items.push({ ...row, advice })
+  }
+
+  const ranked = rankShipDateAdvice(items)
+  return {
+    items: ranked,
+    counts: {
+      // The expensive kind: booked into the wrong accounting period.
+      monthClose: ranked.filter((i) => i.advice.crossesMonthClose).length,
+      // Marked before the goods physically existed to ship. Not "negative
+      // drift" — a date that cannot be true (see IF7190).
+      impossible: ranked.filter((i) => i.advice.impossible).length,
+      // Wrong day, right month. Cheap, and the whole reason this list is
+      // collapsed rather than loud.
+      drift: ranked.filter((i) => !i.advice.crossesMonthClose && !i.advice.impossible).length,
+      total: ranked.length,
+      // The surface's OWN blind spots, stated rather than implied — a clean list
+      // must not be allowed to read as "the whole history is clean".
+      preCustody, // shipped before scanning existed: uncheckable by anyone, ever
+      unscanned,  // shipped since, and still never scanned: a gap in scanning now
+    },
+  }
+}

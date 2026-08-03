@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   honestFloor, shipDateAdvice, rankShipDateAdvice, monthCloseCount,
-  calendarDays, ymd, SEVERITY,
+  calendarDays, ymd, SEVERITY, auditMarkedShipments,
 } from '../src/model/shipDateAdvice.js'
 
 // Local midnight, the way node-postgres hands back a `date` column.
@@ -232,4 +232,109 @@ test('an EDI fulfilment with no scan and no auth still admits it knows nothing',
   assert.equal(a.suggestedDate, null)
   assert.equal(a.severity, SEVERITY.NONE)
   assert.match(a.basisLabel, /no custody scan/)
+})
+
+// ── The retro half: shipments already marked ─────────────────────────────────
+//
+// Every fixture below is a real measured row from 2026-08-03's live audit of all
+// 91 shipped fulfilments.
+
+test('auditMarkedShipments only judges marks that have real evidence', () => {
+  const rows = [
+    // Real evidence: a custody scan. 10 days late, same month — worth a look.
+    { ifNumber: 'IF7287', custodyIn: d('2026-07-17'), markedDate: d('2026-07-27') },
+    // Only the fulfilment date, which NetSuite routinely copies to the ship
+    // date. Auditing one against the other is near-circular, so it is excluded
+    // and counted as `weak` rather than silently dropped.
+    { ifNumber: 'IF7100', ifDate: d('2026-06-05'), markedDate: d('2026-06-20') },
+    // Nothing at all — shipped before any custody scan existed. `blind`.
+    { ifNumber: 'IF6800', markedDate: d('2026-06-05') },
+    // Not marked yet: belongs to the FORWARD list, never to this one.
+    { ifNumber: 'IF7440', custodyIn: d('2026-07-31') },
+  ]
+  const { items, counts } = auditMarkedShipments(rows, {
+    today: d('2026-08-03'), custodyEpoch: d('2026-07-17'),
+  })
+
+  assert.deepEqual(items.map((i) => i.ifNumber), ['IF7287'])
+  assert.equal(counts.total, 1)
+  // Both excluded rows shipped in June, before any scan existed.
+  assert.equal(counts.preCustody, 2)
+  assert.equal(counts.unscanned, 0)
+})
+
+test('the audit distinguishes "never checkable" from "nobody scanned it"', () => {
+  const rows = [
+    // Before the feed existed — nothing anyone can do about this one.
+    { ifNumber: 'IF6800', ifDate: d('2026-06-01'), markedDate: d('2026-06-05') },
+    // After it existed, and still no scan. A live gap, not a historical one, so
+    // it must not hide inside the number above.
+    { ifNumber: 'IF7395', ifDate: d('2026-07-24'), markedDate: d('2026-07-25') },
+  ]
+  const { counts } = auditMarkedShipments(rows, {
+    today: d('2026-08-03'), custodyEpoch: d('2026-07-17'),
+  })
+  assert.equal(counts.preCustody, 1)
+  assert.equal(counts.unscanned, 1)
+})
+
+test('with no custody epoch the audit overstates the live gap, never understates it', () => {
+  // Erring the other way would let a historical blind spot pass as clean.
+  const { counts } = auditMarkedShipments(
+    [{ ifNumber: 'IF6800', ifDate: d('2026-06-01'), markedDate: d('2026-06-05') }],
+    { today: d('2026-08-03') },
+  )
+  assert.equal(counts.preCustody, 0)
+  assert.equal(counts.unscanned, 1)
+})
+
+test('a mark a day off its scan is normal handling, not an error to chase', () => {
+  const { items } = auditMarkedShipments(
+    [{ ifNumber: 'IF7407', custodyIn: d('2026-07-26'), markedDate: d('2026-07-27') }],
+    { today: d('2026-08-03') },
+  )
+  assert.equal(items.length, 0)
+})
+
+test('the audit separates a wrong month from a wrong day and an impossible date', () => {
+  const rows = [
+    // The expensive kind: booked into August, evidence says July.
+    { ifNumber: 'IF7500', custodyIn: d('2026-07-30'), markedDate: d('2026-08-02') },
+    // IF7190, real: marked two days BEFORE the goods came back. Not "negative
+    // drift" — a date that cannot be true.
+    { ifNumber: 'IF7190', custodyIn: d('2026-07-17'), markedDate: d('2026-07-15') },
+    // Wrong day, right month.
+    { ifNumber: 'IF7354', custodyIn: d('2026-07-22'), markedDate: d('2026-07-27') },
+  ]
+  const { items, counts } = auditMarkedShipments(rows, { today: d('2026-08-03') })
+
+  assert.equal(counts.monthClose, 1)
+  assert.equal(counts.impossible, 1)
+  assert.equal(counts.drift, 1)
+  // Ranked so the expensive ones cannot be missed, same rule as the forward list.
+  assert.equal(items[0].advice.severity, SEVERITY.MONTH)
+})
+
+test('an EDI mark is audited against the routing authorization, not the packing scan', () => {
+  // The live shape: cartons scanned in 07-22, truck authorized 07-29, marked
+  // 07-30. Against the scan that reads 8 days adrift — which is DWELL. Against
+  // the authorization it is one day, and stays out of the list entirely.
+  const { items, counts } = auditMarkedShipments([{
+    ifNumber: 'IF7420', edi: true,
+    dcCustodyIn: d('2026-07-22'), routingShipDate: d('2026-07-29'), markedDate: d('2026-07-30'),
+  }], { today: d('2026-08-03') })
+
+  assert.equal(items.length, 0)
+  assert.equal(counts.preCustody, 0)
+  assert.equal(counts.unscanned, 0)
+})
+
+test('an EDI mark that crosses the close still speaks, dwell or not', () => {
+  const { items, counts } = auditMarkedShipments([{
+    ifNumber: 'IF7421', edi: true,
+    dcCustodyIn: d('2026-07-22'), routingShipDate: d('2026-07-29'), markedDate: d('2026-08-01'),
+  }], { today: d('2026-08-03') })
+
+  assert.equal(counts.monthClose, 1)
+  assert.equal(items[0].advice.basis, 'ROUTING_AUTH')
 })
