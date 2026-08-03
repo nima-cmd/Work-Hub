@@ -15,6 +15,7 @@
 // docs/netsuite-api-integration.md); NetSuite exposes them as single letters.
 
 import { runSuiteQL, netsuiteConfigured } from './netsuiteApi.js'
+import { pushWarehousePoLines } from './warehouseFeed.js'
 import { STAGE } from '../model/stages.js'
 import { cleanName } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
@@ -876,5 +877,21 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
     return { ok: false, error: e?.message || String(e) }
   }
 
-  return { ok: true, ...result, counts: pulled.counts, since: pulled.since, warnings }
+  // External mirror: open PO lines → the Naghedi-Warehouse app's Supabase
+  // (see warehouseFeed.js). AFTER the transaction on purpose — a Supabase
+  // hiccup must never roll back our own sync — and only on real runs: the
+  // dry-run path has already returned above, and an external write can't be
+  // rolled back anyway. Soft-fails into a warning like the PO/OC pulls; its
+  // own snapshot row makes "when did the feed last land" queryable.
+  const wh = await pushWarehousePoLines()
+  let warehousePush = 0
+  if (wh.ok) {
+    warehousePush = wh.pushed
+    const { recordSnapshot } = await import('./loadToDb.js')
+    await recordSnapshot('warehousePoFeed', wh.pushed, new Date())
+  } else if (wh.configured !== false) {
+    warnings.push(`warehouse PO feed: ${wh.error}`)
+  }
+
+  return { ok: true, ...result, warehousePush, counts: pulled.counts, since: pulled.since, warnings }
 }

@@ -78,6 +78,14 @@ services:
         sync: false
       - key: ORDERFUL_API_KEY
         sync: false
+      # Naghedi-Warehouse Supabase — the open-PO-lines mirror push
+      # (src/ingest/warehouseFeed.js). Unset = the push silently skips, like
+      # every other integration. Values = that project's URL + anon key (the
+      # same pair the warehouse app's own .env.local carries as VITE_*).
+      - key: WAREHOUSE_SUPABASE_URL
+        sync: false
+      - key: WAREHOUSE_SUPABASE_KEY
+        sync: false
       - key: SLACK_BOT_TOKEN
         sync: false
       - key: CRON_SECRET
