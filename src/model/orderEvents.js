@@ -410,6 +410,75 @@ export function docCountLabel(step = {}) {
   return { text: ours ? `${ours} INVs + ${refs}` : refs, foreign: foreign.length }
 }
 
+// What a partner's own 810 reference honestly IS, given what we hold.
+//
+// Measured live 2026-08-03 over all 116 non-ours-shaped refs: 71 resolve through
+// invoices.nordstrom_ref ('covers'), 42 sit on 810s older than any invoice
+// document we hold — NMG's Feb-2025 refs, the Sep–Oct-2025 cutover shapes, and
+// the C-refs whose invoices NetSuite confirms are real but predate our window
+// ('preRecords') — and 3 (C12017200/205/210, PO 40763935) were transmitted
+// within the span we cover yet sit on NO invoice, ours or NetSuite's
+// ('unmatched'). Three different answers, and the old single tooltip ("not
+// recorded anywhere we can read") had become wrong for 71 of them the moment
+// #40 landed.
+//
+// `recordsFrom` is the coverage floor the sync itself recorded
+// (sync_meta 'invoice_documents_from'), NOT min(invoices.trandate): the invoices
+// table is a union of the document window and old strays riding in on still-open
+// sales orders, so its min() reaches back to spans we hold only strays from.
+export function classifyPartnerRef({ covers = [], sentAt = null, recordsFrom = null } = {}) {
+  if (covers.length) return 'covers'
+  if (recordsFrom && sentAt && new Date(sentAt) < new Date(recordsFrom)) return 'preRecords'
+  return 'unmatched'
+}
+
+// Render-ready lines for a trail's partner refs — resolved refs collapse to one
+// summary line (their invoices already appear as INVOICED/PAID events), while
+// each ref we can NOT account for gets its own line: those are the exceptions,
+// and hiding them inside a count is how this stayed latent twice.
+export function partnerRefNotes(refs = [], recordsFrom = null) {
+  // Tolerant of both a pg Date (server-side callers) and the ISO string JSON
+  // hands the client — String(Date).slice(10) renders 'Wed Mar 04' otherwise.
+  const dOnly = (x) => {
+    if (!x) return '—'
+    const d = x instanceof Date ? x : new Date(x)
+    return Number.isNaN(d.getTime()) ? String(x).slice(0, 10) : d.toISOString().slice(0, 10)
+  }
+  const by = { covers: [], preRecords: [], unmatched: [] }
+  for (const r of refs) by[classifyPartnerRef({ ...r, recordsFrom })].push(r)
+
+  const notes = []
+  if (by.covers.length) {
+    const invCount = new Set(by.covers.flatMap((r) => r.covers)).size
+    notes.push({
+      key: 'covers',
+      verdict: 'covers',
+      text: `${by.covers.length} partner ref${by.covers.length === 1 ? '' : 's'} → ${invCount} INV${invCount === 1 ? '' : 's'} of ours`,
+      title: 'The partner bills one consolidated document per DC per PO; its number is recorded on our own invoices, so these refs resolve — the invoices they cover are counted in the events above.',
+    })
+  }
+  for (const r of by.preRecords) {
+    notes.push({
+      key: r.ref,
+      verdict: 'preRecords',
+      text: `${r.ref} — predates our invoice records`,
+      title: `Transmitted ${dOnly(r.sentAt)}, before the earliest invoice document the app holds (${dOnly(recordsFrom)}). Which invoices it bills is not checkable here.`,
+    })
+  }
+  for (const r of by.unmatched) {
+    notes.push({
+      key: r.ref,
+      verdict: 'unmatched',
+      // Only claim "within the span we cover" when a floor exists to back it.
+      text: `${r.ref} — on no invoice we hold`,
+      title: recordsFrom && r.sentAt
+        ? `Transmitted ${dOnly(r.sentAt)}, within the span our records cover (from ${dOnly(recordsFrom)}), yet no invoice carries this reference — the partner was billed under a number our records never adopted.`
+        : 'No invoice we hold carries this reference.',
+    })
+  }
+  return notes
+}
+
 // One document's history, oldest first — the shape the Ledger view wants.
 // Ties break on spine position so IF_CREATED never renders below the PACKED that
 // shares its date, which is what happens when the source only stores a DATE.

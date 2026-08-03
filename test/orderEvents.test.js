@@ -12,6 +12,7 @@ import {
   eventsFromOrders, eventsFromFulfillments, eventsFromInvoices,
   eventsFromRouting, eventsFromEdi, invNumberFrom810, isOurInvoiceNumber,
   deriveEvents, pendingEvents, summarize, timeline, poTimelineSteps, docCountLabel,
+  classifyPartnerRef, partnerRefNotes,
 } from '../src/model/orderEvents.js'
 
 const find = (events, type) => events.filter((e) => e.eventType === type)
@@ -336,6 +337,51 @@ test("a document count says whose numbers it is counting", () => {
     docCountLabel({ eventType: 'ASN_SENT', docType: 'ASN', docs: ['NB1731231', 'NB1731232'] }),
     { text: '2 ASNs', foreign: 0 },
   )
+})
+
+test('a partner ref is classified by what the records can actually say about it', () => {
+  // Measured live 2026-08-03 across all 116 non-ours-shaped refs: 71 resolve
+  // through invoices.nordstrom_ref, 42 predate the earliest invoice document we
+  // hold, and 3 (C12017200/205/210) were transmitted inside the span we cover
+  // yet sit on no invoice anywhere. Three different answers; the UI used to
+  // render all three identically.
+  const floor = '2026-02-04'
+  assert.equal(classifyPartnerRef({ covers: ['INV11246'], sentAt: '2025-12-16', recordsFrom: floor }), 'covers')
+  assert.equal(classifyPartnerRef({ covers: [], sentAt: '2025-10-29', recordsFrom: floor }), 'preRecords')
+  assert.equal(classifyPartnerRef({ covers: [], sentAt: '2026-03-04', recordsFrom: floor }), 'unmatched')
+  // No floor yet (trandate unpopulated until a sync runs): "predates our
+  // records" is a claim that needs the floor to back it, so it must not fire.
+  assert.equal(classifyPartnerRef({ covers: [], sentAt: '2025-10-29', recordsFrom: null }), 'unmatched')
+  // No transmission date: same rule — never place a document we cannot date.
+  assert.equal(classifyPartnerRef({ covers: [], sentAt: null, recordsFrom: floor }), 'unmatched')
+})
+
+test('partner-ref notes collapse the resolved and name each unaccounted-for ref', () => {
+  // Resolved refs summarise — their invoices already appear as INVOICED/PAID
+  // events above. The unaccounted-for ones are the exceptions, and burying them
+  // in a count is exactly how this stayed latent through #39 and #40.
+  const floor = '2026-02-04'
+  const notes = partnerRefNotes([
+    { ref: 'C12017090', covers: ['INV10715', 'INV10718'], sentAt: '2026-03-04' },
+    { ref: 'C12017095', covers: ['INV10716', 'INV10718'], sentAt: '2026-03-04' },
+    { ref: 'C10274590', covers: [], sentAt: '2025-10-29' },
+    { ref: 'C12017200', covers: [], sentAt: '2026-03-04' },
+  ], floor)
+
+  assert.deepEqual(notes.map((n) => n.verdict), ['covers', 'preRecords', 'unmatched'])
+  // The shared INV10718 counts once — the summary counts invoices, not pairs.
+  assert.equal(notes[0].text, '2 partner refs → 3 INVs of ours')
+  assert.equal(notes[1].text, 'C10274590 — predates our invoice records')
+  assert.match(notes[1].title, /2026-02-04/, 'the claim names the floor that backs it')
+  assert.equal(notes[2].text, 'C12017200 — on no invoice we hold')
+  assert.match(notes[2].title, /never adopted/)
+
+  // Without a floor the unmatched wording must not claim span coverage.
+  const bare = partnerRefNotes([{ ref: 'C10274590', covers: [], sentAt: '2025-10-29' }], null)
+  assert.equal(bare[0].verdict, 'unmatched')
+  assert.ok(!/span our records cover/.test(bare[0].title), 'no floor, no coverage claim')
+
+  assert.deepEqual(partnerRefNotes([], floor), [], 'a PO with no partner refs renders nothing extra')
 })
 
 test('the pre-spine event types still get a label rather than rendering raw', () => {

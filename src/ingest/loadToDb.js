@@ -6,7 +6,7 @@
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
 import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
-import { foldInvoiceRows, invoiceUpsertSql } from './invoiceUpsert.js'
+import { foldInvoiceRows, invoiceUpsertSql, invoiceWindowUpsertSql } from './invoiceUpsert.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
 // so we can later flag "stuck N days in the same stage".
@@ -200,6 +200,13 @@ export async function loadInvoices(records, db = pool, { batchSize = 500 } = {})
     n += chunk.length
   }
   return n
+}
+
+// The invoice-coverage floor — see invoiceWindowUpsertSql for why it only ever
+// moves backwards. No-op when the sync didn't report its window.
+export async function recordInvoiceWindow(invoiceSince, db = pool) {
+  if (!invoiceSince) return
+  await db.query(invoiceWindowUpsertSql(), [invoiceSince])
 }
 
 // Purchase orders — inbound supply, one row per (PO#, item) line.

@@ -8,7 +8,7 @@ import {
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
-import { poTimelineSteps, docCountLabel } from '../../../src/model/orderEvents.js'
+import { poTimelineSteps, docCountLabel, partnerRefNotes } from '../../../src/model/orderEvents.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
 
@@ -28,8 +28,11 @@ const fmtD = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 // Loaded on expand rather than with the page: a PO's trail is ~100 events and
 // there are hundreds of POs.
 // Why a document count can read 'partner refs' rather than 'INVs' — the wording
-// itself is docCountLabel's, in the model.
-const FOREIGN_TITLE = 'The partner’s own reference on the 810, not one of our invoice numbers — which of our invoices it bills is not recorded anywhere we can read'
+// itself is docCountLabel's, in the model. Each partner ref then gets its own
+// verdict line below the steps (partnerRefNotes): resolved refs collapse to one
+// summary, while a ref the records can't account for is named individually —
+// the single this-is-unknowable tooltip that used to hang here became wrong for
+// 71 of the 116 refs the day #40 taught invoices to carry the partner's number.
 
 function PoTimeline({ poNumber }) {
   const [state, setState] = useState({ loading: true })
@@ -47,6 +50,7 @@ function PoTimeline({ poNumber }) {
   if (state.error) return <div className="allocPos sev-hi">Trail unavailable: {state.error}</div>
 
   const steps = poTimelineSteps(state.events || [])
+  const refNotes = partnerRefNotes(state.partnerRefs || [], state.invoiceRecordsFrom)
   if (!steps.length) {
     return (
       <div className="allocPos cust">
@@ -70,7 +74,7 @@ function PoTimeline({ poNumber }) {
           <div key={s.eventType}>
             <b>{s.label}</b>
             {' · '}
-            {count.foreign ? <span title={FOREIGN_TITLE}>{count.text}</span> : count.text}
+            {count.foreign ? <span title="The partner’s own references on the 810, not our invoice numbers — accounted for ref by ref below">{count.text}</span> : count.text}
             {' · '}
             {spans ? `${fmtD(s.first)} → ${fmtD(s.last)}` : fmtD(s.first)}
             {/* An observed date is when the sync first SAW the state, not when it
@@ -79,6 +83,13 @@ function PoTimeline({ poNumber }) {
           </div>
         )
       })}
+      {/* One line per verdict: a resolved summary reassures; an unaccounted-for
+          ref is named, because "3 partner refs" hid a real gap twice running. */}
+      {refNotes.map((n) => (
+        <div key={n.key} className="cust" title={n.title}>
+          {n.verdict === 'unmatched' ? '⚠ ' : ''}{n.text}
+        </div>
+      ))}
     </div>
   )
 }

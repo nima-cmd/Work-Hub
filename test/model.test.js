@@ -106,13 +106,17 @@ test('the invoice upsert resolves the SO through orders — an out-of-window one
   // recreate the #32 bug: a key that resolves to nothing, and indistinguishable
   // from a real link once written.
   assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$2::text/)
-  assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$10::text/)
+  assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$11::text/)
   assert.ok(!/VALUES \(\$1::text, \$2/.test(sql), 'the raw SO must never be inserted directly')
   // amount_remaining must stay un-COALESCEd — it legitimately goes to 0 on payment.
   assert.match(sql, /CASE WHEN EXCLUDED\.amount_remaining IS NULL/)
   // Without the casts, a chunk whose column is entirely NULL has no inferable type.
   assert.match(sql, /\$5::numeric/)
   assert.match(sql, /\$7::date/)
+  // The document date — what min() turns into the trail's records floor. Only
+  // ever fills forward: a pull that omits it must not blank a known date.
+  assert.match(sql, /\$9::date/)
+  assert.match(sql, /trandate\s*=\s*COALESCE\(EXCLUDED\.trandate, invoices\.trandate\)/)
 })
 
 test('the invoice fold collapses a repeated invoice, last one winning', async () => {
@@ -150,6 +154,29 @@ test("the invoice fold carries Nordstrom's consolidated ref, normalised", async 
   assert.equal(rows[1][7], 'C13369515')
   assert.equal(rows[2][7], 'C13369515', 'two of our invoices under ONE consolidated document is normal')
   assert.equal(rows[3][7], null, 'no ref must be NULL, not an empty string')
+})
+
+test('the invoice-coverage floor only ever moves BACKWARDS', async () => {
+  // The window start rolls forward daily, but documents pulled under an earlier
+  // window stay in the table — so overwriting with the latest run's value would
+  // deny coverage of documents we demonstrably hold. LEAST is the whole rule.
+  const { invoiceWindowUpsertSql, INVOICE_WINDOW_KEY } = await import('../src/ingest/invoiceUpsert.js')
+  const sql = invoiceWindowUpsertSql()
+  assert.match(sql, /LEAST\(sync_meta\.value, EXCLUDED\.value\)/)
+  assert.ok(sql.includes(INVOICE_WINDOW_KEY))
+})
+
+test('the invoice fold carries the document date, null when the pull omits it', async () => {
+  // min(trandate) is the floor of the invoice documents we hold — the fact that
+  // lets the trail say a partner's 810 reference "predates our invoice records"
+  // instead of rendering a 2025 document exactly like a live gap.
+  const { foldInvoiceRows } = await import('../src/ingest/invoiceUpsert.js')
+  const rows = foldInvoiceRows([
+    { invoice: 'INV11246', soNumber: 'SO1', tranDate: '2026-06-19' },
+    { invoice: 'INV11300', soNumber: 'SO2' },
+  ])
+  assert.equal(rows[0][8], '2026-06-19')
+  assert.equal(rows[1][8], null)
 })
 
 test('loadInvoices batches rather than one round-trip per row', async () => {
