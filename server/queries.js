@@ -589,10 +589,16 @@ export async function getPoLedger(poNumber) {
     // rebuild it here the same way invNumberFrom810 does — including the
     // already-prefixed case, which is real (invoice 9114 was transmitted once as
     // '9114' and once as 'INV9114') and produced 'INVINV9114' before this guard.
+    // ⚠️ MIRROR, not approximate: the `~* '^(INV)?[0-9]{1,6}$'` shape test is
+    // isOurInvoiceNumber, and a reference that fails it is stored verbatim
+    // because prefixing it would name an invoice that doesn't exist (Nordstrom's
+    // 'C13369495' → 'INVC13369495'). Diverge from the model here and the trail
+    // silently loses its 810s.
     pool.query(
       `SELECT DISTINCT
               CASE WHEN t.type LIKE '856%' THEN 'ASN' ELSE 'INV' END AS doc_type,
               CASE WHEN t.type LIKE '856%'            THEN t.business_number
+                   WHEN t.business_number !~* '^(INV)?[0-9]{1,6}$' THEN t.business_number
                    WHEN t.business_number ILIKE 'INV%' THEN upper(t.business_number)
                    ELSE 'INV' || t.business_number END               AS doc_number
          FROM edi_document_po_refs r
@@ -611,6 +617,11 @@ export async function getPoLedger(poNumber) {
   // An invoice can arrive from either side — NetSuite's SO join or the 810's own
   // number — and the two overlap by design. Merge before querying so a shared
   // invoice doesn't widen the IN list twice.
+  //
+  // ⚠️ This is a list of INVOICE DOCUMENTS, not of our invoices: where a partner
+  // bills under its own reference (Nordstrom's 'C13369495') the 810 contributes
+  // that reference, so a count of this array is NOT a count of invoices raised.
+  // isOurInvoiceNumber is the test if you need to separate them.
   const invs = [...new Set([...pick(nsDocs, 'INV'), ...pick(ediDocs, 'INV')])]
 
   const { rows } = await pool.query(

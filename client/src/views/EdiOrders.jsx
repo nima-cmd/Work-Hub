@@ -8,7 +8,7 @@ import {
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
-import { poTimelineSteps } from '../../../src/model/orderEvents.js'
+import { poTimelineSteps, docCountLabel } from '../../../src/model/orderEvents.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
 import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
 
@@ -27,6 +27,10 @@ const fmtD = (d) => (d ? new Date(d).toLocaleDateString() : '—')
 //
 // Loaded on expand rather than with the page: a PO's trail is ~100 events and
 // there are hundreds of POs.
+// Why a document count can read 'partner refs' rather than 'INVs' — the wording
+// itself is docCountLabel's, in the model.
+const FOREIGN_TITLE = 'The partner’s own reference on the 810, not one of our invoice numbers — which of our invoices it bills is not recorded anywhere we can read'
+
 function PoTimeline({ poNumber }) {
   const [state, setState] = useState({ loading: true })
 
@@ -61,11 +65,12 @@ function PoTimeline({ poNumber }) {
         // timestamps: 15 invoices transmitted minutes apart are one day's work,
         // and rendering them as '12/5/2024 → 12/5/2024' is just noise.
         const spans = fmtD(s.first) !== fmtD(s.last)
+        const count = docCountLabel(s)
         return (
           <div key={s.eventType}>
             <b>{s.label}</b>
             {' · '}
-            {s.docs.length === 1 ? s.docs[0] : `${s.docs.length} ${s.docType || 'doc'}s`}
+            {count.foreign ? <span title={FOREIGN_TITLE}>{count.text}</span> : count.text}
             {' · '}
             {spans ? `${fmtD(s.first)} → ${fmtD(s.last)}` : fmtD(s.first)}
             {/* An observed date is when the sync first SAW the state, not when it
