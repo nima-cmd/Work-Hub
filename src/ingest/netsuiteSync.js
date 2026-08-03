@@ -196,6 +196,10 @@ export function mapInvoiceRow(row) {
     // here (unlike custbody_approval_status on the SO, which arrives as a
     // string), so normalise before the lookup rather than trusting either.
     shippingStatus: INV_SHIPPING_STATUS[Number(row.invoice_status)] || '',
+    // Nordstrom's consolidated invoice reference — many of OUR invoices share one
+    // (per DC, per PO). Uppercased and trimmed here so the 810's businessNumber,
+    // which arrives in whatever case Orderful passes through, can match it.
+    nordstromRef: String(row.nordstrom_ref || '').trim().toUpperCase() || null,
     amountRemaining: nOrNull(row.foreignamountunpaid),
     amountTotal: nOrNull(row.foreigntotal),
     shipDate: row.shipdate || null,
@@ -368,15 +372,40 @@ export function invoiceBySo(invRows = []) {
   return { bySo, ambiguous: [...ambiguous] }
 }
 
-export function invoiceSql(since) {
+// ⚠️ AN INVOICE IS ITS OWN DOCUMENT, so it gets its OWN window (2026-08-03).
+// This query used to be scoped ONLY by the sales order — `openOrRecent(since)` —
+// which made `invoices` a 30-day working window rather than a document record:
+// 104 rows against NetSuite's 418 in the very same INV10996–INV11416 span (25%).
+// The visible cost was on the EDI trail: of Bloomingdale's 166 outbound 810s
+// since 2026-05, only 49 could reach an invoice row, so 117 POs showed "we
+// transmitted an 810" with no INVOICED event, no amount and no paid status. The
+// keying was right all along (see the 810 note in orderEvents) — the coverage
+// wasn't.
+//
+// The `invoiceSince` branch is ADDITIVE, never a replacement. An invoice raised
+// long ago against a still-open sales order has to keep arriving or step 5's
+// gate (`shipping_status`) would freeze at whatever we last saw; the SO branch is
+// what guarantees that, so widening must not trade one blind spot for another.
+//
+// ⚠️ Widening this query ALONE breaks the sync — it does not merely under-fill.
+// `invoices.so_number` has an enforced FK to `orders(so_number)` (proven live:
+// 23503), and today it is this shared `openOrRecent` predicate that guarantees
+// every invoice's SO is in the same pull. All 309 invoices missing from the span
+// belong to orders outside the window too, so the FK would reject every one.
+// `loadInvoices` resolves the SO through `orders` for exactly this reason.
+export function invoiceSql(since, invoiceSince = since) {
   return `SELECT DISTINCT c.tranid AS inv_number, t.tranid AS so_number, c.status,
                  c.custbody_invoice_status AS invoice_status,
+                 c.custbody_hb_edi_nordstrom_inv AS nordstrom_ref,
                  c.foreigntotal, c.foreignamountunpaid,
                  TO_CHAR(c.shipdate,'YYYY-MM-DD') AS shipdate
           FROM transaction t
           JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
           JOIN transaction c ON c.id = l.nextdoc AND c.type='CustInvc'
-          WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
+          WHERE t.type='SalesOrd'
+            AND (${openOrRecent(since)}
+                 OR c.trandate >= TO_DATE('${invoiceSince}','YYYY-MM-DD')
+                 OR c.lastmodifieddate >= TO_DATE('${invoiceSince}','YYYY-MM-DD'))`
 }
 
 // ── inbound supply: purchase orders ──────────────────────────────────────────
@@ -564,9 +593,17 @@ export function foldOrderConfirmationLines(rows = []) {
 // Returns { ok, records, soNumbers, ifNumbers, counts, truncated, warnings }.
 // `records` is the flat partial-record list to hand to buildPipeline.
 // Soft-fails (never throws) so a scheduled run can log and leave data intact.
-export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
+// `invoiceWithinDays` is deliberately MUCH wider than `closedWithinDays`: the
+// working window governs what needs attention, the document window governs what
+// the trail can account for, and those are different questions. 180 days covers
+// the 810 history that surfaced this (2026-05 onward) with headroom — measured
+// live at 1,113 invoices vs 104 today; 365 days would be 3,553 if a trail ever
+// needs to reach further. It does NOT widen `orders`, so no working queue,
+// Kanban lane or court-strip count changes.
+export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithinDays = 180, now } = {}) {
   if (!netsuiteConfigured()) return { ok: false, configured: false, records: [] }
   const since = windowStart(closedWithinDays, now)
+  const invoiceSince = windowStart(Math.max(invoiceWithinDays, closedWithinDays), now)
   const warnings = []
 
   const run = async (label, sql) => {
@@ -584,7 +621,7 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
   if (lines.fail) return { ok: false, error: lines.fail, records: [] }
   const ifs = await run('fulfillments', fulfillmentSql(since))
   if (ifs.fail) return { ok: false, error: ifs.fail, records: [] }
-  const invs = await run('invoices', invoiceSql(since))
+  const invs = await run('invoices', invoiceSql(since, invoiceSince))
   if (invs.fail) return { ok: false, error: invs.fail, records: [] }
   const track = await run('tracking', trackingSql(since))
   if (track.fail) return { ok: false, error: track.fail, records: [] }
@@ -624,7 +661,17 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, now } = {}) {
   // payment gate on the wrong shipment — so it stays null and reads as unknown,
   // which is the multi-document decision applied one field down. Rare in
   // practice: 93 of 94 invoiced SOs carry exactly one invoice.
-  const { bySo: invBySo, ambiguous: ambiguousSos } = invoiceBySo(invs.rows)
+  //
+  // ⚠️ Only count an SO WE ACTUALLY PULLED. The wider invoice window (see
+  // invoiceSql) surfaces historical invoices whose sales order is long gone from
+  // the working set, and those raised the raw count from 1 to 33 — but 32 of the
+  // 33 have no order row and no fulfilment here, so "their IFs are left unlinked"
+  // described IFs that do not exist. Measured before widening: zero SOs lose a
+  // link they hold today. A warning that inflates 1 into 33 trains you to ignore
+  // it, so it now reports only ambiguity that can actually cost a gate.
+  const { bySo: invBySo, ambiguous: allAmbiguous } = invoiceBySo(invs.rows)
+  const pulledSos = new Set(orders.rows.map((r) => String(r.tranid || '').toUpperCase()))
+  const ambiguousSos = allAmbiguous.filter((so) => pulledSos.has(so))
   if (ambiguousSos.length) {
     warnings.push(`${ambiguousSos.length} SO(s) have several invoices — their IFs are left unlinked rather than guessed`)
   }
@@ -719,11 +766,26 @@ export async function fetchOrderConfirmationLines() {
   }
 }
 
-export async function syncFromNetsuite({ closedWithinDays = 30, dryRun = false } = {}) {
-  const pulled = await fetchOrderLifecycle({ closedWithinDays })
+export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDays = 180, dryRun = false } = {}) {
+  const pulled = await fetchOrderLifecycle({ closedWithinDays, invoiceWithinDays })
   if (!pulled.ok) return { ok: false, configured: pulled.configured, error: pulled.error }
 
+  // ⚠️ AN INVOICE RECORD MUST NOT MINT AN ORDER (2026-08-03). buildPipeline
+  // merges every record by SO and emits one order per DISTINCT SO it saw — so the
+  // moment the invoice pull got its own wider window, 985 historical sales orders
+  // appeared here carrying nothing but an invoice: null customer, null location,
+  // null status, and a ship date up to 650 days old. computeFlags then read them
+  // as live work and app-wide attention went 153 → 1,121, every one of them a
+  // phantom OVERDUE. That is the PR #34 "shipped orders read overdue forever" bug
+  // at six times the scale.
+  //
+  // The invoice records still go THROUGH buildPipeline — that is how an order in
+  // the working set gets promoted to INVOICED and picks up its gate — they just
+  // can't create rows of their own. `soNumbers` is the order pull's own scope, so
+  // this keeps `orders` exactly as wide as `orderSql` says it is.
+  const pulledSos = new Set(pulled.soNumbers.map((s) => String(s || '').toUpperCase()))
   const orders = buildPipeline(pulled.records, { today: new Date() })
+    .filter((o) => pulledSos.has(String(o.soNumber || '').toUpperCase()))
   for (const o of orders) o.source = deriveSource(o.customer, o.location)
 
   // Inbound supply. Soft-fails into a warning: a broken PO query should leave the

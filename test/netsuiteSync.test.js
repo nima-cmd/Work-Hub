@@ -13,6 +13,7 @@ import {
   orderLineSql, foldOrderLines, NON_ITEM_LINE_TYPES,
 } from '../src/ingest/netsuiteSync.js'
 import { STAGE } from '../src/model/stages.js'
+import { buildPipeline } from '../src/model/pipeline.js'
 
 test('windowStart: N days back as YYYY-MM-DD', () => {
   assert.equal(windowStart(30, new Date('2026-07-30T12:00:00Z')), '2026-06-30')
@@ -125,6 +126,66 @@ test('mapInvoiceRow: the approved-to-ship gate is decoded from the custom list',
 
 test('invoiceSql: asks for the gate field — step 5 is dead without it', () => {
   assert.match(invoiceSql('2026-06-30'), /custbody_invoice_status/)
+})
+
+test("invoiceSql: asks for Nordstrom's consolidated invoice reference", () => {
+  // Without it a post-cutover Nordstrom 810 has nothing to resolve against, and
+  // its 'C'-prefixed businessNumber stays the unknowable value it was assumed to
+  // be. 91 of our 116 non-ours-shaped refs resolve through this field.
+  assert.match(invoiceSql('2026-06-30'), /custbody_hb_edi_nordstrom_inv/)
+})
+
+test('mapInvoiceRow normalises the Nordstrom ref and nulls a blank one', () => {
+  assert.equal(mapInvoiceRow({ inv_number: 'INV11246', nordstrom_ref: ' c13369495 ' }).nordstromRef,
+    'C13369495')
+  assert.equal(mapInvoiceRow({ inv_number: 'INV11300', nordstrom_ref: '' }).nordstromRef, null,
+    'an empty custom field must be NULL, or every boutique invoice shares one ref')
+  assert.equal(mapInvoiceRow({ inv_number: 'INV11300' }).nordstromRef, null)
+})
+
+test('invoiceSql: the invoice gets its OWN window, ADDED to the order scope', () => {
+  // Why: scoped only by the sales order, `invoices` was a 30-day working window
+  // pretending to be a document record — 104 rows against NetSuite's 418 in the
+  // same INV10996–INV11416 span, which is why 117 of Bloomingdale's 166 outbound
+  // 810s since 2026-05 had no INVOICED event to reach.
+  const sql = invoiceSql('2026-07-04', '2026-02-04')
+  assert.match(sql, /c\.trandate >= TO_DATE\('2026-02-04'/)
+  assert.match(sql, /c\.lastmodifieddate >= TO_DATE\('2026-02-04'/)
+
+  // ADDITIVE, not a replacement. An invoice raised long ago against a still-OPEN
+  // sales order has to keep arriving or step 5's gate freezes at the last value
+  // we happened to see — so the order branch must survive alongside it.
+  assert.match(sql, /t\.status IN \('A','B','D','E','F'\)/)
+  assert.match(sql, /2026-07-04/)
+  assert.ok(/\bOR\b/.test(sql), 'the two windows are OR-ed, so neither can shrink the other')
+
+  // Default: one argument keeps the old single-window behaviour exactly.
+  assert.equal(invoiceSql('2026-06-30'), invoiceSql('2026-06-30', '2026-06-30'))
+})
+
+test('buildPipeline output must be scoped to the ORDER pull, not every record', () => {
+  // The regression the wider invoice window caused, caught only on live data:
+  // buildPipeline emits one order per DISTINCT SO across ALL records, so 985
+  // historical sales orders arrived carrying nothing but an invoice — null
+  // customer, null status, ship dates up to 650 days old — and computeFlags read
+  // every one as live work (attention 153 → 1,121, all phantom OVERDUE).
+  //
+  // This is the shape of the fix syncFromNetsuite applies: an invoice record still
+  // flows through buildPipeline (that's how a real order reaches INVOICED), but
+  // only SOs the order pull itself returned survive into `orders`.
+  const records = [
+    { source: 'NetSuiteLive', soNumber: 'SO12373', customer: 'Bloomingdales', stage: STAGE.OPEN },
+    // an invoice for a sales order that closed months ago and is NOT in the pull
+    { source: 'NetSuiteLive', soNumber: 'SO10710', invoice: 'INV10357', shippingStatus: 'Shipped' },
+  ]
+  const built = buildPipeline(records, { today: new Date('2026-08-03') })
+  assert.ok(built.some((o) => o.soNumber === 'SO10710'),
+    'buildPipeline itself does mint one — which is exactly why the caller must filter')
+
+  const pulledSos = new Set(['SO12373'])
+  const scoped = built.filter((o) => pulledSos.has(o.soNumber))
+  assert.deepEqual(scoped.map((o) => o.soNumber), ['SO12373'])
+  assert.equal(scoped.length, 1, 'an invoice-only SO must never become an order row')
 })
 
 test('invoiceBySo: links an IF to its invoice, and refuses to guess', () => {

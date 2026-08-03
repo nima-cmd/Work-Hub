@@ -6,6 +6,7 @@
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
 import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
+import { foldInvoiceRows, invoiceUpsertSql } from './invoiceUpsert.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
 // so we can later flag "stuck N days in the same stage".
@@ -180,32 +181,23 @@ export async function stampApprovedForShipping(records, db = pool) {
 }
 
 // Invoices — from records carrying an INV number tied to an SO.
-export async function loadInvoices(records, db = pool) {
+//
+// The fold and the SQL live in ./invoiceUpsert.js so they're reachable from the
+// DB-free test suite (this file imports the pool at module load). Read the notes
+// there: the sales order is resolved THROUGH `orders` rather than trusted from the
+// record, because `orders` is a working window and the invoice pull is not.
+//
+// Batched deliberately: at ~100ms per Neon round-trip, the one-query-per-row loop
+// this replaced would have cost ~113s for a 1,113-invoice document window — more
+// than the entire rest of the sync — so batching is what makes the wider pull
+// viable, not a micro-optimisation.
+export async function loadInvoices(records, db = pool, { batchSize = 500 } = {}) {
+  const live = foldInvoiceRows(records)
   let n = 0
-  for (const r of records) {
-    const inv = r.invoice
-    if (!inv || !/^INV/i.test(inv)) continue
-    const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
-    await db.query(
-      `INSERT INTO invoices
-         (inv_number, so_number, status, shipping_status, amount_remaining, amount_total, ship_date, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
-       ON CONFLICT (inv_number) DO UPDATE SET
-         so_number        = COALESCE(EXCLUDED.so_number, invoices.so_number),
-         status           = COALESCE(EXCLUDED.status, invoices.status),
-         shipping_status  = COALESCE(EXCLUDED.shipping_status, invoices.shipping_status),
-         -- amount_remaining legitimately goes to 0 when an invoice is paid, so
-         -- it must NOT be COALESCE-protected (that would freeze it at the first
-         -- non-null we ever saw). Only skip when the source didn't supply it.
-         amount_remaining = CASE WHEN $5::numeric IS NULL THEN invoices.amount_remaining
-                                 ELSE EXCLUDED.amount_remaining END,
-         amount_total     = COALESCE(EXCLUDED.amount_total, invoices.amount_total),
-         ship_date        = COALESCE(EXCLUDED.ship_date, invoices.ship_date),
-         updated_at       = now()`,
-      [inv, so, r.invoiceStatus || r.soStatus || null, r.shippingStatus || null,
-       r.amountRemaining ?? null, r.amountTotal ?? null, r.shipDate || null],
-    )
-    n++
+  for (let i = 0; i < live.length; i += batchSize) {
+    const chunk = live.slice(i, i + batchSize)
+    await db.query(invoiceUpsertSql(chunk.length), chunk.flat())
+    n += chunk.length
   }
   return n
 }
