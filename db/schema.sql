@@ -109,6 +109,28 @@ ALTER TABLE invoices ADD COLUMN IF NOT EXISTS amount_total NUMERIC;
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS nordstrom_ref TEXT;
 CREATE INDEX IF NOT EXISTS invoices_nordstrom_ref_idx ON invoices (nordstrom_ref);
 
+-- The invoice's own document date (NetSuite trandate). #40 made this table a
+-- document record rather than a working window, but stored no document date.
+-- NULL until the next sync touches the row.
+--
+-- ⚠️ min(trandate) is NOT the floor of our document coverage. This table is a
+-- UNION of two scopes — the invoice document window plus invoices riding in on
+-- still-open sales orders, which reach arbitrarily far back (measured: a
+-- 2024-11-19 stray against a 2026-02 window). The coverage floor lives in
+-- sync_meta ('invoice_documents_from'), written by the sync from its own
+-- window, because only the sync knows what span it systematically pulled.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS trandate DATE;
+
+-- ── Sync metadata — facts about coverage only the sync knows ─────────────────
+-- One row per key. First (and so far only) key: 'invoice_documents_from', the
+-- earliest date from which the invoice document window has ever pulled — the
+-- floor behind the trail's "this 810 predates our invoice records" verdict.
+CREATE TABLE IF NOT EXISTS sync_meta (
+  key         TEXT PRIMARY KEY,
+  value       TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
 -- ── Purchase Orders (inbound supply) — from the PO-receiving saved search ─────
 CREATE TABLE IF NOT EXISTS purchase_orders (
   po_number        TEXT,

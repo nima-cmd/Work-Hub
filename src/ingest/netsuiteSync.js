@@ -203,6 +203,10 @@ export function mapInvoiceRow(row) {
     amountRemaining: nOrNull(row.foreignamountunpaid),
     amountTotal: nOrNull(row.foreigntotal),
     shipDate: row.shipdate || null,
+    // The invoice's own document date. min() over these is the floor of the
+    // records we hold — what lets the trail say a partner's 810 reference
+    // "predates our invoice records" instead of rendering it like a live gap.
+    tranDate: row.trandate || null,
   }
 }
 
@@ -398,7 +402,8 @@ export function invoiceSql(since, invoiceSince = since) {
                  c.custbody_invoice_status AS invoice_status,
                  c.custbody_hb_edi_nordstrom_inv AS nordstrom_ref,
                  c.foreigntotal, c.foreignamountunpaid,
-                 TO_CHAR(c.shipdate,'YYYY-MM-DD') AS shipdate
+                 TO_CHAR(c.shipdate,'YYYY-MM-DD') AS shipdate,
+                 TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate
           FROM transaction t
           JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
           JOIN transaction c ON c.id = l.nextdoc AND c.type='CustInvc'
@@ -710,6 +715,9 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithin
       invoices: invRecords.length,
     },
     since,
+    // What the document window covered this run — recorded by the sync so the
+    // trail can honestly say an old 810 "predates our invoice records".
+    invoiceSince,
     warnings,
   }
 }
@@ -802,7 +810,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
 
   const { withTransaction } = await import('../db.js')
   const {
-    loadOrders, loadFulfillments, loadInvoices, recordSnapshot,
+    loadOrders, loadFulfillments, loadInvoices, recordInvoiceWindow, recordSnapshot,
     stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
     reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
     deriveOrderEvents, loadPurchaseOrders, prunePurchaseOrders,
@@ -816,6 +824,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
       const nOrders = await loadOrders(orders, db)
       const nFul = await loadFulfillments(pulled.records, db)
       const nInv = await loadInvoices(pulled.records, db)
+      await recordInvoiceWindow(pulled.invoiceSince, db)
       await stampApprovedForShipping(pulled.records, db)
       const nCredits = await stampShippedValue(pulled.records, db)
       await clearDepartedCustody(pulled.records, db)

@@ -594,18 +594,22 @@ export async function getPoLedger(poNumber) {
     // because prefixing it would name an invoice that doesn't exist (Nordstrom's
     // 'C13369495' → 'INVC13369495'). Diverge from the model here and the trail
     // silently loses its 810s.
+    // GROUP BY, not DISTINCT, so each document also carries its first
+    // transmission date — that date is what places an unresolvable partner ref
+    // against the floor of the invoice records we hold (partnerRefNotes).
     pool.query(
-      `SELECT DISTINCT
-              CASE WHEN t.type LIKE '856%' THEN 'ASN' ELSE 'INV' END AS doc_type,
+      `SELECT CASE WHEN t.type LIKE '856%' THEN 'ASN' ELSE 'INV' END AS doc_type,
               CASE WHEN t.type LIKE '856%'            THEN t.business_number
                    WHEN t.business_number !~* '^(INV)?[0-9]{1,6}$' THEN t.business_number
                    WHEN t.business_number ILIKE 'INV%' THEN upper(t.business_number)
-                   ELSE 'INV' || t.business_number END               AS doc_number
+                   ELSE 'INV' || t.business_number END               AS doc_number,
+              min(t.created_at) AS sent_at
          FROM edi_document_po_refs r
          JOIN edi_transactions t ON t.id = r.transaction_id
         WHERE r.po_number = $1
           AND t.direction = 'OUT' AND t.stream = 'LIVE'
-          AND (t.type LIKE '856%' OR t.type LIKE '810%')`,
+          AND (t.type LIKE '856%' OR t.type LIKE '810%')
+        GROUP BY 1, 2`,
       [po],
     ),
   ])
@@ -628,21 +632,48 @@ export async function getPoLedger(poNumber) {
   // Nordstrom bills like it receives — one consolidated document per DC belonging
   // to a PO — and that document's number is on our own invoices as
   // `custbody_hb_edi_nordstrom_inv`. So 'C13369495' is not unknowable after all:
-  // it covers INV11246, and 91 of the 116 non-ours-shaped refs we hold resolve
-  // this way (the other 25 are the autumn-2025 cutover's bare-digit shapes).
+  // it covers INV11246. Of the 116 non-ours-shaped refs held, 71 resolve from
+  // Neon this way; 20 more are on invoices NetSuite confirms but that predate
+  // the document window; the last 25 split 12 NMG (Feb 2025, the field is
+  // Nordstrom-only) + 10 cutover bare-digit shapes (never DELIVERED) + 3
+  // C-refs on no invoice anywhere (all measured live 2026-08-03).
   //
   // ⚠️ ADDITIVE, and deliberately not a re-key. The partner's reference stays in
   // the list verbatim — rewriting it to one of our numbers would both name a
   // single invoice for a document that covers up to SEVEN, and repeat the
   // INVC13369495 fabrication. This only lets the trail pick up the INVOICED/PAID
   // events of the invoices sitting underneath the consolidated document.
-  const partnerRefs = invs.filter((d) => !isOurInvoiceNumber(d))
-  if (partnerRefs.length) {
-    const { rows: covered } = await pool.query(
-      `SELECT inv_number FROM invoices WHERE nordstrom_ref = ANY($1)`,
-      [partnerRefs.map((r) => r.trim().toUpperCase())],
-    )
-    for (const r of covered) if (!invs.includes(r.inv_number)) invs.push(r.inv_number)
+  //
+  // Beyond pulling the covered invoices in, each ref now reports what it IS —
+  // resolved, older than the records we hold, or a genuine gap — because the
+  // three cases previously rendered identically and only the first is benign
+  // (see classifyPartnerRef in the model for the measured split).
+  const foreignRefs = invs.filter((d) => !isOurInvoiceNumber(d))
+  const partnerRefs = []
+  let invoiceRecordsFrom = null
+  if (foreignRefs.length) {
+    const [{ rows: covered }, { rows: floorRows }] = await Promise.all([
+      pool.query(
+        `SELECT nordstrom_ref, array_agg(inv_number ORDER BY inv_number) AS invs
+           FROM invoices WHERE nordstrom_ref = ANY($1) GROUP BY nordstrom_ref`,
+        [foreignRefs.map((r) => r.trim().toUpperCase())],
+      ),
+      // The coverage floor the sync recorded for the invoice document window.
+      // ⚠️ NOT min(invoices.trandate) — that table is a UNION of the document
+      // window and old invoices riding in on still-open SOs (a 2024-11-19 stray
+      // was live when this was built), so its min() would claim coverage of a
+      // span we hold only strays from. NULL until a post-merge sync has run;
+      // partnerRefNotes degrades to claims that need no floor.
+      pool.query(`SELECT value AS floor FROM sync_meta WHERE key = 'invoice_documents_from'`),
+    ])
+    invoiceRecordsFrom = floorRows[0]?.floor || null
+    const coversBy = new Map(covered.map((r) => [r.nordstrom_ref, r.invs]))
+    const sentBy = new Map(ediDocs.filter((d) => d.doc_type === 'INV').map((d) => [d.doc_number, d.sent_at]))
+    for (const ref of foreignRefs) {
+      const covers = coversBy.get(ref.trim().toUpperCase()) || []
+      partnerRefs.push({ ref, covers, sentAt: sentBy.get(ref) || null })
+      for (const n of covers) if (!invs.includes(n)) invs.push(n)
+    }
   }
 
   const { rows } = await pool.query(
@@ -659,6 +690,8 @@ export async function getPoLedger(poNumber) {
   return {
     poNumber: po,
     documents: { salesOrders: sos, fulfillments: ifs, invoices: invs, asns },
+    partnerRefs,
+    invoiceRecordsFrom,
     events: timeline(decorate(rows)),
   }
 }

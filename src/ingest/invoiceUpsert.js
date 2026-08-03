@@ -10,7 +10,7 @@
 // touching a row twice, and the SQL that refuses to assert a sales-order link it
 // can't back up.
 
-export const INVOICE_COLUMNS = 8
+export const INVOICE_COLUMNS = 9
 
 // records → one parameter tuple per invoice, deduped.
 //
@@ -35,6 +35,7 @@ export function foldInvoiceRows(records = []) {
       // Nordstrom's consolidated ref. Many of our invoices legitimately share
       // one, so this is never used as a key for a single invoice.
       r.nordstromRef ? String(r.nordstromRef).trim().toUpperCase() : null,
+      r.tranDate || null,
     ])
   }
   return [...byInvoice.values()]
@@ -65,12 +66,12 @@ export function invoiceUpsertSql(rowCount) {
     // whose column is entirely NULL gives Postgres nothing to infer a type from.
     return `($${b + 1}::text, (SELECT o.so_number FROM orders o WHERE o.so_number = $${b + 2}::text),
              $${b + 3}::text, $${b + 4}::text, $${b + 5}::numeric, $${b + 6}::numeric, $${b + 7}::date,
-             $${b + 8}::text, now())`
+             $${b + 8}::text, $${b + 9}::date, now())`
   }).join(',')
 
   return `INSERT INTO invoices
        (inv_number, so_number, status, shipping_status, amount_remaining, amount_total, ship_date,
-        nordstrom_ref, updated_at)
+        nordstrom_ref, trandate, updated_at)
      VALUES ${values}
      ON CONFLICT (inv_number) DO UPDATE SET
        so_number        = COALESCE(EXCLUDED.so_number, invoices.so_number),
@@ -84,5 +85,29 @@ export function invoiceUpsertSql(rowCount) {
        amount_total     = COALESCE(EXCLUDED.amount_total, invoices.amount_total),
        ship_date        = COALESCE(EXCLUDED.ship_date, invoices.ship_date),
        nordstrom_ref    = COALESCE(EXCLUDED.nordstrom_ref, invoices.nordstrom_ref),
+       trandate         = COALESCE(EXCLUDED.trandate, invoices.trandate),
        updated_at       = now()`
+}
+
+// Records how far back the invoice document window has EVER reached — the floor
+// behind the trail's "this 810 predates our invoice records" verdict.
+//
+// LEAST, never overwrite: the window start rolls FORWARD daily (180 days before
+// now), but documents pulled under an earlier window stay in the table — so
+// coverage only ever extends backwards (a one-off 365-day pull moves it back for
+// good). Taking the latest run's value instead would claim documents we hold
+// were never pulled. YYYY-MM-DD compares correctly as text.
+//
+// ⚠️ min(invoices.trandate) is NOT this floor and must never substitute for it:
+// the table also carries invoices riding in on still-open sales orders, which
+// reach arbitrarily far back (measured live: a 2024-11-19 stray against a
+// 2026-02 window). Only the sync knows what span it systematically covered.
+export const INVOICE_WINDOW_KEY = 'invoice_documents_from'
+
+export function invoiceWindowUpsertSql() {
+  return `INSERT INTO sync_meta (key, value, updated_at)
+     VALUES ('${INVOICE_WINDOW_KEY}', $1, now())
+     ON CONFLICT (key) DO UPDATE SET
+       value      = LEAST(sync_meta.value, EXCLUDED.value),
+       updated_at = now()`
 }
