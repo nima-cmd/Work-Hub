@@ -955,20 +955,26 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                     <span className="cust">{d.status}</span>
                   </div>
                 )
+                const isOpen = expanded.has(o.businessNumber)
                 return (
                   <div key={o.businessNumber} className={'poCard' + (v.canClose ? ' po-ready' : ' po-warn')}>
-                    <div className="poHead">
+                    {/* Closing a PO is a judgement call, and this tab used to ask for it
+                        without showing the document trail — twice now a wrong invoice
+                        line was "latent" here because the trail only rendered on Open. */}
+                    <div className="poHead" onClick={() => toggle(o.businessNumber)}>
                       <span className="miniSo">{o.businessNumber}</span>
                       {!selectedPartner && <span className="cust">{o.tradingPartner}</span>}
                       <span className={'flag ' + (v.canClose ? 'sev-lo' : 'sev-mid')}>{v.canClose ? 'VERIFIED' : 'NEEDS CHECK'}</span>
                       {o.work.resolution?.netsuiteRef && <span className="flag sev-mid">manual: {o.work.resolution.netsuiteRef}</span>}
                       <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
+                      <span className="cust">{isOpen ? '▾' : '▸'}</span>
                     </div>
                     {o.netsuiteOrder && <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
                     <div className="verifyDocs">
                       <DocRow d={v.ship} />
                       <DocRow d={v.invoice} />
                     </div>
+                    {isOpen && <PoTimeline poNumber={o.businessNumber} />}
                     <div className="resolveRow">
                       {v.canClose
                         ? <button className="btn" disabled={resolveBusy === o.businessNumber} onClick={() => verifyAndClose(o)}>✓ Verify &amp; close</button>
