@@ -92,6 +92,87 @@ test('fromUnpackedFulfillments drops Transfer Order rows at the source', () => {
   assert.equal(rows[0].soNumber, 'SO12062')
 })
 
+test('the invoice upsert resolves the SO through orders — an out-of-window one is NULL', async () => {
+  // The other half of the foreign-key family above. `orders` is a 30-day working
+  // WINDOW, not the universe, so once the invoice pull got its own (much wider)
+  // document window it routinely carries a real SO number with no row here — all
+  // 309 invoices missing from the INV10996–INV11416 span were in that position,
+  // and passing the number verbatim raised 23503 and aborted the whole load.
+  const { invoiceUpsertSql } = await import('../src/ingest/invoiceUpsert.js')
+  const sql = invoiceUpsertSql(2)
+
+  // The SO is never inserted directly — it goes through a lookup that yields NULL
+  // when the order is outside the window. Storing the raw number instead would
+  // recreate the #32 bug: a key that resolves to nothing, and indistinguishable
+  // from a real link once written.
+  assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$2::text/)
+  assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$10::text/)
+  assert.ok(!/VALUES \(\$1::text, \$2/.test(sql), 'the raw SO must never be inserted directly')
+  // amount_remaining must stay un-COALESCEd — it legitimately goes to 0 on payment.
+  assert.match(sql, /CASE WHEN EXCLUDED\.amount_remaining IS NULL/)
+  // Without the casts, a chunk whose column is entirely NULL has no inferable type.
+  assert.match(sql, /\$5::numeric/)
+  assert.match(sql, /\$7::date/)
+})
+
+test('the invoice fold collapses a repeated invoice, last one winning', async () => {
+  // A DISTINCT SuiteQL pull still yields two rows for one invoice whenever any
+  // selected column disagrees (the link table is LINE-level), and Postgres refuses
+  // to update the same row twice in one INSERT … ON CONFLICT — so the fold must
+  // dedupe before anything is batched, or a wide pull dies partway through.
+  const { foldInvoiceRows } = await import('../src/ingest/invoiceUpsert.js')
+
+  const rows = foldInvoiceRows([
+    { invoice: 'INV11244', soNumber: 'SO12373', amountTotal: 10 },
+    { invoice: 'INV11244', soNumber: 'SO12373', amountTotal: 20 },
+    { invoice: 'INV11245', soNumber: 'UNLINKED' },
+    { invoice: 'SO9999', soNumber: 'SO2' },   // not an INV number, ignored
+  ])
+  assert.equal(rows.length, 2, 'the duplicate collapsed and the non-invoice was dropped')
+  assert.equal(rows[0][5], 20, 'the LAST occurrence wins')
+  assert.equal(rows[0][1], 'SO12373', 'the reported SO is still what we look up')
+  assert.equal(rows[1][1], null, "'UNLINKED' is not a sales order")
+})
+
+test("the invoice fold carries Nordstrom's consolidated ref, normalised", async () => {
+  // Nordstrom bills like it receives — one document per DC belonging to a PO — so
+  // MANY of our invoices share one ref (91 refs over 270 invoices, up to 7 each).
+  // It is the value a post-cutover 810 carries, so it has to match the shape the
+  // 810 arrives in: uppercased and trimmed, never used as a per-invoice key.
+  const { foldInvoiceRows } = await import('../src/ingest/invoiceUpsert.js')
+  const rows = foldInvoiceRows([
+    { invoice: 'INV11246', soNumber: 'SO1', nordstromRef: ' c13369495 ' },
+    { invoice: 'INV11266', soNumber: 'SO2', nordstromRef: 'C13369515' },
+    { invoice: 'INV11271', soNumber: 'SO3', nordstromRef: 'C13369515' },  // same doc, legitimately
+    { invoice: 'INV11300', soNumber: 'SO4' },                             // boutique: no ref at all
+  ])
+  assert.equal(rows[0][7], 'C13369495', 'trimmed and uppercased to match the 810')
+  assert.equal(rows[1][7], 'C13369515')
+  assert.equal(rows[2][7], 'C13369515', 'two of our invoices under ONE consolidated document is normal')
+  assert.equal(rows[3][7], null, 'no ref must be NULL, not an empty string')
+})
+
+test('loadInvoices batches rather than one round-trip per row', async () => {
+  // Batching is what makes the wider window viable, not a micro-optimisation: at
+  // ~100ms per Neon round-trip (measured), one query per row would cost ~113s for
+  // a 1,113-invoice document window — more than the rest of the sync put together.
+  const { foldInvoiceRows, invoiceUpsertSql, INVOICE_COLUMNS } =
+    await import('../src/ingest/invoiceUpsert.js')
+
+  const many = foldInvoiceRows(
+    Array.from({ length: 120 }, (_, i) => ({ invoice: `INV${i}`, soNumber: 'SO1' })),
+  )
+  assert.equal(many.length, 120)
+  // What loadInvoices does with them: chunk, one statement per chunk.
+  const batchSize = 50
+  const chunks = []
+  for (let i = 0; i < many.length; i += batchSize) chunks.push(many.slice(i, i + batchSize))
+  assert.equal(chunks.length, 3, '120 rows over a batch size of 50')
+  assert.equal(chunks[0].flat().length, 50 * INVOICE_COLUMNS)
+  // The placeholder count must track the chunk, or the params and SQL disagree.
+  assert.equal((invoiceUpsertSql(50).match(/::text, \(SELECT/g) || []).length, 50)
+})
+
 test('computeFlags reads shortage through ATS (only while Open)', () => {
   const today = new Date('2026-07-08')
   const ats = computeFlags(

@@ -90,6 +90,25 @@ CREATE TABLE IF NOT EXISTS invoices (
 -- `foreigntotal`; nullable for rows that predate this.
 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS amount_total NUMERIC;
 
+-- Nordstrom's CONSOLIDATED invoice reference (Nima, 2026-08-03), from
+-- `custbody_hb_edi_nordstrom_inv` on the invoice record. Nordstrom bills like it
+-- receives: one document per DC belonging to a PO, so this is MANY-TO-ONE — 91
+-- distinct refs cover 270 of our invoices, up to 7 apiece (49 cover more than
+-- one). Never treat it as a key for a single invoice.
+--
+-- This is what a post-cutover Nordstrom 810 carries in its businessNumber. It
+-- answers the question left open when that keying was measured: a 'C'-prefixed
+-- reference is neither ours nor unknowable, it is the consolidated document, and
+-- it resolves 91 of the 116 non-ours-shaped refs we hold. The remaining 25 are
+-- the bare-digit transitional shapes from the autumn-2025 cutover window.
+--
+-- ⚠️ It does NOT re-key anything. `order_events.doc_number` still stores the
+-- partner's reference verbatim (prefixing it would name an invoice that doesn't
+-- exist — the INVC13369495 bug); this column is how the trail additionally names
+-- OUR invoices underneath it.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS nordstrom_ref TEXT;
+CREATE INDEX IF NOT EXISTS invoices_nordstrom_ref_idx ON invoices (nordstrom_ref);
+
 -- ── Purchase Orders (inbound supply) — from the PO-receiving saved search ─────
 CREATE TABLE IF NOT EXISTS purchase_orders (
   po_number        TEXT,
@@ -712,6 +731,32 @@ DELETE FROM order_events
    AND event_type = 'INVOICE_SENT'
    AND doc_number ~* '^INV'
    AND doc_number !~* '^INV[0-9]{1,6}$';
+
+-- Repair of the PHANTOM ORDERS minted by an invoice record (2026-08-03).
+--
+-- When the invoice pull got its own (much wider) document window, buildPipeline —
+-- which emits one order per DISTINCT SO across ALL records — minted 985 order
+-- rows out of invoices alone. They carried no customer, no status and no stage,
+-- but they did carry a ship date up to 650 days old, so computeFlags read every
+-- one as live work: app-wide attention went 153 → 1,121, all phantom OVERDUE.
+-- syncFromNetsuite now scopes buildPipeline's output to the order pull, so this
+-- can't recur; these are the rows already written before that fix.
+--
+-- The invariant: a row with NO stage, NO customer and NO status was never seen by
+-- an order source (mapOrderRow always sets a stage, and every real order has a
+-- customer) — so it can only have been minted by a child document. Idempotent
+-- after the first run, and self-healing if it ever happens again.
+--
+-- ⚠️ The NOT EXISTS guard is load-bearing, not defensive padding:
+-- fulfillments.so_number is ON DELETE **CASCADE**, so deleting an order that owns
+-- one would destroy real fulfilment rows. Invoices only unlink (ON DELETE SET
+-- NULL), which is the honest end state anyway — we hold the invoice, we do not
+-- hold its order.
+DELETE FROM orders o
+ WHERE o.stage IS NULL
+   AND o.customer IS NULL
+   AND o.so_status IS NULL
+   AND NOT EXISTS (SELECT 1 FROM fulfillments f WHERE f.so_number = o.so_number);
 
 -- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
 -- When a packed IF is scanned back IN from the warehouse, the scanner may

@@ -17,7 +17,7 @@ import { groupContainers, lateContainers } from '../src/model/containers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
-import { SPINE_LABEL, timeline } from '../src/model/orderEvents.js'
+import { SPINE_LABEL, timeline, isOurInvoiceNumber } from '../src/model/orderEvents.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -623,6 +623,27 @@ export async function getPoLedger(poNumber) {
   // that reference, so a count of this array is NOT a count of invoices raised.
   // isOurInvoiceNumber is the test if you need to separate them.
   const invs = [...new Set([...pick(nsDocs, 'INV'), ...pick(ediDocs, 'INV')])]
+
+  // A partner reference that isn't ours can still be RESOLVED (Nima, 2026-08-03).
+  // Nordstrom bills like it receives — one consolidated document per DC belonging
+  // to a PO — and that document's number is on our own invoices as
+  // `custbody_hb_edi_nordstrom_inv`. So 'C13369495' is not unknowable after all:
+  // it covers INV11246, and 91 of the 116 non-ours-shaped refs we hold resolve
+  // this way (the other 25 are the autumn-2025 cutover's bare-digit shapes).
+  //
+  // ⚠️ ADDITIVE, and deliberately not a re-key. The partner's reference stays in
+  // the list verbatim — rewriting it to one of our numbers would both name a
+  // single invoice for a document that covers up to SEVEN, and repeat the
+  // INVC13369495 fabrication. This only lets the trail pick up the INVOICED/PAID
+  // events of the invoices sitting underneath the consolidated document.
+  const partnerRefs = invs.filter((d) => !isOurInvoiceNumber(d))
+  if (partnerRefs.length) {
+    const { rows: covered } = await pool.query(
+      `SELECT inv_number FROM invoices WHERE nordstrom_ref = ANY($1)`,
+      [partnerRefs.map((r) => r.trim().toUpperCase())],
+    )
+    for (const r of covered) if (!invs.includes(r.inv_number)) invs.push(r.inv_number)
+  }
 
   const { rows } = await pool.query(
     `SELECT ${LEDGER_FIELDS} FROM order_events
