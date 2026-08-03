@@ -43,7 +43,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
-import { shipDateAdvice, rankShipDateAdvice, monthCloseCount } from '../src/model/shipDateAdvice.js'
+import { shipDateAdvice, rankShipDateAdvice, monthCloseCount, auditMarkedShipments } from '../src/model/shipDateAdvice.js'
 import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
@@ -1668,7 +1668,77 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // Age the ACTIONABLE items only — a freight shipment awaiting its BOL
     // shouldn't inflate the parcel backlog's headline number.
     oldestAgeDays: [...labelledNotShipped, ...needsLabel].reduce((m, i) => Math.max(m, i.ageDays ?? 0), 0),
+    // The retro half of step 6, deliberately kept OUT of every count above and
+    // out of the court strip entirely. See getShipDateAudit.
+    retro: await getShipDateAudit({ today }),
   }
+}
+
+// Step 6, looking backwards: shipments already marked, audited against the same
+// custody/routing evidence the forward list uses.
+//
+// The ONLY difference from getLabelGaps' query is the WHERE clause — same joins,
+// same evidence chain — because the whole point is that the two lists agree about
+// what counts as proof. What differs is the ACTION they imply, which is why they
+// are separate lists and separate numbers (src/model/shipDateAdvice.js).
+//
+// `markedDate` is the fulfilment's own actual_ship_date, so shipDateAdvice audits
+// the date that was used rather than measuring against today.
+export async function getShipDateAudit({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number        AS "ifNumber",
+           f.so_number        AS "soNumber",
+           f.if_date          AS "ifDate",
+           f.actual_ship_date AS "markedDate",
+           o.customer, o.source, o.po_number AS "poNumber", o.dc,
+           c.custody_in     AS "custodyIn",
+           c.custody_out    AS "custodyOut",
+           dcx.custody_in   AS "dcCustodyIn",
+           dcx.custody_out  AS "dcCustodyOut",
+           rs.ship_date     AS "routingShipDate"
+    FROM fulfillments f
+    LEFT JOIN orders o ON o.so_number = f.so_number
+    LEFT JOIN (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_IN')  AS custody_in,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_OUT') AS custody_out
+      FROM order_events WHERE doc_type = 'IF' AND event_type IN ('CUSTODY_IN','CUSTODY_OUT')
+      GROUP BY doc_number
+    ) c ON c.doc_number = f.if_number
+    LEFT JOIN (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_IN')  AS custody_in,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_OUT') AS custody_out
+      FROM order_events WHERE doc_type = 'DC' AND event_type IN ('CUSTODY_IN','CUSTODY_OUT')
+      GROUP BY doc_number
+    ) dcx ON dcx.doc_number = o.po_number || ':' || COALESCE(o.dc, '')
+    -- LATERAL + LIMIT 1: a DC can carry several routing shipments and a plain
+    -- join would silently duplicate the fulfilment row.
+    LEFT JOIN LATERAL (
+      SELECT r.ship_date
+      FROM routing_shipment r
+      WHERE r.dc = o.dc AND o.po_number = ANY(r.member_pos)
+      ORDER BY r.ship_date DESC NULLS LAST, r.id DESC
+      LIMIT 1
+    ) rs ON TRUE
+    WHERE f.actual_ship_date IS NOT NULL
+    ORDER BY f.actual_ship_date DESC
+  `)
+
+  // The earliest custody scan on record. Everything that shipped before it is
+  // uncheckable by anyone, ever — as opposed to a shipment that left AFTER
+  // scanning existed and still has no scan, which is a live gap. Read rather
+  // than hard-coded: a constant would go quietly wrong the day the ledger is
+  // rebuilt or backfilled.
+  const { rows: [epoch] } = await pool.query(`
+    SELECT MIN(occurred_at) AS first
+    FROM order_events WHERE event_type IN ('CUSTODY_IN','CUSTODY_OUT')
+  `)
+
+  return auditMarkedShipments(
+    rows.map((r) => ({ ...r, edi: r.source === 'edi' })),
+    { today, custodyEpoch: epoch?.first || null },
+  )
 }
 
 export async function setShipmentRefs(id, fields = {}) {

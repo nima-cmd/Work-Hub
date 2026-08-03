@@ -2289,6 +2289,19 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .shipDesk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 1100px) { .shipDesk { grid-template-columns: 1fr; } }
 .deskCol { min-width: 0; padding: 10px; border-radius: 9px; background: rgba(0,0,0,0.18); border: 1px solid var(--line); }
+
+/* The retro audit sits UNDER the three action columns, full width and visually
+   quieter than all of them — it is a scoreboard you may open, never a queue. */
+.retroAudit { grid-column: 1 / -1; margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--line); opacity: 0.75; }
+.retroAudit:hover { opacity: 1; }
+.retroTable { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+.retroTable th {
+  text-align: left; font-family: var(--display); font-size: 10px; letter-spacing: 0.08em;
+  font-weight: 700; opacity: 0.6; padding: 3px 8px 3px 0;
+}
+.retroTable td { padding: 3px 8px 3px 0; border-top: 1px solid var(--line); }
+.retroTable tr.retroBad td { background: rgba(248, 81, 73, 0.08); }
+.retroFlag { color: var(--hi); font-weight: 700; }
 .deskAct { background: rgba(0,0,0,0.26); }
 .deskFreight { opacity: 0.72; }        /* present, but never out-shouting the parcel lanes */
 .deskFreight:hover { opacity: 1; }
