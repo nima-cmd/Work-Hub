@@ -252,18 +252,53 @@ export function eventsFromEdi(transactions = []) {
       out.push(evt('ASN_SENT', 'ASN', t.businessNumber, null, t.createdAt, partner))
     } else if (type.startsWith('810')) {
       // Restore the prefix NetSuite carries so this event sits on the same
-      // doc_number as the INVOICED/PAID events for the same invoice.
+      // doc_number as the INVOICED/PAID events for the same invoice — but ONLY
+      // when the reference is one of ours. See invNumberFrom810.
       out.push(evt('INVOICE_SENT', 'INV', invNumberFrom810(t.businessNumber), null, t.createdAt, partner))
     }
   }
   return out
 }
 
-// Orderful carries the 810's business number bare ('11398'); NetSuite calls the
-// same document 'INV11398'. Already-prefixed values pass through unchanged so a
-// partner that transmits the full number doesn't produce 'INVINV11398'.
+// ⚠️ An 810's business number is only SOMETIMES our invoice number, so the
+// prefix can only be restored when the reference is ours to begin with.
+//
+// Measured live 2026-08-03 over every outbound LIVE 810 we hold:
+//
+//   Bloomingdale's   'INV9114' → '9114'   ours throughout (1,076 docs)
+//   Shopbop          'INV8212'            ours (8 docs)
+//   Nordstrom        'INV8605'…'INV9725'  ours, but only to 2025-08-26 (1,473)
+//                    9–10 digits          a transition band, 2025-09 → 2025-10 (10)
+//                    'C13369495'          from 2025-10-29 on — NOT ours (106)
+//   NMG              7- and 10-digit      not ours (12)
+//
+// Nordstrom's is a CUTOVER, not a partner quirk: they carried our number for
+// nine months and then something in the 810 map changed. Our own invoice
+// numbers are 4–5 digits (INV8212…INV11416 across everything we hold), and
+// nothing ours-shaped is longer, so ≤6 bare digits is the test with room to
+// grow and no overlap against any of the not-ours shapes above.
+//
+// Prefixing a foreign reference INVENTS a document number — 'INVC13369495' is
+// neither ours nor Nordstrom's, and it joined to nothing. 116 ledger rows and
+// every /api/ledger?po= payload carried one; PO 50125577 offered four invoice
+// documents (INV11244 + three invented) where one invoice exists. The PO trail
+// would render them as '3 INVs', latent only because all 23 affected POs sit on
+// the Ready-to-close tab, which draws a card with no trail on it.
+//
+// A reference we can't resolve is recorded AS the reference it is; the 810 is
+// still an invoice document, which is why the doc_type stays 'INV'. What we
+// don't know is WHICH of our invoices it is, and the honest way to say that is
+// to not name one.
+export function isOurInvoiceNumber(ref) {
+  return /^(INV)?[0-9]{1,6}$/i.test(String(ref || '').trim())
+}
+
 export function invNumberFrom810(businessNumber) {
   const raw = String(businessNumber || '').trim()
+  if (!isOurInvoiceNumber(raw)) return raw
+  // Already-prefixed values pass through unchanged so a partner that transmits
+  // the full number doesn't produce 'INVINV11398' (invoice 9114 was transmitted
+  // both ways, which is how that one surfaced).
   return /^INV/i.test(raw) ? raw.toUpperCase() : `INV${raw}`
 }
 
@@ -350,6 +385,29 @@ export function poTimelineSteps(events = []) {
     (a, b) => new Date(a.first || 0) - new Date(b.first || 0)
       || (SPINE_ORDER.get(a.eventType) ?? 99) - (SPINE_ORDER.get(b.eventType) ?? 99),
   )
+}
+
+// How a step names its documents — one is named, several are counted.
+//
+// The count has to say WHOSE numbers they are, because an 'INV' document is not
+// always one of our invoices: from 2025-10-29 Nordstrom bills under its own
+// reference ('C13369495') and NMG never used ours, so counting those as 'INVs'
+// claims invoices we never raised — PO 50125577 would read '3 INVs' beside its
+// one real INV11244. Mixed is real — a PO can straddle the cutover — so both
+// groups are named rather than letting the larger one speak for the step.
+//
+// Returns { text, foreign } so the caller can attach the explanation; the wording
+// lives here with SPINE_LABEL rather than in the view, so it is testable.
+export function docCountLabel(step = {}) {
+  const docs = step.docs || []
+  const foreign = step.docType === 'INV' ? docs.filter((d) => !isOurInvoiceNumber(d)) : []
+  if (docs.length === 1) {
+    return { text: foreign.length ? `${docs[0]} (partner ref)` : String(docs[0] ?? ''), foreign: foreign.length }
+  }
+  if (!foreign.length) return { text: `${docs.length} ${step.docType || 'doc'}s`, foreign: 0 }
+  const ours = docs.length - foreign.length
+  const refs = `${foreign.length} partner ref${foreign.length === 1 ? '' : 's'}`
+  return { text: ours ? `${ours} INVs + ${refs}` : refs, foreign: foreign.length }
 }
 
 // One document's history, oldest first — the shape the Ledger view wants.

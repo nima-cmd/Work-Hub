@@ -691,6 +691,28 @@ DELETE FROM order_events
    AND ((event_type = 'ASN_SENT'     AND doc_type <> 'ASN')
      OR (event_type = 'INVOICE_SENT' AND doc_type <> 'INV'));
 
+-- Repair of the FABRICATED invoice numbers (2026-08-03).
+--
+-- invNumberFrom810 prefixed every 810's business number, but only some partners
+-- send ours: Nordstrom cut over to 'C13369495' on 2025-10-29 and NMG never sent
+-- ours at all, so 116 derived INVOICE_SENT rows sat on doc_numbers like
+-- 'INVC13369495' — a document number that exists nowhere and joins to nothing,
+-- served out of every /api/ledger?po= payload as a fourth invoice on a PO with
+-- one.
+--
+-- Also written as an invariant: an 'INV'-prefixed doc_number whose tail is not
+-- an invoice number was invented by us, whatever shape it took. Same safety
+-- argument as the sweep above — these rows are `derived` from the 810's own
+-- createdAt and fetchEventSnapshot reads ALL of edi_transactions rather than a
+-- window, so the next sync rebuilds each one on the honest key with the
+-- identical occurred_at. Scoped to source='derived' so a hand-made correction
+-- is never swept up with them.
+DELETE FROM order_events
+ WHERE source = 'derived'
+   AND event_type = 'INVOICE_SENT'
+   AND doc_number ~* '^INV'
+   AND doc_number !~* '^INV[0-9]{1,6}$';
+
 -- ── Fulfillment boxes (Nima, 2026-07-17) — the IN-scan box capture ───────────
 -- When a packed IF is scanned back IN from the warehouse, the scanner may
 -- capture its carton's weight and L×W×H here. Always SKIPPABLE — a custody

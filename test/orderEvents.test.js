@@ -10,8 +10,8 @@ import assert from 'node:assert/strict'
 import {
   SPINE, SPINE_ORDER, SPINE_LABEL, DERIVED_TYPES, eventKey,
   eventsFromOrders, eventsFromFulfillments, eventsFromInvoices,
-  eventsFromRouting, eventsFromEdi, invNumberFrom810,
-  deriveEvents, pendingEvents, summarize, timeline, poTimelineSteps,
+  eventsFromRouting, eventsFromEdi, invNumberFrom810, isOurInvoiceNumber,
+  deriveEvents, pendingEvents, summarize, timeline, poTimelineSteps, docCountLabel,
 } from '../src/model/orderEvents.js'
 
 const find = (events, type) => events.filter((e) => e.eventType === type)
@@ -177,6 +177,37 @@ test('an 810 business number that already carries INV is not double-prefixed', (
   assert.equal(invNumberFrom810('inv11398'), 'INV11398')
 })
 
+test('a reference that is NOT our invoice number is never prefixed', () => {
+  // Every shape measured live 2026-08-03. Ours are 4–5 digits; the prefix may
+  // only be restored onto one of those, because 'INV' + a foreign reference
+  // invents a document number that exists nowhere and joins to nothing.
+  assert.equal(isOurInvoiceNumber('9114'), true)      // Bloomingdale's, bare
+  assert.equal(isOurInvoiceNumber('INV11416'), true)  // the newest we hold
+  assert.equal(isOurInvoiceNumber('C13369495'), false) // Nordstrom, from 2025-10-29
+  assert.equal(isOurInvoiceNumber('3426195360'), false) // Nordstrom transition band
+  assert.equal(isOurInvoiceNumber('1245531'), false)  // NMG
+  assert.equal(isOurInvoiceNumber('339213124.5'), false) // parsed as a float upstream
+  assert.equal(isOurInvoiceNumber(''), false)
+  assert.equal(isOurInvoiceNumber(null), false)
+
+  assert.equal(invNumberFrom810('C13369495'), 'C13369495')
+  assert.equal(invNumberFrom810('3426195360'), '3426195360')
+  assert.equal(invNumberFrom810('339213124.5'), '339213124.5')
+})
+
+test("a partner-referenced 810 is still an invoice document, keyed on the partner's reference", () => {
+  // Nordstrom cut over on 2025-10-29 from our invoice number to their own 'C'
+  // reference. Before this, PO 50125577's trail showed 'INVC13369495' — an
+  // invoice we never raised — beside its one real INV11244.
+  const events = eventsFromEdi([
+    { type: '810_INVOICE', direction: 'OUT', stream: 'LIVE', businessNumber: 'C13369495', createdAt: '2026-07-06T12:00:00Z', tradingPartner: 'Nordstrom (US) (Direct to Store)' },
+  ])
+  assert.deepEqual(
+    events.map((e) => [e.eventType, e.docType, e.docNumber]),
+    [['INVOICE_SENT', 'INV', 'C13369495']],
+  )
+})
+
 test('one ASN announcing several POs is still ONE event', () => {
   // The PO fan-out is resolved at query time through edi_document_po_refs. If it
   // were fanned out here instead, every window report would double-count the
@@ -285,6 +316,26 @@ test('a PO timeline orders by when each step started, not by the expected shape'
     { eventType: 'INVOICE_SENT', docNumber: 'INV1', occurredAt: '2026-07-20' },
   ])
   assert.deepEqual(steps.map((s) => s.eventType), ['INVOICE_SENT', 'ASN_SENT'])
+})
+
+test("a document count says whose numbers it is counting", () => {
+  // PO 50125577, live: one real invoice and three Nordstrom 'C' references. The
+  // 810 step would read '3 INVs', claiming invoices we never raised — the same
+  // lump the never-lump rule exists to stop.
+  const inv = (docs) => docCountLabel({ eventType: 'INVOICE_SENT', docType: 'INV', docs })
+  assert.deepEqual(inv(['C13369485', 'C13369490', 'C13369495']), { text: '3 partner refs', foreign: 3 })
+  assert.deepEqual(inv(['INV11244', 'INV11245']), { text: '2 INVs', foreign: 0 })
+  // Mixed is real: a PO can straddle the 2025-10-29 cutover.
+  assert.deepEqual(inv(['INV9725', 'C13369495']), { text: '1 INVs + 1 partner ref', foreign: 1 })
+  // A single document is still named, with the reference marked for what it is.
+  assert.deepEqual(inv(['C13369495']), { text: 'C13369495 (partner ref)', foreign: 1 })
+  assert.deepEqual(inv(['INV11244']), { text: 'INV11244', foreign: 0 })
+  // Only the invoice step asks the question — an ASN reference is nobody's
+  // invoice number and must not be flagged as a foreign one.
+  assert.deepEqual(
+    docCountLabel({ eventType: 'ASN_SENT', docType: 'ASN', docs: ['NB1731231', 'NB1731232'] }),
+    { text: '2 ASNs', foreign: 0 },
+  )
 })
 
 test('the pre-spine event types still get a label rather than rendering raw', () => {
