@@ -121,8 +121,18 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   // an unannounced shipment is a compliance chargeback, an undelivered invoice is
   // money not asked for. `refused` is excluded from these chips on purpose: it
   // needs reading, not re-sending, so it would dilute a re-send action.
-  const asnStuck = ediGaps?.counts?.asnStuck ?? 0
-  const invoiceStuck = ediGaps?.counts?.invoiceStuck ?? 0
+  //
+  // ⚠️ These read `*Unannounced*`, NOT `*Stuck`. A stuck document is not an
+  // unannounced shipment: all 62 stuck 856s were superseded copies of shipments
+  // the partner already accepted, so the old chip claimed chargeback exposure
+  // that did not exist (see src/model/ediDelivery.js). Counted by distinct
+  // reference — two stuck copies of one invoice is one invoice to chase. The
+  // superseded pile is NOT given a chip here: it is not something anyone must
+  // act on, and this strip is only the small, aging, someone-must-act set. It is
+  // explained on the EDI page's ④ No ASN tab instead, which is where the
+  // question "but the strip said 62" actually gets asked.
+  const asnUnannounced = ediGaps?.counts?.asnUnannouncedRefs ?? 0
+  const invoiceUnannounced = ediGaps?.counts?.invoiceUnannouncedRefs ?? 0
   // Cartons that shipped and appear on NO delivered ASN. Kept as its own chip
   // rather than folded into asnStuck above, per the never-lump rule: an
   // undelivered DOCUMENT and an undeclared BOX are different failures with
@@ -156,12 +166,12 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
       title: 'EDI/freight lane — these move on a BOL, not a parcel label' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',
       title: 'Packed and waiting on an invoice' },
-    { key: 'asnStuck', n: asnStuck, label: 'ASNs never sent', tone: 'bad', to: 'edi',
-      title: 'Outbound 856s sitting undelivered in Orderful. NetSuite marks them synced, so this fails silently — the partner was never told the shipment is coming' },
+    { key: 'asnUnannounced', n: asnUnannounced, label: 'shipments unannounced', tone: 'bad', to: 'edi',
+      title: 'Shipments whose 856 never reached the partner AND has no accepted copy either — the partner genuinely was never told. Superseded re-sends sitting in Orderful are excluded: they are stale copies of shipments already accepted, so counting them here would invent chargeback exposure' },
     { key: 'cartonsUnannounced', n: cartonsUnannounced, label: 'cartons unannounced', tone: 'bad', to: 'edi',
       title: 'These cartons shipped and are on no delivered ASN — the partner received boxes it was never told about. The box is already gone, so the fix is sending the 856' },
-    { key: 'invoiceStuck', n: invoiceStuck, label: 'invoices never sent', tone: 'warn', to: 'edi',
-      title: 'Outbound 810s that never reached the partner — billed in NetSuite but never actually transmitted' },
+    { key: 'invoiceUnannounced', n: invoiceUnannounced, label: 'invoices never sent', tone: 'warn', to: 'edi',
+      title: 'Outbound 810s that never reached the partner and have no accepted copy — billed in NetSuite but never actually transmitted. Whether they were paid by some other route is not something this app can see, so this is "never sent", not "never paid"' },
     { key: 'unfiledDue', n: unfiledDue, label: 'paper to file', tone: 'warn', to: 'scan',
       title: 'These shipments left and their signed paper was never scanned. Kept apart from the older backlog on the Scan → Drive page — this number is only what you have fallen behind on since filing started being recorded' },
     { key: 'inboundLate', n: inboundLate, label: 'containers late', tone: 'warn', to: 'allocations',

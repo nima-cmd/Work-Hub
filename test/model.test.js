@@ -1295,6 +1295,8 @@ test('computeEdiDeliveryGaps keeps ASNs, invoices and the two failures unlumped'
     { ...asn({ id: '4', businessNumber: 'INV1', deliveryStatus: 'PENDING', createdAt: '2025-10-21T00:00:00Z' }), type: '810_INVOICE' },
   ], NOW)
   assert.deepEqual(g.counts, {
+    asnUnannounced: 1, invoiceUnannounced: 1, asnUnannouncedRefs: 1, invoiceUnannouncedRefs: 1,
+    asnResent: 0, invoiceResent: 0, asnResentRefs: 0, invoiceResentRefs: 0,
     asnStuck: 1, invoiceStuck: 1, asnRefused: 1, invoiceRefused: 0, asnInFlight: 1, invoiceInFlight: 0,
   })
   // A stuck invoice must never be counted as a stuck ASN — different urgency.
@@ -1302,6 +1304,86 @@ test('computeEdiDeliveryGaps keeps ASNs, invoices and the two failures unlumped'
   assert.equal(g.stuck.invoice[0].businessNumber, 'INV1')
   assert.equal(g.oldestAsnStuck.businessNumber, 'OLD1')
   assert.equal(g.oldestAsnStuck.ageDays, 568)
+})
+
+// ── the re-send split (Nima, 2026-08-02) ─────────────────────────────────────
+// A stuck document is NOT an unannounced shipment. Live: 62 of 62 undelivered
+// 856s were superseded copies of shipments the partner had already accepted, so
+// the court strip's red "62 ASNs never sent" chip claimed chargeback exposure
+// that did not exist. These lock the split that makes the chip honest.
+
+test('a stuck 856 whose shipment reference already delivered+accepted is a re-send, not exposure', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: 'SHIP1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED', createdAt: '2025-01-01T00:00:00Z' }),
+    asn({ id: '2', businessNumber: 'SHIP1', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+    asn({ id: '3', businessNumber: 'SHIP1', deliveryStatus: 'PENDING', createdAt: '2025-03-01T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.asnResent, 2)
+  assert.equal(g.counts.asnResentRefs, 1) // two dead copies of ONE shipment
+  assert.equal(g.counts.asnUnannounced, 0) // …and zero exposure
+  assert.equal(g.counts.asnStuck, 2) // the union still reports what sits in Orderful
+  // The headline slot must never name a shipment that actually arrived announced.
+  assert.equal(g.oldestAsnStuck, null)
+  assert.equal(g.resent.asn[0].supersededBy, 'SHIP1')
+})
+
+test('the twin must match on kind AND reference — a delivered 810 never excuses a stuck 856', () => {
+  const g = computeEdiDeliveryGaps([
+    { ...asn({ id: '1', businessNumber: 'REF9', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED', createdAt: '2025-01-01T00:00:00Z' }), type: '810_INVOICE' },
+    asn({ id: '2', businessNumber: 'REF9', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+    // A different DC on the same PO ships under its own reference, so it gets no
+    // free pass from its sibling. This is why the key is the business number and
+    // NOT the PO: PO 22225558 carries six 856s, one per DC.
+    asn({ id: '3', businessNumber: 'REF9-DC299', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.asnResent, 0)
+  assert.equal(g.counts.asnUnannounced, 2)
+})
+
+test('a TEST-stream or rejected twin is not proof the partner was told', () => {
+  const g = computeEdiDeliveryGaps([
+    // Delivered and accepted, but on the TEST stream — no real partner saw it.
+    { ...asn({ id: '1', businessNumber: 'T1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED', createdAt: '2025-01-01T00:00:00Z' }), stream: 'TEST' },
+    asn({ id: '2', businessNumber: 'T1', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+    // Delivered but REJECTED — arrived and was refused, so it announces nothing.
+    asn({ id: '3', businessNumber: 'R1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'REJECTED', createdAt: '2025-01-01T00:00:00Z' }),
+    asn({ id: '4', businessNumber: 'R1', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.asnResent, 0)
+  assert.equal(g.counts.asnUnannounced, 2)
+})
+
+test('ACCEPTED_WITH_ERRORS counts as a landed twin — the shipment IS announced', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: 'W1', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED_WITH_ERRORS', createdAt: '2025-01-01T00:00:00Z' }),
+    asn({ id: '2', businessNumber: 'W1', deliveryStatus: 'PENDING', createdAt: '2025-02-01T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.asnResent, 1)
+  assert.equal(g.counts.asnUnannounced, 0)
+})
+
+test('two stuck copies of ONE invoice is one invoice to chase', () => {
+  // Nordstrom transmitted invoice 327510304 twice and both copies stalled. The
+  // chip counts references, not documents, so this reads 1 rather than 2.
+  const inv = (o) => ({ ...asn(o), type: '810_INVOICE' })
+  const g = computeEdiDeliveryGaps([
+    inv({ id: '1', businessNumber: '327510304', deliveryStatus: 'PENDING', createdAt: '2025-09-09T00:00:00Z' }),
+    inv({ id: '2', businessNumber: '327510304', deliveryStatus: 'PENDING', createdAt: '2025-09-16T00:00:00Z' }),
+    inv({ id: '3', businessNumber: '3426159210', deliveryStatus: 'PENDING', createdAt: '2025-09-23T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.invoiceUnannounced, 3) // documents
+  assert.equal(g.counts.invoiceUnannouncedRefs, 2) // invoices
+  assert.equal(g.counts.invoiceResent, 0) // neither one ever landed, so nothing is superseded
+})
+
+test('a document with no business number can never be excused as a re-send', () => {
+  const g = computeEdiDeliveryGaps([
+    asn({ id: '1', businessNumber: null, deliveryStatus: 'PENDING', createdAt: '2025-01-01T00:00:00Z' }),
+    asn({ id: '2', businessNumber: '', deliveryStatus: 'DELIVERED', acknowledgmentStatus: 'ACCEPTED', createdAt: '2025-01-01T00:00:00Z' }),
+  ], NOW)
+  assert.equal(g.counts.asnResent, 0)
+  assert.equal(g.counts.asnUnannounced, 1)
+  assert.equal(g.counts.asnUnannouncedRefs, 0) // unknown reference — countable as a doc, not as a shipment
 })
 
 test('computeEdiDeliveryGaps ignores inbound and TEST-stream documents', () => {
@@ -1400,10 +1482,18 @@ import { courtLine, warehouseLine } from '../src/model/courtVoice.js'
 test('courtVoice: picks the lane Nima can finish himself, not the biggest number', () => {
   // 61 stuck invoices would drown out 4 labels every single day.
   const line = courtLine([
-    { key: 'invoiceStuck', n: 61, label: 'invoices never sent' },
+    { key: 'invoiceUnannounced', n: 61, label: 'invoices never sent' },
     { key: 'needsLabel', n: 4, label: 'need a label' },
   ])
   assert.match(line, /4 parcels need a label/)
+})
+
+test('courtVoice: the invoice lane never claims the money went unpaid', () => {
+  // We can see that the 810 never reached the partner. We CANNOT see whether the
+  // invoice was settled some other way, so the line must not say it was not.
+  const line = courtLine([{ key: 'invoiceUnannounced', n: 11, label: 'invoices never sent' }])
+  assert.match(line, /11 invoices never went out to the partner/)
+  assert.doesNotMatch(line, /money/i)
 })
 
 test('courtVoice: an item aging past a week overrides the lane order', () => {
