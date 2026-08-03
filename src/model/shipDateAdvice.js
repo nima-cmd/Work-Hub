@@ -83,11 +83,52 @@ export const FLOORS = [
   { key: 'IF_DATE', field: 'ifDate', strength: 'weak', label: 'fulfilment created' },
 ]
 
+// ── The EDI lane is a different animal, and measuring it like boutique lies ───
+//
+// An EDI shipment is never scanned per fulfilment. The cargo tag is per PO-DC
+// (`DC:<po>:<abbrev>`), and one tag covers several IFs — measured 2026-08-03:
+// median 3, max 10, only 16 of 39 scanned keys are 1:1. So a fulfilment's
+// custody evidence is its DC's, not its own, and `custodyIn` is null for all 50
+// shipped EDI IFs.
+//
+// The trap is what happens next. CUSTODY_IN means different things in the two
+// lanes:
+//   • boutique — back in your hands, about to go out the door. A TIGHT floor.
+//   • EDI      — packed, now waiting days for the retailer's authorized truck.
+//
+// Measured on those 50: the cartons were scanned in 2026-07-22, the routing
+// authorization (auth 55753138, 8 BOLs) set pickup for 07-29, and the IFs were
+// marked shipped 07-30. Treating the scan as a tight floor reports every one of
+// them as "7 days adrift" — 47 flags against ZERO real problems (0 month
+// crossings, 0 impossible dates, and all 15 cargo tags shipped on ONE date,
+// which is a truck, not sloppy dating). That gap is DWELL, not drift.
+//
+// So for EDI the physical floor is still the DC scan (goods cannot ship before
+// they are packed — that is what catches an impossible date), but the date you
+// should actually type is the routing authorization's pickup date. It is a PLAN
+// rather than proof of departure, so it is labelled as such and never presented
+// as a fact we observed — same discipline as the rest of this module.
+export const EDI_FLOORS = [
+  { key: 'DC_CUSTODY_IN', field: 'dcCustodyIn', strength: 'scan', label: 'cargo tag scanned back in' },
+  { key: 'DC_CUSTODY_OUT', field: 'dcCustodyOut', strength: 'scan', label: 'cargo tag handed to the warehouse' },
+  { key: 'IF_DATE', field: 'ifDate', strength: 'weak', label: 'fulfilment created' },
+]
+
+// The authorized pickup date, which is the EDI lane's answer to "what date do I
+// type". Strength 'plan' because the retailer scheduled it; we did not watch it.
+export const ROUTING_BASIS = {
+  key: 'ROUTING_AUTH', field: 'routingShipDate', strength: 'plan',
+  label: 'the routing authorization\'s pickup date',
+}
+
 // The tightest honest lower bound on departure for one fulfilment.
 // Returns null when we hold nothing at all — the caller must then say "no
 // evidence", not fall back to today.
+//
+// `row.edi` switches to the per-DC chain. Boutique rows are untouched, so a
+// caller that never sets it behaves exactly as before.
 export function honestFloor(row = {}) {
-  for (const f of FLOORS) {
+  for (const f of row.edi ? EDI_FLOORS : FLOORS) {
     const date = asDate(row[f.field])
     if (date) return { key: f.key, date, strength: f.strength, label: f.label }
   }
@@ -132,14 +173,31 @@ export function shipDateAdvice(row = {}, { today = new Date() } = {}) {
     }
   }
 
-  const driftDays = calendarDays(floor.date, wouldUse)
-  const impossible = driftDays < 0
-  const crossesMonthClose = !impossible && !sameMonth(floor.date, wouldUse)
+  // On the EDI lane the date to type is the authorized pickup, not the packing
+  // scan. Falls back to the physical floor when no authorization is on file.
+  const auth = row.edi ? asDate(row[ROUTING_BASIS.field]) : null
+  const basis = auth ? { ...ROUTING_BASIS, date: auth } : floor
 
-  const severity = impossible
+  // `impossible` ALWAYS measures against the physical floor: the goods cannot
+  // have left before they were packed, whatever the paperwork scheduled. Marking
+  // a shipment earlier than its authorized pickup is merely early, not a lie.
+  const impossible = calendarDays(floor.date, wouldUse) < 0
+
+  // Drift is measured against the basis — the date we are telling you to use.
+  const driftDays = calendarDays(basis.date, wouldUse)
+  const crossesMonthClose = !impossible && !sameMonth(basis.date, wouldUse)
+
+  // An EDI shipment with no authorization on file: the gap between packing and
+  // the retailer's truck is expected DWELL, and reporting it as drift produced
+  // 47 phantom flags against 0 real problems (see the EDI_FLOORS note above).
+  // A month crossing or an impossible date still counts — those are real
+  // whatever the lane.
+  const dwellOnly = !!row.edi && !auth
+
+  const severity = impossible || crossesMonthClose
     ? SEVERITY.MONTH
-    : crossesMonthClose
-      ? SEVERITY.MONTH
+    : dwellOnly
+      ? SEVERITY.NONE
       : driftDays >= 2
         ? SEVERITY.DRIFT
         : driftDays >= 1
@@ -148,23 +206,30 @@ export function shipDateAdvice(row = {}, { today = new Date() } = {}) {
 
   return {
     ifNumber: row.ifNumber || null,
-    suggestedDate: ymd(floor.date),
-    basis: floor.key,
-    basisLabel: floor.label,
-    strength: floor.strength,
+    suggestedDate: ymd(basis.date),
+    basis: basis.key,
+    basisLabel: basis.label,
+    strength: basis.strength,
     driftDays,
     crossesMonthClose,
     impossible,
     severity,
-    advice: adviceLine({ floor, driftDays, crossesMonthClose, impossible, marked }),
+    dwellOnly,
+    advice: adviceLine({ floor: basis, driftDays, crossesMonthClose, impossible, marked, dwellOnly }),
   }
 }
 
-function adviceLine({ floor, driftDays, crossesMonthClose, impossible, marked }) {
+function adviceLine({ floor, driftDays, crossesMonthClose, impossible, marked, dwellOnly }) {
   const on = ymd(floor.date)
   const was = `${on} (${floor.label})`
   if (impossible) {
     return `Marked ${ymd(marked)} — but it was still ${floor.label} on ${on}. That date cannot be right.`
+  }
+  // Say why we are NOT giving a date rather than going quiet: an EDI carton sits
+  // between packing and the retailer's truck, so the packing scan is a floor, not
+  // a suggestion. Volunteering it would name a date days before the truck came.
+  if (dwellOnly && !crossesMonthClose) {
+    return `Packed ${on} (${floor.label}); it then waits for the retailer's truck, so this cannot date the departure. Use the routing authorization.`
   }
   if (crossesMonthClose) {
     const verb = marked ? 'It was marked' : 'Marking it today puts it'
