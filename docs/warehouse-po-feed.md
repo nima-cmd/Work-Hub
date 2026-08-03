@@ -1,18 +1,25 @@
-# Warehouse PO feed — `ns_open_po_lines`
+# Warehouse feed — `ns_open_po_lines` + `ns_item_location_qtys`
 
-Work-Hub pushes every **open PO item line** (statuses Pending Receipt +
-Partially Received) into the Naghedi-Warehouse app's Supabase on every sync
-cycle, replacing that app's manual "PO Warehouse View" CSV import. Built
-2026-08-03 against the receiving-side spec; code in
-`src/ingest/warehouseFeed.js`, manual run via `npm run sync:warehouse-pos`.
+Work-Hub pushes two NetSuite mirrors into the Naghedi-Warehouse app's Supabase
+on every sync cycle, replacing that app's manual CSV imports:
+
+- **`ns_open_po_lines`** — every open PO item line (statuses Pending Receipt +
+  Partially Received), replacing the "PO Warehouse View" CSV. Built 2026-08-03
+  against the receiving-side spec; manual run via `npm run sync:warehouse-pos`.
+- **`ns_item_location_qtys`** — every stocked item-location quantity,
+  replacing the "Warehouse Item View" CSV (which fills the app's SKU catalog +
+  per-location quantities). Built 2026-08-03; manual run via
+  `npm run sync:warehouse-inventory`.
+
+Code for both in `src/ingest/warehouseFeed.js`.
 
 ## Ownership
 
-**Work-Hub owns `ns_open_po_lines` and writes nothing else in that project.**
-The warehouse app reads it; its own tables (`purchase_orders`, `bins`,
+**Work-Hub owns the two `ns_*` tables and writes nothing else in that project.**
+The warehouse app reads them; its own tables (`purchase_orders`, `bins`,
 `bin_skus`, `containers`, `sku_catalog`, `location_qtys`, `app_meta`, …) are
-never touched by this feed. The app's existing CSV import can keep full-wiping
-its own `purchase_orders` without colliding with anything.
+never touched by these feeds. The app's existing CSV imports can keep
+full-wiping their own tables without colliding with anything.
 
 ## One-time setup (Supabase SQL editor)
 
@@ -43,6 +50,19 @@ create table if not exists ns_open_po_lines (
 );
 -- Matches the project's other tables: the app writes with the anon key, so
 -- RLS stays off. (Tables created via the SQL editor default to RLS disabled.)
+
+create table if not exists ns_item_location_qtys (
+  item_id       text        not null,  -- NetSuite item internal id
+  location_id   text        not null,  -- NetSuite location internal id
+  sku           text        not null,  -- NetSuite itemid verbatim (the app's SKU key)
+  display_name  text,                  -- e.g. "Alhaja Pez Necklace | Gold"
+  item_type     text,                  -- InvtPart etc — the reader owns catalog rules
+  location_name text,                  -- location.fullname, FULL path ("Warehouse Bulk : Nordstrom")
+  qty_available numeric     not null default 0,  -- on hand minus commitments
+  qty_on_hand   numeric     not null default 0,  -- the physical count
+  synced_at     timestamptz not null,  -- push batch stamp; max(synced_at) = feed freshness
+  primary key (item_id, location_id)
+);
 ```
 
 ## Semantics the reader can rely on
@@ -78,10 +98,27 @@ pair already in `.env.local`. Unset = the push skips silently, like every other
 integration — the `warehousePoFeed` row in `import_snapshots` is the freshness
 record on the Work-Hub side.
 
-## Phase 2 (not built)
+## Inventory feed semantics (`ns_item_location_qtys`)
 
-Inventory (`sku_catalog`/`location_qtys`) could be fed the same way, but those
-tables are the app's NetSuite mirror for bin-fill and packing-slip validation,
-their import is delete-and-replace from the browser, and Work-Hub does not
-ingest inventory yet — roadmap item 5 is the prerequisite. Deliberately out of
-scope here.
+- **One row per (item, location) with a nonzero on-hand OR available qty** —
+  source is NetSuite's `aggregateItemLocation` balance table, read live.
+  Negative quantities are sent as-is (an oversold location is a fact, not
+  noise); the reader clamps if it wants to.
+- **Both qty measures ride along** because the old CSV pivot never said which
+  one it carried: `qty_available` subtracts commitments, `qty_on_hand` is the
+  physical count. The reader picks — for bin-fill the physical count is
+  probably the honest one.
+- **No SKU-shape or item-type filtering here.** The app's CSV parser already
+  skips non-SKU rows by its own pattern; a feed that pre-filters would
+  silently hide rows the app could see in its own export. `item_type` rides
+  along so the reader can scope.
+- **Location names are FULL paths**, same rule as the PO feed's destinations.
+  The CSV's column headers were whatever the saved search pivoted — the reader
+  maps names, never positions.
+- Freshness/sweep discipline is identical to the PO feed: one batch stamp,
+  sweep only after every upsert batch lands, truncated/empty pulls never
+  replace the mirror. Its snapshot row is `warehouseInventoryFeed`.
+- **The app-side reader is not built yet** (their repo, same split as the PO
+  feed's `nsPoFeed.js`): it would fill the `wh_sku_catalog` /
+  `wh_location_qtys` localStorage maps the way `parseCatalogCsv` does, with
+  the CSV import kept as fallback.
