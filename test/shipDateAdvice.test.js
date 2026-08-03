@@ -145,3 +145,91 @@ test('monthCloseCount counts what belongs on the chip', () => {
   ]
   assert.equal(monthCloseCount(items), 2)
 })
+
+// ── The EDI lane (measured live 2026-08-03) ──────────────────────────────────
+//
+// Real shape: PO 7590875 DC "SC" — 10 fulfilments under ONE cargo tag, scanned
+// back in 2026-07-22, routing auth 55753138 set pickup for 07-29, IFs marked
+// shipped 07-30. Treating the scan as a tight floor called all of them "7 days
+// adrift"; 47 such flags existed against 0 real problems.
+
+test('EDI reads its custody off the cargo tag, not the fulfilment', () => {
+  // 0 of the 50 shipped EDI IFs carry IF-level custody, so the per-IF fields are
+  // null and only the DC ones are populated.
+  const f = honestFloor({ edi: true, custodyIn: null, dcCustodyIn: d('2026-07-22') })
+  assert.equal(f.key, 'DC_CUSTODY_IN')
+  assert.match(f.label, /cargo tag/)
+  // Boutique must be untouched by the new chain.
+  assert.equal(honestFloor({ custodyIn: d('2026-07-27') }).key, 'CUSTODY_IN')
+  // A DC scan is invisible to the boutique chain — it isn't that IF's evidence.
+  assert.equal(honestFloor({ dcCustodyIn: d('2026-07-22') }), null)
+})
+
+test('the routing authorization is the EDI date to type, not the packing scan', () => {
+  const a = shipDateAdvice({
+    ifNumber: 'IF7302', edi: true,
+    dcCustodyIn: d('2026-07-22'),
+    routingShipDate: d('2026-07-29'),
+    markedDate: d('2026-07-30'),
+  })
+  assert.equal(a.basis, 'ROUTING_AUTH')
+  assert.equal(a.suggestedDate, '2026-07-29')
+  // Against the auth the real drift is ONE day, not the seven the scan implies.
+  assert.equal(a.driftDays, 1)
+  assert.equal(a.severity, SEVERITY.MINOR)
+  // It is a plan the retailer set, never something we watched happen.
+  assert.equal(a.strength, 'plan')
+})
+
+test('routing dwell is not drift — the 47 phantom flags stay silent', () => {
+  // Same carton, no authorization on file: the 7-day gap is the carton waiting
+  // for the truck. Reporting it would be the false positive this exists to stop.
+  const a = shipDateAdvice({
+    ifNumber: 'IF7317', edi: true,
+    dcCustodyIn: d('2026-07-22'),
+    markedDate: d('2026-07-29'),
+  })
+  assert.equal(a.driftDays, 7)
+  assert.equal(a.severity, SEVERITY.NONE, '7 days of dwell must not raise anything')
+  assert.equal(a.dwellOnly, true)
+  assert.match(a.advice, /waits for the retailer's truck/)
+  // Boutique with the SAME 7-day gap is real drift and must still fire.
+  const boutique = shipDateAdvice({ custodyIn: d('2026-07-22'), markedDate: d('2026-07-29') })
+  assert.equal(boutique.severity, SEVERITY.DRIFT)
+})
+
+test('dwell never excuses a month close or an impossible date', () => {
+  // Packed Jul 22, marked Aug 3: dwell or not, that books in the wrong month.
+  const crossing = shipDateAdvice({
+    ifNumber: 'IF7320', edi: true, dcCustodyIn: d('2026-07-22'), markedDate: d('2026-08-03'),
+  })
+  assert.equal(crossing.crossesMonthClose, true)
+  assert.equal(crossing.severity, SEVERITY.MONTH)
+  assert.equal(monthCloseCount([crossing]), 1)
+
+  // Marked BEFORE the cartons were packed — impossible, whatever the plan said.
+  const impossible = shipDateAdvice({
+    ifNumber: 'IF7305', edi: true,
+    dcCustodyIn: d('2026-07-22'), routingShipDate: d('2026-07-29'), markedDate: d('2026-07-20'),
+  })
+  assert.equal(impossible.impossible, true)
+  assert.equal(impossible.severity, SEVERITY.MONTH)
+})
+
+test('shipping before the authorized pickup is early, not impossible', () => {
+  // The truck came a day sooner than scheduled. The goods were already packed on
+  // the 22nd, so nothing was faked — this must not be reported as impossible.
+  const a = shipDateAdvice({
+    ifNumber: 'IF7311', edi: true,
+    dcCustodyIn: d('2026-07-22'), routingShipDate: d('2026-07-29'), markedDate: d('2026-07-28'),
+  })
+  assert.equal(a.impossible, false)
+  assert.equal(a.driftDays, -1)
+})
+
+test('an EDI fulfilment with no scan and no auth still admits it knows nothing', () => {
+  const a = shipDateAdvice({ ifNumber: 'IF9999', edi: true }, { today: d('2026-08-03') })
+  assert.equal(a.suggestedDate, null)
+  assert.equal(a.severity, SEVERITY.NONE)
+  assert.match(a.basisLabel, /no custody scan/)
+})

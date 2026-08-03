@@ -1549,7 +1549,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            i.status         AS "invoiceStatus",
            i.amount_total   AS "invoiceTotal",
            c.custody_in     AS "custodyIn",
-           c.custody_out    AS "custodyOut"
+           c.custody_out    AS "custodyOut",
+           dcx.custody_in   AS "dcCustodyIn",
+           dcx.custody_out  AS "dcCustodyOut",
+           rs.ship_date     AS "routingShipDate"
     FROM fulfillments f
     LEFT JOIN orders   o ON o.so_number = f.so_number
     LEFT JOIN invoices i ON i.inv_number = f.invoice_number
@@ -1564,6 +1567,28 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       FROM order_events WHERE doc_type = 'IF' AND event_type IN ('CUSTODY_IN','CUSTODY_OUT')
       GROUP BY doc_number
     ) c ON c.doc_number = f.if_number
+    -- An EDI shipment is scanned per PO-DC cargo tag, NEVER per fulfilment, so
+    -- its custody evidence lives under doc_type='DC' keyed '<po>:<dc>'. Measured
+    -- 2026-08-03: 0 of the 50 shipped EDI IFs carry IF-level custody, while 49
+    -- of them sit under a scanned cargo tag.
+    LEFT JOIN (
+      SELECT doc_number,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_IN')  AS custody_in,
+             MAX(occurred_at) FILTER (WHERE event_type = 'CUSTODY_OUT') AS custody_out
+      FROM order_events WHERE doc_type = 'DC' AND event_type IN ('CUSTODY_IN','CUSTODY_OUT')
+      GROUP BY doc_number
+    ) dcx ON dcx.doc_number = o.po_number || ':' || COALESCE(o.dc, '')
+    -- The authorized pickup date: on the EDI lane THIS is the date to type, not
+    -- the packing scan (which precedes the retailer's truck by days of dwell).
+    -- LATERAL + LIMIT 1 because a DC can carry several shipments and a plain join
+    -- would silently duplicate the fulfilment row.
+    LEFT JOIN LATERAL (
+      SELECT r.ship_date
+      FROM routing_shipment r
+      WHERE r.dc = o.dc AND o.po_number = ANY(r.member_pos)
+      ORDER BY r.ship_date DESC NULLS LAST, r.id DESC
+      LIMIT 1
+    ) rs ON TRUE
     -- Packed but not yet shipped. actual_ship_date is the belt-and-suspenders:
     -- anything with a real ship date has already departed.
     WHERE f.actual_ship_date IS NULL
@@ -1582,18 +1607,28 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // (it was 12 of the first 16 hits). Their equivalent gap is a missing BOL,
     // which the routing workspace already owns. Only the parcel lane belongs in
     // the needs-a-label list.
-    const lane = r.source === 'edi' ? 'freight' : 'parcel'
+    const edi = r.source === 'edi'
+    const lane = edi ? 'freight' : 'parcel'
     return {
       ...r,
       trackingNumbers: tracking,
       lane,
       kind: labelled ? 'LABELLED_NOT_SHIPPED' : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
       ageDays,
-      // WHICH DATE to type when marking it shipped (Nima's step 6). Only the
-      // labelled ones get it: an IF with no label hasn't gone anywhere, so
-      // dating its departure would be fiction.
-      advice: labelled
-        ? shipDateAdvice({ ifNumber: r.ifNumber, custodyIn: r.custodyIn, custodyOut: r.custodyOut, ifDate: r.ifDate }, { today })
+      // WHICH DATE to type when marking it shipped (Nima's step 6).
+      //
+      // A PARCEL IF with no label hasn't gone anywhere, so dating its departure
+      // would be fiction — those still get nothing. But FREIGHT never carries a
+      // parcel label at all, so gating on `labelled` silently excluded the entire
+      // EDI lane from step 6; that, as much as the missing per-IF custody, is why
+      // no EDI fulfilment has ever been given a ship date to use.
+      advice: labelled || lane === 'freight'
+        ? shipDateAdvice({
+          ifNumber: r.ifNumber, ifDate: r.ifDate, edi,
+          custodyIn: r.custodyIn, custodyOut: r.custodyOut,
+          dcCustodyIn: r.dcCustodyIn, dcCustodyOut: r.dcCustodyOut,
+          routingShipDate: r.routingShipDate,
+        }, { today })
         : null,
       // A labelled-but-unshipped IF is the more urgent of the two: the customer
       // already has the package while our books say it never left.
@@ -1610,7 +1645,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   // nothing but tidiness. Age still decides ties, via the advice's drift.
   const labelledNotShipped = rankShipDateAdvice(items.filter((i) => i.kind === 'LABELLED_NOT_SHIPPED'))
   const needsLabel = items.filter((i) => i.kind === 'NEEDS_LABEL')
-  const freight = items.filter((i) => i.kind === 'FREIGHT_BOL_LANE')
+  // Ranked on the same month-close rule now that freight carries advice, so an
+  // EDI shipment about to be booked into the wrong month sorts to the top of its
+  // own list rather than sitting in fulfilment-date order.
+  const freight = rankShipDateAdvice(items.filter((i) => i.kind === 'FREIGHT_BOL_LANE'))
   return {
     items,
     labelledNotShipped,
@@ -1622,6 +1660,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       freight: freight.length,
       // The expensive subset: marking these today books them in the wrong month.
       monthClose: monthCloseCount(labelledNotShipped),
+      // Deliberately a SEPARATE number, never added to the one above (the
+      // never-lump rule): a parcel shipment needs marking shipped, a freight one
+      // needs its BOL date honoured. Same cost, different action.
+      freightMonthClose: monthCloseCount(freight),
     },
     // Age the ACTIONABLE items only — a freight shipment awaiting its BOL
     // shouldn't inflate the parcel backlog's headline number.

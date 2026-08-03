@@ -310,6 +310,10 @@ export function ShipDeskSector({ labelGaps, onNavigate }) {
   const monthClose = labelGaps.counts?.monthClose ?? 0
   const unlabelled = [...(labelGaps.needsLabel || [])].sort(byAgeDesc)
   const freight = labelGaps.freight || []
+  // Kept as its OWN number, never added to `monthClose` above (the never-lump
+  // rule): a parcel shipment needs marking shipped, a freight one needs its BOL
+  // date honoured. Same cost, different action, different column.
+  const freightMonthClose = labelGaps.counts?.freightMonthClose ?? 0
 
   if (!marked.length && !unlabelled.length && !freight.length) {
     return <div className="empty">Ship desk clear — nothing packed is waiting on you 🎉</div>
@@ -353,7 +357,18 @@ export function ShipDeskSector({ labelGaps, onNavigate }) {
         <div className="deskHead info">
           ⛴ FREIGHT · BOL LANE <span className="sectorCount">{freight.length}</span>
         </div>
-        <div className="deskWhy">EDI partners move on a BOL, never a parcel label — routed, not labelled.</div>
+        <div className="deskWhy">
+          EDI partners move on a BOL, never a parcel label — routed, not labelled.
+          {/* An EDI carton sits between packing and the retailer's truck, so its
+              day-to-day gap is DWELL and stays silent. A month crossing is the one
+              case that costs real money, so it is the one case that speaks. */}
+          {freightMonthClose > 0 && (
+            <span className="deskAlarm">
+              {freightMonthClose === 1 ? '1 would book' : `${freightMonthClose} would book`} into
+              a closed month — use the routing authorization's date, not today's.
+            </span>
+          )}
+        </div>
         {freight.length > 0 ? (
           <>
             <div className="freightRoll">
