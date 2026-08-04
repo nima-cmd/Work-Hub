@@ -122,7 +122,14 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   const heldForPayment = labelGaps.counts?.heldForPayment ?? 0
   const withNestor = custody ? custody.filter((c) => c.state === 'with_warehouse').length : null
   const canShip = bay ? bay.filter((s) => s.floating).length : null
+  // Step 4: every packed IF has an invoice. PACKED means "packed, no invoice
+  // yet" — but ONLY since 2026-08-04. Before that no order could leave PACKED at
+  // all on the live sync (no mapper set the stage an invoice implies), so this
+  // chip read 4 while all four of those orders were invoiced, and the SAME four
+  // also read "held for payment" one chip along. See src/model/pipeline.js.
   const needsInvoice = orders.filter((o) => o.stage === STAGE.PACKED).length
+  // Already gone, money still outstanding on terms that should have held it.
+  const shippedWhileOwing = labelGaps.shippedWhileOwing?.counts?.total ?? 0
   // Outbound EDI that never reached the partner. ASNs and invoices stay apart —
   // an unannounced shipment is a compliance chargeback, an undelivered invoice is
   // money not asked for. `refused` is excluded from these chips on purpose: it
@@ -173,7 +180,9 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
     { key: 'heldForPayment', n: heldForPayment, label: 'held for payment', tone: 'info', to: 'launch',
       title: 'Packed and correctly waiting: money is owed and actually due, so these must not ship yet. Derived from the invoice terms and what is still outstanding — NOT from the hand-set Approved-For-Shipping field, so it stays right whether or not anyone has updated that. Net 30/45/60 and paid-in-full invoices are never held here' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',
-      title: 'Packed and waiting on an invoice' },
+      title: 'Packed with no invoice against the order yet. An order that HAS one moves on to Invoiced — pending payment or Approved for shipping, so it no longer counts here; if it is also being held for payment it says so on its own chip rather than twice' },
+    { key: 'shippedWhileOwing', n: shippedWhileOwing, label: 'shipped, still owed', tone: 'bad', to: 'health',
+      title: 'These shipments have already left, and money is still outstanding on terms that should have held them back (Due on receipt with a balance). Net terms and paid invoices never appear here. It says "still owed" rather than "shipped before paying" on purpose: the balance is what is open RIGHT NOW, and no history of the balance on the day it shipped exists to check against' },
     { key: 'asnUnannounced', n: asnUnannounced, label: 'shipments unannounced', tone: 'bad', to: 'edi',
       title: 'Shipments whose 856 never reached the partner AND has no accepted copy either — the partner genuinely was never told. Superseded re-sends sitting in Orderful are excluded: they are stale copies of shipments already accepted, so counting them here would invent chargeback exposure' },
     { key: 'cartonsUnannounced', n: cartonsUnannounced, label: 'cartons unannounced', tone: 'bad', to: 'edi',

@@ -4,17 +4,61 @@
 // (the legend on the "Packed, Not Yet Shipped" portlet) as machine-readable
 // flags.
 
-import { STAGE, furthestStage } from './stages.js'
+import { STAGE, STAGE_RANK, furthestStage } from './stages.js'
 import { shipWindowFlags } from './shipWindow.js'
+import { paymentBlocked } from './paymentGate.js'
 
 const DAY = 86_400_000
 
-// The invoiced search's "Shipping Status" tells us whether an invoiced order
-// has already been approved to ship, or is still waiting on payment/approval.
-function stageFromShipping(shippingStatus) {
-  const s = (shippingStatus || '').toLowerCase()
+// ── WHERE AN INVOICED ORDER SITS ─────────────────────────────────────────────
+//
+// ⚠️ THIS WAS DEAD ON THE LIVE PATH FOR THE WHOLE LIVE-INGEST ERA (found
+// 2026-08-04). The old version keyed off `rec.stage === STAGE.INVOICED`, which
+// only the retired CSV mappers ever emit (savedSearches.js). `mapInvoiceRow`
+// emits no stage at all, so on the live sync NO order could ever leave PACKED:
+// measured live, 0 of 238 orders sat at INVOICED or APPROVED, and both stages —
+// with their labels and next-actions — were unreachable.
+//
+// Three surfaces were lying as a direct result:
+//   · the court strip's "need an invoice" chip (`stage === PACKED`) read 4 while
+//     all 4 of those orders had an invoice — and the SAME four also read
+//     "held for payment", so the strip gave opposite advice about one set of
+//     shipments;
+//   · routeItems' day plan queued an "Invoice <customer>" task for them;
+//   · routeItems' "Ship it out" leg (gated on STAGE.APPROVED) could never fire.
+//
+// So the promotion is now derived from the ORDER — an invoice number from any
+// source — rather than from one mapper remembering to set a stage.
+function isInvoiced(o) {
+  return !!o.invoice || STAGE_RANK[o.stage] >= STAGE_RANK[STAGE.INVOICED]
+}
+
+// Which of the two invoiced stages. Prefers objective evidence over the
+// hand-maintained field, the rule PR #47 established for the ship gate: terms +
+// what is still owed decide, so a stale `shippingStatus` can neither hold an
+// order back nor push it forward (src/model/paymentGate.js).
+function invoicedStage(o) {
+  const payments = o.invoicePayments || []
+  if (payments.length) {
+    // ANY invoice still owing holds the order. Not first-wins: an SO can carry
+    // several invoices (the MULTI_DOC case we flag rather than model), and
+    // "one of them is paid" is not "clear to ship".
+    if (payments.some(paymentBlocked)) return STAGE.INVOICED
+    // Nothing is blocking payment — but "Ship it out" is only honest once the
+    // goods are actually packed. An invoice can precede its fulfilment, and
+    // without this guard such an order would jump straight to APPROVED and read
+    // as ready to leave while it is still being picked.
+    return hasPackedFulfillment(o) ? STAGE.APPROVED : STAGE.INVOICED
+  }
+  // No terms or balance on any record — the CSV path, where the hand-maintained
+  // "Shipping Status" is the only signal there is. Unchanged behavior.
+  const s = (o.shippingStatus || '').toLowerCase()
   if (s.includes('approved for shipping') || s.includes('shipped')) return STAGE.APPROVED
   return STAGE.INVOICED // "Pending Payment", "FOB Pending Approval", etc.
+}
+
+function hasPackedFulfillment(o) {
+  return o.fulfillments.some((f) => /packed|shipped/i.test(f.status || f.packedStatus || ''))
 }
 
 export function buildPipeline(allRecords, { today = new Date() } = {}) {
@@ -56,6 +100,11 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
         // into one cargo tag per PO-DC (Nima, 2026-08-02).
         dc: null,
         storeNumber: null,
+        // Payment evidence, one entry per invoice record seen for this SO. Kept
+        // as a list rather than folded onto the order because the gate must
+        // consider EVERY invoice (see invoicedStage) — a single first-wins
+        // `amountRemaining` would let a paid invoice speak for an unpaid one.
+        invoicePayments: [],
       })
     }
     return orders.get(key)
@@ -82,10 +131,16 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     if (rec.location && !o.location) o.location = rec.location
     if (rec.poNumber) o.poNumber = rec.poNumber
 
-    // advance the order's stage to the furthest point any source reports
-    let recStage = rec.stage
-    if (rec.stage === STAGE.INVOICED) recStage = stageFromShipping(rec.shippingStatus)
-    o.stage = furthestStage(o.stage, recStage)
+    // advance the order's stage to the furthest point any source reports. Which
+    // of the two INVOICED stages an invoice implies is decided after the loop,
+    // once every invoice and fulfilment for this SO has been seen — see
+    // invoicedStage.
+    o.stage = furthestStage(o.stage, rec.stage)
+
+    // The objective half of the ship gate, straight off the invoice record.
+    if (rec.terms != null || rec.amountRemaining != null) {
+      o.invoicePayments.push({ terms: rec.terms ?? null, amountRemaining: rec.amountRemaining ?? null })
+    }
 
     for (const k of CARRY) {
       const empty = o[k] == null || o[k] === '' || o[k] === false
@@ -117,6 +172,10 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
   }
 
   for (const o of orders.values()) {
+    // An invoice exists, so this order is past "packed — watching for invoice".
+    // furthestStage keeps SHIPPED where it is; nothing here can move an order
+    // backwards.
+    if (isInvoiced(o)) o.stage = furthestStage(o.stage, invoicedStage(o))
     o.flags = computeFlags(o, today)
     o.sources = [...o.sources]
   }
