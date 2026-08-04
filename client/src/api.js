@@ -932,3 +932,13 @@ export async function fetchHealth() {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Overdue invoices — a DIAGNOSTIC, never a shipping gate (Nima, 2026-08-04:
+// "while it doesn't directly fall into our job it's nice to know"). An overdue
+// invoice means either the money arrived and wasn't posted, or we never asked
+// for it — and on the EDI lane the second is checkable against the 810.
+export async function fetchOverdueInvoices() {
+  const res = await fetch('/api/overdue-invoices')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
