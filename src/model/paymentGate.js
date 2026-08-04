@@ -15,8 +15,13 @@
 // is accurate — the cost of it is the LABOUR, not errors.
 //
 // So shippability is DERIVED from objective fields instead: the terms, what is
-// still owed, and the due date. The manual field stays useful as a record of
-// what a human decided, never as the test.
+// still owed, and the due date.
+//
+// The manual field survives in exactly ONE role, added 2026-08-04 once Nima
+// explained what it is for: a one-way WAIVER. `Approved For Shipping` on a
+// due-on-receipt invoice is the NY office saying "ship it regardless of payment",
+// which is a decision no objective field can hold. It can only ever unblock —
+// see `approvedToShip` below for why that keeps the dependency harmless.
 //
 // The rule, in Nima's words (2026-08-04): "if an invoice is net 30 45 or 60 it
 // can ship, or if no payment is due … If we are however waiting for payment we
@@ -40,6 +45,32 @@ export function paymentDue(terms) {
   return true
 }
 
+// ── THE NY OVERRIDE (Nima, 2026-08-04) ───────────────────────────────────────
+//
+// "We also check for a manual set of the approved to ship on orders that are due
+// on receipt — this is how our NY office lets us know that they want something
+// shipped regardless of payment."
+//
+// So `shipping_status = Approved For Shipping` on a Due-on-receipt invoice is not
+// bookkeeping, it is an INSTRUCTION from another office, and it is the one thing
+// the derived gate cannot work out for itself: no objective field records a
+// decision to waive payment.
+//
+// ⚠️ This does NOT reintroduce the dependency the header warns about, because it
+// can only ever UNBLOCK. If nobody has touched the field — or it is stale, or the
+// sync never pulled it — the answer falls back to the derived one, which is
+// "blocked". The failure direction is holding goods we could have shipped, never
+// shipping goods we were supposed to hold.
+//
+// Only the approval value counts. `Shipped` is not an approval (it describes
+// something already gone, and 2 live invoices carry it with a balance still
+// open); `Pending Payment` and `FOB Pending Approval` are holds, not waivers.
+const APPROVED_TO_SHIP = /approved\s*for\s*shipping/i
+
+export function approvedToShip(shipGate) {
+  return APPROVED_TO_SHIP.test(String(shipGate || ''))
+}
+
 // Does payment block this shipment RIGHT NOW?
 //
 // ⚠️ Net terms that have gone PAST DUE still do NOT block (Nima, 2026-08-04).
@@ -48,19 +79,24 @@ export function paymentDue(terms) {
 // somewhere else (a payment not posted, or an 810 never sent to a partner).
 // Holding goods over it would be the app inventing a policy nobody asked for.
 // Overdue invoices get their own list instead — see `overdueInvoices` below.
-export function paymentBlocked({ terms, amountRemaining } = {}) {
+export function paymentBlocked({ terms, amountRemaining, shipGate } = {}) {
   const owed = Number(amountRemaining ?? 0)
   if (!(owed > 0)) return false        // nothing outstanding — never blocked
+  if (approvedToShip(shipGate)) return false   // NY said ship it anyway
   return paymentDue(terms)
 }
 
 // Why it's clear to ship — for the UI to say something specific rather than
 // just suppressing a chip. Null when payment IS blocking.
-export function clearedReason({ terms, amountRemaining } = {}) {
+export function clearedReason({ terms, amountRemaining, shipGate } = {}) {
   const owed = Number(amountRemaining ?? 0)
   if (!(owed > 0)) return 'paid in full'
   if (NO_PAYMENT.test(terms || '')) return 'no payment required'
   if (NET_TERMS.test(terms || '')) return `${String(terms).trim()} — not due yet`
+  // Named as a decision, not as a state: this row IS owed money and due, and the
+  // only reason it can move is that a person said so. Worth reading as such on
+  // the screen, because it is the one clearance nothing objective backs up.
+  if (approvedToShip(shipGate)) return 'approved to ship despite balance (NY office)'
   return null
 }
 

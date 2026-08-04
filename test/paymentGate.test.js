@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  paymentDue, paymentBlocked, clearedReason, overdueInvoices, overdueSummary,
+  paymentDue, paymentBlocked, clearedReason, approvedToShip,
+  overdueInvoices, overdueSummary,
 } from '../src/model/paymentGate.js'
 import { buildPipeline } from '../src/model/pipeline.js'
 import { STAGE } from '../src/model/stages.js'
@@ -53,6 +54,47 @@ test('clearedReason names why it may ship, and is null when blocked', () => {
   assert.equal(clearedReason({ terms: 'No Payment Required', amountRemaining: 50 }), 'no payment required')
   assert.equal(clearedReason({ terms: 'Net 45', amountRemaining: 50 }), 'Net 45 — not due yet')
   assert.equal(clearedReason({ terms: 'Due on receipt', amountRemaining: 158 }), null)
+})
+
+// ── the NY waiver, at the gate itself ────────────────────────────────────────
+//
+// "We also check for a manual set of the approved to ship on orders that are due
+// on receipt — this is how our NY office lets us know that they want something
+// shipped regardless of payment" (Nima, 2026-08-04).
+test('approvedToShip: only the approval value waives, and it does so one-way', () => {
+  assert.equal(approvedToShip('Approved For Shipping'), true)
+  assert.equal(approvedToShip('approved for shipping'), true)
+  // The other three live values are holds or history, never waivers.
+  assert.equal(approvedToShip('Pending Payment'), false)
+  assert.equal(approvedToShip('FOB Pending Approval'), false)
+  assert.equal(approvedToShip('Shipped'), false)
+  assert.equal(approvedToShip(null), false)
+})
+
+test('paymentBlocked: the NY waiver releases a due-on-receipt hold', () => {
+  const owing = { terms: 'Due on receipt', amountRemaining: 90654.4 }
+  assert.equal(paymentBlocked(owing), true)
+  assert.equal(paymentBlocked({ ...owing, shipGate: 'Approved For Shipping' }), false)
+  // The values that are NOT the waiver must leave the hold exactly as it was.
+  assert.equal(paymentBlocked({ ...owing, shipGate: 'Pending Payment' }), true)
+  assert.equal(paymentBlocked({ ...owing, shipGate: 'FOB Pending Approval' }), true)
+})
+
+// The whole reason the waiver is safe to depend on: an absent, stale or never-
+// synced field falls back to the derived answer, and the derived answer HOLDS.
+// The failure direction is a shipment parked one cycle too long, never a shipment
+// that leaves without authorization.
+test('paymentBlocked: a missing gate never loosens the derived hold', () => {
+  for (const shipGate of [null, undefined, '', 'anything else']) {
+    assert.equal(paymentBlocked({ terms: 'Due on receipt', amountRemaining: 158, shipGate }), true)
+  }
+})
+
+test('clearedReason names the waiver as a decision, not a state', () => {
+  assert.equal(
+    clearedReason({ terms: 'Due on receipt', amountRemaining: 158, shipGate: 'Approved For Shipping' }),
+    'approved to ship despite balance (NY office)',
+  )
 })
 
 // ── the overdue diagnostic ───────────────────────────────────────────────────
@@ -158,11 +200,51 @@ test('an invoice number promotes an order out of PACKED even with no stage on th
 test('payment blocking keeps an invoiced order at INVOICED, never APPROVED', () => {
   const orders = buildPipeline([
     { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
-    // ⚠️ The hand-set field says approved; the derived gate says money is owed on
-    // Due-on-receipt. The derived answer wins — that is the whole point of #47.
-    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Approved For Shipping',
+    // The hand-set field agrees here, but it is not what decides: money is owed on
+    // Due-on-receipt, and the derived gate is what holds the order (#47).
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Pending Payment',
       terms: 'Due on receipt', amountRemaining: 2225.6 },
   ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+// ── the NY waiver ────────────────────────────────────────────────────────────
+//
+// ⚠️ THIS CASE USED TO ASSERT THE OPPOSITE, and the old assertion was in this
+// file: a hand-set `Approved For Shipping` on a due-on-receipt invoice with money
+// owed was expected to stay at INVOICED, on the reasoning that the derived gate
+// must always beat the hand-maintained field. Nima's answer (2026-08-04) says
+// that field is not bookkeeping in this one position — it is how the NY office
+// instructs the warehouse to ship regardless of payment. #47's rule was right
+// about the field never BLOCKING, and wrong about it never WAIVING.
+test('the NY office can waive the hold: Approved For Shipping ships a due-on-receipt order', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Approved For Shipping',
+      terms: 'Due on receipt', amountRemaining: 90654.4 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.APPROVED)
+})
+
+test('the waiver only ever unblocks — it never promotes an unpacked order', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PICKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Picked' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Approved For Shipping',
+      terms: 'Due on receipt', amountRemaining: 500 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+test('a waiver on ONE invoice does not speak for another invoice still holding', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Approved For Shipping',
+      terms: 'Due on receipt', amountRemaining: 900 },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV2', shippingStatus: 'Pending Payment',
+      terms: 'Due on receipt', amountRemaining: 158 },
+  ], { today: new Date('2026-08-04') })
+  // Per-invoice, not folded: were the gate read off the order's first non-empty
+  // shippingStatus, INV1's waiver would have released INV2's hold.
   assert.equal(orders[0].stage, STAGE.INVOICED)
 })
 

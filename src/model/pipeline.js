@@ -37,6 +37,12 @@ function isInvoiced(o) {
 // hand-maintained field, the rule PR #47 established for the ship gate: terms +
 // what is still owed decide, so a stale `shippingStatus` can neither hold an
 // order back nor push it forward (src/model/paymentGate.js).
+//
+// The ONE exception is the NY waiver — an explicit `Approved For Shipping` on a
+// due-on-receipt invoice, which is another office instructing us to ship despite
+// the balance (Nima, 2026-08-04). It rides inside `paymentBlocked`, so it reaches
+// APPROVED here for free, which is what makes routeItems' "Ship it out" leg fire
+// for a waived order. Stale-safe by construction: it only ever unblocks.
 function invoicedStage(o) {
   const payments = o.invoicePayments || []
   if (payments.length) {
@@ -139,7 +145,15 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
 
     // The objective half of the ship gate, straight off the invoice record.
     if (rec.terms != null || rec.amountRemaining != null) {
-      o.invoicePayments.push({ terms: rec.terms ?? null, amountRemaining: rec.amountRemaining ?? null })
+      // `shipGate` rides along per-invoice rather than being read off the folded
+      // `o.shippingStatus`: the NY waiver applies to the invoice a person actually
+      // approved, and on a multi-invoice SO a first-non-empty fold would let one
+      // invoice's approval speak for another's hold.
+      o.invoicePayments.push({
+        terms: rec.terms ?? null,
+        amountRemaining: rec.amountRemaining ?? null,
+        shipGate: rec.shippingStatus ?? null,
+      })
     }
 
     for (const k of CARRY) {

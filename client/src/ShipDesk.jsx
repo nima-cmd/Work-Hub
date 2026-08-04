@@ -114,11 +114,17 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   const markShipped = labelGaps.counts?.labelledNotShipped ?? 0
   const needsLabel = labelGaps.counts?.needsLabel ?? 0
   const freight = labelGaps.counts?.freight ?? 0
-  // Packed, but money is owed and due — so these must NOT move (2026-08-04).
-  // Rendered rather than dropped: reclassifying them out of the two chips above
-  // is what stops the strip nagging about work Nima must not do, but silently
-  // removing four real shipments from the only screen that ages them would
-  // break "nothing sits ignored". Info tone — visible, never accusing.
+  // Packed, LABELLED, but money is owed and due — so these must NOT move
+  // (2026-08-04). Rendered rather than dropped: reclassifying them out of
+  // "mark shipped" is what stops the strip nagging about work Nima must not do,
+  // but silently removing real shipments from the only screen that ages them
+  // would break "nothing sits ignored". Info tone — visible, never accusing.
+  //
+  // ⚠️ It took a second correction to get the boundary right. This chip first
+  // absorbed EVERY payment-held IF, including ones with no label — which quietly
+  // suppressed the oldest real item on the board (IF7414, $90,654 owed, 6 days, no
+  // label). Nima's flow settles it: label → invoice → ship decision, so payment
+  // can only ever park a shipment whose label already exists.
   const heldForPayment = labelGaps.counts?.heldForPayment ?? 0
   const withNestor = custody ? custody.filter((c) => c.state === 'with_warehouse').length : null
   const canShip = bay ? bay.filter((s) => s.floating).length : null
@@ -174,11 +180,11 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
     { key: 'markShipped', n: markShipped, label: 'mark shipped', tone: 'bad', to: 'command',
       title: 'These IFs carry a tracking number but are still Packed — they already went out; NetSuite just does not know yet' },
     { key: 'needsLabel', n: needsLabel, label: 'need a label', tone: 'warn', to: 'command',
-      title: 'Packed with no carrier label — still physically here' },
+      title: 'Packed with no carrier label — still physically here. Includes shipments whose payment has not cleared: the label is made first, then the invoice, then the ship decision, so waiting on money is no reason to leave the label unmade' },
     { key: 'freight', n: freight, label: 'need routing', tone: 'info', to: 'routing',
       title: 'EDI/freight lane — these move on a BOL, not a parcel label' },
     { key: 'heldForPayment', n: heldForPayment, label: 'held for payment', tone: 'info', to: 'launch',
-      title: 'Packed and correctly waiting: money is owed and actually due, so these must not ship yet. Derived from the invoice terms and what is still outstanding — NOT from the hand-set Approved-For-Shipping field, so it stays right whether or not anyone has updated that. Net 30/45/60 and paid-in-full invoices are never held here' },
+      title: 'Labelled, packed and correctly waiting: money is owed and actually due, so these must not ship yet — the package is ready and the money is all that is left. Derived from the invoice terms and what is still outstanding, so it stays right whether or not anyone has maintained the Shipping Status field. The one thing that field can still do is waive the hold: an explicit Approved For Shipping is the NY office saying ship it regardless of payment. Net 30/45/60 and paid-in-full invoices are never held here, and a payment-held shipment with no label yet counts under "need a label" instead, not here' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',
       title: 'Packed with no invoice against the order yet. An order that HAS one moves on to Invoiced — pending payment or Approved for shipping, so it no longer counts here; if it is also being held for payment it says so on its own chip rather than twice' },
     { key: 'shippedWhileOwing', n: shippedWhileOwing, label: 'shipped, still owed', tone: 'bad', to: 'health',
