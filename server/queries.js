@@ -471,27 +471,39 @@ export async function getShipDepartures() {
 // Two figures, shown as "galactic credits" but really plain dollars:
 //   • shippedThisMonth — sum of SHIPPED_VALUE ledger snapshots dated this month
 //     (pinned to actual ship date, immune to later payment zeroing the invoice);
-//   • waiting — live sum of amount_remaining across everything packed but not yet
-//     shipped (the ships sitting in the Launch Bay).
+//   • waiting — outstanding balance across the ships sitting in the Launch Bay.
+//
+// ⚠️ `waiting` READ 0 FOREVER, and 0 in a header reads as "nothing is waiting"
+// (found by audit 2026-08-04). It was gated on `f.packed_status IS NOT NULL` —
+// the hand-keyed IF-Packed-Status field that getLaunchBay's own comment says it
+// was REWORKED TO ABANDON because the saved search went stale. Measured: that
+// field is non-null on 0 of 70 unshipped fulfilments (8 of 190 ever, all of them
+// long since shipped), so the sum was STRUCTURALLY zero — it could not have
+// reported a number whatever the data did. Meanwhile the bay held 11 ships with
+// $7,593.60 outstanding.
+//
+// So `waiting` is now derived from getLaunchBay() itself rather than from a
+// second, hand-written copy of "what's in the bay". That makes the sentence above
+// true by construction: the two cannot drift, and the bay's real scope rules come
+// along for free — notably the CHINA EXCLUSION. Summing packed-not-shipped
+// invoices directly would report $98,248, but $90,654 of that is IF7414, which
+// ships FOB direct from China and never sits on our dock
+// (see src/model/labelGap.js). Counting it as "waiting to leave" would overstate
+// the figure by 12x on a header counter.
 export async function getCredits({ today = new Date() } = {}) {
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
-  const [shipped, waiting] = await Promise.all([
+  const [shipped, bay] = await Promise.all([
     pool.query(
       `SELECT COALESCE(SUM(NULLIF(note,'')::numeric), 0) AS total
        FROM order_events
        WHERE event_type = 'SHIPPED_VALUE' AND occurred_at >= $1`,
       [monthStart],
     ),
-    pool.query(
-      `SELECT COALESCE(SUM(i.amount_remaining), 0) AS total
-       FROM fulfillments f
-       JOIN invoices i ON i.inv_number = f.invoice_number
-       WHERE f.packed_status IS NOT NULL AND f.actual_ship_date IS NULL`,
-    ),
+    getLaunchBay({ today }),
   ])
   return {
     shippedThisMonth: Number(shipped.rows[0].total),
-    waiting: Number(waiting.rows[0].total),
+    waiting: bay.reduce((n, s) => n + Number(s.amountRemaining || 0), 0),
     month: monthStart.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
   }
 }
@@ -818,6 +830,7 @@ export async function getLaunchBay({ today = new Date() } = {}) {
            o.customer, o.source, o.po_number AS "poNumber", o.location,
            o.billing_status AS "billingStatus",
            i.shipping_status AS "invShip", i.status AS "invStatus",
+           i.amount_remaining AS "amountRemaining",
            a.approved_since AS "approvedSince",
            c.custody_out AS "custodyOut", c.custody_in AS "custodyIn",
            sc.status AS "shipCentralStatus"

@@ -1,0 +1,157 @@
+// scripts/check-counters.js — does every counter still MEAN what it says?
+// Run: npm run check:counters      (needs .env.local — reads Neon, writes nothing)
+//
+// WHY THIS EXISTS
+//
+// Every bug this app has shipped in its counters has been one of four shapes,
+// and each was found by accident, one per session, by rendering the number and
+// squinting at it:
+//
+//   (i)   STRUCTURALLY UNREACHABLE — a branch that cannot ever be true, so the
+//         number is a constant pretending to be a measurement.
+//         · INVOICED_PENDING_PAYMENT / APPROVED_FOR_SHIPPING: 0 of 238 orders,
+//           ever, because promotion keyed off a stage only the retired CSV
+//           mappers set (PR #48).
+//         · credits.waiting: gated on `packed_status IS NOT NULL`, which is null
+//           on 0 of 70 unshipped fulfilments — so the header read "0 CR WAITING"
+//           while $7,593.60 sat parked in the bay (found by this audit).
+//   (ii)  COUNTS SOMETHING ELSE than its label claims — "4 need an invoice" while
+//         all four had one (PR #48); "62 ASNs never sent" that were all re-sends
+//         of shipments already accepted (PR #36).
+//   (iii) KEYED ON A HAND-SET OR DISPLAY FIELD where an objective one exists —
+//         the day plan's bench gated on channelKey(), a display classifier, which
+//         hid SO12344 entirely (PR #50); "needs a label" keyed so that China/FOB
+//         shipments demanded a label nobody will ever make (PR #50).
+//   (iv)  A COMMENT PROMISING A MECHANISM no code implements — HELD_FOR_PAYMENT's
+//         "a silent filter would bury it" safety net (PR #48), netsuiteSync's
+//         "that is how an order gets promoted" (PR #48), and main.jsx's "dev has
+//         no sw.js" (PR #51).
+//
+// Shapes (i) and (ii) are mechanically checkable, and that is all this script
+// tries to do. Two kinds of assertion, both cheap:
+//
+//   PARTITION — a family of counters must exactly account for its own item list.
+//     A kind that never fires, or an item counted under two kinds, breaks the sum.
+//     This is what makes "the never-lump rule" enforceable rather than aspirational.
+//   FLOOR     — if something plainly exists, the counter that reports it must not
+//     be zero. Deliberately weaker than re-deriving the number: re-implementing a
+//     scope in the checker just creates a second copy to drift. A floor catches
+//     the dead gate without pretending to know the exact answer.
+//
+// It does NOT try to check shapes (iii) and (iv) — those need judgement and a
+// human reading the field's provenance. What it does mean is that no counter can
+// go structurally dead again without something saying so out loud.
+import * as Q from '../server/queries.js'
+import { pool } from '../src/db.js'
+import { LIVE_SYNCS } from '../src/model/syncHealth.js'
+
+const results = []
+const ok = (name, detail = '') => results.push({ pass: true, name, detail })
+const bad = (name, detail) => results.push({ pass: false, name, detail })
+
+const partition = (name, parts, total, note = '') => {
+  const sum = parts.reduce((n, p) => n + Number(p || 0), 0)
+  if (sum === Number(total)) ok(name, `${sum} = ${total}${note ? ' · ' + note : ''}`)
+  else bad(name, `parts sum to ${sum} but the list holds ${total}${note ? ' · ' + note : ''}`)
+}
+
+// A counter may only be zero when there is genuinely nothing to report.
+const floor = (name, value, existsCount, detail) => {
+  if (Number(value) > 0 || Number(existsCount) === 0) ok(name, detail)
+  else bad(name, `reads ${value} while ${detail}`)
+}
+
+// ── label gaps: the court strip's busiest family ─────────────────────────────
+const lg = await Q.getLabelGaps({})
+partition('labelGaps kinds account for every packed-not-shipped IF',
+  [lg.counts.labelledNotShipped, lg.counts.needsLabel, lg.counts.freight,
+    lg.counts.fobPickup, lg.counts.heldForPayment],
+  lg.items.length,
+  'a new lane that never fires, or an IF counted twice, breaks this')
+
+// ── the Launch Bay + the header counter that must agree with it ──────────────
+const bay = await Q.getLaunchBay()
+const KNOWN_STATES = new Set(['approved', 'payment', 'invoice', 'scanned_in', 'other'])
+const strange = bay.filter((s) => !KNOWN_STATES.has(s.state)).map((s) => s.ifNumber)
+strange.length
+  ? bad('every bay ship has a known state', `unrecognised: ${strange.join(', ')}`)
+  : ok('every bay ship has a known state', `${bay.length} ships`)
+
+// `floating` is what the "can ship" chip counts, and it is defined as
+// state === 'approved'. If those two ever diverge the chip is measuring nothing.
+const floatingMismatch = bay.filter((s) => s.floating !== (s.state === 'approved'))
+floatingMismatch.length
+  ? bad('bay `floating` still means state=approved', `${floatingMismatch.length} rows disagree`)
+  : ok('bay `floating` still means state=approved', `${bay.filter((s) => s.floating).length} floating`)
+
+// The header's "waiting" figure. Floor, not equality: the bay owns the scope
+// (notably excluding China/FOB, which never sits on our dock), so the checker
+// only insists that parked money cannot read as zero.
+const { rows: owing } = await pool.query(`
+  SELECT COUNT(*) n, COALESCE(SUM(i.amount_remaining), 0) owed
+  FROM fulfillments f
+  JOIN invoices i ON i.inv_number = f.invoice_number
+  LEFT JOIN orders o ON o.so_number = f.so_number
+  WHERE f.actual_ship_date IS NULL
+    AND COALESCE(o.location, '') NOT ILIKE '%china%'
+    AND i.amount_remaining > 0`)
+const credits = await Q.getCredits()
+floor('header `waiting` is not structurally dead', credits.waiting, owing[0].n,
+  `${owing[0].n} unshipped non-China IF(s) owe $${Number(owing[0].owed).toLocaleString()}`)
+
+// ── filing, cartons, overdue money, EDI delivery, inbound ───────────────────
+const unf = await Q.getUnfiledPaper({})
+partition('unfiled paper: due + backlog account for both lists',
+  [unf.counts.due, unf.counts.backlog], unf.due.length + unf.backlog.length,
+  'the due/backlog split must never lose or double a shipment')
+
+const ac = await Q.getAsnCartonCheck()
+partition('every packed carton is either matched to an SSCC or undeclared',
+  [ac.counts.matched, ac.counts.undeclared], ac.counts.packed)
+
+const od = await Q.getOverdueInvoices({})
+partition('overdue invoices: summary count matches the list',
+  [od.summary.count], od.items.length)
+partition('overdue invoices: every row lands in exactly one inquiry bucket',
+  [od.summary.neverBilled, od.summary.unknown810, od.summary.unknownSource, od.summary.chasePayment],
+  od.summary.count)
+
+const eg = await Q.getEdiDeliveryGaps({})
+// A stuck document is either a genuine non-announcement or a superseded re-send.
+// That split IS the PR #36 finding; if it stops partitioning, the strip has gone
+// back to claiming chargeback exposure it cannot support.
+partition('stuck ASNs split cleanly into unannounced vs re-sent',
+  [eg.counts.asnUnannounced, eg.counts.asnResent], eg.counts.asnStuck)
+partition('stuck invoices split cleanly into unannounced vs re-sent',
+  [eg.counts.invoiceUnannounced, eg.counts.invoiceResent], eg.counts.invoiceStuck)
+
+const inb = await Q.getInboundContainers({})
+const inbTotal = inb.containers.length
+inb.counts.late + inb.counts.awaiting <= inbTotal
+  ? ok('inbound late + awaiting fit inside the container list',
+    `${inb.counts.late} + ${inb.counts.awaiting} <= ${inbTotal}`)
+  : bad('inbound late + awaiting fit inside the container list',
+    `${inb.counts.late} + ${inb.counts.awaiting} > ${inbTotal}`)
+
+// ── sync health: a sync that silently stops being reported reads as healthy ──
+const sh = await Q.getSyncHealth()
+const reported = new Set(sh.syncs.map((s) => s.key))
+const missing = LIVE_SYNCS.map((s) => s.key).filter((k) => !reported.has(k))
+missing.length
+  ? bad('every LIVE sync is reported on Health', `absent: ${missing.join(', ')}`)
+  : ok('every LIVE sync is reported on Health', `${LIVE_SYNCS.length} live syncs`)
+
+// ── report ──
+const failed = results.filter((r) => !r.pass)
+console.log('\n  COUNTER TRUTH CHECK\n  ' + '─'.repeat(72))
+for (const r of results) {
+  console.log(`  ${r.pass ? '✓' : '✗'} ${r.name}`)
+  if (r.detail) console.log(`      ${r.detail}`)
+}
+console.log('  ' + '─'.repeat(72))
+console.log(`  ${results.length - failed.length}/${results.length} checks pass` +
+  (failed.length ? ` · ${failed.length} FAILED` : ' · every counter still means what it says'))
+console.log()
+
+await pool.end()
+process.exit(failed.length ? 1 : 0)
