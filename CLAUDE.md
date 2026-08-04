@@ -83,7 +83,7 @@ src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 8
 src/ingest/asnCartonSync.js  runs that check + persists it (the CLI and the cron share it)
 src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
 src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
-src/ingest/warehouseFeed.js  open PO lines + item-location qtys → the Naghedi-Warehouse app's Supabase (docs/warehouse-po-feed.md)
+src/ingest/warehouseFeed.js  open PO lines + item-location qtys → the Naghedi-Warehouse app's Supabase (docs/warehouse-po-feed.md; shared-DB rules in docs/SHARED_DATA_PROTOCOL.md)
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client
