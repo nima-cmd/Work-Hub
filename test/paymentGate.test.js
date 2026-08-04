@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   paymentDue, paymentBlocked, clearedReason, overdueInvoices, overdueSummary,
 } from '../src/model/paymentGate.js'
+import { buildPipeline } from '../src/model/pipeline.js'
+import { STAGE } from '../src/model/stages.js'
 
 // The four terms values live in NetSuite today (480 invoices since 2026-05).
 test('paymentDue: net terms and no-payment-required never demand money up front', () => {
@@ -133,4 +135,84 @@ test('overdueSummary totals money and separates the never-billed count', () => {
   assert.equal(s.amount, 350)
   assert.equal(s.neverBilled, 1)
   assert.equal(s.oldestDays, 64)
+})
+
+// ── the invoiced stage (src/model/pipeline.js) ───────────────────────────────
+//
+// The regression these cover: on the live sync NO order could leave PACKED,
+// because the only code that promoted an invoiced order keyed off a `stage`
+// field that only the retired CSV mappers set. Measured live 2026-08-04: 0 of
+// 238 orders at INVOICED or APPROVED, while 4 packed-and-invoiced orders read
+// "need an invoice" AND "held for payment" at the same time.
+
+test('an invoice number promotes an order out of PACKED even with no stage on the record', () => {
+  const orders = buildPipeline([
+    // Exactly the live shape: a fulfilment says packed, the invoice record
+    // carries payment evidence and NO stage of its own.
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', terms: 'Due on receipt', amountRemaining: 158 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+test('payment blocking keeps an invoiced order at INVOICED, never APPROVED', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    // ⚠️ The hand-set field says approved; the derived gate says money is owed on
+    // Due-on-receipt. The derived answer wins — that is the whole point of #47.
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', shippingStatus: 'Approved For Shipping',
+      terms: 'Due on receipt', amountRemaining: 2225.6 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+test('cleared payment on a packed order reaches APPROVED', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', terms: 'Net 30', amountRemaining: 5000 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.APPROVED) // net terms never block
+})
+
+test('cleared payment does NOT reach APPROVED before the goods are packed', () => {
+  const orders = buildPipeline([
+    // An invoice can precede its fulfilment. Without the packed guard this order
+    // would read "Approved for shipping · Ship it out" while still being picked.
+    { source: 'if', stage: STAGE.PICKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Picked' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', terms: 'Net 30', amountRemaining: 5000 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+test('ONE unpaid invoice on a multi-invoice SO holds the whole order', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', terms: 'Due on receipt', amountRemaining: 0 },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV2', terms: 'Due on receipt', amountRemaining: 900 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.INVOICED)
+})
+
+test('with no terms or balance the hand-set field still decides (the CSV path)', () => {
+  const csv = (shippingStatus) => buildPipeline([
+    { source: 'csv', stage: STAGE.INVOICED, soNumber: 'SO1', invoice: 'INV1', shippingStatus },
+  ], { today: new Date('2026-08-04') })[0].stage
+  assert.equal(csv('Approved For Shipping'), STAGE.APPROVED)
+  assert.equal(csv('Pending Payment'), STAGE.INVOICED)
+})
+
+test('nothing promotes an order that has no invoice at all', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.PACKED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Packed' },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.PACKED) // the honest "need an invoice" case
+})
+
+test('SHIPPED is never walked backwards by an unpaid invoice', () => {
+  const orders = buildPipeline([
+    { source: 'if', stage: STAGE.SHIPPED, soNumber: 'SO1', ifNumber: 'IF1', ifStatus: 'Shipped',
+      actualShipDate: '2026-07-14' },
+    { source: 'inv', soNumber: 'SO1', invoice: 'INV1', terms: 'Due on receipt', amountRemaining: 6887 },
+  ], { today: new Date('2026-08-04') })
+  assert.equal(orders[0].stage, STAGE.SHIPPED)
 })

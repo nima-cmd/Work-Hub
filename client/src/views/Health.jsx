@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchHealth, fetchOverdueInvoices } from '../api.js'
+import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps } from '../api.js'
 
 // Health — what's connected, what's arriving, and what to do when it isn't.
 //
@@ -127,8 +127,67 @@ export default function Health() {
         GitHub throttles it. Flagged as late after {syncs.warnHours}h and stopped after {syncs.staleHours}h.
       </div>
 
+      <ShippedWhileOwing />
       <OverdueInvoices />
     </div>
+  )
+}
+
+// Goods already gone with money still outstanding on terms that should have held
+// them. Sits above the overdue list because it is the sharper version of the same
+// question: an overdue invoice is money not yet in, this is money not yet in on
+// something we can no longer hold. It exists because the packed-side chip's own
+// comment promised this case could never hide, while its query — packed rows only
+// — could never see it (see getShippedWhileOwing in server/queries.js).
+function ShippedWhileOwing() {
+  const [d, setD] = useState(null)
+  useEffect(() => {
+    // Soft: this is a secondary diagnostic on a page whose main job is sync
+    // health, so a failure here must not blank the page.
+    fetchLabelGaps().then((r) => setD(r?.shippedWhileOwing || null)).catch(() => {})
+  }, [])
+
+  if (!d || !d.items?.length) return null
+  const money = (n) => '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })
+
+  return (
+    <>
+      <h3 className="hlSection">Shipped, still owed</h3>
+      <div className="muted hlSub">
+        <b>{d.counts.total}</b> shipment{d.counts.total === 1 ? '' : 's'} ·{' '}
+        <b>{money(d.amount)}</b> outstanding.
+        {d.counts.dueBeforeShipped > 0
+          ? <> <b>{d.counts.dueBeforeShipped}</b> had already passed the invoice due date on the day it left.</>
+          : <> None of them was past its due date on the day it left.</>}
+        {' '}Balances are as of now — no record of the balance on the ship date exists,
+        so this says “still owed”, not “shipped before paying”.
+      </div>
+      <div className="hlRows">
+        {d.items.map((r) => (
+          <div key={r.ifNumber} className={'hlRow ' + (r.dueBeforeShipped ? 'bad' : 'partial')}>
+            <span className="hlDot" />
+            <div className="hlRowMain">
+              <div className="hlRowTop">
+                <b>{r.ifNumber}</b>
+                <span className="hlBadge" title="Money outstanding on terms that hold a packed shipment back">
+                  {r.dueBeforeShipped ? 'was past due when it shipped' : 'outstanding'}
+                </span>
+              </div>
+              <div className="hlPowers">
+                {r.customer || <span className="muted">bill-to unknown</span>}
+                {' · '}<b>{money(r.amountRemaining)}</b> on {r.invoiceNumber}
+                {' · shipped '}{new Date(r.shippedOn).toLocaleDateString()} ({r.daysSinceShipped}d ago)
+                <span className="muted">
+                  {' · '}{r.invoiceTerms || 'terms unknown'}
+                  {r.invoiceDueDate ? ` · due ${new Date(r.invoiceDueDate).toLocaleDateString()}` : ''}
+                  {r.soNumber ? ` · ${r.soNumber}` : ''}
+                </span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   )
 }
 

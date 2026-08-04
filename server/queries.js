@@ -1830,6 +1830,72 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // The retro half of step 6, deliberately kept OUT of every count above and
     // out of the court strip entirely. See getShipDateAudit.
     retro: await getShipDateAudit({ today }),
+    // The exception HELD_FOR_PAYMENT's own comment promises cannot hide — and
+    // which, until now, structurally could. See getShippedWhileOwing.
+    shippedWhileOwing: await getShippedWhileOwing({ today }),
+  }
+}
+
+// Goods that LEFT while payment was blocking them.
+//
+// ⚠️ THIS LIST EXISTS BECAUSE THE CODE ABOVE CLAIMED IT ALREADY DID. The
+// HELD_FOR_PAYMENT branch is documented as "if something ever DOES ship while
+// payment is blocking, that's a real exception and a silent filter would bury
+// it" — but getLabelGaps' WHERE clause is `actual_ship_date IS NULL AND status
+// = packed`, so a shipment that departed anyway leaves the query's scope
+// entirely and no filter, silent or otherwise, was ever involved. A comment
+// promising a safety net is not a safety net (found 2026-08-04).
+//
+// ⚠️ WORDED AS "STILL OWES", NOT "SHIPPED BEFORE PAYING". `amount_remaining` is
+// the balance RIGHT NOW; we hold no history of what was owed on the day it left,
+// so the honest claim is about today's balance on something already gone. Live
+// today: 1 row — IF7263, shipped 2026-07-14, $6,887 still open on INV11335,
+// which had been due since 2026-07-02.
+export async function getShippedWhileOwing({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT f.if_number   AS "ifNumber",
+           f.so_number   AS "soNumber",
+           f.actual_ship_date AS "shippedOn",
+           i.inv_number  AS "invoiceNumber",
+           i.terms       AS "invoiceTerms",
+           i.amount_remaining AS "amountRemaining",
+           i.due_date    AS "invoiceDueDate",
+           i.status      AS "invoiceStatus",
+           COALESCE(o.customer, i.bill_to) AS customer,
+           o.source
+    FROM fulfillments f
+    JOIN invoices i ON i.inv_number = f.invoice_number
+    LEFT JOIN orders o ON o.so_number = f.so_number
+    WHERE f.actual_ship_date IS NOT NULL
+      AND i.amount_remaining > 0
+    ORDER BY f.actual_ship_date DESC
+  `)
+
+  const day = 86_400_000
+  // Same derived gate as the packed list, so the two lists agree about what
+  // "payment is blocking" means — net terms and paid-in-full never appear here,
+  // exactly as they never hold a packed shipment back.
+  const items = rows
+    .filter((r) => paymentBlocked({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining }))
+    .map((r) => ({
+      ...r,
+      amountRemaining: Number(r.amountRemaining),
+      daysSinceShipped: r.shippedOn ? Math.floor((today - new Date(r.shippedOn)) / day) : null,
+      // Was it already past due when it left? That's the closest we can honestly
+      // get to "shipped against the rule" without a balance history: a due date
+      // BEFORE the ship date means money was owed and due while it was going out.
+      dueBeforeShipped: r.invoiceDueDate && r.shippedOn
+        ? new Date(r.invoiceDueDate) < new Date(r.shippedOn)
+        : null,
+    }))
+
+  return {
+    items,
+    counts: {
+      total: items.length,
+      dueBeforeShipped: items.filter((i) => i.dueBeforeShipped === true).length,
+    },
+    amount: items.reduce((n, i) => n + i.amountRemaining, 0),
   }
 }
 
