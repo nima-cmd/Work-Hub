@@ -13,6 +13,11 @@ on every sync cycle, replacing that app's manual CSV imports:
 
 Code for both in `src/ingest/warehouseFeed.js`.
 
+**`npm run check:warehouse-feed`** verifies the whole thing at any point: it
+probes both tables and names the go-live step that's still missing (table not
+created → not seeded → deploy not pushing), or confirms row counts + snapshot
+age when live. Run it after each go-live step below.
+
 ## Ownership
 
 **Work-Hub owns the two `ns_*` tables and writes nothing else in that project.**

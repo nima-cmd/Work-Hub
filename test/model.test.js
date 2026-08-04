@@ -1790,6 +1790,30 @@ test('syncHealth: the line names the sync — an anonymous warning gets ignored'
   assert.match(line, /and 1 other/, 'says how many more are affected')
 })
 
+test('syncHealth: a conditional sync that has never pushed is OMITTED — an unconfigured deploy stays green', () => {
+  // The warehouse feeds are gated on the WAREHOUSE_* vars; before go-live they
+  // have no snapshot row. That must read as "not applicable", never as 'never'.
+  const h = computeSyncHealth({ netsuiteLive: hoursAgo(1), ediPackagesLive: hoursAgo(0.2) }, SYNC_NOW)
+  assert.equal(h.status, 'ok')
+  assert.ok(!h.syncs.some((s) => s.key === 'warehousePoFeed' || s.key === 'warehouseInventoryFeed'))
+})
+
+test('syncHealth: once a conditional sync HAS pushed, going quiet is a real signal like any other', () => {
+  const h = computeSyncHealth(
+    { netsuiteLive: hoursAgo(1), ediPackagesLive: hoursAgo(0.2), warehousePoFeed: hoursAgo(9) },
+    SYNC_NOW,
+  )
+  assert.equal(h.status, 'stale')
+  assert.match(syncHealthLine(h), /Warehouse PO feed/)
+  // and a fresh one simply rides along, green
+  const ok = computeSyncHealth(
+    { netsuiteLive: hoursAgo(1), ediPackagesLive: hoursAgo(0.2), warehousePoFeed: hoursAgo(1), warehouseInventoryFeed: hoursAgo(1) },
+    SYNC_NOW,
+  )
+  assert.equal(ok.status, 'ok')
+  assert.equal(ok.syncs.length, 4)
+})
+
 // ── Health: connections & data flow (2026-07-31) ─────────────────────────────
 // Built after the deploy went 13h without a NetSuite sync while its cron
 // returned 200 every run. The cause was five env vars missing on Render, and the

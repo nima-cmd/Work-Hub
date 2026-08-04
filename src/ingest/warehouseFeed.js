@@ -42,6 +42,7 @@
 //      of 86 open POs at build time, sent as NULL, never guessed.
 
 import { runSuiteQL, netsuiteConfigured } from './netsuiteApi.js'
+import { syncStatus } from '../model/syncHealth.js'
 
 // ── config ────────────────────────────────────────────────────────────────────
 // WAREHOUSE_* is the canonical name (declared in render.yaml); the VITE_* pair
@@ -291,6 +292,52 @@ export function mapWarehouseInventory(rows = []) {
     })
   }
   return { rows: out, skippedNoSku }
+}
+
+// ── the go-live check ─────────────────────────────────────────────────────────
+// One probe per table answers "which go-live step is still missing": a 404
+// means the CREATE TABLE block hasn't been run, an empty table means the seed
+// script hasn't, and rows whose newest synced_at has gone stale mean nothing is
+// pushing on the deploy (the Render WAREHOUSE_* vars). Staleness reuses the
+// LIVE_SYNCS thresholds because these feeds ride the same throttled cycle.
+export const WAREHOUSE_FEED_TABLES = [
+  { table: 'ns_open_po_lines', label: 'open PO lines', seed: 'npm run sync:warehouse-pos' },
+  { table: 'ns_item_location_qtys', label: 'item-location quantities', seed: 'npm run sync:warehouse-inventory' },
+]
+
+export async function checkWarehouseFeedTables({ _fetch = fetch, env = process.env, now = () => new Date() } = {}) {
+  const creds = warehouseSupabaseCreds(env)
+  if (!creds) return { configured: false, tables: [] }
+  const t = now().getTime()
+
+  const tables = await Promise.all(WAREHOUSE_FEED_TABLES.map(async ({ table, label, seed }) => {
+    let res
+    try {
+      // count=exact + limit 1 gets the row count (content-range) and the newest
+      // stamp in a single request.
+      res = await _fetch(`${creds.url}/rest/v1/${table}?select=synced_at&order=synced_at.desc&limit=1`, {
+        headers: restHeaders(creds.key, { Prefer: 'count=exact' }),
+      })
+    } catch (e) {
+      return { table, label, seed, status: 'error', error: `network: ${e?.message || e}` }
+    }
+    if (res.status === 404) return { table, label, seed, status: 'missing' }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      return { table, label, seed, status: 'error', error: `${res.status} ${body.slice(0, 200)}` }
+    }
+    const range = res.headers?.get?.('content-range') || ''
+    const m = range.match(/\/(\d+)$/)
+    const rows = m ? Number(m[1]) : 0
+    const body = await res.json().catch(() => [])
+    const syncedAt = body?.[0]?.synced_at || null
+    if (!rows || !syncedAt) return { table, label, seed, status: 'empty', rows: 0 }
+    const ageHours = (t - new Date(syncedAt).getTime()) / 3.6e6
+    const s = syncStatus(ageHours)
+    return { table, label, seed, status: s === 'ok' ? 'live' : s, rows, syncedAt, ageHours }
+  }))
+
+  return { configured: true, tables }
 }
 
 export async function pushWarehouseInventory({ _fetch = fetch, _nsFetch = fetch, env = process.env, now = () => new Date() } = {}) {
