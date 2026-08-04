@@ -2282,3 +2282,59 @@ test('ediPartnerTabs: an undelivered ASN counts even when its sales orders aged 
   assert.equal(tabs.noSalesOrder.length, 0)
 })
 
+// ── partner-cancelled 850s (the PR #12 follow-up, 2026-08-04) ────────────────
+// A partner cancels an EDI PO by re-transmitting it zeroed out: the newest 850
+// carries 0 total units (Nordstrom: 1 line / 0 units / no window; Shopbop
+// keeps the window). Live 2026-08-04: 4 POs, 3 already hand-closed by Nima,
+// POJ00391335 reading "Enter in NetSuite" a week after Shopbop killed it.
+
+test('computeEdiPipeline: a zeroing re-send marks the PO cancelled850 — unknown units never do', () => {
+  const mk850 = (id, createdAt, totalUnits) => ({
+    id, type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Shopbop',
+    direction: 'IN', createdAt, lastUpdatedAt: createdAt, totalUnits,
+  })
+  // newest 850 zeroed → cancelled
+  const zeroed = computeEdiPipeline([mk850('t1', '2026-07-27', 40), mk850('t2', '2026-07-28', 0)], [], [], [], [], [])
+  assert.equal(zeroed.orders[0].cancelled850, true)
+  // a zeroed COPY superseded by a real re-send is NOT cancelled — newest wins
+  const revived = computeEdiPipeline([mk850('t1', '2026-07-27', 0), mk850('t2', '2026-07-28', 40)], [], [], [], [], [])
+  assert.equal(revived.orders[0].cancelled850, false)
+  // null totalUnits = lines never pulled = unknown, which must never read as cancelled
+  const unknown = computeEdiPipeline([mk850('t1', '2026-07-27', 40), mk850('t2', '2026-07-28', null)], [], [], [], [], [])
+  assert.equal(unknown.orders[0].cancelled850, false)
+})
+
+test('ediWork: a partner-cancelled PO stops the chase — no MISSED nag, no cancel danger, asks for a close', () => {
+  // Shopbop's shape: the zeroed re-send KEEPS its window, so without the gate
+  // this dead PO would walk into cancel-soon/passed as the date approached.
+  const w = deriveWork(edi850(30, { cancelled850: true, cancelAfter: new Date(T0 - 3 * DAY_MS).toISOString() }), null, T0)
+  assert.equal(w.partnerCancelled, true)
+  assert.equal(w.missed850, false)
+  assert.equal(w.cancelState, null)
+  assert.match(w.needed, /Cancelled by partner/)
+  assert.equal(w.closed, false)               // nothing closes silently — the human confirms
+})
+
+test('ediWork: a zeroed 850 on a SHIPPED order stays loud — that is a dispute, not a cancellation', () => {
+  const w = deriveWork(edi850(30, {
+    cancelled850: true,
+    netsuiteOrders: [{ soNumber: 'SO1', stage: 'SHIPPED', itemFulfillments: [], invoices: [] }],
+  }), null, T0)
+  assert.equal(w.partnerCancelled, false)
+  assert.doesNotMatch(w.needed, /Cancelled by partner/)
+})
+
+test('ediPartnerTabs: a partner-cancelled PO is not asked to be imported', () => {
+  const mk850 = (id, createdAt, totalUnits) => ({
+    id, type: '850_PURCHASE_ORDER', businessNumber: 'PO1', tradingPartner: 'Shopbop',
+    direction: 'IN', createdAt, lastUpdatedAt: createdAt, totalUnits,
+  })
+  const old = new Date(T0 - 30 * DAY_MS).toISOString()
+  const { orders } = computeEdiPipeline([mk850('t1', old, 40), mk850('t2', old, 0)], [], [], [], [], [])
+  const work = computeEdiWork(orders, [], T0)
+  assert.equal(work.orders[0].work.partnerCancelled, true)
+  assert.equal(work.totals.partnerCancelled, 1)
+  // "import it" is the wrong instruction for a PO the partner killed
+  assert.equal(computeEdiPartnerTabs(work.orders, { today: T0 }).noSalesOrder.length, 0)
+})
+

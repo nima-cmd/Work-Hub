@@ -89,7 +89,11 @@ export function computeEdiPartnerTabs(orders = [], { today = Date.now(), missedA
     // closed months ago and have simply aged out of the open-order sync window
     // (the sync keeps open orders + anything modified recently). If we announced
     // or invoiced it, a sales order plainly existed.
-    if (o.bucket !== 'NO_850_FOUND' && !sos.length && o.stageRank <= 2) {
+    // A partner-cancelled PO (current 850 zeroed — ediWork's partnerCancelled)
+    // is excluded: "import it" is exactly the wrong instruction for a PO the
+    // partner killed. Its card still shows "Cancelled by partner — confirm &
+    // close" on the main board.
+    if (o.bucket !== 'NO_850_FOUND' && !sos.length && o.stageRank <= 2 && !o.work?.partnerCancelled) {
       noSalesOrder.push({
         businessNumber: o.businessNumber,
         partner,

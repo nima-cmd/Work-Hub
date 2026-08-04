@@ -924,6 +924,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                       {o.work.needsRecheck && <span className="flag sev-hi" title={o.work.recheckSummary.join('; ')}>⟳ RE-CHECK</span>}
                       {o.work.sendCount > 1 && <span className="flag sev-mid">sent {o.work.sendCount}×</span>}
                       {o.work.missed850 && <span className="flag sev-hi">MISSED? {o.work.age850}d old</span>}
+                      {o.work.partnerCancelled && <span className="flag sev-mid" title="Newest 850 re-sent with 0 units">✕ partner cancelled</span>}
                       {o.work.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {o.work.cancelDays}d</span>}
                       <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
                     </div>
@@ -1020,6 +1021,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                   {w.sendCount > 1 && <span className="flag sev-mid" title={`Partner sent this PO's 850 ${w.sendCount} times`}>sent {w.sendCount}×</span>}
                   {w.unallocated && <span className="flag sev-mid">unallocated</span>}
                   {w.missed850 && <span className="flag sev-hi">MISSED? {w.age850}d old</span>}
+                  {w.partnerCancelled && <span className="flag sev-mid" title="Newest 850 re-sent with 0 units">✕ partner cancelled</span>}
                   {w.cancelState === 'passed' && <span className="flag sev-hi">cancel passed {w.cancelDays}d</span>}
                   {w.cancelState === 'soon' && <span className="flag sev-mid">cancel in {w.cancelDays}d</span>}
                   {w.resolution && <span className="flag sev-mid">manual: {w.resolution.netsuiteRef || 'note'}</span>}
