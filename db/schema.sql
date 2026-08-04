@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS invoices (
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
 
+-- The two fields that make shippability DERIVABLE instead of hand-maintained
+-- (2026-08-04). `shipping_status` above is a NetSuite custom field a human sets;
+-- terms + due_date are objective, so src/model/paymentGate.js can decide whether
+-- payment actually blocks a shipment without depending on anyone's bookkeeping.
+-- Live terms distribution (480 invoices since May): Net 60 · Net 45 · Due on
+-- receipt · Net 30 · No Payment Required. Additive and nullable — rows loaded
+-- before this simply read as unknown terms, which paymentDue() treats as
+-- "money is due" (the safe direction).
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS terms    TEXT;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS due_date DATE;
+-- Who the invoice bills, off the INVOICE's own entity rather than the order's
+-- customer: 1,015 invoices have a NULL so_number by design (their order is
+-- outside the 30-day window), and an overdue list that can't name who owes the
+-- money is unusable. 61 of the first 70 overdue rows had no customer without it.
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS bill_to  TEXT;
+
 -- Invoice TOTAL, distinct from amount_remaining (2026-07-30). The shipped-$
 -- credit (stampShippedValue) valued a shipment by what was still OWED at ship
 -- time — fine while Naghedi ships FOB/pre-payment and we observe it unpaid, but

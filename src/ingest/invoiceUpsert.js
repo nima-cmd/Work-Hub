@@ -10,7 +10,7 @@
 // touching a row twice, and the SQL that refuses to assert a sales-order link it
 // can't back up.
 
-export const INVOICE_COLUMNS = 9
+export const INVOICE_COLUMNS = 12
 
 // records → one parameter tuple per invoice, deduped.
 //
@@ -36,6 +36,11 @@ export function foldInvoiceRows(records = []) {
       // one, so this is never used as a key for a single invoice.
       r.nordstromRef ? String(r.nordstromRef).trim().toUpperCase() : null,
       r.tranDate || null,
+      // Terms text verbatim (matched loosely by paymentGate.js, never by id) and
+      // the due date — the objective inputs to "is payment blocking this?".
+      r.terms || null,
+      r.dueDate || null,
+      r.billTo || null,
     ])
   }
   return [...byInvoice.values()]
@@ -66,12 +71,13 @@ export function invoiceUpsertSql(rowCount) {
     // whose column is entirely NULL gives Postgres nothing to infer a type from.
     return `($${b + 1}::text, (SELECT o.so_number FROM orders o WHERE o.so_number = $${b + 2}::text),
              $${b + 3}::text, $${b + 4}::text, $${b + 5}::numeric, $${b + 6}::numeric, $${b + 7}::date,
-             $${b + 8}::text, $${b + 9}::date, now())`
+             $${b + 8}::text, $${b + 9}::date, $${b + 10}::text, $${b + 11}::date,
+             $${b + 12}::text, now())`
   }).join(',')
 
   return `INSERT INTO invoices
        (inv_number, so_number, status, shipping_status, amount_remaining, amount_total, ship_date,
-        nordstrom_ref, trandate, updated_at)
+        nordstrom_ref, trandate, terms, due_date, bill_to, updated_at)
      VALUES ${values}
      ON CONFLICT (inv_number) DO UPDATE SET
        so_number        = COALESCE(EXCLUDED.so_number, invoices.so_number),
@@ -86,6 +92,9 @@ export function invoiceUpsertSql(rowCount) {
        ship_date        = COALESCE(EXCLUDED.ship_date, invoices.ship_date),
        nordstrom_ref    = COALESCE(EXCLUDED.nordstrom_ref, invoices.nordstrom_ref),
        trandate         = COALESCE(EXCLUDED.trandate, invoices.trandate),
+       terms            = COALESCE(EXCLUDED.terms, invoices.terms),
+       due_date         = COALESCE(EXCLUDED.due_date, invoices.due_date),
+       bill_to          = COALESCE(EXCLUDED.bill_to, invoices.bill_to),
        updated_at       = now()`
 }
 

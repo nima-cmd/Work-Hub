@@ -98,15 +98,19 @@ test('the invoice upsert resolves the SO through orders — an out-of-window one
   // document window it routinely carries a real SO number with no row here — all
   // 309 invoices missing from the INV10996–INV11416 span were in that position,
   // and passing the number verbatim raised 23503 and aborted the whole load.
-  const { invoiceUpsertSql } = await import('../src/ingest/invoiceUpsert.js')
+  const { invoiceUpsertSql, INVOICE_COLUMNS } = await import('../src/ingest/invoiceUpsert.js')
   const sql = invoiceUpsertSql(2)
+  // Derived, not hard-coded: this assertion is about the SO going through a
+  // lookup, not about how many columns the row happens to have. Pinning the
+  // literal placeholder made adding terms/due_date fail a test that still held.
+  const secondRowSo = INVOICE_COLUMNS + 2
 
   // The SO is never inserted directly — it goes through a lookup that yields NULL
   // when the order is outside the window. Storing the raw number instead would
   // recreate the #32 bug: a key that resolves to nothing, and indistinguishable
   // from a real link once written.
   assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$2::text/)
-  assert.match(sql, /SELECT o\.so_number FROM orders o WHERE o\.so_number = \$11::text/)
+  assert.match(sql, new RegExp(`SELECT o\\.so_number FROM orders o WHERE o\\.so_number = \\$${secondRowSo}::text`))
   assert.ok(!/VALUES \(\$1::text, \$2/.test(sql), 'the raw SO must never be inserted directly')
   // amount_remaining must stay un-COALESCEd — it legitimately goes to 0 on payment.
   assert.match(sql, /CASE WHEN EXCLUDED\.amount_remaining IS NULL/)
@@ -117,6 +121,15 @@ test('the invoice upsert resolves the SO through orders — an out-of-window one
   // ever fills forward: a pull that omits it must not blank a known date.
   assert.match(sql, /\$9::date/)
   assert.match(sql, /trandate\s*=\s*COALESCE\(EXCLUDED\.trandate, invoices\.trandate\)/)
+  // Terms + due date: the objective inputs to the derived ship gate. COALESCEd,
+  // so a pull that omits them can't blank what we already know.
+  assert.match(sql, /\$10::text/)
+  assert.match(sql, /\$11::date/)
+  assert.match(sql, /terms\s*=\s*COALESCE\(EXCLUDED\.terms, invoices\.terms\)/)
+  assert.match(sql, /due_date\s*=\s*COALESCE\(EXCLUDED\.due_date, invoices\.due_date\)/)
+  // bill_to comes off the invoice's own entity — the only name available for the
+  // 1,015 invoices whose order sits outside the window.
+  assert.match(sql, /bill_to\s*=\s*COALESCE\(EXCLUDED\.bill_to, invoices\.bill_to\)/)
 })
 
 test('the invoice fold collapses a repeated invoice, last one winning', async () => {

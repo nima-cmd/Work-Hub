@@ -17,7 +17,7 @@ import { groupContainers, lateContainers } from '../src/model/containers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
-import { SPINE_LABEL, timeline, isOurInvoiceNumber } from '../src/model/orderEvents.js'
+import { SPINE_LABEL, timeline, isOurInvoiceNumber, invNumberFrom810 } from '../src/model/orderEvents.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -30,6 +30,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import { splitUnfiled } from '../src/model/filing.js'
+import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -1601,6 +1602,72 @@ export async function setShipmentShipped(id, shipped = true) {
 //
 // Aged by how long it has been sitting so the oldest surface first — that's the
 // "nothing sits ignored" mission.
+// ── Overdue invoices (Nima, 2026-08-04) ──────────────────────────────────────
+//
+// Explicitly NOT a shipping gate — he was clear that chasing an overdue invoice
+// "doesn't directly fall into our job", which is why net terms past due still
+// ship (see paymentGate.js). It's a DIAGNOSTIC: an invoice past due either means
+// the money arrived and wasn't posted, or we never actually asked for it.
+//
+// On the EDI lane the second case is checkable, and that closes a gap this app
+// documented as unprovable: the "invoices never sent" chip could show stuck 810s
+// but NOT say the money went unasked-for, because the invoices table then began
+// in 2026-05 and payment wasn't checkable from Neon. With the widened document
+// window plus amount_remaining and due_date, an overdue partner invoice whose
+// 810 never reached the partner IS that claim, evidenced.
+//
+// An 810 names our invoice one of two ways — its own business number (ours, via
+// invNumberFrom810) or, for Nordstrom, a consolidated reference we store on
+// invoices.nordstrom_ref. Both are checked; neither is invented.
+export async function getOverdueInvoices({ today = new Date() } = {}) {
+  const { rows } = await pool.query(`
+    SELECT i.inv_number       AS "invNumber",
+           i.so_number        AS "soNumber",
+           i.terms,
+           i.due_date         AS "dueDate",
+           i.amount_remaining AS "amountRemaining",
+           i.nordstrom_ref    AS "nordstromRef",
+           -- The order's customer when we hold the order; otherwise the
+           -- invoice's own bill-to, which is always present.
+           COALESCE(o.customer, i.bill_to) AS customer,
+           o.source
+    FROM invoices i
+    LEFT JOIN orders o ON o.so_number = i.so_number
+    WHERE i.amount_remaining > 0 AND i.due_date IS NOT NULL
+  `)
+
+  // Which invoices have an 810 the partner actually RECEIVED. Delivered-only:
+  // a PENDING/FAILED 810 is precisely the "never billed them" case.
+  const { rows: docs } = await pool.query(`
+    SELECT business_number AS "businessNumber", delivery_status AS "deliveryStatus"
+    FROM edi_transactions
+    WHERE type LIKE '810%' AND business_number IS NOT NULL
+  `)
+  const delivered = new Set()
+  const seen = new Set()
+  for (const d of docs) {
+    const key = String(invNumberFrom810(d.businessNumber) || '').toUpperCase()
+    if (!key) continue
+    seen.add(key)
+    if (String(d.deliveryStatus || '').toUpperCase() === 'DELIVERED') delivered.add(key)
+  }
+
+  const byInv = new Map(rows.map((r) => [String(r.invNumber).toUpperCase(), r]))
+  // null = we hold no 810 record either way, reported as unknown rather than
+  // counted as a missing document. An absent record is not evidence.
+  const ediInvoiceDelivered = (invNumber) => {
+    const inv = String(invNumber || '').toUpperCase()
+    const row = byInv.get(inv)
+    const refs = [inv, row?.nordstromRef ? String(row.nordstromRef).toUpperCase() : null].filter(Boolean)
+    if (refs.some((k) => delivered.has(k))) return true
+    if (refs.some((k) => seen.has(k))) return false
+    return null
+  }
+
+  const items = overdueInvoices(rows, { today, ediInvoiceDelivered })
+  return { items, summary: overdueSummary(items) }
+}
+
 export async function getLabelGaps({ today = new Date() } = {}) {
   const { rows } = await pool.query(`
     SELECT f.if_number      AS "ifNumber",
@@ -1613,6 +1680,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            o.customer, o.source, o.po_number AS "poNumber", o.dc,
            i.status         AS "invoiceStatus",
            i.amount_total   AS "invoiceTotal",
+           i.shipping_status AS "shipGate",
+           i.terms          AS "invoiceTerms",
+           i.amount_remaining AS "amountRemaining",
+           i.due_date       AS "invoiceDueDate",
            c.custody_in     AS "custodyIn",
            c.custody_out    AS "custodyOut",
            dcx.custody_in   AS "dcCustodyIn",
@@ -1674,11 +1745,26 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // the needs-a-label list.
     const edi = r.source === 'edi'
     const lane = edi ? 'freight' : 'parcel'
+    // IS PAYMENT HOLDING THIS BACK? (2026-08-04) A label is printed at PACK time,
+    // before the payment gate clears, so `labelled` alone said "you forgot to mark
+    // this shipped" about goods deliberately sitting here — 2 of 2 live flags were
+    // false (IF7409 $2,225.60 owed, IF7413 $158, both Due-on-receipt and past due).
+    // Derived from terms + what's owed, NOT from the hand-maintained shipping
+    // status — see src/model/paymentGate.js for why that distinction matters.
+    const heldForPayment = paymentBlocked({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining })
     return {
       ...r,
       trackingNumbers: tracking,
       lane,
-      kind: labelled ? 'LABELLED_NOT_SHIPPED' : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
+      heldForPayment,
+      paymentCleared: heldForPayment ? null : clearedReason({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining }),
+      // A payment-held IF is step 5's business (the ship gate), not step 6's
+      // (mark shipped on the real date). Given its own kind rather than being
+      // filtered away: if something ever DOES ship while payment is blocking,
+      // that's a real exception and a silent filter would bury it.
+      kind: heldForPayment ? 'HELD_FOR_PAYMENT'
+        : labelled ? 'LABELLED_NOT_SHIPPED'
+          : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
       ageDays,
       // WHICH DATE to type when marking it shipped (Nima's step 6).
       //
@@ -1697,7 +1783,9 @@ export async function getLabelGaps({ today = new Date() } = {}) {
         : null,
       // A labelled-but-unshipped IF is the more urgent of the two: the customer
       // already has the package while our books say it never left.
-      needed: labelled
+      needed: heldForPayment
+        ? `Held for payment — $${Number(r.amountRemaining).toLocaleString()} owed on ${r.invoiceNumber} (${r.invoiceTerms || 'terms unknown'})`
+        : labelled
         ? `Shipped on ${tracking.length} label(s) — mark ${r.ifNumber} shipped in NetSuite`
         : lane === 'freight'
           ? `Freight/BOL lane — routed on a BOL, not a parcel label`
@@ -1714,15 +1802,21 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   // EDI shipment about to be booked into the wrong month sorts to the top of its
   // own list rather than sitting in fulfilment-date order.
   const freight = rankShipDateAdvice(items.filter((i) => i.kind === 'FREIGHT_BOL_LANE'))
+  // Correctly parked, not work: money is owed and due, so these must NOT move.
+  // Surfaced so the count is visible (and so a shipped-anyway exception can't
+  // hide), but never added to any actionable number — the never-lump rule.
+  const heldForPayment = items.filter((i) => i.kind === 'HELD_FOR_PAYMENT')
   return {
     items,
     labelledNotShipped,
     needsLabel,
     freight, // kept separate so the parcel lists stay actionable, not buried
+    heldForPayment,
     counts: {
       labelledNotShipped: labelledNotShipped.length,
       needsLabel: needsLabel.length,
       freight: freight.length,
+      heldForPayment: heldForPayment.length,
       // The expensive subset: marking these today books them in the wrong month.
       monthClose: monthCloseCount(labelledNotShipped),
       // Deliberately a SEPARATE number, never added to the one above (the

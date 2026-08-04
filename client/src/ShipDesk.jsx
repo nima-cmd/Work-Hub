@@ -114,6 +114,12 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   const markShipped = labelGaps.counts?.labelledNotShipped ?? 0
   const needsLabel = labelGaps.counts?.needsLabel ?? 0
   const freight = labelGaps.counts?.freight ?? 0
+  // Packed, but money is owed and due — so these must NOT move (2026-08-04).
+  // Rendered rather than dropped: reclassifying them out of the two chips above
+  // is what stops the strip nagging about work Nima must not do, but silently
+  // removing four real shipments from the only screen that ages them would
+  // break "nothing sits ignored". Info tone — visible, never accusing.
+  const heldForPayment = labelGaps.counts?.heldForPayment ?? 0
   const withNestor = custody ? custody.filter((c) => c.state === 'with_warehouse').length : null
   const canShip = bay ? bay.filter((s) => s.floating).length : null
   const needsInvoice = orders.filter((o) => o.stage === STAGE.PACKED).length
@@ -164,6 +170,8 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
       title: 'Packed with no carrier label — still physically here' },
     { key: 'freight', n: freight, label: 'need routing', tone: 'info', to: 'routing',
       title: 'EDI/freight lane — these move on a BOL, not a parcel label' },
+    { key: 'heldForPayment', n: heldForPayment, label: 'held for payment', tone: 'info', to: 'launch',
+      title: 'Packed and correctly waiting: money is owed and actually due, so these must not ship yet. Derived from the invoice terms and what is still outstanding — NOT from the hand-set Approved-For-Shipping field, so it stays right whether or not anyone has updated that. Net 30/45/60 and paid-in-full invoices are never held here' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',
       title: 'Packed and waiting on an invoice' },
     { key: 'asnUnannounced', n: asnUnannounced, label: 'shipments unannounced', tone: 'bad', to: 'edi',

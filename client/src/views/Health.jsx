@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchHealth } from '../api.js'
+import { fetchHealth, fetchOverdueInvoices } from '../api.js'
 
 // Health — what's connected, what's arriving, and what to do when it isn't.
 //
@@ -126,6 +126,83 @@ export default function Health() {
         A sync is expected roughly every 90 minutes — the scheduled check asks for every 10, but
         GitHub throttles it. Flagged as late after {syncs.warnHours}h and stopped after {syncs.staleHours}h.
       </div>
+
+      <OverdueInvoices />
     </div>
+  )
+}
+
+// Overdue invoices — deliberately on Health rather than any shipping screen.
+// Nima: "while it doesn't directly fall into our job it's nice to know if an
+// invoice is overdue in payment. It would let us know if something is wrong
+// either in payment being posted or … if there needs to be an inquiry into an
+// 810 or invoice not sent." So it diagnoses, it never gates: an invoice past due
+// does NOT hold a shipment (see src/model/paymentGate.js).
+const INQUIRY = {
+  'never-billed': { label: 'never billed', tone: 'bad',
+    hint: 'An 810 exists but never reached the partner — we may never have asked for this money' },
+  'chase-payment': { label: 'chase payment', tone: 'partial',
+    hint: 'They were billed. Either payment has not come in, or it came in and was not posted' },
+  'unknown-810': { label: '810 unknown', tone: 'partial',
+    hint: 'EDI, but we hold no 810 record either way — an absent record is not proof it was never sent' },
+  'unknown-source': { label: 'lane unknown', tone: 'partial',
+    hint: 'This invoice’s order is outside the sync window, so we cannot tell whether an 810 was owed' },
+}
+
+function OverdueInvoices() {
+  const [d, setD] = useState(null)
+  const [err, setErr] = useState(null)
+  useEffect(() => {
+    fetchOverdueInvoices().then(setD).catch((e) => setErr(e.message))
+  }, [])
+
+  if (err) return <div className="banner error">⚠ Couldn’t load overdue invoices: {err}</div>
+  if (!d) return null
+  const { items, summary } = d
+  const money = (n) => '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })
+
+  return (
+    <>
+      <h3 className="hlSection">Invoices past due</h3>
+      {!items.length ? (
+        <div className="muted hlFoot">Nothing past due. </div>
+      ) : (
+        <>
+          <div className="muted hlSub">
+            <b>{summary.count}</b> invoices · <b>{money(summary.amount)}</b> outstanding · oldest{' '}
+            <b>{summary.oldestDays}d</b> past due.
+            {summary.neverBilled > 0
+              ? <> <b>{summary.neverBilled}</b> may never have been billed — those are worth an 810 inquiry first.</>
+              : <> None of them is missing a delivered 810, so this is a payment/posting question, not a document one.</>}
+            {' '}This list never holds a shipment.
+          </div>
+          <div className="hlRows">
+            {items.map((r) => {
+              const inq = INQUIRY[r.inquiry] || INQUIRY['chase-payment']
+              return (
+                <div key={r.invNumber} className={'hlRow ' + inq.tone}>
+                  <span className="hlDot" />
+                  <div className="hlRowMain">
+                    <div className="hlRowTop">
+                      <b>{r.invNumber}</b>
+                      <span className="hlBadge" title={inq.hint}>{inq.label}</span>
+                    </div>
+                    <div className="hlPowers">
+                      {r.customer || <span className="muted">bill-to unknown</span>}
+                      {' · '}<b>{money(r.amountRemaining)}</b>
+                      {' · '}{r.daysOverdue}d past due
+                      <span className="muted">
+                        {' · '}{r.terms || 'terms unknown'} · due {new Date(r.dueDate).toLocaleDateString()}
+                        {r.soNumber ? ` · ${r.soNumber}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </>
   )
 }

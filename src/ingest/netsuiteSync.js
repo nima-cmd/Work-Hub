@@ -203,6 +203,17 @@ export function mapInvoiceRow(row) {
     nordstromRef: String(row.nordstrom_ref || '').trim().toUpperCase() || null,
     amountRemaining: nOrNull(row.foreignamountunpaid),
     amountTotal: nOrNull(row.foreigntotal),
+    // Payment terms + due date: the objective half of the ship gate. These are
+    // what let src/model/paymentGate.js derive whether payment blocks a
+    // shipment, instead of reading the hand-maintained `shippingStatus` above.
+    // Terms arrive as label text via BUILTIN.DF ("Net 30", "Due on receipt",
+    // "No Payment Required") and are matched loosely, never by id.
+    terms: String(row.terms || '').trim() || null,
+    dueDate: row.duedate || null,
+    // Who the invoice bills. Taken from the INVOICE, not the order, because
+    // 1,015 invoices legitimately have no order row (out-of-window, by design)
+    // — and an overdue list that can't say who owes the money is unusable.
+    billTo: String(row.bill_to || '').trim() || null,
     shipDate: row.shipdate || null,
     // The invoice's own document date. min() over these is the floor of the
     // records we hold — what lets the trail say a partner's 810 reference
@@ -403,6 +414,9 @@ export function invoiceSql(since, invoiceSince = since) {
                  c.custbody_invoice_status AS invoice_status,
                  c.custbody_hb_edi_nordstrom_inv AS nordstrom_ref,
                  c.foreigntotal, c.foreignamountunpaid,
+                 BUILTIN.DF(c.terms) AS terms,
+                 BUILTIN.DF(c.entity) AS bill_to,
+                 TO_CHAR(c.duedate,'YYYY-MM-DD') AS duedate,
                  TO_CHAR(c.shipdate,'YYYY-MM-DD') AS shipdate,
                  TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate
           FROM transaction t

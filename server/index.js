@@ -18,7 +18,7 @@ import {
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
-  streamMasterBol, fileMasterToDrive, getLabelGaps, getUpsRate, getUpsConnection,
+  streamMasterBol, fileMasterToDrive, getLabelGaps, getOverdueInvoices, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
   getCatalogueGaps, buildCatalogueAddCsv, getEdiDeliveryGaps,
   getAsnCartonCheck, startAsnCartonCheck, startNetsuiteRefresh, netsuiteRefreshStatus,
@@ -396,6 +396,18 @@ app.post('/api/edi/arrivals/dismiss', async (req, res) => {
 app.get('/api/label-gaps', async (_req, res) => {
   try {
     res.json(await getLabelGaps())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Overdue invoices — a diagnostic list, never a shipping gate. Flags whether an
+// overdue EDI invoice's 810 ever reached the partner ('never-billed'), which is
+// the difference between "chase the payment" and "we never asked for it".
+app.get('/api/overdue-invoices', async (_req, res) => {
+  try {
+    res.json(await getOverdueInvoices())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
