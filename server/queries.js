@@ -44,7 +44,7 @@ import {
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
 import { shipDateAdvice, rankShipDateAdvice, monthCloseCount, auditMarkedShipments } from '../src/model/shipDateAdvice.js'
-import { computeSyncHealth, LIVE_SYNCS } from '../src/model/syncHealth.js'
+import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/syncHealth.js'
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
@@ -948,7 +948,7 @@ export async function getSyncHealth() {
   const { rows } = await pool.query(
     `SELECT source, MAX(imported_at) AS last_at FROM import_snapshots
       WHERE source = ANY($1) GROUP BY source`,
-    [LIVE_SYNCS.map((s) => s.key)],
+    [[...LIVE_SYNCS, ...CONDITIONAL_SYNCS].map((s) => s.key)],
   )
   const lastBySource = Object.fromEntries(rows.map((r) => [r.source, r.last_at]))
   return computeSyncHealth(lastBySource)

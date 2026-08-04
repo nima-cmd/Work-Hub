@@ -30,6 +30,16 @@ export const LIVE_SYNCS = [
   { key: 'ediPackagesLive', label: 'EDI cartons (routing feed)' },
 ]
 
+// Syncs that only exist once their integration is configured — the warehouse
+// Supabase mirrors. Deliberately NOT in LIVE_SYNCS: a deploy without the
+// WAREHOUSE_* vars would sit permanently red on 'never'. Each joins the health
+// picture only after its first completed push; from then on going quiet is a
+// real signal, exactly like the always-on syncs.
+export const CONDITIONAL_SYNCS = [
+  { key: 'warehousePoFeed', label: 'Warehouse PO feed (Supabase)' },
+  { key: 'warehouseInventoryFeed', label: 'Warehouse inventory feed (Supabase)' },
+]
+
 const RANK = { never: 4, stale: 3, warn: 2, ok: 0 }
 
 export function syncStatus(ageHours) {
@@ -43,11 +53,15 @@ export function syncStatus(ageHours) {
 export function computeSyncHealth(lastBySource = {}, now = new Date()) {
   const t = now instanceof Date ? now.getTime() : new Date(now).getTime()
 
-  const syncs = LIVE_SYNCS.map(({ key, label }) => {
+  const row = ({ key, label }) => {
     const last = lastBySource[key] ? new Date(lastBySource[key]) : null
     const ageHours = last ? (t - last.getTime()) / 3.6e6 : null
     return { key, label, lastAt: last ? last.toISOString() : null, ageHours, status: syncStatus(ageHours) }
-  })
+  }
+  const syncs = [
+    ...LIVE_SYNCS.map(row),
+    ...CONDITIONAL_SYNCS.filter(({ key }) => lastBySource[key]).map(row),
+  ]
 
   // Worst single sync wins — one dead feed makes the whole picture untrustworthy,
   // and averaging would hide exactly the case this exists to catch.

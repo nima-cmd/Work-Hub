@@ -7,6 +7,7 @@ import {
   warehouseSupabaseCreds, warehouseFeedConfigured, warehousePoLineSql,
   mapWarehousePoLines, pushWarehousePoLines, WAREHOUSE_PO_STATUS_CODES,
   warehouseInventorySql, mapWarehouseInventory, pushWarehouseInventory,
+  checkWarehouseFeedTables, WAREHOUSE_FEED_TABLES,
 } from '../src/ingest/warehouseFeed.js'
 
 const ENV = {
@@ -234,4 +235,70 @@ test('pushWarehouseInventory: unconfigured is a silent skip, and a failed upsert
   assert.equal(r.ok, false)
   assert.match(r.error, /upsert batch 0: 500/)
   assert.deepEqual(calls, ['POST'])
+})
+
+// ── the go-live check ─────────────────────────────────────────────────────────
+
+const CHECK_NOW = () => new Date('2026-08-04T18:00:00Z')
+
+function probeReturning(byTable) {
+  return async (url) => {
+    const table = url.match(/\/rest\/v1\/([a-z_]+)\?/)[1]
+    const spec = byTable[table]
+    if (spec.status === 404) return { ok: false, status: 404, text: async () => 'relation does not exist' }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (h) => (h === 'content-range' ? spec.range : null) },
+      json: async () => (spec.syncedAt ? [{ synced_at: spec.syncedAt }] : []),
+      text: async () => '',
+    }
+  }
+}
+
+test('checkWarehouseFeedTables: 404 = missing, 0 rows = empty — each names its own step', async () => {
+  const r = await checkWarehouseFeedTables({
+    env: ENV,
+    now: CHECK_NOW,
+    _fetch: probeReturning({
+      ns_open_po_lines: { status: 404 },
+      ns_item_location_qtys: { range: '*/0' },
+    }),
+  })
+  assert.equal(r.configured, true)
+  assert.equal(r.tables.length, WAREHOUSE_FEED_TABLES.length)
+  const [po, inv] = r.tables
+  assert.equal(po.status, 'missing')
+  assert.equal(inv.status, 'empty')
+  assert.equal(inv.rows, 0)
+  assert.equal(inv.seed, 'npm run sync:warehouse-inventory')
+})
+
+test('checkWarehouseFeedTables: fresh rows read live; a table whose newest stamp went quiet reads stale', async () => {
+  const r = await checkWarehouseFeedTables({
+    env: ENV,
+    now: CHECK_NOW,
+    _fetch: probeReturning({
+      ns_open_po_lines: { range: '0-0/1748', syncedAt: '2026-08-04T17:10:00Z' },
+      ns_item_location_qtys: { range: '0-0/1934', syncedAt: '2026-08-03T09:00:00Z' },
+    }),
+  })
+  const [po, inv] = r.tables
+  assert.equal(po.status, 'live')
+  assert.equal(po.rows, 1748)
+  assert.ok(po.ageHours < 1)
+  assert.equal(inv.status, 'stale')
+  assert.equal(inv.rows, 1934)
+  assert.ok(inv.ageHours > 24)
+})
+
+test('checkWarehouseFeedTables: unconfigured says so; a non-404 failure is an error, never a guess', async () => {
+  assert.deepEqual(await checkWarehouseFeedTables({ env: {} }), { configured: false, tables: [] })
+  const r = await checkWarehouseFeedTables({
+    env: ENV,
+    now: CHECK_NOW,
+    _fetch: async () => ({ ok: false, status: 500, text: async () => 'oops' }),
+  })
+  assert.ok(r.tables.every((t) => t.status === 'error'))
+  assert.match(r.tables[0].error, /500/)
 })

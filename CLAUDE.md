@@ -29,6 +29,8 @@ npm run sync:ups-costs # harvest real UPS billed costs from ShipStation
 npm run sync:warehouse-pos # push open PO lines to the Naghedi-Warehouse Supabase
 npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
+npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
+
 ```
 
 ## Data flow
