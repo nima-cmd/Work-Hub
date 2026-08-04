@@ -2144,6 +2144,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .fpGlyph { color: var(--accent); font-size: 15px; width: 18px; text-align: center; flex: none; }
 .fpLabel { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fpPin { color: var(--accent); margin-left: 6px; font-size: 12px; }
+/* "their court" — a leg waiting on the warehouse. Muted on purpose: it's real
+   work (chasing) but not a keystroke of ours, so it must not read as urgent. */
+.fpTheirs { color: var(--muted); margin-left: 8px; font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; }
 .fpDeadline { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .fpDeadline em { font-style: normal; color: var(--muted); font-size: 12px; }
 .fpDeadline em.risk { color: var(--hi); }

@@ -21,6 +21,8 @@ import { buildRouteItems, applyDayPlan } from '../../../src/model/routeItems.js'
 
 const KIND_GLYPH = {
   edi_route: '⇄', invoice: '$', ship: '➤', pack: '▣',
+  // ⌖ matches the Ship Desk's "NEEDS A LABEL" lane — same work, same mark.
+  label: '⌖', chase: '⧗', mark_packed: '▣', handoff: '⇥',
   weaver_sync: '⟲', csv_upload: '⬆', email_reply: '✉', planning: '◇', default: '◆',
 }
 const glyph = (k) => KIND_GLYPH[k] || KIND_GLYPH.default
@@ -43,7 +45,7 @@ const isoToTime = (iso) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export default function FlightPlan({ orders = [], tasks = [], onNavigate = () => {}, onRefresh }) {
+export default function FlightPlan({ orders = [], tasks = [], labelGaps = null, onNavigate = () => {}, onRefresh }) {
   const [edi, setEdi] = useState(null)
   const [planRows, setPlanRows] = useState([])
   const [now, setNow] = useState(() => Date.now())
@@ -65,13 +67,13 @@ export default function FlightPlan({ orders = [], tasks = [], onNavigate = () =>
   const ediWork = useMemo(() => (edi ? computeEdiWork(edi.orders || [], edi.resolutions || []) : null), [edi])
 
   const { plan, doneItems, manualMode } = useMemo(() => {
-    const items = buildRouteItems(orders, tasks, ediWork, { now })
+    const items = buildRouteItems(orders, tasks, ediWork, { now, labelGaps })
     const { items: merged, manualMode } = applyDayPlan(items, planRows)
     const open = merged.filter((i) => !i.done)
     const done = merged.filter((i) => i.done)
     const plan = computeRoute(open, { now, preserveOrder: manualMode })
     return { plan, doneItems: done, manualMode }
-  }, [orders, tasks, ediWork, planRows, now])
+  }, [orders, tasks, ediWork, labelGaps, planRows, now])
 
   const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
 
@@ -152,6 +154,11 @@ export default function FlightPlan({ orders = [], tasks = [], onNavigate = () =>
                 <span className="fpLabel">
                   {isNow ? '▶ ' : ''}{r.label}
                   {r.scheduled && <span className="fpPin" title="Has a set due-time">⏱</span>}
+                  {/* Whose court: a leg we can't finish alone reads as theirs, so
+                      an unmoved one isn't mistaken for a missed keystroke. */}
+                  {r.courtTheirs && (
+                    <span className="fpTheirs" title="Waiting on the warehouse — chasing is our part">their court</span>
+                  )}
                 </span>
                 <span className="fpDeadline">
                   {r.deadline != null && <em className={r.atRisk ? 'risk' : ''}>by {hhmm(r.deadline)}</em>}
