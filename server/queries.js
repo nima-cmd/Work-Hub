@@ -1678,7 +1678,7 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            f.if_date        AS "ifDate",
            f.invoice_number AS "invoiceNumber",
            f.tracking_numbers AS "trackingNumbers",
-           o.customer, o.source, o.po_number AS "poNumber", o.dc,
+           o.customer, o.source, o.po_number AS "poNumber", o.dc, o.location,
            i.status         AS "invoiceStatus",
            i.amount_total   AS "invoiceTotal",
            i.shipping_status AS "shipGate",
@@ -1744,8 +1744,21 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // (it was 12 of the first 16 hits). Their equivalent gap is a missing BOL,
     // which the routing workspace already owns. Only the parcel lane belongs in
     // the needs-a-label list.
+    // Third lane, added 2026-08-04 once Nima explained what FOB Pending Approval
+    // actually is: "a shipment that is in china pending a pick up usually
+    // confirmed by our china warehouse but that's with someone in our NY office."
+    // We never dispatch it, so we never make its label.
+    //
+    // ⚠️ Keyed on `location`, NOT on the hand-set `shipping_status`. The status
+    // field is the same one #47/#49 established can be trusted in ONE direction at
+    // most: if it went stale or was never set, keying on it would drop this
+    // shipment back into "needs a label" and re-invent the work. Location is the
+    // objective signal, and the two agree on every row where both are known
+    // (6 of 6; the 4 other FOB invoices carry no order at all — the null-SO
+    // strays from the invoice document window).
     const edi = r.source === 'edi'
-    const lane = edi ? 'freight' : 'parcel'
+    const fob = /china/i.test(r.location || '')
+    const lane = edi ? 'freight' : fob ? 'fob' : 'parcel'
     // IS PAYMENT HOLDING THIS BACK? (2026-08-04) A label is printed at PACK time,
     // before the payment gate clears, so `labelled` alone said "you forgot to mark
     // this shipped" about goods deliberately sitting here — 2 of 2 live flags were
@@ -1811,6 +1824,13 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   // EDI shipment about to be booked into the wrong month sorts to the top of its
   // own list rather than sitting in fulfilment-date order.
   const freight = rankShipDateAdvice(items.filter((i) => i.kind === 'FREIGHT_BOL_LANE'))
+  // The China/FOB pickup lane. Its own list for the same reason freight has one:
+  // the action is a confirmation with the China warehouse and the NY office, not
+  // anything anyone in this warehouse can do, so it must never be added to a
+  // parcel number. Age still matters — this is where the largest balance on the
+  // board sits (IF7414, $90,654).
+  const fobPickup = items.filter((i) => i.kind === 'FOB_PICKUP')
+    .sort((a, b) => (b.ageDays ?? 0) - (a.ageDays ?? 0))
   // Correctly parked, not work: money is owed and due, so these must NOT move.
   // Surfaced so the count is visible (and so a shipped-anyway exception can't
   // hide), but never added to any actionable number — the never-lump rule.
@@ -1825,11 +1845,13 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     labelledNotShipped,
     needsLabel,
     freight, // kept separate so the parcel lists stay actionable, not buried
+    fobPickup,
     heldForPayment,
     counts: {
       labelledNotShipped: labelledNotShipped.length,
       needsLabel: needsLabel.length,
       freight: freight.length,
+      fobPickup: fobPickup.length,
       heldForPayment: heldForPayment.length,
       // The expensive subset: marking these today books them in the wrong month.
       monthClose: monthCloseCount(labelledNotShipped),

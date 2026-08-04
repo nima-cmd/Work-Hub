@@ -1023,10 +1023,17 @@ test('buildRouteItems splits the bench and never asks for an invoice before the 
     { soNumber: 'SO11988', customer: 'Nordstrom - 568', stage: STAGE.PICKED, severity: 3, source: 'edi',
       flags: [{ key: 'WAREHOUSE_HOLDS', label: 'IF9 with warehouse 9d — chase it', severity: 3 }] },
   ]
-  const labelGaps = { needsLabel: [
-    { ifNumber: 'IF7410', soNumber: 'SO12374', customer: 'Julian Gold', ageDays: 0 },
-    { ifNumber: 'IF7414', soNumber: 'SO12394', customer: 'Yagi Tsusho LTD.', ageDays: 6 },
-  ] }
+  const labelGaps = {
+    needsLabel: [
+      { ifNumber: 'IF7410', soNumber: 'SO12374', customer: 'Julian Gold', ageDays: 0 },
+      { ifNumber: 'IF7412', soNumber: 'SO12330', customer: 'Robertson Madison LLC', ageDays: 4 },
+    ],
+    // In China awaiting collection — never a label leg of ours, and no cutoff of
+    // ours to miss (the truck is theirs to send). See src/model/labelGap.js.
+    fobPickup: [
+      { ifNumber: 'IF7414', soNumber: 'SO12394', customer: 'Yagi Tsusho LTD.', ageDays: 6 },
+    ],
+  }
   const items = buildRouteItems(orders, [], null, { now: T0, labelGaps })
   const byId = new Map(items.map((i) => [i.id, i]))
 
@@ -1044,7 +1051,15 @@ test('buildRouteItems splits the bench and never asks for an invoice before the 
   assert.ok(!byId.has('inv-SO12374'))
   assert.equal(byId.get('label-IF7410').kind, 'label')
   assert.equal(byId.get('label-IF7410').deadline, null)     // same-day gap → no cutoff
-  assert.equal(byId.get('label-IF7414').deadline, three)    // 6 days old → today
+  assert.equal(byId.get('label-IF7412').deadline, three)    // 4 days old → today
+
+  // A China/FOB shipment gets a CONFIRMATION leg, never a label leg — the truck
+  // is theirs to send, so no cutoff of ours and no label we would ever make.
+  assert.ok(!byId.has('label-IF7414'))
+  assert.equal(byId.get('fob-IF7414').kind, 'chase')
+  assert.equal(byId.get('fob-IF7414').courtTheirs, true)
+  assert.equal(byId.get('fob-IF7414').deadline, null)
+  assert.doesNotMatch(byId.get('fob-IF7414').label, /Label/)
 
   // the parcel lane is decided by `source`, never by the display channel
   assert.equal(byId.get('bench-SO12344').kind, 'mark_packed')

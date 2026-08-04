@@ -153,6 +153,31 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
     })
   }
 
+  // ── FOB: in China, awaiting collection ──
+  // Not a label and not a BOL. The China warehouse confirms the pickup and the NY
+  // office holds the thread (Nima, 2026-08-04), so chasing that confirmation is
+  // the only part of this lane anyone here touches — hence a `chase` leg in their
+  // court, exactly like an IF the warehouse is sitting on.
+  //
+  // ⚠️ These rows were `needsLabel` until 2026-08-04, so the label feeder above
+  // was queueing a 3pm cutoff on work that will never be done: IF7414 ($90,654,
+  // the largest balance on the board) led that queue.
+  for (const g of (opts.labelGaps?.fobPickup || [])) {
+    items.push({
+      id: 'fob-' + g.ifNumber,
+      label: `${g.ifNumber} · Confirm China pickup · ${g.customer || ''}`.trim().slice(0, 60),
+      group: 'FOB pickups',
+      kind: 'chase',
+      // No cutoff of ours to miss — the truck is theirs to send. Age is what
+      // keeps it from being forgotten, and the strip's chip carries that.
+      deadline: null,
+      durationMin: dur('chase'),
+      priority: 3,
+      courtTheirs: true,
+      nav: 'ship',
+    })
+  }
+
   // ── shippable orders + the boutique bench ──
   for (const o of orders) {
     // approved-for-shipping → a "ship it out" leg (deadline from its cancel
