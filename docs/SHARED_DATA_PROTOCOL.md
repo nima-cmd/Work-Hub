@@ -95,9 +95,20 @@ Both feeds are populated and verified end-to-end:
 `npm run check:warehouse-feed` (Work-Hub) reports both tables' row counts and snapshot
 age, and names the missing step if either regresses.
 
-⚠️ **Work-Hub's Render deploy does not yet carry `WAREHOUSE_SUPABASE_URL` / `_KEY`**, so
-until those are set the feeds refresh only when a sync runs locally. A stale
-`synced_at` means that, not a broken contract.
+**The Render deploy pushes both feeds on every sync cycle** — verified 2026-08-04 by
+dispatching `recurring-check.yml` with no local sync running and watching `synced_at`
+advance 18:34:16Z → 18:54:55Z (row counts unchanged at 1,843 / 1,934).
+
+`WAREHOUSE_SUPABASE_URL` / `_KEY` are declared in `render.yaml` but deliberately left
+**empty**: `warehouseSupabaseCreds()` falls back to the `VITE_SUPABASE_URL` /
+`VITE_SUPABASE_ANON_KEY` pair already set on Render, and today those would be the exact
+same values — the warehouse project and its publishable key. Filling them in would just
+duplicate a credential in a second place.
+
+Those two vars earn their keep at **phase 2**: when Work-Hub is re-keyed to a secret key
+(see *Enforcement*), `WAREHOUSE_SUPABASE_KEY` becomes a genuinely *different* value from
+the app's publishable key, and setting it is what separates the two identities. Until
+then, empty is correct.
 
 ---
 
