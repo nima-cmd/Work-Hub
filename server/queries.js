@@ -31,6 +31,7 @@ import {
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import { splitUnfiled } from '../src/model/filing.js'
 import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
+import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -1751,20 +1752,28 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     // false (IF7409 $2,225.60 owed, IF7413 $158, both Due-on-receipt and past due).
     // Derived from terms + what's owed, NOT from the hand-maintained shipping
     // status — see src/model/paymentGate.js for why that distinction matters.
-    const heldForPayment = paymentBlocked({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining })
+    const gate = { terms: r.invoiceTerms, amountRemaining: r.amountRemaining, shipGate: r.shipGate }
+    const heldForPayment = paymentBlocked(gate)
     return {
       ...r,
       trackingNumbers: tracking,
       lane,
       heldForPayment,
-      paymentCleared: heldForPayment ? null : clearedReason({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining }),
+      paymentCleared: heldForPayment ? null : clearedReason(gate),
       // A payment-held IF is step 5's business (the ship gate), not step 6's
       // (mark shipped on the real date). Given its own kind rather than being
       // filtered away: if something ever DOES ship while payment is blocking,
       // that's a real exception and a silent filter would bury it.
-      kind: heldForPayment ? 'HELD_FOR_PAYMENT'
-        : labelled ? 'LABELLED_NOT_SHIPPED'
-          : lane === 'freight' ? 'FREIGHT_BOL_LANE' : 'NEEDS_LABEL',
+      //
+      // ⚠️ THE ORDER OF THE TESTS IS THE WHOLE FIX, and it now lives in
+      // src/model/labelGap.js where it can be tested (Nima, 2026-08-04): "a label
+      // is created, the next step is the creation of an invoice, and then after we
+      // need to know if we can ship it." The document step comes BEFORE the payment
+      // question, so an unlabelled parcel needs its label whether or not money is
+      // owed. While `heldForPayment` was tested first it swallowed exactly that:
+      // IF7414 ($90,654 owed, 6 days, the board's oldest item) and IF7412 ($3,140)
+      // had ZERO labels and still read as "correctly parked".
+      kind: labelGapKind({ labelled, lane, heldForPayment }),
       ageDays,
       // WHICH DATE to type when marking it shipped (Nima's step 6).
       //
@@ -1783,13 +1792,13 @@ export async function getLabelGaps({ today = new Date() } = {}) {
         : null,
       // A labelled-but-unshipped IF is the more urgent of the two: the customer
       // already has the package while our books say it never left.
-      needed: heldForPayment
-        ? `Held for payment — $${Number(r.amountRemaining).toLocaleString()} owed on ${r.invoiceNumber} (${r.invoiceTerms || 'terms unknown'})`
-        : labelled
-        ? `Shipped on ${tracking.length} label(s) — mark ${r.ifNumber} shipped in NetSuite`
-        : lane === 'freight'
-          ? `Freight/BOL lane — routed on a BOL, not a parcel label`
-          : `Packed with no carrier label — create one for ${r.ifNumber}`,
+      // Derived from the same classifier as `kind`, so the sentence on the row and
+      // the chip that counts it can never disagree.
+      needed: labelGapNeeded({
+        labelled, lane, heldForPayment, ifNumber: r.ifNumber,
+        invoiceNumber: r.invoiceNumber, invoiceTerms: r.invoiceTerms,
+        amountRemaining: r.amountRemaining, labelCount: tracking.length,
+      }),
     }
   })
 
@@ -1805,6 +1814,11 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   // Correctly parked, not work: money is owed and due, so these must NOT move.
   // Surfaced so the count is visible (and so a shipped-anyway exception can't
   // hide), but never added to any actionable number — the never-lump rule.
+  //
+  // Since 2026-08-04 this is only ever a LABELLED shipment. A payment-held IF with
+  // no label still appears under needsLabel, because the label precedes the
+  // invoice in Nima's flow — so `heldForPayment` now means precisely "the package
+  // is ready and the money is what's left", never "nothing to do here".
   const heldForPayment = items.filter((i) => i.kind === 'HELD_FOR_PAYMENT')
   return {
     items,
@@ -1861,6 +1875,7 @@ export async function getShippedWhileOwing({ today = new Date() } = {}) {
            i.amount_remaining AS "amountRemaining",
            i.due_date    AS "invoiceDueDate",
            i.status      AS "invoiceStatus",
+           i.shipping_status AS "shipGate",
            COALESCE(o.customer, i.bill_to) AS customer,
            o.source
     FROM fulfillments f
@@ -1874,9 +1889,13 @@ export async function getShippedWhileOwing({ today = new Date() } = {}) {
   const day = 86_400_000
   // Same derived gate as the packed list, so the two lists agree about what
   // "payment is blocking" means — net terms and paid-in-full never appear here,
-  // exactly as they never hold a packed shipment back.
+  // exactly as they never hold a packed shipment back. That now includes the NY
+  // waiver: a shipment the office approved to leave with a balance still open was
+  // AUTHORIZED, so listing it as an exception would accuse someone of a decision
+  // they were instructed to make. (Live: the 1 row here carries `Shipped`, not the
+  // approval, so it is unaffected.)
   const items = rows
-    .filter((r) => paymentBlocked({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining }))
+    .filter((r) => paymentBlocked({ terms: r.invoiceTerms, amountRemaining: r.amountRemaining, shipGate: r.shipGate }))
     .map((r) => ({
       ...r,
       amountRemaining: Number(r.amountRemaining),
