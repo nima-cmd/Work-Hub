@@ -145,6 +145,12 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
     // (partners re-transmit to change dates or units — 2026-07-29).
     const po850s = sorted.filter((t) => t.type === '850_PURCHASE_ORDER')
     const po850 = po850s[po850s.length - 1] || null
+    // A partner cancels an EDI PO by re-transmitting it ZEROED OUT: the newest
+    // 850 arrives with 0 total units (Nordstrom's shape is 1 line / 0 units /
+    // no window; Shopbop keeps the window — both live 2026-08-04). Strict
+    // === 0 on purpose: an 850 whose lines were never pulled carries null
+    // totalUnits, and unknown must never read as cancelled.
+    const cancelled850 = !!po850 && po850.totalUnits === 0
     const hasManualLinks = sorted.some((t) => manualLinkByTxnId.has(t.id))
 
     // Only meaningful when we DO have a currently-open NetSuite order to check
@@ -177,6 +183,7 @@ export function computeEdiPipeline(transactions = [], fulfillments = [], netsuit
       lastUpdatedAt: sorted.reduce((max, t) => (t.lastUpdatedAt > max ? t.lastUpdatedAt : max), sorted[0]?.lastUpdatedAt || null),
       shipNotBefore: po850?.shipNotBefore || null,
       cancelAfter: po850?.cancelAfter || null,
+      cancelled850,
       transactions: sorted,
       fulfillments: fulfillmentsByPoNumber.get(businessNumber) || [],
       netsuiteOrder,

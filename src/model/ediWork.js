@@ -96,6 +96,16 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     : (order.netsuiteOrder ? [order.netsuiteOrder] : [])
   const unshippedSos = sos.filter((o) => o.stage !== 'SHIPPED')
 
+  // ── partner cancellation (2026-08-04, the PR #12 follow-up) ────────────────
+  // The CURRENT 850 zeroes the PO out (ediPipeline's `cancelled850`) — the
+  // partner's cancel shape is a re-send with 0 units. Chasing it with "enter
+  // in NetSuite" / cancel-date danger is wrong: the work left is to
+  // acknowledge the cancellation and close. Only quiets the chase when
+  // nothing shipped — a zeroed PO with a shipped fulfilment is a DISPUTE,
+  // not a cancellation, and falls through to the normal (loud) flow.
+  const partnerCancelled =
+    !!order.cancelled850 && order.stageRank < 3 && !sos.some((o) => o.stage === 'SHIPPED')
+
   // ── closed? ────────────────────────────────────────────────────────────────
   // Manual close always wins. Nothing closes silently anymore (Nima, 2026-07-28,
   // Phase C): the old `autoClosed = stageRank>=4 && !hasIssue` trusted "an 810
@@ -144,7 +154,7 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   // after MISSED_AFTER_DAYS that's "nobody entered this" — the failure Nima
   // found from a month back.
   const missed850 =
-    !closed && !r &&
+    !closed && !r && !partnerCancelled &&
     order.bucket !== 'NO_850_FOUND' &&
     order.stageRank <= 2 &&
     !order.netsuiteOrder &&
@@ -153,7 +163,10 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   // ── cancel-date danger ─────────────────────────────────────────────────────
   let cancelState = null // 'passed' | 'soon' | null
   let cancelDays = null
-  if (!closed && order.cancelAfter && order.stageRank < 3) {
+  // A cancelled PO's cancel-after date is moot — without the gate, Shopbop's
+  // zeroed re-send (which keeps its window) escalates a dead PO to cancel
+  // danger as the date approaches.
+  if (!closed && !partnerCancelled && order.cancelAfter && order.stageRank < 3) {
     const d = daysSince(order.cancelAfter, today)
     if (d != null && d >= 0) { cancelState = 'passed'; cancelDays = d }
     else if (d != null && -d <= CANCEL_SOON_DAYS) { cancelState = 'soon'; cancelDays = -d }
@@ -175,6 +188,10 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     needed = (order.netsuiteOrder || r?.netsuiteRef)
       ? 'Validate this PO — confirm it to release from review'
       : 'Validate this PO — confirm its NetSuite order (parked for review)'
+  } else if (partnerCancelled) {
+    // Closing flows through the same manual resolution path as everything
+    // else (mark cancelled) — nothing closes silently.
+    needed = 'Cancelled by partner — current 850 zeroes it out; confirm & close'
   } else if (readyToClose) {
     needed = verify.canClose
       ? 'Verify & close — 856 + 810 delivered & accepted'
@@ -219,6 +236,7 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     resolution: r,
     needed,
     missed850,
+    partnerCancelled,
     age850,
     cancelState,
     cancelDays,
@@ -251,12 +269,13 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
   for (const o of withWork) {
     const key = o.tradingPartner || '(unknown partner)'
     if (!partners.has(key)) {
-      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0 })
+      partners.set(key, { tradingPartner: key, open: 0, closed: 0, missed: 0, cancelDanger: 0, issues: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0, partnerCancelled: 0 })
     }
     const p = partners.get(key)
     if (o.work.closed) p.closed++
     else p.open++
     if (o.work.missed850) p.missed++
+    if (o.work.partnerCancelled && !o.work.closed) p.partnerCancelled++
     if (o.work.cancelState) p.cancelDanger++
     if (o.hasIssue && !o.work.closed) p.issues++
     if (o.work.underReview) p.inReview++
@@ -277,8 +296,9 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
       unallocated: t.unallocated + p.unallocated, recheck: t.recheck + p.recheck,
       readyToClose: t.readyToClose + p.readyToClose,
       needs856: t.needs856 + p.needs856, needs810: t.needs810 + p.needs810,
+      partnerCancelled: t.partnerCancelled + p.partnerCancelled,
     }),
-    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0 },
+    { open: 0, closed: 0, missed: 0, cancelDanger: 0, inReview: 0, unallocated: 0, recheck: 0, readyToClose: 0, needs856: 0, needs810: 0, partnerCancelled: 0 },
   )
 
   return { orders: withWork, partners: partnerList, totals }
