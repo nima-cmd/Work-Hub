@@ -30,6 +30,7 @@ npm run sync:warehouse-pos # push open PO lines to the Naghedi-Warehouse Supabas
 npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
+npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
 
 ```
 
@@ -66,6 +67,12 @@ NetSuite saved searches ──(manual CSV export)──▶ src/ingest ──▶ 
 - **OC ↔ PO** has no native NetSuite link — the app will own that mapping
   (`oc_po_links` table).
 - **Natural keys** (SO#, IF#, INV#, PO#) are primary keys so re-imports upsert.
+- **Every counter bug here has been one of four shapes** — unreachable branch ·
+  counts something other than its label · keyed on a hand-set/display field where
+  an objective one exists · a comment describing a mechanism no code implements.
+  `npm run check:counters` mechanically catches the first two. The other two need
+  a human to check a field's provenance — so when a number looks calm, ask what
+  it is keyed on before believing it.
 
 ## Layout
 
