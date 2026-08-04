@@ -32,10 +32,21 @@ self.addEventListener('fetch', (e) => {
     return
   }
 
-  // Static assets (Vite emits content-hashed files): cache-first, then network.
+  // Static assets: cache-first, then network.
+  //
+  // ⚠️ CODE is only ever cached from /assets/, where Vite emits content-hashed
+  // filenames — a new build produces new URLs, so cache-first can never serve
+  // stale code. The old rule also matched ANY path ending in `.js`/`.css`, which
+  // is safe for a built bundle but catastrophic anywhere serving unhashed module
+  // URLs: it pinned /src/model/*.js permanently and made a dev page render code
+  // that was not on disk (2026-08-04 — see client/src/main.jsx). Registration is
+  // now production-only, and this narrowing means a worker that somehow installs
+  // against unhashed sources still cannot freeze them.
+  const hashedCode = url.pathname.startsWith('/assets/')
+  const media = /\.(png|svg|ico|webmanifest|woff2?)$/.test(url.pathname)
   e.respondWith(
     caches.match(request).then((hit) => hit || fetch(request).then((res) => {
-      if (res.ok && (url.pathname.startsWith('/assets/') || /\.(png|svg|woff2?|css|js)$/.test(url.pathname))) {
+      if (res.ok && (hashedCode || media)) {
         const copy = res.clone(); caches.open(CACHE).then((c) => c.put(request, copy))
       }
       return res
