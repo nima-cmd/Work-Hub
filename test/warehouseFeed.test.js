@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   warehouseSupabaseCreds, warehouseFeedConfigured, warehousePoLineSql,
   mapWarehousePoLines, pushWarehousePoLines, WAREHOUSE_PO_STATUS_CODES,
+  warehouseInventorySql, mapWarehouseInventory, pushWarehouseInventory,
 } from '../src/ingest/warehouseFeed.js'
 
 const ENV = {
@@ -155,4 +156,82 @@ test('pushWarehousePoLines: unconfigured (either side) is a silent skip, not an 
   assert.deepEqual(await pushWarehousePoLines({ env: noSupabase }), { ok: false, configured: false })
   const noNetsuite = { WAREHOUSE_SUPABASE_URL: 'https://wh.supabase.co', WAREHOUSE_SUPABASE_KEY: 'k' }
   assert.deepEqual(await pushWarehousePoLines({ env: noNetsuite }), { ok: false, configured: false })
+})
+
+// ── the inventory feed ────────────────────────────────────────────────────────
+
+// A realistic pull: two locations on one SKU (one oversold — negative
+// available with stock on hand), a second SKU, and a keyless row (no item
+// join) that must be counted, not silently dropped.
+const INV_ROWS = [
+  { item_id: '6233', sku: 'SN02264NB-TEAK', display_name: 'Isola Large Bag | Teak', item_type: 'InvtPart', location_id: '2', location_name: 'Warehouse', qty_available: '18', qty_on_hand: '18' },
+  { item_id: '6233', sku: 'SN02264NB-TEAK', display_name: 'Isola Large Bag | Teak', item_type: 'InvtPart', location_id: '4', location_name: 'Damages', qty_available: '-2', qty_on_hand: '10' },
+  { item_id: '6284', sku: 'SN04023LD-CASHMERE', display_name: 'Nomad Medium Hobo | Cashmere', item_type: 'InvtPart', location_id: '7', location_name: "Warehouse Bulk : Bloomingdale's", qty_available: '112', qty_on_hand: '112' },
+  { item_id: '9999', sku: null, display_name: null, item_type: 'InvtPart', location_id: '2', location_name: 'Warehouse', qty_available: '1', qty_on_hand: '1' },
+]
+
+test('warehouseInventorySql: nonzero-either-measure scope, full location path, no SKU filtering', () => {
+  const sql = warehouseInventorySql()
+  assert.match(sql, /aggregateItemLocation/)
+  assert.match(sql, /quantityonhand <> 0 OR il\.quantityavailable <> 0/)
+  assert.match(sql, /l\.fullname/)
+  assert.doesNotMatch(sql, /itemid (LIKE|REGEXP)/i)
+})
+
+test('mapWarehouseInventory: numbers as numbers, negatives kept, keyless rows counted not dropped', () => {
+  const { rows, skippedNoSku } = mapWarehouseInventory(INV_ROWS)
+  assert.equal(rows.length, 3)
+  assert.equal(skippedNoSku, 1)
+  const damaged = rows.find((r) => r.location_id === '4')
+  assert.equal(damaged.qty_available, -2)
+  assert.equal(damaged.qty_on_hand, 10)
+  assert.equal(damaged.location_name, 'Damages')
+  const bloomies = rows.find((r) => r.location_id === '7')
+  assert.equal(bloomies.location_name, "Warehouse Bulk : Bloomingdale's")
+  assert.equal(bloomies.sku, 'SN04023LD-CASHMERE')
+})
+
+test('pushWarehouseInventory: upserts to ns_item_location_qtys on (item_id,location_id), then sweeps older stamps', async () => {
+  const calls = []
+  const _fetch = async (url, init) => {
+    calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body) })
+    return { ok: true, status: 200, text: async () => '', headers: { get: (h) => (h === 'content-range' ? '*/5' : null) } }
+  }
+  const now = () => new Date('2026-08-03T21:00:00Z')
+  const r = await pushWarehouseInventory({ env: ENV, _nsFetch: nsFetchReturning(INV_ROWS), _fetch, now })
+
+  assert.equal(r.ok, true)
+  assert.equal(r.pushed, 3)
+  assert.equal(r.skippedNoSku, 1)
+  assert.equal(r.swept, 5)
+
+  assert.equal(calls.length, 2)
+  const [upsert, sweep] = calls
+  assert.equal(upsert.method, 'POST')
+  assert.match(upsert.url, /\/rest\/v1\/ns_item_location_qtys\?on_conflict=item_id,location_id$/)
+  assert.ok(upsert.body.every((row) => row.synced_at === '2026-08-03T21:00:00.000Z'))
+  assert.equal(sweep.method, 'DELETE')
+  assert.match(sweep.url, /ns_item_location_qtys\?synced_at=lt\./)
+})
+
+test('pushWarehouseInventory: shares the never-replace guards — truncated and empty pulls write nothing', async () => {
+  let supabaseCalls = 0
+  const _fetch = async () => { supabaseCalls++; return { ok: true, status: 200, text: async () => '' } }
+  const truncated = await pushWarehouseInventory({ env: ENV, _nsFetch: nsFetchReturning(INV_ROWS, { truncated: true }), _fetch })
+  assert.equal(truncated.ok, false)
+  assert.match(truncated.error, /INCOMPLETE/)
+  const empty = await pushWarehouseInventory({ env: ENV, _nsFetch: nsFetchReturning([]), _fetch })
+  assert.equal(empty.ok, false)
+  assert.match(empty.error, /refusing to replace/)
+  assert.equal(supabaseCalls, 0)
+})
+
+test('pushWarehouseInventory: unconfigured is a silent skip, and a failed upsert aborts before the sweep', async () => {
+  assert.deepEqual(await pushWarehouseInventory({ env: {} }), { ok: false, configured: false })
+  const calls = []
+  const _fetch = async (url, init) => { calls.push(init.method); return { ok: false, status: 500, text: async () => 'boom' } }
+  const r = await pushWarehouseInventory({ env: ENV, _nsFetch: nsFetchReturning(INV_ROWS), _fetch })
+  assert.equal(r.ok, false)
+  assert.match(r.error, /upsert batch 0: 500/)
+  assert.deepEqual(calls, ['POST'])
 })

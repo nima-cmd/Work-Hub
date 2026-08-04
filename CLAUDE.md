@@ -27,6 +27,7 @@ npm run analyze        # CLI attention list straight from CSVs (no DB)
 npm run ups:rate       # what a big box costs on the WHOLESALE UPS account
 npm run sync:ups-costs # harvest real UPS billed costs from ShipStation
 npm run sync:warehouse-pos # push open PO lines to the Naghedi-Warehouse Supabase
+npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 ```
 
@@ -80,7 +81,7 @@ src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 8
 src/ingest/asnCartonSync.js  runs that check + persists it (the CLI and the cron share it)
 src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
 src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
-src/ingest/warehouseFeed.js  open PO lines → the Naghedi-Warehouse app's Supabase (docs/warehouse-po-feed.md)
+src/ingest/warehouseFeed.js  open PO lines + item-location qtys → the Naghedi-Warehouse app's Supabase (docs/warehouse-po-feed.md)
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client

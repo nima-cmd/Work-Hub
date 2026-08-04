@@ -15,6 +15,7 @@
     "sync:packages": "node --env-file=.env.local scripts/sync-edi-packages.js",
     "sync:ups-costs": "node --env-file=.env.local scripts/sync-ups-costs.js",
     "sync:warehouse-pos": "node --env-file=.env.local scripts/sync-warehouse-pos.js",
+    "sync:warehouse-inventory": "node --env-file=.env.local scripts/sync-warehouse-inventory.js",
     "backfill:events": "node --env-file=.env.local scripts/backfill-events.js",
     "ups:rate": "node --env-file=.env.local scripts/ups-rate.js",
     "check:netsuite": "node --env-file=.env.local scripts/check-netsuite.js",

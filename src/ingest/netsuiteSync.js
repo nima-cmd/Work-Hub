@@ -15,7 +15,7 @@
 // docs/netsuite-api-integration.md); NetSuite exposes them as single letters.
 
 import { runSuiteQL, netsuiteConfigured } from './netsuiteApi.js'
-import { pushWarehousePoLines } from './warehouseFeed.js'
+import { pushWarehousePoLines, pushWarehouseInventory } from './warehouseFeed.js'
 import { STAGE } from '../model/stages.js'
 import { cleanName } from './savedSearches.js'
 import { buildPipeline } from '../model/pipeline.js'
@@ -893,5 +893,18 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
     warnings.push(`warehouse PO feed: ${wh.error}`)
   }
 
-  return { ok: true, ...result, warehousePush, counts: pulled.counts, since: pulled.since, warnings }
+  // Second mirror, same discipline: stocked item-location quantities →
+  // ns_item_location_qtys (the app's inventory view). Independent of the PO
+  // push on purpose — one feed failing must not silence the other.
+  const inv = await pushWarehouseInventory()
+  let warehouseInventoryPush = 0
+  if (inv.ok) {
+    warehouseInventoryPush = inv.pushed
+    const { recordSnapshot } = await import('./loadToDb.js')
+    await recordSnapshot('warehouseInventoryFeed', inv.pushed, new Date())
+  } else if (inv.configured !== false) {
+    warnings.push(`warehouse inventory feed: ${inv.error}`)
+  }
+
+  return { ok: true, ...result, warehousePush, warehouseInventoryPush, counts: pulled.counts, since: pulled.since, warnings }
 }

@@ -1,17 +1,22 @@
-// src/ingest/warehouseFeed.js — push open PO lines into the Naghedi-Warehouse
-// app's Supabase, replacing its manual "PO Warehouse View" CSV import.
+// src/ingest/warehouseFeed.js — push NetSuite mirrors into the Naghedi-Warehouse
+// app's Supabase, replacing its manual CSV imports. Two feeds live here:
+//
+//   ns_open_po_lines       one row per open PO ITEM LINE (the receiving dock)
+//   ns_item_location_qtys  one row per stocked item-location (the inventory view)
 //
 // The warehouse app (~/src/Naghedi-Warehouse) generates NetSuite Item Receipt +
-// Inventory Transfer CSVs off PO line data it today gets from a hand-exported
-// saved search. This feed writes the same facts — one row per PO ITEM LINE —
-// into a table that app will read instead: `ns_open_po_lines`.
+// Inventory Transfer CSVs off PO line data, and fills its SKU catalog +
+// per-location quantities, from hand-exported saved searches. These feeds write
+// the same facts into tables that app will read instead.
 //
-// Ownership: Work-Hub OWNS ns_open_po_lines and writes NOTHING else in that
+// Ownership: Work-Hub OWNS the two ns_* tables and writes NOTHING else in that
 // project. The app's own tables (purchase_orders, bins, bin_skus, containers,
 // sku_catalog, location_qtys, app_meta, …) are never touched — bin_skus in
 // particular is their app-authoritative physical count, and their catalog
 // import already full-wipes purchase_orders on its own schedule; two writers
-// on one table was the clobber risk this design removes.
+// on one table was the clobber risk this design removes. sku_catalog and
+// location_qtys stay theirs for the same reason: the inventory feed writes the
+// NEW table, and reading it (vs the CSV) is the app's call, not ours.
 //
 // The receiving-side spec this implements (Nima, 2026-08-03) had four gotchas,
 // each one already paid for in the warehouse app:
@@ -163,39 +168,17 @@ function restHeaders(key, extra = {}) {
   }
 }
 
-export async function pushWarehousePoLines({ _fetch = fetch, _nsFetch = fetch, env = process.env, now = () => new Date() } = {}) {
-  const creds = warehouseSupabaseCreds(env)
-  if (!creds) return { ok: false, configured: false }
-  if (!netsuiteConfigured(env)) return { ok: false, configured: false }
-
-  const pulled = await runSuiteQL(warehousePoLineSql(), { env, _fetch: _nsFetch })
-  if (!pulled.ok) {
-    return { ok: false, configured: true, error: pulled.needsAuth ? 'NetSuite auth rejected' : pulled.error || 'NetSuite pull failed' }
-  }
-  // A truncated pull must never replace the mirror — the sweep would delete
-  // real open lines that merely fell off the last page (same rule as
-  // prunePurchaseOrders).
-  if (pulled.truncated) {
-    return { ok: false, configured: true, error: 'NetSuite pull hit the page cap — INCOMPLETE, not pushing' }
-  }
-
-  const { rows, skippedNonItem, poCount } = mapWarehousePoLines(pulled.rows)
-  // Zero open POs would mean the warehouse has nothing inbound at all —
-  // implausible enough that an empty result is treated as a broken pull, not a
-  // reason to empty the dock's table (mirrors the never-prune-against-empty
-  // guard on our own tables).
-  if (!rows.length) {
-    return { ok: false, configured: true, error: 'pull returned 0 open PO lines — refusing to replace the mirror' }
-  }
-
+// Stamp → batch-upsert → sweep, shared by both feeds. Returns
+// { ok, pushed, swept, syncedAt } or { ok:false, error, pushed? }.
+async function pushSnapshot({ table, conflict, rows, creds, _fetch = fetch, now = () => new Date() }) {
   const syncedAt = now().toISOString()
   const stamped = rows.map((r) => ({ ...r, synced_at: syncedAt }))
-  const base = `${creds.url}/rest/v1/ns_open_po_lines`
+  const base = `${creds.url}/rest/v1/${table}`
 
   for (let i = 0; i < stamped.length; i += BATCH) {
     let res
     try {
-      res = await _fetch(`${base}?on_conflict=po_id,line_seq`, {
+      res = await _fetch(`${base}?on_conflict=${conflict}`, {
         method: 'POST',
         headers: restHeaders(creds.key, { Prefer: 'resolution=merge-duplicates,return=minimal' }),
         body: JSON.stringify(stamped.slice(i, i + BATCH)),
@@ -229,5 +212,108 @@ export async function pushWarehousePoLines({ _fetch = fetch, _nsFetch = fetch, e
   const m = range.match(/\/(\d+)$/)
   if (m) swept = Number(m[1])
 
-  return { ok: true, pushed: stamped.length, poCount, skippedNonItem, swept, syncedAt }
+  return { ok: true, pushed: stamped.length, swept, syncedAt }
+}
+
+export async function pushWarehousePoLines({ _fetch = fetch, _nsFetch = fetch, env = process.env, now = () => new Date() } = {}) {
+  const creds = warehouseSupabaseCreds(env)
+  if (!creds) return { ok: false, configured: false }
+  if (!netsuiteConfigured(env)) return { ok: false, configured: false }
+
+  const pulled = await runSuiteQL(warehousePoLineSql(), { env, _fetch: _nsFetch })
+  if (!pulled.ok) {
+    return { ok: false, configured: true, error: pulled.needsAuth ? 'NetSuite auth rejected' : pulled.error || 'NetSuite pull failed' }
+  }
+  // A truncated pull must never replace the mirror — the sweep would delete
+  // real open lines that merely fell off the last page (same rule as
+  // prunePurchaseOrders).
+  if (pulled.truncated) {
+    return { ok: false, configured: true, error: 'NetSuite pull hit the page cap — INCOMPLETE, not pushing' }
+  }
+
+  const { rows, skippedNonItem, poCount } = mapWarehousePoLines(pulled.rows)
+  // Zero open POs would mean the warehouse has nothing inbound at all —
+  // implausible enough that an empty result is treated as a broken pull, not a
+  // reason to empty the dock's table (mirrors the never-prune-against-empty
+  // guard on our own tables).
+  if (!rows.length) {
+    return { ok: false, configured: true, error: 'pull returned 0 open PO lines — refusing to replace the mirror' }
+  }
+
+  const pushed = await pushSnapshot({ table: 'ns_open_po_lines', conflict: 'po_id,line_seq', rows, creds, _fetch, now })
+  if (!pushed.ok) return pushed
+  return { ...pushed, poCount, skippedNonItem }
+}
+
+// ── the inventory feed ────────────────────────────────────────────────────────
+// One row per stocked item-location, replacing the app's manual "Warehouse
+// Item View" CSV (which fills sku_catalog/location_qtys). aggregateItemLocation
+// is NetSuite's per-location balance table — verified exposed to the bot role
+// 2026-08-03 (~1,875 stocked rows live). Both qty measures ride along because
+// the CSV pivot never said which one it carried: `available` subtracts
+// commitments, `on_hand` is the physical count. Scope is any row with a
+// NONZERO on-hand or available qty — negatives included (an oversold location
+// is a fact, not noise; the reader clamps if it wants to).
+export function warehouseInventorySql() {
+  return `SELECT il.item AS item_id, i.itemid AS sku, i.displayname AS display_name,
+                 i.itemtype AS item_type, il.location AS location_id,
+                 l.fullname AS location_name,
+                 il.quantityavailable AS qty_available, il.quantityonhand AS qty_on_hand
+          FROM aggregateItemLocation il
+          JOIN item i ON i.id = il.item
+          JOIN location l ON l.id = il.location
+          WHERE il.quantityonhand <> 0 OR il.quantityavailable <> 0
+          ORDER BY il.item, il.location`
+}
+
+// SuiteQL rows → flat push rows. No filtering by SKU shape or item type — the
+// reader owns its own catalog rules (its CSV parser already skips non-SKU
+// rows); a feed that pre-filters would silently hide rows the app could see in
+// its own export. Rows with no itemid at all can't key anything and are
+// counted, not dropped silently.
+export function mapWarehouseInventory(rows = []) {
+  const out = []
+  let skippedNoSku = 0
+  for (const row of rows) {
+    const sku = String(row.sku || '').trim()
+    const itemId = String(row.item_id || '').trim()
+    const locationId = String(row.location_id || '').trim()
+    if (!sku || !itemId || !locationId) { skippedNoSku++; continue }
+    out.push({
+      item_id: itemId,
+      location_id: locationId,
+      sku,
+      display_name: String(row.display_name || '').trim() || null,
+      item_type: row.item_type || null,
+      location_name: String(row.location_name || '').trim() || null,
+      qty_available: Number(row.qty_available) || 0,
+      qty_on_hand: Number(row.qty_on_hand) || 0,
+    })
+  }
+  return { rows: out, skippedNoSku }
+}
+
+export async function pushWarehouseInventory({ _fetch = fetch, _nsFetch = fetch, env = process.env, now = () => new Date() } = {}) {
+  const creds = warehouseSupabaseCreds(env)
+  if (!creds) return { ok: false, configured: false }
+  if (!netsuiteConfigured(env)) return { ok: false, configured: false }
+
+  const pulled = await runSuiteQL(warehouseInventorySql(), { env, _fetch: _nsFetch })
+  if (!pulled.ok) {
+    return { ok: false, configured: true, error: pulled.needsAuth ? 'NetSuite auth rejected' : pulled.error || 'NetSuite pull failed' }
+  }
+  if (pulled.truncated) {
+    return { ok: false, configured: true, error: 'NetSuite pull hit the page cap — INCOMPLETE, not pushing' }
+  }
+
+  const { rows, skippedNoSku } = mapWarehouseInventory(pulled.rows)
+  // An empty warehouse is as implausible as zero inbound POs — treat it as a
+  // broken pull, never a reason to sweep the mirror empty.
+  if (!rows.length) {
+    return { ok: false, configured: true, error: 'pull returned 0 stocked item-locations — refusing to replace the mirror' }
+  }
+
+  const pushed = await pushSnapshot({ table: 'ns_item_location_qtys', conflict: 'item_id,location_id', rows, creds, _fetch, now })
+  if (!pushed.ok) return pushed
+  return { ...pushed, skippedNoSku }
 }
