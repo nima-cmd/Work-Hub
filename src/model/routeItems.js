@@ -119,7 +119,14 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
   const awaitingLabel = new Set(needsLabel.map((g) => g.soNumber).filter(Boolean))
 
   // ── tasks ──
-  for (const t of tasks.filter((t) => t.status === 'open')) {
+  //
+  // ⚠️ RECURRING instances are deliberately NOT legs (2026-08-05). They belong to
+  // the "catch up first" band above the plan (src/model/catchUp.js): a daily
+  // rhythm has no cutoff of its own, so EDF was sorting a 15-minute Weaver sync
+  // in among cutoff-bound routing jobs and letting it take slots ahead of them.
+  // They are COUNTED in the band, never dropped — the one thing that must not
+  // happen is the same work appearing in both places.
+  for (const t of tasks.filter((t) => t.status === 'open' && !t.recurringKey)) {
     const kind = taskKind(t)
     // a real due_at wins; otherwise synthesize from urgency
     const deadline = t.dueAt ? new Date(t.dueAt).getTime() : urgencyDeadline(t.urgency, times)

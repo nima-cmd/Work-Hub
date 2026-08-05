@@ -2622,3 +2622,34 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* A row missing a weight or a dimension cannot be typed yet — mark it, don't hide it. */
 .rt-rowGap { background: rgba(248,81,73,0.06); }
 .rt-sscc { color: var(--muted); }
+
+/* ── Catch up first (CatchUp.jsx) ──────────────────────────────────────────
+   Deliberately QUIETER than the First hour panel directly below it: no accent
+   fill, no colour for age. It is the pre-flight, not the plan — the moment it
+   competes visually for the eye, it stops being "never blocking". */
+.cu { border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px 10px;
+  margin-bottom: 14px; background: rgba(255,255,255,0.02); }
+.cuHead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.cuHead h2 { margin: 0; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.cuNote { color: var(--muted); font-size: 11px; font-style: italic; opacity: 0.8; }
+.cuBlock + .cuBlock { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.cuBlockHead { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--muted); }
+.cuCount { font-size: 17px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.cuWhat { flex: 1; }
+.cuGo { border: 1px solid var(--line); background: transparent; color: var(--text);
+  border-radius: 7px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.cuGo:hover { border-color: var(--accent); color: var(--accent); }
+.cuSenders, .cuRhythms { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+.cuSenders li { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; color: var(--muted); }
+.cuFrom { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cuTally { font-variant-numeric: tabular-nums; }
+.cuThreads { opacity: 0.7; }
+.cuAge { width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+.cuMore { opacity: 0.7; font-style: italic; }
+.cuRhythms li { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
+.cuTick { border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: 6px; padding: 1px 7px; font-size: 11px; cursor: pointer; }
+.cuTick:hover:not(:disabled) { border-color: var(--ok, var(--accent)); color: var(--ok, var(--accent)); }
+.cuSubject { flex: 1; color: var(--text); }
+.cuBasis { color: var(--muted); font-size: 11px; }
+.cuDomain { color: var(--muted); font-size: 11px; opacity: 0.75; }

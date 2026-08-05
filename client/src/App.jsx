@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
+import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
 import { fmtAge } from './lib.jsx'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -141,6 +141,10 @@ const VIEWS = [
 export default function App() {
   const [orders, setOrders] = useState(null)
   const [tasks, setTasks] = useState([])
+  // Unread transmissions. Lifted to App (2026-08-05) because the "catch up
+  // first" band on the day plan needs the same list Transmissions renders —
+  // one fetch, so the two can't disagree about how many are unread.
+  const [emails, setEmails] = useState([])
   const [activity, setActivity] = useState([])
   const [events, setEvents] = useState([])
   const [syncHealth, setSyncHealth] = useState(null)
@@ -178,6 +182,9 @@ export default function App() {
     // best-effort: the app still works if either fails to load.
     fetchQuestTasks().then(setTasks).catch(() => {})
     fetchQuestActivity().then(setActivity).catch(() => {})
+    // /api/quest-emails answers { emails, characters } — the list is the half
+    // the band needs.
+    fetchQuestEmails().then((r) => setEmails(r?.emails || [])).catch(() => {})
     // Order-events ledger — folds into Calendar's day grid.
     //
     // TWO fetches on purpose. The plain feed is the latest 500 of the whole
@@ -383,7 +390,7 @@ export default function App() {
         <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} inbound={inbound} onNavigate={setView} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} tasks={tasks} activity={activity} events={events} views={VIEWS}
+        {orders && <Active orders={orders} tasks={tasks} emails={emails} activity={activity} events={events} views={VIEWS}
                            labelGaps={labelGaps} custody={custody} bay={bay}
                            onNavigate={setView} onRefresh={refresh} />}
       </main>
