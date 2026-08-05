@@ -109,6 +109,67 @@ export const NORDSTROM_DCS = {
   '89': { name: 'Nordstrom DC #089', street: '5703 North Marine Drive', city: 'Portland', state: 'OR', zip: '97203-6421' },
 }
 
+// ── Parcel billing on a Bloomingdale's DC-direct routing (Nima, 2026-08-05) ──
+//
+//   "For Bloomingdales its always ground the account number is 5R12Y0 and the zip
+//    code is 30083 for fedex its also always ground letting us select collect"
+//
+// These are STANDING RULES, not per-notification values, so they are defaults rather
+// than something to type on every shipment. The 2026-08-04 notifications agree
+// exactly: five UPS Ground routings all read "BILL TO ACCT#5R12Y0" with a
+// third-party address of 4401 Sarr Pkwy, Stone Mountain GA 30083, and the FedEx one
+// published no account at all ("vendor must use their FedEx account and ship using
+// collect freight terms").
+//
+// ⚠️ THE ZIP IS NOT DECORATION. UPS validates a third-party billing account against
+// its postal code, so an import missing 30083 is rejected or silently falls back to
+// billing US — which would put Macy's freight on Naghedi's own account.
+//
+// ⚠️ 5R12Y0 IS MACY'S ACCOUNT. It must never be presented as one of Naghedi's two
+// (C6J610 wholesale / 18GE01 ecom) — see upsRates.js, which refuses to mislabel
+// them. Hence `terms` is always stated alongside it.
+export const PARCEL_BILLING = {
+  bloomingdales: {
+    service: 'Ground',                 // both carriers, always
+    ups:   { terms: 'Third Party Bill', account: '5R12Y0', zip: '30083' },
+    fedex: { terms: 'Collect', account: null, zip: null },
+  },
+}
+
+// Which carrier a free-typed carrier string means. Deliberately tolerant: the field
+// holds whatever the routing email said ("UPS GRND", "FEDEX GROUND- PARCEL-COLLECT").
+export function carrierKind(carrier) {
+  const c = String(carrier || '').toLowerCase()
+  if (c.includes('ups')) return 'ups'
+  if (c.includes('fedex') || c.includes('fdx')) return 'fedex'
+  return null
+}
+
+// Resolve billing for a shipment: anything explicitly stored WINS, the partner rule
+// fills the rest. Same shape as derived task urgency — a standing rule should not
+// need retyping, and a recorded exception must not be overwritten by one.
+// Local rather than importing shipWindow's partnerKey — this module is an address
+// and carrier table and should not depend on the ship-window rules to read a name.
+function parcelPartner(partner) {
+  return /bloomingdale/i.test(String(partner || '')) ? 'bloomingdales' : null
+}
+
+export function parcelBilling({ partner, carrier, freightTerms, billToAccount } = {}) {
+  const rule = PARCEL_BILLING[parcelPartner(partner)] || null
+  const kind = carrierKind(carrier)
+  const base = rule && kind ? rule[kind] : null
+  return {
+    service: rule?.service || null,
+    carrierKind: kind,
+    terms: freightTerms || base?.terms || null,
+    account: billToAccount || base?.account || null,
+    // Only ever the zip belonging to the account actually being billed, so a stored
+    // account with no zip does not silently inherit Macy's.
+    accountZip: billToAccount && billToAccount !== base?.account ? null : (base?.zip || null),
+    fromRule: !freightTerms && !billToAccount && !!base,
+  }
+}
+
 // Carrier → SCAC (guide §9.1 + Naghedi's Carrier tab). TL/IM/LTL are Collect
 // except RXO (3rd Party). Nordstrom always CTE (California Transport, CAIE).
 export const CARRIERS = {

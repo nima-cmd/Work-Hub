@@ -9,7 +9,7 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
-import { macysDc } from '../src/model/bolAddresses.js'
+import { macysDc, parcelBilling } from '../src/model/bolAddresses.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
@@ -1455,7 +1455,14 @@ export async function getRouting() {
   for (const s of shipments) {
     s.netsuite = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
     s.labels = buildLabelWorksheet(
-      { ...s, address: macysDc(s.dc) },
+      {
+        ...s,
+        address: macysDc(s.dc),
+        billing: parcelBilling({
+          partner: s.partner, carrier: s.carrier,
+          freightTerms: s.freightTerms, billToAccount: s.billToAccount,
+        }),
+      },
       worksheetRows.get(s.id) || [],
     )
     const live = lineages[String(s.bolNumber)] || null

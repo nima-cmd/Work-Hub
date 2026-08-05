@@ -70,8 +70,14 @@ export function buildLabelWorksheet(ship = {}, rows = []) {
     shipDate: ship.shipDate || null,
     shipTo: ship.address || null,
     consignedTo: ship.consignedTo || null,
-    billToAccount: ship.billToAccount || null,
-    freightTerms: ship.freightTerms || null,
+    // Billing resolved from the partner's standing rule, with anything explicitly
+    // stored on the shipment winning. Bloomingdale's is always Ground; UPS is third
+    // party to Macy's 5R12Y0 / zip 30083, FedEx is collect on ours.
+    service: ship.billing?.service || null,
+    freightTerms: ship.billing?.terms || null,
+    billToAccount: ship.billing?.account || null,
+    billToZip: ship.billing?.accountZip || null,
+    billingFromRule: !!ship.billing?.fromRule,
     applicable: !!ship.shipDirect,
     lines,
     cartons: lines.length,
@@ -98,11 +104,17 @@ export function labelLine(l) {
 // names and the map is pointed at them. Guessing one tool's exact headers would
 // produce a file that imports silently wrong, which is worse than one that needs
 // mapping once.
+// ⚠️ Carrier and Service are SEPARATE columns. An earlier cut put the raw carrier
+// string ("UPS GRND") in Service, which no importer understands as a service level —
+// the service is always "Ground" here and the carrier is which company.
+// BillTo_Zip is required for UPS third-party billing: without it UPS rejects the
+// third-party account or falls back to billing the shipper.
 export const CSV_COLUMNS = [
   'Reference1_PO', 'Reference2_Store', 'ShipTo_Company', 'ShipTo_Address1',
   'ShipTo_City', 'ShipTo_State', 'ShipTo_Zip', 'ShipTo_Country',
   'Weight_Lb', 'Length_In', 'Width_In', 'Height_In',
-  'Service', 'Billing', 'BillTo_Account', 'SSCC', 'IF', 'BOL',
+  'Carrier', 'Service', 'Billing', 'BillTo_Account', 'BillTo_Zip',
+  'SSCC', 'IF', 'BOL',
 ]
 
 const csvCell = (v) => {
@@ -119,7 +131,8 @@ export function worksheetCsv(sheets = []) {
         l.poNumber, l.storeNumber,
         w.shipTo?.name, w.shipTo?.street, w.shipTo?.city, w.shipTo?.state, w.shipTo?.zip, 'US',
         l.weightLb, l.lengthIn, l.widthIn, l.heightIn,
-        w.carrier, w.freightTerms, w.billToAccount, l.ucc, l.ifNumber, w.bolNumber,
+        w.carrier, w.service, w.freightTerms, w.billToAccount, w.billToZip,
+        l.ucc, l.ifNumber, w.bolNumber,
       ].map(csvCell).join(','))
     }
   }
