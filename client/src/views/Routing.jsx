@@ -505,6 +505,61 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
   )
 }
 
+
+// One line per carton, for typing UPS/FedEx labels by hand (Nima, 2026-08-05).
+//
+// A DC-direct shipment goes to ONE address but its cartons belong to different
+// STORES — the DC cross-docks them — so the PO + store pair is the only thing
+// distinguishing otherwise identical labels, and it is what has to be printed.
+//
+// Collapsed by default: 22 rows would swamp a routing card, and this is only needed
+// at the moment labels are being made.
+function LabelWorksheet({ s }) {
+  const [open, setOpen] = useState(false)
+  const w = s.labels
+  if (!w?.applicable || !w.cartons) return null
+  return (
+    <div className="rt-labels">
+      <button className="rt-editToggle" onClick={() => setOpen((o) => !o)}>
+        {open ? '▾' : '⌖'} Labels to create ({w.cartons}{w.stores > 1 ? ` · ${w.stores} stores` : ''})
+      </button>
+      {open && (
+        <div className="rt-labelSheet">
+          <div className="rt-labelHead">
+            {w.shipTo
+              ? <span>{w.shipTo.name} · {w.shipTo.street}, {w.shipTo.city}, {w.shipTo.state} {w.shipTo.zip}</span>
+              : <span className="rt-warn">No stored address for “{w.dc}” — confirm it before printing</span>}
+            {w.carrier && <span className="rt-labelCarrier">{w.carrier}</span>}
+          </div>
+          <table className="rt-labelTable">
+            <thead>
+              <tr><th>#</th><th>PO</th><th>Store</th><th>Name</th><th>Carton</th><th>Units</th></tr>
+            </thead>
+            <tbody>
+              {w.lines.map((l) => (
+                <tr key={`${l.ifNumber}-${l.seq}`}>
+                  <td>{l.seq}</td>
+                  <td className="rt-mono">{l.poNumber}</td>
+                  <td className="rt-mono rt-store">{l.storeNumber || '?'}</td>
+                  <td>{l.storeName}</td>
+                  <td>{l.cartonOf || '—'}</td>
+                  {/* Units are known per FULFILMENT, never per carton — nothing
+                      records which unit went in which box, so a split would be
+                      invented and then checked against a physical carton. */}
+                  <td title={`${l.ifNumber} total`}>{l.ifUnits ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {w.lines.some((l) => l.cartonsUnknown) && (
+            <p className="hint">Rows marked with no carton count are shown as one carton — the pack feed has not reported them yet.</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
@@ -601,6 +656,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 
           <BolActions s={s} />
           <RefSummary s={s} />
+          <LabelWorksheet s={s} />
           <EdiTrail s={s} />
           <EmailLinks docType="ROUTING_SHIPMENT" docNumber={s.id} compact />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>

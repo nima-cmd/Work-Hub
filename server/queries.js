@@ -8,6 +8,8 @@ import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
+import { buildLabelWorksheet } from '../src/model/labelWorksheet.js'
+import { macysDc } from '../src/model/bolAddresses.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
@@ -1370,6 +1372,40 @@ export async function unresolveEdiPo(businessNumber) {
 // assigned to that exact PO-set (if any). Shipments whose PO-set is no longer
 // in the feed (already routed/exported away) surface separately so a minted BOL
 // is never lost from view.
+// Every store-level fulfilment riding on a shipment, so a parcel label can name the
+// PO and the store. Scoped to the shipment ids asked for, so it never scans.
+//
+// The DC join matters: a PO fans out to one sales order per STORE, and a shipment
+// covers only the stores whose DC matches it. Without `o.dc = rs.dc` a Secaucus
+// worksheet would list every store on the PO, nationwide.
+async function fetchShipmentStoreCartons(ids = []) {
+  const map = new Map()
+  if (!ids.length) return map
+  const { rows } = await pool.query(
+    `SELECT rs.id AS shipment_id, o.po_number, o.store_number, o.customer,
+            o.so_number, f.if_number, p.cartons, p.packed_units, p.if_units
+     FROM routing_shipment rs
+     JOIN orders o ON o.po_number = ANY(rs.member_pos) AND o.dc = rs.dc
+     LEFT JOIN fulfillments f ON f.so_number = o.so_number
+     LEFT JOIN edi_fulfillment_pack p ON p.if_number = f.if_number
+     WHERE rs.id = ANY($1)
+     ORDER BY rs.id, o.store_number, o.po_number`,
+    [ids],
+  )
+  for (const r of rows) {
+    if (!map.has(r.shipment_id)) map.set(r.shipment_id, [])
+    map.get(r.shipment_id).push({
+      poNumber: r.po_number, storeNumber: r.store_number, storeName: r.customer,
+      soNumber: r.so_number, ifNumber: r.if_number,
+      cartons: r.cartons,
+      // packed_units is what actually went in a box; if_units is what the
+      // fulfilment says. Prefer the packed figure and fall back, never sum them.
+      units: r.packed_units ?? r.if_units ?? null,
+    })
+  }
+  return map
+}
+
 export async function getRouting() {
   const [packages, shipments, auths, holds] = await Promise.all([
     fetchEdiPackages(), fetchRoutingShipments(), fetchRoutingAuths(), fetchRoutingHolds(),
@@ -1397,8 +1433,18 @@ export async function getRouting() {
     fetchShipmentEdiLineage(shipments.map((s) => s.bolNumber)),
     fetchShipmentEdiSnapshots(),
   ])
+  // Per-carton label worksheet for the DC-direct parcel shipments (Nima,
+  // 2026-08-05). One address, many stores — the PO + store pair is the only thing
+  // distinguishing 22 otherwise identical labels, and it is what the DC needs
+  // printed to cross-dock the carton onward. See src/model/labelWorksheet.js.
+  const worksheetRows = await fetchShipmentStoreCartons(shipments.filter((s) => s.shipDirect).map((s) => s.id))
+
   for (const s of shipments) {
     s.netsuite = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
+    s.labels = buildLabelWorksheet(
+      { ...s, address: macysDc(s.dc) },
+      worksheetRows.get(s.id) || [],
+    )
     const live = lineages[String(s.bolNumber)] || null
     const snap = snapshots[s.id] || null
     s.edi = live
