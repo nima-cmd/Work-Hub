@@ -7,6 +7,7 @@ import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
+import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
@@ -87,7 +88,17 @@ export async function getOrders() {
             'custodyOut', (SELECT MAX(e.occurred_at) FROM order_events e
                            WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_OUT'),
             'custodyIn',  (SELECT MAX(e.occurred_at) FROM order_events e
-                           WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_IN')
+                           WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_IN'),
+            -- "our part is done", recorded without telling NetSuite. Gates the
+            -- mark-it-packed nudge for orders we must not invoice yet — see
+            -- src/model/prepped.js.
+            'preppedAt',     (SELECT MAX(e.occurred_at) FROM order_events e
+                              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PREPPED'),
+            'prepClearedAt', (SELECT MAX(e.occurred_at) FROM order_events e
+                              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PREP_CLEARED'),
+            'prepNote',      (SELECT e.note FROM order_events e
+                              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PREPPED'
+                              ORDER BY e.occurred_at DESC LIMIT 1)
           ) ORDER BY f.if_number
         )
         FROM fulfillments f WHERE f.so_number = o.so_number
@@ -440,6 +451,35 @@ export async function deleteCustodyScan({ id, docType, docNumber }) {
 // Manually clear a custody item off the register (Nima, 2026-07-22) — writes a
 // CUSTODY_CLEARED marker so a departed carton or a stale/orphaned scan drops
 // off, the same signal ingest uses at departure. Works for IF and DC docs.
+// ── "Our part is done" (Nima, 2026-08-05) ───────────────────────────────────
+// Records that the physical work on a fulfilment is finished WITHOUT marking it
+// packed in NetSuite — because packed is the signal to accounting to invoice, and
+// some boutique orders must not be invoiced early. Full reasoning in
+// src/model/prepped.js.
+//
+// A plain ledger event, so it inherits the spine every other custody fact uses and
+// needs no schema change. Latest-event-wins against PREP_CLEARED so a mis-click is
+// undoable — a marker that can only ever be set is a trap.
+export async function setFulfillmentPrepped({ ifNumber, prepped = true, note } = {}) {
+  const doc = String(ifNumber || '').trim()
+  if (!doc) throw new Error('ifNumber is required')
+  // The SO rides along on the event as a denormalised spine ref (loose, no FK —
+  // events must survive doc churn; see db/schema.sql order_events).
+  const { rows: fr } = await pool.query('SELECT so_number FROM fulfillments WHERE if_number = $1', [doc])
+  const soNumber = fr[0]?.so_number || null
+  await insertOrderEvent({
+    eventType: prepped ? PREPPED : PREP_CLEARED,
+    docType: 'IF',
+    docNumber: doc,
+    soNumber,
+    // The note answers "why isn't this packed?" a week later, which is the whole
+    // point of holding it back on purpose.
+    note: note?.trim() || null,
+    source: 'manual',
+  })
+  return { ifNumber: doc, prepped }
+}
+
 export async function clearCustodyItem({ docType, docNumber }) {
   const dt = docType === 'DC' ? 'DC' : 'IF'
   if (!docNumber) throw new Error('docNumber required')

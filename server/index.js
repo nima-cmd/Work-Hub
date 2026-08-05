@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  setFulfillmentPrepped, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
@@ -208,6 +208,18 @@ app.post('/api/print-label', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// "Our part is done" on a fulfilment, without marking it packed in NetSuite —
+// packed is accounting's signal to invoice, and some boutique orders must not be
+// invoiced early (Nima, 2026-08-05). See src/model/prepped.js.
+app.post('/api/fulfillment/prepped', async (req, res) => {
+  try {
+    res.json(await setFulfillmentPrepped(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 

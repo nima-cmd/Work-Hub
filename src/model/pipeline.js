@@ -5,6 +5,7 @@
 // flags.
 
 import { STAGE, STAGE_RANK, furthestStage } from './stages.js'
+import { needsPackNudge, preppedLabel } from './prepped.js'
 import { shipWindowFlags } from './shipWindow.js'
 import { paymentBlocked } from './paymentGate.js'
 
@@ -257,11 +258,26 @@ export function computeFlags(o, today) {
       } else if (inn) {
         // Back from the warehouse but the order still reads PICKED — our side
         // of the work (mark packed in NetSuite) is the outstanding task.
-        flags.push({
-          key: 'BACK_NOT_PACKED',
-          label: `${f.ifNumber} returned from warehouse — mark it packed`,
-          severity: 2,
-        })
+        //
+        // ...UNLESS we have recorded that our part is already done. `Packed` in
+        // NetSuite tells accounting to invoice, so an order we must not invoice yet
+        // cannot use it, and Nima asked for an alternative marker (2026-08-05). A
+        // PREPPED fulfilment is held back deliberately, so it stops nagging — but it
+        // keeps a flag at severity 0 rather than vanishing, because "nothing sits
+        // ignored" outranks "nothing nags me". See src/model/prepped.js.
+        if (needsPackNudge({ backInPossession: true, packedInNetsuite: false, preppedAt: f.preppedAt, prepClearedAt: f.prepClearedAt })) {
+          flags.push({
+            key: 'BACK_NOT_PACKED',
+            label: `${f.ifNumber} returned from warehouse — mark it packed`,
+            severity: 2,
+          })
+        } else {
+          flags.push({
+            key: 'PREPPED_HELD',
+            label: preppedLabel({ ifNumber: f.ifNumber, note: f.prepNote, preppedAt: f.preppedAt }),
+            severity: 0,
+          })
+        }
       } else if (f.ifDate && daysBetween(f.ifDate, today) >= 1) {
         // IF exists but was never scanned out — either the handoff never
         // happened, or it happened unscanned. Print the label and scan it.
