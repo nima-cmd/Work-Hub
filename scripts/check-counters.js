@@ -99,6 +99,24 @@ const credits = await Q.getCredits()
 floor('header `waiting` is not structurally dead', credits.waiting, owing[0].n,
   `${owing[0].n} unshipped non-China IF(s) owe $${Number(owing[0].owed).toLocaleString()}`)
 
+// The departures board and the bay must be the SAME list. They were two copies
+// of "what's on the dock" and only one got the 2026-07-17 rework, so the board
+// spent a year listing shipments that had already left (6–29 days prior) and
+// hiding all 70 still here. Now it delegates — this asserts it still does.
+const dep = await Q.getShipDepartures({})
+dep.length === bay.length && dep.every((d, i) => d.ifNumber === bay[i].ifNumber)
+  ? ok('ship departures is the launch bay, not a second copy', `${dep.length} ships`)
+  : bad('ship departures is the launch bay, not a second copy',
+    `departures has ${dep.length} rows, bay has ${bay.length} — they have diverged again`)
+
+// Nothing on a departures board may already have departed. This is the assertion
+// the old query would have failed on all 8 of its rows.
+const gone = dep.filter((d) => d.actualShipDate)
+gone.length
+  ? bad('nothing on the departures board has already shipped',
+    `${gone.length} departed row(s): ${gone.slice(0, 5).map((d) => d.ifNumber).join(', ')}`)
+  : ok('nothing on the departures board has already shipped', `${dep.length} still here`)
+
 // ── filing, cartons, overdue money, EDI delivery, inbound ───────────────────
 const unf = await Q.getUnfiledPaper({})
 partition('unfiled paper: due + backlog account for both lists',

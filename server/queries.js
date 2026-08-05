@@ -449,22 +449,31 @@ export async function clearCustodyItem({ docType, docNumber }) {
   return getCustodyRegister()
 }
 
-// ── Ship departures (Nima, 2026-07-16) — every packed IF, grouped by its
-// IF-Packed-Status: "Approved to Ship" can leave today; "FOB Order Awaiting
-// Shipment" is mid-process; "Waiting On Payment" is stuck at the dock for a
-// credit transfer; "Pending Invoice" is its own real status seen in the data
-// too. Only rows with a packed_status at all are shown — everything else has
-// already moved past this part of the pipeline.
-export async function getShipDepartures() {
-  const { rows } = await pool.query(`
-    SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber", f.packed_status AS "packedStatus",
-           f.days_pending AS "daysPending", f.invoice_number AS "invoiceNumber", f.if_date AS "ifDate",
-           o.customer, o.source, o.po_number AS "poNumber"
-    FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
-    WHERE f.packed_status IS NOT NULL
-    ORDER BY f.days_pending DESC NULLS LAST
-  `)
-  return rows
+// ── Ship departures (Nima, 2026-07-16) — what is at the dock, and what holds it.
+//
+// ⚠️ THIS PAGE WAS SHOWING THE EXACT OPPOSITE OF ITS PURPOSE (found by the shape
+// (iii)/(iv) sweep, 2026-08-04). It selected `WHERE f.packed_status IS NOT NULL`
+// and its comment claimed "only rows with a packed_status at all are shown —
+// everything else has already moved past this part of the pipeline". Both halves
+// were inverted. That hand-keyed IF-Packed-Status field is non-null on exactly 8
+// of 190 fulfilments and **all 8 have already shipped** (6 to 29 days ago), while
+// the 70 IFs still physically here all have it NULL. So the page listed departed
+// shipments under "Can depart today" and hid every shipment awaiting departure —
+// and had all 8 been cleared it would have said "Nothing waiting on departure 🎉".
+//
+// This is the same dead field that made the header's `waiting` figure read 0
+// (see getCredits), and the same one getLaunchBay was REWORKED to abandon back on
+// 2026-07-17 — that rework simply never reached this second copy.
+//
+// So there is no second copy any more: departures ARE the launch bay, bucketed by
+// the bay's derived state. One source, so the two pages cannot disagree about
+// what is on the dock, and the objective `actual_ship_date IS NULL` scope comes
+// with it. NOTE this also inherits the bay's CHINA EXCLUSION — a China/FOB order
+// is collected abroad and never departs our dock, so it does not belong on a
+// departures board; it is surfaced on its own `fobPickup` lane instead
+// (src/model/labelGap.js).
+export async function getShipDepartures({ today = new Date() } = {}) {
+  return getLaunchBay({ today })
 }
 
 // ── Shipment credits (Nima, 2026-07-17) — the header counter ─────────────────

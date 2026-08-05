@@ -22,8 +22,13 @@ import { STAGE } from './stages.js'
 
 const dur = (k) => DEFAULT_DURATIONS_MIN[k] ?? DEFAULT_DURATIONS_MIN.default
 
-// Classify a task into a work "kind" (drives its default duration + icon). Kept
-// in sync with scripts/plan-route-demo.js.
+// Classify a task into a work "kind" (drives its default duration + icon).
+//
+// This used to say "kept in sync with scripts/plan-route-demo.js", which was a
+// hope rather than a mechanism — the demo kept its own copy of this function AND
+// of the leg rules, and by 2026-08-04 it had silently diverged (still emitting the
+// old "Invoice <customer>" leg for picked orders). The demo now imports
+// buildRouteItems instead, so there is nothing left to keep in sync.
 export function taskKind(t) {
   const k = (t.recurringKey || '') + ' ' + (t.subject || '')
   if (/weaver/i.test(k)) return 'weaver_sync'

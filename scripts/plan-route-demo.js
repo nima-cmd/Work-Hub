@@ -1,64 +1,30 @@
-// scripts/plan-route-demo.js — PROTOTYPE (Nima, 2026-07-21): pull the real
-// current work, apply the deadline rules, and print the route the planner
-// produces, so we can sanity-check the ORDERING LOGIC before building any UI.
+// scripts/plan-route-demo.js — print the route the planner produces for the real
+// current work, so the ORDERING LOGIC can be sanity-checked from a terminal.
 // Simulates a 9:00 AM start so we see an ideal morning plan.
 // Run: node --env-file=.env.local scripts/plan-route-demo.js
-
-import { getQuestTasks, getEdiReview, getOrders } from '../server/queries.js'
+//
+// ⚠️ It no longer re-implements the item builder. It used to keep its own copies
+// of taskKind() and the leg rules "in sync with src/model/routeItems.js" — and by
+// 2026-08-04 they had silently diverged: routeItems had split the boutique bench
+// into chase / mark-packed / label legs and dropped the severity gate, while this
+// file still emitted the old "Invoice <customer>" leg for every picked order (all
+// 14 of which were undoable). A comment claiming two files are kept in sync is not
+// a mechanism that keeps them in sync. Now it calls buildRouteItems directly, so
+// the demo cannot disagree with the app.
+import { getQuestTasks, getEdiReview, getOrders, getLabelGaps } from '../server/queries.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
-import { channelKey } from '../src/model/channels.js'
-import { computeRoute, DEFAULT_DURATIONS_MIN } from '../src/model/routePlan.js'
+import { computeRoute } from '../src/model/routePlan.js'
+import { buildRouteItems } from '../src/model/routeItems.js'
 
 const START = new Date(); START.setHours(9, 0, 0, 0)
 const NOW = START.getTime()
-const at = (h) => { const d = new Date(START); d.setHours(h, 0, 0, 0); return d.getTime() }
-const NOON = at(12), THREE = at(15)
-const dur = (k) => DEFAULT_DURATIONS_MIN[k] ?? DEFAULT_DURATIONS_MIN.default
 const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-function taskKind(t) {
-  const k = (t.recurringKey || '') + ' ' + (t.subject || '')
-  if (/weaver/i.test(k)) return 'weaver_sync'
-  if (/csv|upload/i.test(k)) return 'csv_upload'
-  if (String(t.instanceKey || '').startsWith('edi:')) return 'edi_route'
-  return 'email_reply'
-}
-
-const items = []
-
-// 1) open quest_tasks — urgent → 3pm cutoff; recurring/others → fill (no hard deadline)
-const tasks = await getQuestTasks()
-for (const t of tasks.filter((t) => t.status === 'open')) {
-  const kind = taskKind(t)
-  items.push({
-    id: 'task-' + t.id, label: (t.subject || 'task').slice(0, 42), kind,
-    deadline: t.urgency === 'hi' ? THREE : null,
-    durationMin: dur(kind), priority: t.urgency === 'hi' ? 0 : t.urgency === 'mid' ? 2 : 4,
-  })
-}
-
-// 2) open EDI orders — Nordstrom routing must go out by noon; cancel-danger by its date
-const edi = computeEdiWork((await getEdiReview()).orders || [], [])
-for (const o of edi.orders.filter((o) => !o.work.closed).slice(0, 40)) {
-  const partner = (o.tradingPartner || '').toLowerCase()
-  let deadline = null, priority = 3
-  if (partner.includes('nordstrom') && o.stageRank < 3) { deadline = NOON; priority = 1 }
-  else if (o.work.cancelState === 'passed') { deadline = NOW; priority = 0 }
-  else if (o.work.cancelState === 'soon') { deadline = THREE; priority = 1 }
-  else continue // no hard deadline today → skip from the day route
-  items.push({ id: 'edi-' + o.businessNumber, label: `EDI route ${o.tradingPartner} · PO ${o.businessNumber}`.slice(0, 46), kind: 'edi_route', deadline, durationMin: dur('edi_route'), priority })
-}
-
-// 3) boutique orders in hand needing an invoice → by noon (invoice→payment→ship chain);
-//    anything already past its ship date is urgent (treat like a 3pm ship push)
-const orders = await getOrders()
-for (const o of orders) {
-  const ch = channelKey(o)
-  const needsInvoice = o.stage && !['SHIPPED', 'INVOICED', 'APPROVED_FOR_SHIPPING'].includes(o.stage)
-  if (ch === 'boutique' && needsInvoice && o.severity > 0) {
-    items.push({ id: 'inv-' + o.soNumber, label: `Invoice ${o.customer} · ${o.soNumber}`.slice(0, 46), kind: 'invoice', deadline: NOON, durationMin: dur('invoice'), priority: 2 })
-  }
-}
+const [tasks, edi, orders, labelGaps] = await Promise.all([
+  getQuestTasks(), getEdiReview(), getOrders(), getLabelGaps({}),
+])
+const ediWork = computeEdiWork(edi.orders || [], edi.resolutions || [])
+const items = buildRouteItems(orders, tasks, ediWork, { now: NOW, labelGaps })
 
 // keep the demo readable — cap the fill (no-deadline) items
 const withDl = items.filter((i) => i.deadline != null)
