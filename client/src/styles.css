@@ -2601,3 +2601,19 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* Muted hard: the archive count must be visible but must never read as urgent. */
 .fhArchive { opacity: 0.62; }
 .fhTotal { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ── Label worksheet (Nima, 2026-08-05) ───────────────────────────────────────
+   Typed off, one row per carton, while looking at the carrier's own form. Dense
+   and monospaced on the two fields that must not be mistyped: PO and store. */
+.rt-labels { margin-top: 6px; }
+.rt-labelSheet { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.rt-labelHead { display: flex; gap: 10px; align-items: baseline; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.rt-labelCarrier { margin-left: auto; color: var(--accent); font-weight: 600; }
+.rt-warn { color: var(--hi); }
+.rt-labelTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rt-labelTable th { text-align: left; font-weight: 500; color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 6px 4px 0; border-bottom: 1px solid var(--line); }
+.rt-labelTable td { padding: 3px 6px 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.rt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+/* The store number is the single most mistypeable field on the label. */
+.rt-store { color: var(--accent); font-weight: 600; }
