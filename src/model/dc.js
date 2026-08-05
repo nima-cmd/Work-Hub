@@ -88,3 +88,20 @@ export function dcLabel(code) {
 export function partnerForDc(code) {
   return /^\d+$/.test(String(code || '').trim()) ? 'Nordstrom' : "Bloomingdale's"
 }
+
+// Nordstrom's portal names a supplier PO as "<our PO>-<destination DC>"
+// (e.g. "50073677-89" on request 5189002RR000000061). That makes it a real join
+// key back to a routing shipment — the Macy's routing emails carry no PO at all,
+// so Bloomingdale's can only be matched on DC + recency, while Nordstrom matches
+// exactly.
+//
+// ⚠️ The portal writes the DC UNPADDED ("89") while orders/routing_shipment store
+// it padded ("089"), so the DC is returned BOTH ways and the caller can match
+// either. Getting this wrong is a silent no-match, the same trap as the
+// Macy's abbreviation lookup.
+export function parseSupplierPo(supplierPo) {
+  const m = String(supplierPo || '').trim().match(/^(\d+)-(\d+)(?:_\d+)?$/)
+  if (!m) return null
+  const dc = m[2]
+  return { poNumber: m[1], dc, dcPadded: dc.padStart(3, '0') }
+}

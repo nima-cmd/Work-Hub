@@ -89,6 +89,13 @@ export function routingShipTo({ dc, direct, mergeCenter } = {}) {
 }
 
 // Nordstrom: each DC is its own ship-to (direct, no merge center).
+//
+// Confirmed against Nordstrom's own vendor portal 2026-08-05 (Nima's screenshot of
+// https://nrdrp.sce.manh.com/udc/dm/screen/vendor-request/RoutingRequestLine):
+// destination facility 89 / "PORTLAND DC" prints 5703 N MARINE DR, PORTLAND OR
+// 97203 — matching the '089' entry below. Our own origin reads back as facility
+// EXT2082 "Naghedi CA Warehouse", 825 Western Unit 13, Glendale CA 91201, which is
+// SHIP_FROM above.
 export const NORDSTROM_DCS = {
   '569': { name: 'Nordstrom DC #569', street: '30 Distribution Drive', city: 'Elizabethtown', state: 'PA', zip: '17022' },
   '584': { name: 'Nordstrom DC #584', street: '490 Columbia Ave', city: 'Riverside', state: 'CA', zip: '92507' },

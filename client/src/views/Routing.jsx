@@ -837,8 +837,11 @@ function RefEditor({ s, auths, busy, onSave }) {
     shipDirect: !!s.shipDirect,
     consignedTo: s.consignedTo || '',
     trackingNumbers: (s.trackingNumbers || []).join(', '),
+    routingRequestNumber: s.routingRequestNumber || '',
+    routingRequestLine: s.routingRequestLine || '',
   })
   const isBloomies = s.partner === "Bloomingdale's"
+  const isNordstrom = s.partner === 'Nordstrom'
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
 
   // The Bloomingdale's auth # comes from the routing email — typed in directly.
@@ -905,6 +908,22 @@ function RefEditor({ s, auths, busy, onSave }) {
             </p>
           )}
         </>
+      )}
+      {/* Nordstrom routes through its own Manhattan portal rather than a routing
+          email, and the request number is the reference to keep (Nima, 2026-08-05).
+          The supplier PO there reads "<our PO>-<DC>" (50073677-89), so unlike the
+          Macy's emails it joins to a shipment exactly. */}
+      {isNordstrom && (
+        <div className="rt-editRow">
+          <label>Routing request #
+            <input value={d.routingRequestNumber} onChange={set('routingRequestNumber')}
+              placeholder="5189002RR000000061" />
+          </label>
+          <label>Request line
+            <input value={d.routingRequestLine} onChange={set('routingRequestLine')}
+              placeholder="RRL7854657822930187974" />
+          </label>
+        </div>
       )}
       <div className="rt-editRow">
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>

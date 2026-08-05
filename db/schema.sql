@@ -1015,6 +1015,26 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS ship_direct      BOOLEAN DEFAULT false;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS consigned_to     TEXT;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] DEFAULT '{}';
+-- Nordstrom's Supplier Routing Request number (Nima, 2026-08-05). Nordstrom routes
+-- through its own Manhattan-Associates portal, not a routing email:
+--   https://nrdrp.sce.manh.com/udc/dm/screen/vendor-request/RoutingRequestLine
+-- A request line there reads, for example:
+--   Supplier Routing Request:      5189002RR000000061
+--   Supplier Routing Request Line: RRL7854657822930187974
+--   Supplier Purchase Order:       50073677-89
+--   Destination Facility: 89   Destination Facility Name: PORTLAND DC
+--
+-- ⚠️ The supplier PO is "<our PO>-<destination DC>", which makes it a REAL join
+-- key — the Macy's routing emails carry no PO at all, so Bloomingdale's can only
+-- be matched on DC + recency. Nordstrom can be matched exactly: 50073677-89 ->
+-- (partner Nordstrom, dc 089, PO 50073677 in member_pos) = one shipment.
+-- Note the DC is unpadded there ("89") and stored padded here ("089").
+--
+-- Stored per shipment because a request line is per PO+DC, which is the same grain
+-- as a routing_shipment. One request number can cover several lines, so this may
+-- legitimately repeat across DCs — the same way a Bloomingdale's auth_number does.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS routing_request_number TEXT;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS routing_request_line   TEXT;
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can

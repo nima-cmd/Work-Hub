@@ -11,7 +11,7 @@ import {
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { shipWindow, shipWindowFlags, isoDay } from '../src/model/shipWindow.js'
-import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc } from '../src/model/bolAddresses.js'
+import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -31,7 +31,7 @@ import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/saved
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
 import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
-import { partnerForDc, dcLabel, DC_ABBREV } from '../src/model/dc.js'
+import { partnerForDc, dcLabel, DC_ABBREV, parseSupplierPo } from '../src/model/dc.js'
 import { extractPoDates, extractPoLines, summarizePoLines } from '../src/ingest/orderfulDates.js'
 import { diffPoVersions, poVersionInfo } from '../src/model/ediPoDiff.js'
 import { extractAsnManifest } from '../src/ingest/orderfulAsn.js'
@@ -2650,4 +2650,34 @@ test('every harvested DC key matches a DC name the app already parses', () => {
   for (const key of Object.keys(MACYS_DCS)) {
     assert.ok(DC_ABBREV[key], `MACYS_DCS key "${key}" is not a known DC name in dc.js`)
   }
+})
+
+// ── Nordstrom's routing portal (Nima's screenshot, 2026-08-05) ───────────────
+test("a Nordstrom supplier PO splits into our PO and its destination DC", () => {
+  // Verbatim from request 5189002RR000000061.
+  const p = parseSupplierPo('50073677-89')
+  assert.equal(p.poNumber, '50073677')
+  assert.equal(p.dc, '89')
+  // ⚠️ The portal writes the DC unpadded; orders + routing_shipment store it
+  // padded. Matching on the wrong one is a SILENT no-match.
+  assert.equal(p.dcPadded, '089')
+  // the per-line form carries a line suffix
+  assert.equal(parseSupplierPo('50073677-89_01').poNumber, '50073677')
+  assert.equal(parseSupplierPo('50073677-89_01').dcPadded, '089')
+  assert.equal(parseSupplierPo('not-a-po'), null)
+  assert.equal(parseSupplierPo(null), null)
+})
+
+test('the stored Nordstrom DC 089 matches what the portal prints', () => {
+  // Portal: destination facility 89 / PORTLAND DC / 5703 N MARINE DR / PORTLAND OR
+  // 97203. If someone edits this table, this fails rather than a BOL going out with
+  // a wrong address.
+  const dc = NORDSTROM_DCS['089']
+  assert.match(dc.street, /5703 N(orth)? Marine Dr/i)
+  assert.equal(dc.city, 'Portland')
+  assert.equal(dc.state, 'OR')
+  assert.match(dc.zip, /^97203/)
+  // both the padded and unpadded keys resolve to the same DC — the portal uses one
+  // form and our data the other.
+  assert.equal(NORDSTROM_DCS['89'].street, dc.street)
 })

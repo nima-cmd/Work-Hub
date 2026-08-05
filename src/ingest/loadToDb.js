@@ -718,6 +718,8 @@ export async function fetchRoutingShipments(db = pool) {
             fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
             ship_direct AS "shipDirect", consigned_to AS "consignedTo",
             tracking_numbers AS "trackingNumbers",
+            routing_request_number AS "routingRequestNumber",
+            routing_request_line AS "routingRequestLine",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
@@ -988,6 +990,9 @@ const SHIPMENT_REF_COLS = {
   shipDirect: 'ship_direct',
   consignedTo: 'consigned_to',
   trackingNumbers: 'tracking_numbers',
+  // Nordstrom's portal references (Nima, 2026-08-05) — see db/schema.sql.
+  routingRequestNumber: 'routing_request_number',
+  routingRequestLine: 'routing_request_line',
 }
 
 // tracking_numbers is TEXT[]; everything else here is scalar. A shipment is many
