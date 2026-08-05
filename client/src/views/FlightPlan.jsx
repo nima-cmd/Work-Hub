@@ -4,6 +4,8 @@ import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeRoute } from '../../../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../../../src/model/routeItems.js'
 import FirstHour from './FirstHour.jsx'
+import CatchUp from './CatchUp.jsx'
+import { buildCatchUp } from '../../../src/model/catchUp.js'
 
 // Daily Flight Plan (Nima, 2026-07-28) — the "flight route" for the day. The
 // route engine (src/model/routePlan.js) and the live-data adapter
@@ -46,7 +48,7 @@ const isoToTime = (iso) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export default function FlightPlan({ orders = [], tasks = [], labelGaps = null, onNavigate = () => {}, onRefresh }) {
+export default function FlightPlan({ orders = [], tasks = [], emails = [], labelGaps = null, onNavigate = () => {}, onRefresh }) {
   const [edi, setEdi] = useState(null)
   const [planRows, setPlanRows] = useState([])
   const [now, setNow] = useState(() => Date.now())
@@ -108,11 +110,27 @@ export default function FlightPlan({ orders = [], tasks = [], labelGaps = null, 
     try { await setTaskSchedule(taskId, patch); onRefresh?.() } finally { setBusy(false) }
   }
 
+  // The band's own data. Rhythms are lifted OUT of `plan` (routeItems.js), so
+  // these two surfaces partition the work rather than double-counting it.
+  const catchUp = useMemo(() => buildCatchUp(emails, tasks, { now }), [emails, tasks, now])
+
+  async function completeRhythm(r) {
+    setBusy(true)
+    try { await completeQuestTask(r.id); onRefresh?.() } finally { setBusy(false) }
+  }
+
   const s = plan.summary
   const firstOpenIdx = plan.route.findIndex((r) => r.end > now)
 
   return (
     <div className="fpView">
+      {/* Above the plan, never a gate on it: the unread inbox + today's
+          rhythms, which the route deliberately doesn't carry (catchUp.js). */}
+      <CatchUp
+        catchUp={catchUp} onNavigate={onNavigate} busy={busy}
+        onCompleteRhythm={completeRhythm}
+      />
+
       {/* One thing, then a few, then a count. Fed from the SAME route as the
           timeline below so the two can never disagree — see FirstHour.jsx. */}
       <FirstHour
