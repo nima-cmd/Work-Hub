@@ -130,6 +130,10 @@ export function mapEdiPackageRows({ ifs = [], packages = [], ifUnits = [] } = {}
   const agg = new Map()
   const unparseableBoxes = new Set()
   let orphanCartons = 0
+  // The carton rows themselves, kept rather than only summed (Nima, 2026-08-05:
+  // "i do need how each carton in the shipment its weight and dimension"). The
+  // rollup below still sums them; this simply stops throwing the detail away.
+  const cartons = []
 
   for (const p of packages) {
     const ifId = String(p.if_id ?? p.ifId)
@@ -138,6 +142,21 @@ export function mapEdiPackageRows({ ifs = [], packages = [], ifUnits = [] } = {}
     const key = poDcOfIf.get(ifId)
     const parts = key ? splitPoDc(key) : null
     if (!parts) { orphanCartons++; continue }
+    const dims = parseBoxDims(p.box)
+    cartons.push({
+      ifNumber: f?.ifNumber ?? null,
+      cartonNo: String(p.carton_no ?? p.cartonNo ?? ''),
+      poDc: key, poNumber: parts.poNumber, dc: parts.dc,
+      weightLb: Number(p.weight) || null,
+      units: Number(p.units) || null,
+      ucc: p.ucc ?? null,
+      boxName: p.box ?? null,
+      // NULL rather than 0 when the box type's name isn't dimensional — a zero
+      // dimension on a carrier label is a rejected shipment, not a small box.
+      lengthIn: dims ? dims[0] : null,
+      widthIn: dims ? dims[1] : null,
+      heightIn: dims ? dims[2] : null,
+    })
     let e = agg.get(key)
     if (!e) {
       e = {
@@ -160,7 +179,8 @@ export function mapEdiPackageRows({ ifs = [], packages = [], ifUnits = [] } = {}
   const rows = [...agg.values()].map((e) => ({ ...e, cubicFeetRaw: round1(e.cubicFeetRaw) }))
   rows.sort((a, b) => a.poDc.localeCompare(b.poDc))
   const fulfilments = [...perIf.values()].sort((a, b) => String(a.ifNumber).localeCompare(String(b.ifNumber)))
-  return { rows, fulfilments, unparseableBoxes: [...unparseableBoxes], orphanCartons }
+  cartons.sort((a, b) => String(a.ifNumber).localeCompare(String(b.ifNumber)) || String(a.cartonNo).localeCompare(String(b.cartonNo)))
+  return { rows, fulfilments, cartons, unparseableBoxes: [...unparseableBoxes], orphanCartons }
 }
 
 export async function fetchEdiPackagesLive() {
@@ -198,7 +218,7 @@ export async function syncEdiPackagesLive({ dryRun = false } = {}) {
   }
 
   const { withTransaction, pool } = await import('../db.js')
-  const { loadEdiPackages, loadFulfilmentPack, recordSnapshot } = await import('./loadToDb.js')
+  const { loadEdiPackages, loadFulfilmentPack, loadEdiCartons, recordSnapshot } = await import('./loadToDb.js')
   const { rows: existing } = await pool.query('SELECT po_dc FROM edi_packages')
   const incoming = new Set(pulled.rows.map((r) => r.poDc))
   const removed = existing.map((r) => r.po_dc).filter((k) => !incoming.has(k))
@@ -211,6 +231,10 @@ export async function syncEdiPackagesLive({ dryRun = false } = {}) {
       // Same transaction as the carton feed: the pack check compares against
       // those exact cartons, so the two must never be written apart.
       await loadFulfilmentPack(pulled.fulfilments || [], db)
+      // Same transaction again: the rollup, the pack check and the carton detail all
+      // derive from ONE pull of the same carton rows, so writing them apart would let
+      // a label sheet disagree with the BOL it ships under.
+      await loadEdiCartons(pulled.cartons || [], db)
       await recordSnapshot('ediPackagesLive', n, new Date(), db)
       if (dryRun) { const e = new Error('dry run'); e.code = ROLLBACK; e.partial = n; throw e }
       return n

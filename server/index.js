@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  setFulfillmentPrepped, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  setFulfillmentPrepped, getLabelWorksheetCsv, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
@@ -214,6 +214,22 @@ app.post('/api/print-label', async (req, res) => {
 // "Our part is done" on a fulfilment, without marking it packed in NetSuite —
 // packed is accounting's signal to invoice, and some boutique orders must not be
 // invoiced early (Nima, 2026-08-05). See src/model/prepped.js.
+// Label worksheet as CSV. ?bol=NB1731256 for one shipment, omitted for all of
+// today's DC-direct ones. A download, so it opens straight into a carrier's import.
+app.get('/api/label-worksheet.csv', async (req, res) => {
+  try {
+    const { csv, cartons } = await getLabelWorksheetCsv({ bolNumber: req.query.bol || null })
+    const name = req.query.bol ? `labels-${req.query.bol}.csv` : 'labels.csv'
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
+    res.setHeader('X-Carton-Count', String(cartons))
+    res.send(csv)
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
 app.post('/api/fulfillment/prepped', async (req, res) => {
   try {
     res.json(await setFulfillmentPrepped(req.body || {}))

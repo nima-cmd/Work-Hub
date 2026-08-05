@@ -30,28 +30,36 @@
 // so dividing it by carton count would invent a figure that goes on a carrier label
 // and gets billed.
 
-// Expand fulfilment rows into one line per carton.
+// One line per CARTON, from the persisted carton rows (Nima, 2026-08-05: "i dont
+// need the name and the carton count i do need how each carton in the shipment its
+// weight and dimension").
 //
-// rows: [{ poNumber, storeNumber, storeName, soNumber, ifNumber, cartons, units }]
-// ship: { bolNumber, dc, carrier, shipDate, shipDirect, consignedTo, address }
+// rows: [{ poNumber, storeNumber, soNumber, ifNumber, cartons: [{cartonNo, weightLb,
+//          lengthIn, widthIn, heightIn, boxName, ucc, units}] }]
 export function buildLabelWorksheet(ship = {}, rows = []) {
   const lines = []
   for (const r of rows) {
-    // A fulfilment with no carton count yet still gets ONE line rather than
-    // vanishing — a box exists physically whether or not the pack feed has caught
-    // up, and a missing line is how a carton ships unlabelled.
-    const n = Math.max(1, Number(r.cartons) || 0)
-    for (let k = 1; k <= n; k++) {
+    const cartons = r.cartons?.length ? r.cartons : [null]
+    for (const c of cartons) {
       lines.push({
         seq: lines.length + 1,
         poNumber: r.poNumber,
         storeNumber: r.storeNumber || null,
-        storeName: shortStore(r.storeName),
-        soNumber: r.soNumber,
         ifNumber: r.ifNumber,
-        cartonOf: n > 1 ? `${k} of ${n}` : null,
-        ifUnits: r.units ?? null,
-        cartonsUnknown: !Number(r.cartons),
+        cartonNo: c?.cartonNo ?? null,
+        // ⚠️ Real per-carton figures, never a total divided by carton count. IF7469
+        // ships two boxes of the SAME type weighing 44lb and 47lb — an average
+        // would be wrong on both, and a wrong weight on a carrier label gets
+        // rebilled.
+        weightLb: c?.weightLb ?? null,
+        lengthIn: c?.lengthIn ?? null,
+        widthIn: c?.widthIn ?? null,
+        heightIn: c?.heightIn ?? null,
+        dims: c && c.lengthIn ? `${c.lengthIn}x${c.widthIn}x${c.heightIn}` : null,
+        ucc: c?.ucc ?? null,
+        // No carton row yet — the box exists physically, so it gets a line with the
+        // gap visible rather than being dropped.
+        missing: !c,
       })
     }
   }
@@ -62,30 +70,58 @@ export function buildLabelWorksheet(ship = {}, rows = []) {
     shipDate: ship.shipDate || null,
     shipTo: ship.address || null,
     consignedTo: ship.consignedTo || null,
-    // Freight moves on the BOL, so a per-carton parcel sheet is meaningless there.
-    // Stated rather than silently returning an empty list.
+    billToAccount: ship.billToAccount || null,
+    freightTerms: ship.freightTerms || null,
     applicable: !!ship.shipDirect,
     lines,
     cartons: lines.length,
-    stores: new Set(lines.map((l) => l.storeNumber)).size,
+    // Totals are a cross-check against the BOL, not label input.
+    totalWeightLb: round1(lines.reduce((n, l) => n + (l.weightLb || 0), 0)),
+    incomplete: lines.filter((l) => l.missing || l.weightLb == null || l.lengthIn == null).length,
   }
 }
 
-// "Bloomingdale's - 0231 China Grove Pool Stock/Customer/Customer Fulfillment
-// Center" is unreadable on a worksheet row. Keep the human part, drop the prefix
-// and the warehouse boilerplate.
-export function shortStore(name) {
-  if (!name) return null
-  return String(name)
-    .replace(/^.*?\b\d{4}\s*/, '')
-    .replace(/\s*(Pool Stock|Customer Fulfillment Center|Customer)\b.*$/i, '')
-    .trim() || String(name).trim()
-}
+const round1 = (n) => Math.round(n * 10) / 10
 
-// A single line's label text, so the sheet and anything printed from it can never
-// disagree about what goes on the box.
+// The label's own reference fields: PO and store are what the DC cross-docks on.
 export function labelLine(l) {
   const store = l.storeNumber ? `Store ${l.storeNumber}` : 'Store ?'
-  const carton = l.cartonOf ? ` · carton ${l.cartonOf}` : ''
-  return `PO ${l.poNumber} · ${store}${carton}`
+  return `PO ${l.poNumber} · ${store}`
+}
+
+// A CSV a carrier's batch-import tool can read. One row per carton, because that is
+// one label.
+//
+// ⚠️ The column NAMES here are generic on purpose. UPS's importers do not share a
+// schema — WorldShip uses a user-defined import map, ups.com "Import Shipments"
+// expects its own header set — so this emits every field a label needs under plain
+// names and the map is pointed at them. Guessing one tool's exact headers would
+// produce a file that imports silently wrong, which is worse than one that needs
+// mapping once.
+export const CSV_COLUMNS = [
+  'Reference1_PO', 'Reference2_Store', 'ShipTo_Company', 'ShipTo_Address1',
+  'ShipTo_City', 'ShipTo_State', 'ShipTo_Zip', 'ShipTo_Country',
+  'Weight_Lb', 'Length_In', 'Width_In', 'Height_In',
+  'Service', 'Billing', 'BillTo_Account', 'SSCC', 'IF', 'BOL',
+]
+
+const csvCell = (v) => {
+  const s = v == null ? '' : String(v)
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+}
+
+export function worksheetCsv(sheets = []) {
+  const out = [CSV_COLUMNS.join(',')]
+  for (const w of sheets) {
+    if (!w.applicable) continue
+    for (const l of w.lines) {
+      out.push([
+        l.poNumber, l.storeNumber,
+        w.shipTo?.name, w.shipTo?.street, w.shipTo?.city, w.shipTo?.state, w.shipTo?.zip, 'US',
+        l.weightLb, l.lengthIn, l.widthIn, l.heightIn,
+        w.carrier, w.freightTerms, w.billToAccount, l.ucc, l.ifNumber, w.bolNumber,
+      ].map(csvCell).join(','))
+    }
+  }
+  return out.join('\n') + '\n'
 }
