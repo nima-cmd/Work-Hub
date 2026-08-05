@@ -6,6 +6,7 @@ import { pool } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
+import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
@@ -2487,10 +2488,68 @@ export async function searchQuestArchive(q) {
 // Every read runs ensureRecurringTasks first — the "catch up whenever the
 // app is opened" mechanism (Nima, 2026-07-16), no separate scheduler needed
 // until this is deployed somewhere always-on.
-export async function getQuestTasks() {
+// Urgency is DERIVED here rather than read off the row (Nima, 2026-08-05: "if the
+// app can learn and set urgency with a manual overrid it be best"). The hand-set
+// value survives as `urgencyOverride` and wins when present; `urgencyBasis` says
+// WHY, so an urgency nobody can explain never drives the day.
+//
+// Everything downstream reads `t.urgency`, so the day plan's ordering
+// (urgencyPriority / urgencyDeadline in src/model/routeItems.js) picks this up with
+// no change of its own.
+// ⚠️ `severityByDoc` is what makes 'hi' REACHABLE. Without it, hi can only come
+// from a real due_at — and 0 of 34 open tasks have one, so hi would be structurally
+// impossible and the scale would silently collapse to mid/lo. That is the
+// unreachable-branch shape this repo keeps producing, so the caller that already
+// holds order severities passes them in and getQuestTasks resolves them here.
+export async function getQuestTasks({ now = Date.now(), severityByDoc = null } = {}) {
   await ensureRecurringTasks()
   const tasks = await fetchQuestTasks()
-  return tasks.map((t) => ({ ...t, character: getCharacterById(t.characterId) }))
+  // Default: derive severities for linked sales orders ourselves, so the API path
+  // gets a working hi tier without every caller having to remember.
+  const sev = severityByDoc || (await linkedDocSeverities(tasks, now))
+  return tasks.map((t) => {
+    const u = deriveTaskUrgency(t, { now, linkedSeverity: sev.get(t.netsuiteDocNumber) })
+    return {
+      ...t,
+      character: getCharacterById(t.characterId),
+      urgency: u.level,
+      urgencyBasis: u.basis,
+      urgencyDerived: u.derived,
+      urgencyOverride: u.override,
+    }
+  })
+}
+
+// The severity of each NetSuite doc a task hangs off, so an urgent order makes its
+// task urgent. Reuses computeFlags — the app's ONE definition of severity — rather
+// than re-deriving "is this order in trouble" in SQL, which would drift the moment
+// the flag rules changed.
+async function linkedDocSeverities(tasks, now) {
+  const docs = [...new Set(tasks.map((t) => t.netsuiteDocNumber).filter(Boolean))]
+  if (!docs.length) return new Map()
+  const today = new Date(now)
+  // Only the linked docs, so this never scans the order table.
+  const { rows } = await pool.query(
+    `SELECT o.*,
+            COALESCE((SELECT json_agg(json_build_object(
+              'ifNumber', f.if_number, 'status', f.status, 'packedStatus', f.packed_status,
+              'invoice', f.invoice_number, 'actualShipDate', f.actual_ship_date, 'ifDate', f.if_date))
+              FROM fulfillments f WHERE f.so_number = o.so_number), '[]'::json) AS fulfillments,
+            '[]'::json AS invoices
+     FROM orders o WHERE o.so_number = ANY($1)`, [docs])
+  const map = new Map()
+  for (const r of rows) {
+    const o = {
+      soNumber: r.so_number, customer: r.customer, location: r.location, source: r.source,
+      stage: r.stage, shippingStatus: r.shipping_status, shipDate: r.ship_date,
+      cancelDate: r.cancel_date, daysPending: r.days_pending, soStatus: r.so_status,
+      qtyOrdered: Number(r.qty_ordered), qtyFulfilled: Number(r.qty_fulfilled),
+      isAts: r.is_ats, fulfillments: r.fulfillments, invoices: [], ediWindow: null,
+    }
+    const flags = computeFlags(o, today)
+    map.set(r.so_number, flags.reduce((m, f) => Math.max(m, f.severity), 0))
+  }
+  return map
 }
 
 export async function createTaskFromQuestEmail(emailId) {
