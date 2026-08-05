@@ -15,11 +15,43 @@
 // A resolution always wins over inference, and is always visibly flagged.
 
 import { poVersionInfo } from './ediPoDiff.js'
+import { routingDeadline, routingCutoffHour } from './shipWindow.js'
+
+// The routing deadline for one EDI order, or null when the partner has no stated
+// routing lead or sent no cancel date.
+//
+// `order.tradingPartner` is what names the partner here — partnerKey reads
+// location+customer, and an EDI review order carries the partner instead.
+export function routeByFor(order, cancelAfter) {
+  return routingDeadline({ customer: order?.tradingPartner || '' }, cancelAfter)
+}
+
+// Does this partner's deadline carry a time of day (Nordstrom's noon) rather than
+// being "some time that day"? Decides whether lateness is judged to the hour.
+export function routeCutoffHourFor(order) {
+  return routingCutoffHour({ customer: order?.tradingPartner || '' })
+}
+
+// How the deadline reads on a card. Names the date, and the hour only when the
+// partner actually has a cutoff — saying "by 12pm" to a partner with no stated
+// cutoff would invent a precision we were never given.
+export function routeDeadlineText(routeBy, cutoffHour) {
+  if (routeBy == null) return 'routing'
+  const d = new Date(routeBy)
+  const date = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  if (cutoffHour == null) return date
+  const hour = cutoffHour % 12 === 0 ? 12 : cutoffHour % 12
+  return `${date} ${hour}${cutoffHour < 12 ? 'am' : 'pm'}`
+}
 
 const DAY = 86400000
 
 export const MISSED_AFTER_DAYS = 7 // 850 with no NetSuite order after this = presumed missed
 export const CANCEL_SOON_DAYS = 7
+// The routing deadline is only 3 business days wide to begin with, so a 7-day
+// "soon" horizon would light up before the window even opens. Two days: enough to
+// act, short enough that the chip means today-or-tomorrow.
+export const ROUTE_SOON_DAYS = 2
 
 function daysSince(dateish, today) {
   if (!dateish) return null
@@ -172,6 +204,36 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     else if (d != null && -d <= CANCEL_SOON_DAYS) { cancelState = 'soon'; cancelDays = -d }
   }
 
+  // ── the ROUTING deadline, which lands earlier than the cancel date ─────────
+  //
+  // Bloomingdale's routing must be in 3 BUSINESS days before its cancel date
+  // (Nima, 2026-08-04 — see src/model/shipWindow.js for the rule and why business
+  // days matter). The board has only ever ranked on the cancel date, so a PO with
+  // a cancel date five days out read as five days of slack while the deadline that
+  // actually binds was tomorrow. Live example the day this landed: PO 8040291 and
+  // 8040313, cancel Mon Aug 10, route by Wed Aug 5.
+  //
+  // ⚠️ Deliberately a SEPARATE state, not a redefinition of cancelState — that
+  // field means the cancel date and is read in five places, and quietly changing
+  // what an existing field means is how the last four counter bugs happened. Both
+  // feed cancelDanger; neither is summed into the other.
+  //
+  // ⚠️ Gated on `!order.routed`. Once the routing request is in, the deadline is
+  // MET, not missed — and live today all 4 open Bloomingdale's POs are already
+  // routed, so an ungated version would have been 4-for-4 false on its first run.
+  let routeState = null // 'passed' | 'soon' | null
+  let routeDays = null
+  const routeBy = order.routed ? null : routeByFor(order, order.cancelAfter)
+  const routeCutoffHour = routeCutoffHourFor(order)
+  if (!closed && !partnerCancelled && !order.routed && routeBy != null && order.stageRank < 3) {
+    // Compared as INSTANTS, not whole days, because Nordstrom's deadline is noon —
+    // day-precision math would call 3pm on the deadline day "still today" and hand
+    // back a next-day pickup that is already gone.
+    const ms = routeBy - today
+    if (ms <= 0) { routeState = 'passed'; routeDays = Math.max(0, Math.round(-ms / DAY)) }
+    else if (ms <= ROUTE_SOON_DAYS * DAY) { routeState = 'soon'; routeDays = Math.round(ms / DAY) }
+  }
+
   // ── what's needed next (first thing that blocks progress) ─────────────────
   let needed = null
   let needs856 = false, needs810 = false
@@ -229,6 +291,15 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     needed = 'Review — state unclear'
   }
   if (cancelState === 'passed') needed = `⚠ Cancel date passed ${cancelDays}d ago — ${needed || 'review'}`
+  // The routing deadline leads only when the cancel date has NOT already passed —
+  // once the shipment is late outright, "route it by Tuesday" is no longer the
+  // useful sentence. Says ROUTE explicitly so it can't be read as a ship date.
+  // The lead differs by partner (3 business days for Bloomingdale's, noon the day
+  // before for Nordstrom), so the sentence states the ACTUAL deadline rather than
+  // hardcoding one partner's rule — the previous draft said "3 business days" to
+  // everyone, which would have been wrong for every Nordstrom PO.
+  else if (routeState === 'passed') needed = `⚠ Routing was due ${routeDeadlineText(routeBy, routeCutoffHour)} — ${needed || 'route it'}`
+  else if (routeState === 'soon') needed = `⏱ Route by ${routeDeadlineText(routeBy, routeCutoffHour)} — ${needed || 'route it'}`
 
   return {
     closed,
@@ -240,6 +311,12 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     age850,
     cancelState,
     cancelDays,
+    // The routing deadline, kept apart from cancelState on purpose (never summed
+    // into it) — one is "the partner cancels", the other is "we miss our slot".
+    routeState,
+    routeDays,
+    routeBy,
+    routed: !!order.routed,
     reviewState,
     underReview,
     unallocated,
@@ -276,7 +353,10 @@ export function computeEdiWork(orders = [], resolutions = [], today = Date.now()
     else p.open++
     if (o.work.missed850) p.missed++
     if (o.work.partnerCancelled && !o.work.closed) p.partnerCancelled++
-    if (o.work.cancelState) p.cancelDanger++
+    // Either clock counts as danger — missing the routing slot IS how the cancel
+    // date then gets missed. Counted once per PO, never once per clock, so a PO
+    // late on both doesn't double the number (the never-lump rule cuts both ways).
+    if (o.work.cancelState || o.work.routeState) p.cancelDanger++
     if (o.hasIssue && !o.work.closed) p.issues++
     if (o.work.underReview) p.inReview++
     if (o.work.unallocated) p.unallocated++

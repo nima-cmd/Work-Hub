@@ -38,12 +38,21 @@
 //     scope in the checker just creates a second copy to drift. A floor catches
 //     the dead gate without pretending to know the exact answer.
 //
-// It does NOT try to check shapes (iii) and (iv) — those need judgement and a
-// human reading the field's provenance. What it does mean is that no counter can
-// go structurally dead again without something saying so out loud.
+// FINDING a shape (iii) or (iv) bug still needs judgement and a human reading a
+// field's provenance — no script will notice that `packed_status` is hand-keyed, or
+// that a comment is describing something the code below it doesn't do.
+//
+// But once found, both become assertable, and the ones already found are asserted
+// below: the scope promises that used to live only in prose (placeholders excluded,
+// China off the dock, the filing epoch, the headline age), and the gate keeping the
+// routing deadline off already-routed POs. So the honest claim is narrower than
+// "shapes 1–2 only" and wider than nothing — no counter can go structurally dead,
+// and no promise that has been caught out once can quietly break again.
 import * as Q from '../server/queries.js'
 import { pool } from '../src/db.js'
 import { LIVE_SYNCS } from '../src/model/syncHealth.js'
+import { FILING_LEDGER_START } from '../src/model/filing.js'
+import { computeEdiWork } from '../src/model/ediWork.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -99,6 +108,24 @@ const credits = await Q.getCredits()
 floor('header `waiting` is not structurally dead', credits.waiting, owing[0].n,
   `${owing[0].n} unshipped non-China IF(s) owe $${Number(owing[0].owed).toLocaleString()}`)
 
+// The departures board and the bay must be the SAME list. They were two copies
+// of "what's on the dock" and only one got the 2026-07-17 rework, so the board
+// spent a year listing shipments that had already left (6–29 days prior) and
+// hiding all 70 still here. Now it delegates — this asserts it still does.
+const dep = await Q.getShipDepartures({})
+dep.length === bay.length && dep.every((d, i) => d.ifNumber === bay[i].ifNumber)
+  ? ok('ship departures is the launch bay, not a second copy', `${dep.length} ships`)
+  : bad('ship departures is the launch bay, not a second copy',
+    `departures has ${dep.length} rows, bay has ${bay.length} — they have diverged again`)
+
+// Nothing on a departures board may already have departed. This is the assertion
+// the old query would have failed on all 8 of its rows.
+const gone = dep.filter((d) => d.actualShipDate)
+gone.length
+  ? bad('nothing on the departures board has already shipped',
+    `${gone.length} departed row(s): ${gone.slice(0, 5).map((d) => d.ifNumber).join(', ')}`)
+  : ok('nothing on the departures board has already shipped', `${dep.length} still here`)
+
 // ── filing, cartons, overdue money, EDI delivery, inbound ───────────────────
 const unf = await Q.getUnfiledPaper({})
 partition('unfiled paper: due + backlog account for both lists',
@@ -132,6 +159,60 @@ inb.counts.late + inb.counts.awaiting <= inbTotal
     `${inb.counts.late} + ${inb.counts.awaiting} <= ${inbTotal}`)
   : bad('inbound late + awaiting fit inside the container list',
     `${inb.counts.late} + ${inb.counts.awaiting} > ${inbTotal}`)
+
+// ── promises that were only comments (shape iv) ──────────────────────────────
+// Each of these was an assertion in prose that nothing verified. A comment
+// claiming a scope rule is not the scope rule — that is how a page ended up
+// listing shipments that had already left, and how the header's `waiting` figure
+// spent its life at zero. Cheap to assert, so now they are asserted.
+
+// queries.js: "Placeholder orders are EXCLUDED here, at the single read path
+// every work view uses."
+const orders = await Q.getOrders()
+const { rows: phRows } = await pool.query(`SELECT COUNT(*) n FROM orders WHERE is_placeholder IS TRUE`)
+const leaked = orders.filter((o) => o.isPlaceholder).length
+leaked
+  ? bad('placeholder orders never reach getOrders', `${leaked} leaked`)
+  : ok('placeholder orders never reach getOrders', `${phRows[0].n} placeholder(s) held back`)
+
+// queries.js: "China-Warehouse orders are EXCLUDED — they ship FOB direct."
+const chinaInBay = bay.filter((s) => /china/i.test(s.location || '')).map((s) => s.ifNumber)
+chinaInBay.length
+  ? bad('China/FOB never appears on the dock', `present: ${chinaInBay.join(', ')}`)
+  : ok('China/FOB never appears on the dock', 'collected abroad, has its own lane')
+
+// filing.js: shipments that departed before the epoch "are never counted as due".
+// Both directions, because the split is only honest if neither side leaks.
+const epoch = new Date(FILING_LEDGER_START)
+const preEpochDue = unf.due.filter((r) => new Date(r.shippedAt) < epoch).length
+const postEpochBacklog = unf.backlog.filter((r) => new Date(r.shippedAt) >= epoch).length
+preEpochDue || postEpochBacklog
+  ? bad('the filing epoch split leaks in neither direction',
+    `${preEpochDue} pre-epoch in due, ${postEpochBacklog} post-epoch in backlog`)
+  : ok('the filing epoch split leaks in neither direction', `epoch ${FILING_LEDGER_START}`)
+
+// queries.js: held-for-payment rows are "never added to any actionable number".
+// The headline age is the one that would quietly absorb them.
+const maxHeldAge = Math.max(0, ...lg.heldForPayment.map((h) => h.ageDays ?? 0))
+const maxActionable = Math.max(0, ...[...lg.needsLabel, ...lg.labelledNotShipped].map((h) => h.ageDays ?? 0))
+lg.oldestAgeDays === maxActionable
+  ? ok('the headline age ignores parked and non-parcel lanes',
+    `oldest ${lg.oldestAgeDays} = oldest actionable ${maxActionable} (oldest held is ${maxHeldAge})`)
+  : bad('the headline age ignores parked and non-parcel lanes',
+    `oldest ${lg.oldestAgeDays} but oldest actionable is ${maxActionable}`)
+
+// The routing deadline (Bloomingdale's, 3 business days before cancel) must never
+// fire on a PO that has already been routed. This is not hypothetical: all 4 open
+// Bloomingdale's POs were routed the day the rule landed, so an ungated version
+// would have been 4-for-4 false on its first run.
+const review = await Q.getEdiReview()
+const ediWork = computeEdiWork(review.orders || [], review.resolutions || [])
+const routedButFlagged = ediWork.orders.filter((o) => o.work.routeState && o.work.routed)
+routedButFlagged.length
+  ? bad('the routing deadline never fires on an already-routed PO',
+    `${routedButFlagged.length}: ${routedButFlagged.slice(0, 5).map((o) => o.businessNumber).join(', ')}`)
+  : ok('the routing deadline never fires on an already-routed PO',
+    `${ediWork.orders.filter((o) => o.work.routed).length} routed PO(s), ${ediWork.orders.filter((o) => o.work.routeState).length} flagged`)
 
 // ── sync health: a sync that silently stops being reported reads as healthy ──
 const sh = await Q.getSyncHealth()

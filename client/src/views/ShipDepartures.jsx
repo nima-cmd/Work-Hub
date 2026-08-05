@@ -2,15 +2,21 @@ import { useEffect, useState } from 'react'
 import { fetchShipDepartures } from '../api.js'
 import { SourceBadge, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
 
-// Nima's framing (2026-07-16) for each IF-Packed-Status bucket, in priority
-// order — "Approved to Ship" can leave TODAY, so it goes first; anything not
-// in this list (a status this view hasn't been told about yet) still shows,
-// appended at the end, rather than silently dropped.
+// Nima's framing (2026-07-16) is unchanged — what can leave TODAY goes first —
+// but the buckets now key on the bay's DERIVED state rather than on the
+// hand-keyed IF-Packed-Status string.
+//
+// ⚠️ Those strings were the bug. The field is null on every IF still at the dock,
+// so this board grouped 8 already-departed shipments under "Can depart today"
+// (they left 6–29 days ago) and showed none of the 70 actually here. See
+// getShipDepartures in server/queries.js. An unrecognised state still gets its own
+// column, appended, rather than being silently dropped.
 const BUCKETS = [
-  { key: 'Approved to Ship', label: 'Approved to Ship', hint: 'Can depart today' },
-  { key: 'FOB Order Awaiting Shipment', label: 'FOB Awaiting Shipment', hint: 'Mid-process, not yet cleared to ship' },
-  { key: 'Waiting On Payment', label: 'Waiting on Payment', hint: 'Stuck at the dock for a credit transfer' },
-  { key: 'Pending Invoice', label: 'Pending Invoice', hint: '' },
+  { key: 'approved', label: 'Approved to Ship', hint: 'Cleared — can depart today' },
+  { key: 'scanned_in', label: 'Back in Our Hands', hint: 'Scanned back in — label it and get it out' },
+  { key: 'payment', label: 'Waiting on Payment', hint: 'Held at the dock until the balance clears' },
+  { key: 'invoice', label: 'Pending Invoice', hint: 'Needs an invoice before it can move' },
+  { key: 'other', label: 'Other', hint: 'No invoice or billing signal yet' },
 ]
 
 export default function ShipDepartures() {
@@ -25,9 +31,9 @@ export default function ShipDepartures() {
   if (!rows) return <div className="banner">Loading ship departures…</div>
 
   const known = new Set(BUCKETS.map((b) => b.key))
-  const extraKeys = [...new Set(rows.map((r) => r.packedStatus).filter((k) => !known.has(k)))]
+  const extraKeys = [...new Set(rows.map((r) => r.state).filter((k) => k && !known.has(k)))]
   const cols = [...BUCKETS, ...extraKeys.map((key) => ({ key, label: key, hint: '' }))]
-    .map((b) => ({ ...b, items: rows.filter((r) => r.packedStatus === b.key) }))
+    .map((b) => ({ ...b, items: rows.filter((r) => r.state === b.key) }))
     .filter((c) => c.items.length)
 
   return (
