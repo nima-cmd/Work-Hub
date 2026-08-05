@@ -1140,7 +1140,26 @@ export async function getEdiReview() {
   // each EDI order is fulfilled from, or a from-stock flag.
   const supplyRows = await fetchEdiSupply()
   const ediSupply = Object.fromEntries(supplyRows.map((r) => [r.businessNumber, r]))
-  return { ...pipeline, manualOrders, resolutions, ediTasks, ediSupply }
+
+  // Which POs are already routed. Needed because Bloomingdale's carries a ROUTING
+  // deadline 3 business days ahead of its cancel date (src/model/shipWindow.js),
+  // and a deadline flag that cannot see the work already done is just a false
+  // positive generator — live today all 4 open Bloomingdale's POs are routed, so
+  // an ungated flag would have fired 4-for-4 wrong on its first run.
+  //
+  // Decorated onto the orders here rather than threaded as a 4th argument to
+  // computeEdiWork, which has five callers.
+  const { rows: routedRows } = await pool.query(
+    `SELECT DISTINCT unnest(member_pos) AS po_number, MAX(ship_date) AS ship_date
+     FROM routing_shipment GROUP BY 1`)
+  const routedByPo = new Map(routedRows.map((r) => [String(r.po_number), r.ship_date]))
+  const orders = (pipeline.orders || []).map((o) => ({
+    ...o,
+    routed: routedByPo.has(String(o.businessNumber)),
+    routedShipDate: routedByPo.get(String(o.businessNumber)) || null,
+  }))
+
+  return { ...pipeline, orders, manualOrders, resolutions, ediTasks, ediSupply }
 }
 
 // Assign the inbound production PO an EDI order comes from (or mark from-stock).

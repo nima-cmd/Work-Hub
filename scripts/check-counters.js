@@ -38,13 +38,21 @@
 //     scope in the checker just creates a second copy to drift. A floor catches
 //     the dead gate without pretending to know the exact answer.
 //
-// It does NOT try to check shapes (iii) and (iv) — those need judgement and a
-// human reading the field's provenance. What it does mean is that no counter can
-// go structurally dead again without something saying so out loud.
+// FINDING a shape (iii) or (iv) bug still needs judgement and a human reading a
+// field's provenance — no script will notice that `packed_status` is hand-keyed, or
+// that a comment is describing something the code below it doesn't do.
+//
+// But once found, both become assertable, and the ones already found are asserted
+// below: the scope promises that used to live only in prose (placeholders excluded,
+// China off the dock, the filing epoch, the headline age), and the gate keeping the
+// routing deadline off already-routed POs. So the honest claim is narrower than
+// "shapes 1–2 only" and wider than nothing — no counter can go structurally dead,
+// and no promise that has been caught out once can quietly break again.
 import * as Q from '../server/queries.js'
 import { pool } from '../src/db.js'
 import { LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { FILING_LEDGER_START } from '../src/model/filing.js'
+import { computeEdiWork } from '../src/model/ediWork.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -192,6 +200,19 @@ lg.oldestAgeDays === maxActionable
     `oldest ${lg.oldestAgeDays} = oldest actionable ${maxActionable} (oldest held is ${maxHeldAge})`)
   : bad('the headline age ignores parked and non-parcel lanes',
     `oldest ${lg.oldestAgeDays} but oldest actionable is ${maxActionable}`)
+
+// The routing deadline (Bloomingdale's, 3 business days before cancel) must never
+// fire on a PO that has already been routed. This is not hypothetical: all 4 open
+// Bloomingdale's POs were routed the day the rule landed, so an ungated version
+// would have been 4-for-4 false on its first run.
+const review = await Q.getEdiReview()
+const ediWork = computeEdiWork(review.orders || [], review.resolutions || [])
+const routedButFlagged = ediWork.orders.filter((o) => o.work.routeState && o.work.routed)
+routedButFlagged.length
+  ? bad('the routing deadline never fires on an already-routed PO',
+    `${routedButFlagged.length}: ${routedButFlagged.slice(0, 5).map((o) => o.businessNumber).join(', ')}`)
+  : ok('the routing deadline never fires on an already-routed PO',
+    `${ediWork.orders.filter((o) => o.work.routed).length} routed PO(s), ${ediWork.orders.filter((o) => o.work.routeState).length} flagged`)
 
 // ── sync health: a sync that silently stops being reported reads as healthy ──
 const sh = await Q.getSyncHealth()

@@ -54,6 +54,53 @@ const DAY = 86400000
 // only because it names DC arrival rather than departure.
 const HEADSTART = { bloomingdales: DC_HEADSTART_DAYS }
 
+// ── The routing deadline (Nima, 2026-08-04) ──────────────────────────────────
+//
+// The question this settles had been open for thirteen sessions: is
+// Bloomingdale's CANCEL date also a DC-arrival date? It is not.
+//
+//   "Bloomingdales cancel date is cancel date, the start date is arrival in DC
+//    date. So the start date is the date that they want in their possesion, we
+//    can route up to a week in advance. Anytime we route a bloomingdales its 3
+//    business days before we can route it. So if a PO has a cancel date of
+//    August 7 we need to have routed it by August 4."
+//
+// So the cancel date stands as the cancel date — but a SECOND, EARLIER deadline
+// exists that the board never modelled: the routing request. Routing must be in
+// 3 BUSINESS days ahead of the cancel date.
+//
+// ⚠️ BUSINESS days, and the distinction is the whole point. Nima's own example
+// spans no weekend (Fri cancel → Tue deadline, which calendar math also gets
+// right), so a naive `-3 days` looks correct on it and then quietly fails the
+// moment a weekend intervenes: a MONDAY cancel is due Wednesday, where calendar
+// math says Friday. That is two days of false comfort on a chargeback clock.
+//
+// ⚠️ Only Bloomingdale's, because only Bloomingdale's has been specified. The
+// module's existing rule for headstarts applies in mirror image here: inventing a
+// lead time we were not told about would fabricate urgency, exactly as assuming a
+// headstart would ship early. Other partners get 0 until Nima says otherwise.
+export const ROUTING_LEAD_BUSINESS_DAYS = { bloomingdales: 3 }
+
+export function routingLeadDays(order) {
+  return ROUTING_LEAD_BUSINESS_DAYS[partnerKey(order)] || 0
+}
+
+// Walk back n business days, skipping Saturday and Sunday. Holidays are NOT
+// modelled — we hold no holiday calendar, and inventing one would move a real
+// deadline on a guess. The error direction is therefore a deadline that reads one
+// day later than the partner's own cut-off across a holiday week, which is a
+// known gap rather than a silent one.
+export function minusBusinessDays(t, n) {
+  if (t == null) return null
+  let d = t, left = n
+  while (left > 0) {
+    d -= DAY
+    const w = new Date(d).getDay()
+    if (w !== 0 && w !== 6) left--
+  }
+  return d
+}
+
 // Matches src/model/channels.js's keys without importing its presentation
 // concerns — this module is a rule table, not a palette.
 export function partnerKey({ location, customer } = {}) {
@@ -110,6 +157,14 @@ export function shipWindow(order, today = new Date()) {
   const headstart = headstartDays(order)
   const opens = snb == null ? null : addDays(snb, -headstart)
 
+  // The routing request has to be in before the shipment does. Computed off the
+  // partner's own cancel date only — never off the sales order's date, which for
+  // EDI disagrees with the partner on 12 of 12 open POs and usually reads LATER,
+  // so deriving a routing deadline from it would push the deadline out rather
+  // than pull it in. No cancelAfter → no routing deadline, not a guessed one.
+  const routeLead = routingLeadDays(order)
+  const routeBy = routeLead && cancel != null ? minusBusinessDays(cancel, routeLead) : null
+
   // Already gone → the deadline is moot. Worth stating rather than assuming:
   // the OVERDUE flag this module replaced did NOT check, so a shipped order
   // whose ship date was months back read "53d overdue" forever (SO11975 and 30
@@ -127,6 +182,11 @@ export function shipWindow(order, today = new Date()) {
     mustShipBy,
     startBy: addDays(mustShipBy, -PACK_LEAD_DAYS),
     soShipDate: soShip,
+    // The routing request's own, earlier deadline. null for every partner but
+    // Bloomingdale's, and null with no partner cancel date to count back from.
+    routingLeadDays: routeLead,
+    routeBy,
+    daysToRoute: daysTo(now, routeBy),        // negative = already late to route
     daysToShip: daysTo(now, mustShipBy),      // negative = the date has passed
     daysToOpen: daysTo(now, opens),
     notOpenYet: opens != null && opens > now,

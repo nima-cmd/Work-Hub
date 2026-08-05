@@ -590,6 +590,51 @@ test('ediWork: a cancelled PO closes with its own closedBy so it can never read 
   assert.equal(w.missed850, false)
 })
 
+// ── the routing deadline on the EDI board (Nima, 2026-08-04) ────────────────
+// The board only ever ranked on the cancel date, so a Bloomingdale's PO whose
+// cancel date was days out read as slack while the deadline that actually binds —
+// routing, 3 business days earlier — was today. Live at the time: PO 8040291 /
+// 8040313, cancel Mon Aug 10, route by Wed Aug 5.
+test('ediWork: Bloomingdale\'s routing deadline fires ahead of the cancel date', () => {
+  // Wed Aug 5, so a Mon Aug 10 cancel is 5 days out but routing is due TODAY.
+  const AUG5 = new Date('2026-08-05T12:00:00Z').getTime()
+  const bloomies = (extra = {}) => ({
+    ...edi850(3), tradingPartner: "Bloomingdale's", cancelAfter: '2026-08-10', ...extra,
+  })
+
+  const due = deriveWork(bloomies(), null, AUG5)
+  assert.equal(due.routeState, 'passed')          // Aug 5 IS the deadline
+  assert.equal(due.cancelState, 'soon')           // the cancel date is merely near
+  assert.match(due.needed, /Routing was due/)
+  assert.match(due.needed, /3 business days/)
+
+  // ⚠️ The false-positive guard. All 4 live Bloomingdale's POs were ALREADY routed
+  // the day this shipped — ungated, this flag would have been 4-for-4 wrong.
+  const alreadyRouted = deriveWork(bloomies({ routed: true }), null, AUG5)
+  assert.equal(alreadyRouted.routeState, null)
+  assert.equal(alreadyRouted.routeBy, null)
+  assert.doesNotMatch(alreadyRouted.needed || '', /Routing/)
+
+  // Nordstrom has no stated routing lead, so it gets no second deadline.
+  const nord = deriveWork({ ...edi850(3), cancelAfter: '2026-08-10' }, null, AUG5)
+  assert.equal(nord.routeState, null)
+
+  // Once the cancel date itself has passed, "route it by Tuesday" is not the
+  // useful sentence any more — the outright miss leads.
+  const late = deriveWork(bloomies({ cancelAfter: '2026-08-01' }), null, AUG5)
+  assert.equal(late.cancelState, 'passed')
+  assert.match(late.needed, /Cancel date passed/)
+})
+
+test('ediWork: cancelDanger counts a PO once even when both clocks are ringing', () => {
+  const AUG5 = new Date('2026-08-05T12:00:00Z').getTime()
+  const o = { ...edi850(3), tradingPartner: "Bloomingdale's", cancelAfter: '2026-08-06' }
+  const { partners, totals } = computeEdiWork([o], [], AUG5)
+  const p = partners.find((x) => /Bloomingdale/.test(x.tradingPartner))
+  assert.equal(p.cancelDanger, 1)   // not 2 — one PO, one count
+  assert.equal(totals.cancelDanger, 1)
+})
+
 test('ediWork: shipped-in-NetSuite needs the ASN', () => {
   const needsAsn = deriveWork(
     edi850(10, { stageRank: 1, netsuiteOrder: { soNumber: 'SO1', stage: 'SHIPPED' } }), null, T0)
@@ -2216,6 +2261,43 @@ test('shipWindow: a boutique order still runs on its own ship date', () => {
   assert.equal(w.source, 'so')
   assert.equal(w.daysToShip, 3)
   assert.equal(w.soPastCancel, false)  // no 850 → nothing to disagree with
+})
+
+// ── the routing deadline (Nima, 2026-08-04) ─────────────────────────────────
+// "if a PO has a cancel date of August 7 we need to have routed it by August 4."
+test('the routing deadline is 3 BUSINESS days before Bloomingdale\'s cancel date', () => {
+  // Nima's own example: cancel Fri Aug 7 → route by Tue Aug 4.
+  const fri = shipWindow({
+    customer: "Bloomingdale's - 059",
+    ediWindow: { shipNotBefore: '2026-07-27', cancelAfter: '2026-08-07' },
+  }, AUG2)
+  assert.equal(isoDay(fri.routeBy), '2026-08-04')
+  assert.equal(isoDay(fri.mustShipBy), '2026-08-07')   // the cancel date still stands
+
+  // THE CASE CALENDAR MATH GETS WRONG. A Monday cancel is due the previous
+  // Wednesday; `-3 days` would say Friday and hand back two days that don't exist.
+  const mon = shipWindow({
+    customer: "Bloomingdale's - 059",
+    ediWindow: { cancelAfter: '2026-08-10' },
+  }, AUG2)
+  assert.equal(new Date(2026, 7, 10).getDay(), 1)      // Aug 10 2026 is a Monday
+  assert.equal(isoDay(mon.routeBy), '2026-08-05')      // Wednesday
+  assert.notEqual(isoDay(mon.routeBy), '2026-08-07')   // what -3 calendar days says
+})
+
+test('no routing deadline is invented for partners we were not told about', () => {
+  // Nordstrom is documented as rigid and no routing lead has been stated. Assuming
+  // one would fabricate urgency — the mirror of assuming a headstart.
+  const nord = shipWindow({
+    customer: 'Nordstrom - 584', ediWindow: { cancelAfter: '2026-08-10' },
+  }, AUG2)
+  assert.equal(nord.routingLeadDays, 0)
+  assert.equal(nord.routeBy, null)
+  assert.equal(nord.daysToRoute, null)
+
+  // ...and no partner cancel date means nothing to count back from.
+  const noWindow = shipWindow({ customer: "Bloomingdale's - 059", shipDate: '2026-08-20' }, AUG2)
+  assert.equal(noWindow.routeBy, null)
 })
 
 test("shipWindow: Bloomingdale's may start a week before its DC start date", () => {
