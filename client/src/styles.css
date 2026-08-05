@@ -2653,3 +2653,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cuSubject { flex: 1; color: var(--text); }
 .cuBasis { color: var(--muted); font-size: 11px; }
 .cuDomain { color: var(--muted); font-size: 11px; opacity: 0.75; }
+
+/* Steps of one rhythm — the round trip Nima described (2026-08-05). Indented
+   under their task so three steps never read as three jobs. */
+.cuRhythm { display: block; padding: 4px 0; }
+.cuRhythmHead { display: flex; align-items: baseline; gap: 8px; }
+.cuSteps { list-style: none; margin: 4px 0 2px 26px; padding: 0; font-size: 11.5px; }
+.cuSteps li { display: flex; align-items: center; gap: 6px; padding: 1px 0; color: var(--muted); }
+.cuSteps li.done span { text-decoration: line-through; opacity: 0.6; }
+.cuSteps input { accent-color: var(--accent); }
+.cuStepLink { color: var(--accent); text-decoration: none; font-size: 10.5px; }
+.cuStepLink:hover { text-decoration: underline; }

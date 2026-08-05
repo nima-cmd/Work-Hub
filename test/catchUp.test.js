@@ -91,3 +91,28 @@ test('a generic display name still says who it is, via the domain', () => {
   }], NOW)
   assert.equal(g.domain, 'bloomingdales.com')
 })
+
+// Nima, 2026-08-05: "those are all one task honestly btw" — the Airtable job is
+// a NetSuite → Airtable → NetSuite → Airtable round trip that used to be two
+// separate daily nags. Showing the steps is what lets a half-done one resume.
+test('a rhythm carries its steps, and only a verified one is gated by them', () => {
+  const t = {
+    id: 5, status: 'open', recurringKey: 'weaver-airtable-roundtrip',
+    subject: 'Weaver ⇄ Airtable round trip', completionMode: 'verified',
+    checklist: [
+      { key: 'export-ns', label: 'Export from NetSuite', url: 'https://x', done: true },
+      { key: 'import-new', label: 'Import new items back', done: false },
+      { key: 'final-export', label: 'Final export', done: false },
+    ],
+  }
+  const [r] = buildCatchUp([], [t], { now: NOW }).rhythms
+  assert.equal(r.steps.length, 3)
+  assert.equal(r.steps.filter((s) => s.done).length, 1)
+  assert.equal(r.steps[0].url, 'https://x')
+  assert.equal(r.gated, true)
+
+  // A plain checkbox task with no steps must not claim a gate it doesn't have.
+  const [plain] = buildCatchUp([], [{ id: 6, status: 'open', recurringKey: 'k', subject: 's', completionMode: 'checkbox' }], { now: NOW }).rhythms
+  assert.deepEqual(plain.steps, [])
+  assert.equal(plain.gated, false)
+})

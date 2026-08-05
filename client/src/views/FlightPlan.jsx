@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchEdiReview, fetchDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone, setTaskSchedule, completeQuestTask } from '../api.js'
+import { fetchEdiReview, fetchDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone, setTaskSchedule, completeQuestTask, setTaskChecklistItem } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeRoute } from '../../../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../../../src/model/routeItems.js'
@@ -118,6 +118,10 @@ export default function FlightPlan({ orders = [], tasks = [], emails = [], label
     setBusy(true)
     try { await completeQuestTask(r.id); onRefresh?.() } finally { setBusy(false) }
   }
+  async function toggleRhythmStep(r, step, done) {
+    setBusy(true)
+    try { await setTaskChecklistItem(r.id, step.key, done); onRefresh?.() } finally { setBusy(false) }
+  }
 
   const s = plan.summary
   const firstOpenIdx = plan.route.findIndex((r) => r.end > now)
@@ -128,7 +132,7 @@ export default function FlightPlan({ orders = [], tasks = [], emails = [], label
           rhythms, which the route deliberately doesn't carry (catchUp.js). */}
       <CatchUp
         catchUp={catchUp} onNavigate={onNavigate} busy={busy}
-        onCompleteRhythm={completeRhythm}
+        onCompleteRhythm={completeRhythm} onToggleStep={toggleRhythmStep}
       />
 
       {/* One thing, then a few, then a count. Fed from the SAME route as the
