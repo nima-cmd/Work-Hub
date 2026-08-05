@@ -998,6 +998,23 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS fedex_pickup_number TEXT;
 -- the active Routing queue into a "Shipped" archive tab so gone BOLs stop
 -- cluttering the board. Explicit "Mark shipped" action — nothing auto-ships.
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
+-- Straight-to-DC routing (Nima, 2026-08-05). Bloomingdale's is no longer always
+-- consigned through a Merge Center: the Aug-4 notifications routed 6 of 6 POs
+-- DIRECT to the DC (5 x UPS Ground, 1 x FedEx Ground), and Nima notes freight can
+-- go direct to a DC too. So the destination is recorded per shipment rather than
+-- assumed from the partner.
+--
+--   ship_direct   true  = consigned to the DC itself (see src/model/bolAddresses.js
+--                         MACYS_DCS); false/NULL = via the merge_center above.
+--   consigned_to  the consignee block VERBATIM off the routing notification, so we
+--                 can always answer "where did we actually send it" even if our
+--                 address table later changes or the partner moves a DC.
+--   tracking_numbers  parcel tracking for a DC-direct small-package shipment.
+--                 An ARRAY because a shipment is many cartons and UPS/FedEx give
+--                 one number per carton. Freight shipments keep using the BOL.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS ship_direct      BOOLEAN DEFAULT false;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS consigned_to     TEXT;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] DEFAULT '{}';
 
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can

@@ -6,7 +6,7 @@
 //
 // A field left `null` renders "(confirm …)" in red rather than a guess.
 
-import { dcLabel } from './dc.js'
+import { dcLabel, DC_ABBREV } from './dc.js'
 
 // Where every shipment ships FROM (the master BOL's Ship From block).
 export const SHIP_FROM = {
@@ -27,6 +27,66 @@ export const MERGE_CENTERS = {
   HP: { label: 'High Point Merge', name: 'High Point 1:1 Merge Center c/o Dynamic', street: '1124 Elon Place', city: 'High Point', state: 'NC', zip: '27260' },
 }
 export const DEFAULT_MERGE = 'CA'
+
+// ── Macy's / Bloomingdale's DCs (Nima, 2026-08-05) ──────────────────────────
+//
+// The file used to assume Bloomingdale's ALWAYS routes through a 1:1 Merge
+// Center. That is no longer true, and Nima flagged it: "our Bloomingdales have
+// been routed and they are going straight to the DC via UPS ground and Fedex
+// Ground… in some cases we may ship freight directly to the dc address not just
+// the merge centers."
+//
+// ⚠️ These addresses are NOT typed from memory — they were harvested from the
+// actual Macy's routing notifications sitting in quest_emails (sender
+// ML.Manuundel.MacysNet@macys.com), which print the real consignee block:
+//
+//   "Project Number(s) 9004296 containing Shipment(s) 52129510 -
+//    Consigned to: MINOOKA DC 601 MIDPOINT ROAD MINOOKA , IL 60447"
+//
+// Keyed on the SAME DC names src/model/dc.js already parses out of the NetSuite
+// ship-to (DC_ABBREV), so a shipment's DC joins straight through with no second
+// naming scheme to keep in sync.
+//
+// Joppa is deliberately ABSENT rather than guessed — no notification has named it
+// yet, and per this file's own rule a missing field must render "(confirm …)" in
+// red instead of a plausible-looking address.
+export const MACYS_DCS = {
+  'Secaucus':       { name: "Macy's Secaucus DC",       street: '500 Meadowlands Parkway', city: 'Secaucus',        state: 'NJ', zip: '07094' },
+  'Stone Mountain': { name: "Macy's Stone Mountain DC", street: '4401 Sarr Parkway',       city: 'Stone Mountain',  state: 'GA', zip: '30083' },
+  'Los Angeles':    { name: "Macy's Los Angeles DC",   street: '15541 East Gale Avenue',  city: 'City of Industry', state: 'CA', zip: '91745' },
+  'Minooka':        { name: "Macy's Minooka DC",       street: '601 Midpoint Road',       city: 'Minooka',         state: 'IL', zip: '60447' },
+  'China Grove DC': { name: "Macy's CFC China Grove DC", street: '1305 Liberty Ridge Rd', city: 'China Grove',     state: 'NC', zip: '28023' },
+  'Hayward':        { name: "Macy's Hayward DC",       street: '28701 Hall Road',         city: 'Hayward',         state: 'CA', zip: '94545' },
+}
+
+// Where a Bloomingdale's shipment is actually consigned. Two shapes, and the
+// notification says which outright rather than leaving it to be inferred:
+//
+//   · consigned to the DC          → parcel (UPS/FedEx Ground, "SMALL PACKAGE")
+//     OR freight direct to the DC. Nima: freight-direct happens too, so this is
+//     NOT the same question as "is it parcel".
+//   · consigned "c/o MEGA-MERGE CA" → the merge center, as before (LTL).
+//
+// `direct` is therefore about the DESTINATION, never about the carrier — keeping
+// those two apart is what lets freight-direct-to-DC work.
+// ⚠️ A shipment's `dc` is stored ABBREVIATED ('SC', 'CL', 'HA' — see dcAbbrev in
+// src/model/dc.js), while these addresses are keyed on the full DC name the
+// notification prints. Looking up one with the other silently returns null, which
+// would have rendered "no stored address" for every DC on the board — caught only
+// by reading a real routing row. So resolve BOTH ways.
+const BY_ABBREV = Object.fromEntries(
+  Object.keys(MACYS_DCS).map((name) => [DC_ABBREV[name], MACYS_DCS[name]]).filter(([k]) => k),
+)
+
+export function macysDc(dc) {
+  if (!dc) return null
+  return MACYS_DCS[dc] || BY_ABBREV[dc] || null
+}
+
+export function routingShipTo({ dc, direct, mergeCenter } = {}) {
+  if (direct) return macysDc(dc)   // null → the BOL prints "(confirm address)"
+  return MERGE_CENTERS[mergeCenter || DEFAULT_MERGE] || null
+}
 
 // Nordstrom: each DC is its own ship-to (direct, no merge center).
 export const NORDSTROM_DCS = {
