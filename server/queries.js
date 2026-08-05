@@ -44,6 +44,7 @@ import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src
 import { splitUnfiled } from '../src/model/filing.js'
 import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
+import { closeReadiness } from '../src/model/closeReady.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -1590,6 +1591,15 @@ export async function getRouting() {
     // An ASN went out but NetSuite still doesn't call it shipped — a real gap,
     // surfaced rather than used to auto-archive.
     s.asnAheadOfNetsuite = !!(s.edi?.asn && !s.netsuite.confirmed)
+
+    // Can this BOL be closed out? Evidence only — see src/model/closeReady.js
+    // for why both halves must agree and why nothing here closes anything.
+    s.closeReady = closeReadiness({
+      shippedAt: s.shippedAt,
+      hasAsn: !!s.edi?.asn,
+      ackStatus: s.edi?.asn?.ackStatus || null,
+      netsuiteConfirmed: !!s.netsuite?.confirmed,
+    })
   }
 
   const byKey = new Map()
