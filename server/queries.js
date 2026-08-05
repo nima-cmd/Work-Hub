@@ -8,12 +8,13 @@ import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
-import { buildLabelWorksheet } from '../src/model/labelWorksheet.js'
+import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { macysDc } from '../src/model/bolAddresses.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
   upsertOcPoLink, deleteOcPoLink, dismissOrderConfirmation, dismissPurchaseOrder,
+  fetchCartonsForIfs,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeContainerView } from '../src/model/ocPoContainers.js'
@@ -1392,18 +1393,30 @@ async function fetchShipmentStoreCartons(ids = []) {
      ORDER BY rs.id, o.store_number, o.po_number`,
     [ids],
   )
+  // The real carton rows — weight and dimensions per box, not a total to divide.
+  const cartonsByIf = await fetchCartonsForIfs([...new Set(rows.map((r) => r.if_number).filter(Boolean))])
   for (const r of rows) {
     if (!map.has(r.shipment_id)) map.set(r.shipment_id, [])
     map.get(r.shipment_id).push({
-      poNumber: r.po_number, storeNumber: r.store_number, storeName: r.customer,
+      poNumber: r.po_number, storeNumber: r.store_number,
       soNumber: r.so_number, ifNumber: r.if_number,
-      cartons: r.cartons,
-      // packed_units is what actually went in a box; if_units is what the
-      // fulfilment says. Prefer the packed figure and fall back, never sum them.
-      units: r.packed_units ?? r.if_units ?? null,
+      cartons: cartonsByIf.get(r.if_number) || [],
     })
   }
   return map
+}
+
+// The label worksheet as CSV, for a carrier's batch-import tool (Nima, 2026-08-05:
+// "If this is something we can make as an export to import into UPS let me know").
+// One row per carton, because that is one label.
+export async function getLabelWorksheetCsv({ bolNumber = null } = {}) {
+  const r = await getRouting()
+  const list = Array.isArray(r) ? r : (r.shipments || [])
+  const sheets = list
+    .filter((s) => s.labels?.applicable && !s.shippedAt)
+    .filter((s) => !bolNumber || String(s.bolNumber) === String(bolNumber))
+    .map((s) => s.labels)
+  return { csv: worksheetCsv(sheets), sheets: sheets.length, cartons: sheets.reduce((n, w) => n + w.cartons, 0) }
 }
 
 export async function getRouting() {

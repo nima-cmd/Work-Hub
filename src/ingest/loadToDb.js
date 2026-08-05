@@ -493,6 +493,59 @@ export async function loadEdiPackages(rows, db = pool) {
   return n
 }
 
+// The carton rows themselves (Nima, 2026-08-05) — weight and dimensions per box,
+// which the sync always fetched and then summed away. REPLACE for the same reason
+// edi_packages is replaced: a carton missing from the pull belongs to a fulfilment
+// that has shipped, and a stale row would put a departed box on a label sheet.
+// Runs inside the sync's transaction, so a failure cannot leave the table empty.
+export async function loadEdiCartons(rows, db = pool) {
+  await db.query('DELETE FROM edi_carton')
+  let n = 0
+  for (const r of rows) {
+    if (!r.ifNumber || !r.cartonNo) continue
+    await db.query(
+      `INSERT INTO edi_carton
+         (if_number, carton_no, po_dc, po_number, dc, weight_lb, units, ucc,
+          box_name, length_in, width_in, height_in, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+       ON CONFLICT (if_number, carton_no) DO UPDATE SET
+         po_dc = EXCLUDED.po_dc, po_number = EXCLUDED.po_number, dc = EXCLUDED.dc,
+         weight_lb = EXCLUDED.weight_lb, units = EXCLUDED.units, ucc = EXCLUDED.ucc,
+         box_name = EXCLUDED.box_name, length_in = EXCLUDED.length_in,
+         width_in = EXCLUDED.width_in, height_in = EXCLUDED.height_in,
+         updated_at = now()`,
+      [r.ifNumber, r.cartonNo, r.poDc || null, r.poNumber || null, r.dc || null,
+        r.weightLb ?? null, r.units ?? null, r.ucc || null, r.boxName || null,
+        r.lengthIn ?? null, r.widthIn ?? null, r.heightIn ?? null],
+    )
+    n++
+  }
+  return n
+}
+
+// Every carton on the fulfilments of the shipments asked for, so a label sheet can
+// name each box's weight and dimensions. Scoped, so it never scans.
+export async function fetchCartonsForIfs(ifNumbers = [], db = pool) {
+  if (!ifNumbers.length) return new Map()
+  const { rows } = await db.query(
+    `SELECT if_number, carton_no, weight_lb, units, ucc, box_name,
+            length_in, width_in, height_in
+     FROM edi_carton WHERE if_number = ANY($1)
+     ORDER BY if_number, carton_no`, [ifNumbers])
+  const map = new Map()
+  for (const r of rows) {
+    if (!map.has(r.if_number)) map.set(r.if_number, [])
+    map.get(r.if_number).push({
+      cartonNo: r.carton_no, weightLb: r.weight_lb == null ? null : Number(r.weight_lb),
+      units: r.units, ucc: r.ucc, boxName: r.box_name,
+      lengthIn: r.length_in == null ? null : Number(r.length_in),
+      widthIn: r.width_in == null ? null : Number(r.width_in),
+      heightIn: r.height_in == null ? null : Number(r.height_in),
+    })
+  }
+  return map
+}
+
 // Per-IF pack reconciliation (Nima, 2026-08-02). REPLACE, not upsert, for the
 // same reason edi_packages is replaced: an IF missing from the pull has shipped,
 // and a stale row would keep flagging a shipment that already left. Callers run
@@ -720,6 +773,7 @@ export async function fetchRoutingShipments(db = pool) {
             tracking_numbers AS "trackingNumbers",
             routing_request_number AS "routingRequestNumber",
             routing_request_line AS "routingRequestLine",
+            bill_to_account AS "billToAccount", freight_terms AS "freightTerms",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,

@@ -1048,6 +1048,50 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS routing_request_line   TEX
 -- maximum or nothing cannot order a day.
 ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS urgency_override TEXT;
 
+-- Per-CARTON detail (Nima, 2026-08-05): "i do need how each carton in the shipment
+-- its weight and dimension. If this is something we can make as an export to import
+-- into UPS let me know."
+--
+-- The NetSuite sync has always FETCHED this — customrecord_hb_edi_packages is one
+-- row per carton carrying weight, units, the SSCC, and a Package Definition whose
+-- display name IS the dimensions ("24x16x17") — and then summed it away into
+-- edi_packages (a PO-DC rollup) and edi_fulfillment_pack (a per-IF count). Nothing
+-- kept the carton rows, so "what does carton 3 weigh" was unanswerable from a
+-- database that had already been told.
+--
+-- Replaced per sync, exactly like edi_packages: a PO-DC absent from the pull has
+-- shipped, and leaving stale cartons behind would put departed boxes on a label
+-- sheet.
+CREATE TABLE IF NOT EXISTS edi_carton (
+  if_number   TEXT NOT NULL,
+  carton_no   TEXT NOT NULL,
+  po_dc       TEXT,
+  po_number   TEXT,
+  dc          TEXT,
+  weight_lb   NUMERIC,
+  units       INTEGER,
+  ucc         TEXT,          -- the SSCC/UCC-128 label already on the box
+  box_name    TEXT,          -- the Package Definition display name, e.g. "24x16x17"
+  length_in   NUMERIC,       -- parsed from box_name; NULL when it isn't dimensional
+  width_in    NUMERIC,
+  height_in   NUMERIC,
+  updated_at  TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (if_number, carton_no)
+);
+CREATE INDEX IF NOT EXISTS idx_edi_carton_po_dc ON edi_carton(po_dc);
+
+-- Freight billing per shipment. UPS Ground on a Macy's routing is THIRD PARTY BILL
+-- to Macy's own account (5R12Y0 on the 2026-08-04 notifications, third-party
+-- address 4401 Sarr Pkwy, Stone Mountain GA); FedEx Ground publishes no account, so
+-- the vendor ships COLLECT on their own.
+--
+-- ⚠️ Stored per shipment rather than hardcoded: it comes off the routing
+-- notification and Macy's can change it. And it must NEVER be confused with
+-- Naghedi's own two UPS accounts (C6J610 wholesale / 18GE01 ecom) — see
+-- src/model/upsRates.js, which refuses to present one as the other.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS bill_to_account TEXT;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS freight_terms   TEXT;
+
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
 -- cover everything routed in one go, or there can be several auths each

@@ -2617,3 +2617,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
 /* The store number is the single most mistypeable field on the label. */
 .rt-store { color: var(--accent); font-weight: 600; }
+.rt-labelFoot { display: flex; gap: 12px; align-items: center; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.rt-labelFoot .btnGhost { margin-left: auto; }
+/* A row missing a weight or a dimension cannot be typed yet — mark it, don't hide it. */
+.rt-rowGap { background: rgba(248,81,73,0.06); }
+.rt-sscc { color: var(--muted); }

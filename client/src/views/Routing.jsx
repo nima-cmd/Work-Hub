@@ -521,7 +521,7 @@ function LabelWorksheet({ s }) {
   return (
     <div className="rt-labels">
       <button className="rt-editToggle" onClick={() => setOpen((o) => !o)}>
-        {open ? '▾' : '⌖'} Labels to create ({w.cartons}{w.stores > 1 ? ` · ${w.stores} stores` : ''})
+        {open ? '▾' : '⌖'} Labels to create ({w.cartons})
       </button>
       {open && (
         <div className="rt-labelSheet">
@@ -531,29 +531,39 @@ function LabelWorksheet({ s }) {
               : <span className="rt-warn">No stored address for “{w.dc}” — confirm it before printing</span>}
             {w.carrier && <span className="rt-labelCarrier">{w.carrier}</span>}
           </div>
+          {/* Billing is per-carrier on a Macy's routing: UPS Ground is THIRD PARTY
+              BILL to Macy's own account, FedEx publishes none so it ships collect on
+              ours. Shown here because it is typed on every single label. */}
+          {(w.freightTerms || w.billToAccount) && (
+            <div className="rt-labelHead">
+              <span>{w.freightTerms || 'terms not recorded'}</span>
+              {w.billToAccount && <span className="rt-mono">bill-to {w.billToAccount}</span>}
+            </div>
+          )}
           <table className="rt-labelTable">
             <thead>
-              <tr><th>#</th><th>PO</th><th>Store</th><th>Name</th><th>Carton</th><th>Units</th></tr>
+              <tr><th>#</th><th>PO</th><th>Store</th><th>Weight</th><th>Dimensions</th><th>SSCC</th></tr>
             </thead>
             <tbody>
               {w.lines.map((l) => (
-                <tr key={`${l.ifNumber}-${l.seq}`}>
+                <tr key={`${l.ifNumber}-${l.seq}`} className={l.weightLb == null || l.lengthIn == null ? 'rt-rowGap' : ''}>
                   <td>{l.seq}</td>
                   <td className="rt-mono">{l.poNumber}</td>
                   <td className="rt-mono rt-store">{l.storeNumber || '?'}</td>
-                  <td>{l.storeName}</td>
-                  <td>{l.cartonOf || '—'}</td>
-                  {/* Units are known per FULFILMENT, never per carton — nothing
-                      records which unit went in which box, so a split would be
-                      invented and then checked against a physical carton. */}
-                  <td title={`${l.ifNumber} total`}>{l.ifUnits ?? '—'}</td>
+                  {/* Real per-carton values. Two boxes of the same type genuinely
+                      differ (44lb vs 47lb live), so nothing here is averaged. */}
+                  <td className="rt-mono">{l.weightLb != null ? `${l.weightLb} lb` : <span className="rt-warn">—</span>}</td>
+                  <td className="rt-mono">{l.dims || <span className="rt-warn">no dims</span>}</td>
+                  <td className="rt-mono rt-sscc" title={l.ucc || ''}>{l.ucc ? l.ucc.slice(-8) : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {w.lines.some((l) => l.cartonsUnknown) && (
-            <p className="hint">Rows marked with no carton count are shown as one carton — the pack feed has not reported them yet.</p>
-          )}
+          <div className="rt-labelFoot">
+            <span>{w.cartons} carton(s) · {w.totalWeightLb} lb total</span>
+            {w.incomplete > 0 && <span className="rt-warn">{w.incomplete} missing weight or dimensions</span>}
+            <a className="btnGhost" href={`/api/label-worksheet.csv?bol=${encodeURIComponent(w.bolNumber)}`}>⤓ CSV</a>
+          </div>
         </div>
       )}
     </div>
