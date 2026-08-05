@@ -1386,3 +1386,55 @@ ALTER TABLE asn_carton_run ADD COLUMN IF NOT EXISTS scope TEXT;
 -- ALTER, not a changed CREATE: CREATE TABLE IF NOT EXISTS is a no-op once the
 -- table exists in Neon and silently ignores a new column.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN DEFAULT false;
+
+-- ── One job, not three daily nags (Nima, 2026-08-05) ────────────────────────
+-- His words: "those are all one task honestly btw. Airtable requires us to
+-- export from netsuite into airtable weaver board then find new items import
+-- that back into netsuite and then one final export to keep our weaver airtable
+-- updated so it can let us know if there new items."
+--
+-- So `weaver-netsuite-update` and `airtable-daily-reminder` were two reminders
+-- for two STEPS of one round trip, each tickable on its own — which is how a
+-- three-step job gets recorded as done with step 2 never run. It is now one
+-- 'verified' task whose three checklist items ARE his three steps: completion
+-- is blocked until all three are ticked (runVerification in server/queries.js),
+-- so a half-finished round trip resumes where it stopped instead of restarting.
+-- That is the "most tasks end up only partially done" problem, at the one place
+-- in the app where the steps were already known.
+--
+-- The URLs are carried over verbatim from the airtable-daily-reminder
+-- description as it stood in Neon (a hand-edit that never reached this file).
+INSERT INTO recurring_task_templates
+  (key, title, description, character_id, schedule_type, schedule_times, completion_mode, verify_key, checklist_items, urgency)
+VALUES
+  ('weaver-airtable-roundtrip', 'Weaver ⇄ Airtable round trip',
+   'One job in three steps: NetSuite → Airtable, new items back into NetSuite, then a final export so the Weaver board can flag what''s new.',
+   NULL, 'daily_times', ARRAY['09:00','14:00'], 'verified', NULL,
+   '[{"key":"export-ns","label":"Export from NetSuite into the Airtable Weaver board","url":"https://8513640.app.netsuite.com/app/common/search/searchresults.nl?searchid=2419","done":false},
+     {"key":"import-new","label":"Find the new items in Airtable and import them back into NetSuite","url":"https://8513640.app.netsuite.com/app/setup/assistants/nsimport/importassistant.nl?recid=278&new=T","done":false},
+     {"key":"final-export","label":"Final export so the Weaver board is current and can flag new items","url":"https://airtable.com/app4dbJIctbXUrCxp/pag6txHjqKknVFnLs","done":false}]'::jsonb,
+   'mid')
+ON CONFLICT (key) DO NOTHING;
+
+-- Retire the three it replaces.
+--
+-- `csv-freshness-monitor` goes too, on Nima's evidence: "we have yet to need to
+-- rely on a csv upload." Work-Hub ingests live from NetSuite (CSV is the
+-- fallback path), and both Naghedi-Warehouse feeds are live — verified
+-- 2026-08-05 by `npm run check:warehouse-feed`: ns_open_po_lines 1,843 rows and
+-- ns_item_location_qtys 1,935 rows, both 24 minutes old. Its last manual item
+-- (that app's NetSuite Items CSV) is the one part the feeds don't provably
+-- cover, so this is a retirement on his call, not a proof of redundancy —
+-- reversible with a single `UPDATE … SET active = true`. The verifier stays in
+-- server/queries.js so bringing it back needs no code.
+UPDATE recurring_task_templates SET active = false
+ WHERE key IN ('weaver-netsuite-update', 'airtable-daily-reminder', 'csv-freshness-monitor');
+
+-- Open instances of a retired template are DELETED, never completed: marking
+-- them done would write "this was done today" into quest_task_activity and the
+-- Ledger for work nobody did. Same hard-remove the duplicate-instance collapse
+-- uses; quest_task_activity cascades. Done/closed instances are left alone —
+-- they are history and stay true.
+DELETE FROM quest_tasks
+ WHERE status = 'open'
+   AND recurring_key IN ('weaver-netsuite-update', 'airtable-daily-reminder', 'csv-freshness-monitor');

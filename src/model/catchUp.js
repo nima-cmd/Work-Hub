@@ -79,9 +79,20 @@ export function buildCatchUp(emails = [], tasks = [], opts = {}) {
   const senders = groupInbox(emails, now)
   const unread = senders.reduce((n, s) => n + s.count, 0)
   const threads = senders.reduce((n, s) => n + s.threads, 0)
+  // Steps, when the template defines them. Nima, 2026-08-05, on what looked
+  // like three separate daily nags: "those are all one task honestly btw" — the
+  // Airtable job is a NetSuite → Airtable → NetSuite → Airtable round trip. A
+  // three-step job shown as one tick is how step 2 gets skipped; showing the
+  // steps is what lets a half-finished one RESUME, which is the actual
+  // "most tasks end up only partially done" complaint.
   const rhythms = tasks.filter(isRhythm).map((t) => ({
     id: t.id,
     subject: t.subject || 'recurring task',
+    steps: (t.checklist || []).map((c) => ({ key: c.key, label: c.label, url: c.url || null, done: !!c.done })),
+    // Only a 'verified' task's steps actually GATE completion (runVerification
+    // in server/queries.js refuses while any is unticked), so the band must not
+    // imply a gate that isn't there.
+    gated: t.completionMode === 'verified',
     // The basis the urgency deriver already computed, so the band can never
     // describe a task differently from the Tasks view (same lesson as
     // labelGap.js: one call, one sentence).

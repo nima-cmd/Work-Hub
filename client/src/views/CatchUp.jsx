@@ -7,7 +7,7 @@
 // Deliberately quieter than First hour: no verbs, no "start here", no colour for
 // age. This is the thing you clear before the plan starts, not the plan.
 
-export default function CatchUp({ catchUp, onNavigate, onCompleteRhythm, busy }) {
+export default function CatchUp({ catchUp, onNavigate, onCompleteRhythm, onToggleStep, busy }) {
   if (!catchUp || catchUp.empty) return null
   const { inbox, rhythms } = catchUp
   // Show the busiest few senders; the tail is a count, never a scroll.
@@ -59,14 +59,37 @@ export default function CatchUp({ catchUp, onNavigate, onCompleteRhythm, busy })
             <span className="cuWhat">{rhythms.length === 1 ? 'daily rhythm' : 'daily rhythms'}</span>
           </div>
           <ul className="cuRhythms">
-            {rhythms.map((r) => (
-              <li key={r.id}>
-                <button className="cuTick" disabled={busy} title="Mark it done"
-                        onClick={() => onCompleteRhythm?.(r)}>✓</button>
-                <span className="cuSubject">{r.subject}</span>
-                <span className="cuBasis">{r.basis}</span>
-              </li>
-            ))}
+            {rhythms.map((r) => {
+              const left = r.steps.filter((s) => !s.done)
+              // The server refuses to complete a gated task with a step
+              // outstanding, so the button says why instead of failing.
+              const blocked = r.gated && left.length > 0
+              return (
+                <li key={r.id} className="cuRhythm">
+                  <div className="cuRhythmHead">
+                    <button className="cuTick" disabled={busy || blocked}
+                            title={blocked ? `${left.length} step${left.length === 1 ? '' : 's'} still to do` : 'Mark it done'}
+                            onClick={() => onCompleteRhythm?.(r)}>✓</button>
+                    <span className="cuSubject">{r.subject}</span>
+                    {r.steps.length > 0
+                      ? <span className="cuBasis">{r.steps.length - left.length}/{r.steps.length} steps</span>
+                      : <span className="cuBasis">{r.basis}</span>}
+                  </div>
+                  {r.steps.length > 0 && (
+                    <ol className="cuSteps">
+                      {r.steps.map((s) => (
+                        <li key={s.key} className={s.done ? 'done' : ''}>
+                          <input type="checkbox" checked={s.done} disabled={busy}
+                                 onChange={(e) => onToggleStep?.(r, s, e.target.checked)} />
+                          <span>{s.label}</span>
+                          {s.url && <a href={s.url} target="_blank" rel="noreferrer" className="cuStepLink">Open ↗</a>}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}
