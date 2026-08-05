@@ -6,9 +6,23 @@ import {
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
-import { CARRIERS } from '../../../src/model/bolAddresses.js'
+import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
+
+// One-line preview of the stored DC address, so a DC-direct routing shows WHERE
+// it is going before the BOL is generated. Returns null when we hold no address
+// for that DC — the caller says so plainly rather than printing a guess (the same
+// rule bolAddresses.js follows: a missing field renders "(confirm …)", never a
+// plausible-looking address).
+// ⚠️ Goes through macysDc, NOT MACYS_DCS[dc] — a shipment's `dc` is the
+// ABBREVIATION ('SC'), while the table is keyed on the full name ('Secaucus'), so
+// the direct index silently returns null and this rendered "No stored address" for
+// every DC. Caught on screen, not in review.
+function shipToLine(dc) {
+  const a = macysDc(dc)
+  return a ? `→ ${a.name}, ${a.street}, ${a.city}, ${a.state} ${a.zip}` : null
+}
 
 // EDI Routing (Nima, 2026-07-22) — replaces the NetSuite routing_helper.js
 // Suitelet + Google Sheet. Pick which POs are shipping, consolidate into ONE
@@ -819,8 +833,15 @@ function RefEditor({ s, auths, busy, onSave }) {
     trailerNumber: s.trailerNumber || '',
     sealNumber: s.sealNumber || '',
     fedexPickupNumber: s.fedexPickupNumber || '',
+    // Straight-to-DC routing (Nima, 2026-08-05).
+    shipDirect: !!s.shipDirect,
+    consignedTo: s.consignedTo || '',
+    trackingNumbers: (s.trackingNumbers || []).join(', '),
+    routingRequestNumber: s.routingRequestNumber || '',
+    routingRequestLine: s.routingRequestLine || '',
   })
   const isBloomies = s.partner === "Bloomingdale's"
+  const isNordstrom = s.partner === 'Nordstrom'
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
 
   // The Bloomingdale's auth # comes from the routing email — typed in directly.
@@ -858,20 +879,69 @@ function RefEditor({ s, auths, busy, onSave }) {
         <label>Carrier<input value={d.carrier} onChange={set('carrier')} /></label>
         <label>SCAC<input value={d.scac} onChange={set('scac')} /></label>
       </div>
+      {/* Bloomingdale's is no longer always consigned via a Merge Center (Nima,
+          2026-08-05): the Aug-4 notifications sent 6 of 6 POs DIRECT to the DC.
+          The toggle picks the DESTINATION, and it is deliberately independent of
+          the carrier — freight can go direct to a DC too, so "direct" must not
+          come to mean "parcel". */}
       {isBloomies && (
-        <label>Merge center (ship-to)
-          <select value={d.mergeCenter} onChange={set('mergeCenter')}>
-            <option value="CA">Mega-Merge CA · Santa Fe Springs</option>
-            <option value="NJ">Mega-Merge NJ · Burlington</option>
-            <option value="HP">High Point Merge · Dynamic</option>
-          </select>
-        </label>
+        <>
+          <label>Ship-to
+            <select value={d.shipDirect ? 'dc' : 'merge'}
+              onChange={(e) => setD({ ...d, shipDirect: e.target.value === 'dc' })}>
+              <option value="merge">Via 1:1 Merge Center</option>
+              <option value="dc">Direct to the DC{s.dc ? ` · ${s.dc}` : ''}</option>
+            </select>
+          </label>
+          {!d.shipDirect && (
+            <label>Merge center
+              <select value={d.mergeCenter} onChange={set('mergeCenter')}>
+                <option value="CA">Mega-Merge CA · Santa Fe Springs</option>
+                <option value="NJ">Mega-Merge NJ · Burlington</option>
+                <option value="HP">High Point Merge · Dynamic</option>
+              </select>
+            </label>
+          )}
+          {d.shipDirect && (
+            <p className="hint" style={{ margin: '2px 0 0' }}>
+              {shipToLine(s.dc) || `No stored address for “${s.dc}” — the BOL will ask you to confirm it.`}
+            </p>
+          )}
+        </>
+      )}
+      {/* Nordstrom routes through its own Manhattan portal rather than a routing
+          email, and the request number is the reference to keep (Nima, 2026-08-05).
+          The supplier PO there reads "<our PO>-<DC>" (50073677-89), so unlike the
+          Macy's emails it joins to a shipment exactly. */}
+      {isNordstrom && (
+        <div className="rt-editRow">
+          <label>Routing request #
+            <input value={d.routingRequestNumber} onChange={set('routingRequestNumber')}
+              placeholder="5189002RR000000061" />
+          </label>
+          <label>Request line
+            <input value={d.routingRequestLine} onChange={set('routingRequestLine')}
+              placeholder="RRL7854657822930187974" />
+          </label>
+        </div>
       )}
       <div className="rt-editRow">
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>
         <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>
       </div>
       <label>FedEx pickup #<input value={d.fedexPickupNumber} onChange={set('fedexPickupNumber')} placeholder="pickup confirmation #" /></label>
+      {/* One number per carton is normal on a DC-direct parcel shipment, so this
+          takes a list; commas, spaces or a pasted column all split correctly. */}
+      <label>Tracking #s
+        <input value={d.trackingNumbers} onChange={set('trackingNumbers')}
+          placeholder="1Z… , 1Z…  (one per carton — paste is fine)" />
+      </label>
+      {/* The consignee block verbatim off the routing notification, so "where did
+          we actually send it" survives any later change to our address table. */}
+      <label>Consigned to (from the routing email)
+        <input value={d.consignedTo} onChange={set('consignedTo')}
+          placeholder="MINOOKA DC 601 MIDPOINT ROAD MINOOKA , IL 60447" />
+      </label>
       <label>Ship date<input type="date" value={d.shipDate} onChange={set('shipDate')} /></label>
       <button className="btn" disabled={busy} onClick={() => onSave(d)}>{busy ? 'Saving…' : 'Save route info'}</button>
     </div>

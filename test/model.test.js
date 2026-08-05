@@ -11,6 +11,7 @@ import {
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { shipWindow, shipWindowFlags, isoDay } from '../src/model/shipWindow.js'
+import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -30,7 +31,7 @@ import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/saved
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
 import { classifyEdiDelivery, computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
-import { partnerForDc, dcLabel } from '../src/model/dc.js'
+import { partnerForDc, dcLabel, DC_ABBREV, parseSupplierPo } from '../src/model/dc.js'
 import { extractPoDates, extractPoLines, summarizePoLines } from '../src/ingest/orderfulDates.js'
 import { diffPoVersions, poVersionInfo } from '../src/model/ediPoDiff.js'
 import { extractAsnManifest } from '../src/ingest/orderfulAsn.js'
@@ -1064,6 +1065,9 @@ test('pickedWorkLeg names the action from the flag, worst severity first', () =>
   assert.equal(both.kind, 'chase')
 })
 
+const noonOf = (t) => { const d = new Date(t); d.setHours(12, 0, 0, 0); return d.getTime() }
+const twoOf = (t) => { const d = new Date(t); d.setHours(14, 0, 0, 0); return d.getTime() }
+
 test('buildRouteItems splits the bench and never asks for an invoice before the label', () => {
   const T0 = new Date('2026-07-28T09:00:00').getTime()
   const three = (() => { const d = new Date(T0); d.setHours(15, 0, 0, 0); return d.getTime() })()
@@ -1108,10 +1112,17 @@ test('buildRouteItems splits the bench and never asks for an invoice before the 
   assert.equal(byId.get('bench-SO12307').kind, 'chase')
   assert.equal(byId.get('bench-SO12307').deadline, three)   // severity 3 → today
   assert.equal(byId.get('bench-SO12313').kind, 'mark_packed')
-  assert.equal(byId.get('bench-SO12313').deadline, null)    // severity 2 → fill work
+  // ⚠️ REWRITTEN 2026-08-05. This asserted `null` — mark_packed as fill work —
+  // which was right only while nobody knew why noon existed. Nima then explained
+  // it: an IF back in our hands and not yet marked packed must be packed before
+  // NOON, because that is what lets it enter the 12–2 invoice window and ship the
+  // same day. So it carries a real cutoff now, and it is his, not invented.
+  assert.equal(byId.get('bench-SO12313').deadline, noonOf(T0))
 
-  // severity 0 no longer hides real invoice work
+  // severity 0 no longer hides real invoice work, and it lands on Nima's 2pm
+  // invoice cutoff rather than the noon one that was never his.
   assert.ok(byId.has('inv-SO12389'))
+  assert.equal(byId.get('inv-SO12389').deadline, twoOf(T0))
   // ...but the invoice is NEVER named before the label (Nima's sequence)
   assert.ok(!byId.has('inv-SO12374'))
   assert.equal(byId.get('label-IF7410').kind, 'label')
@@ -2583,3 +2594,90 @@ test('ediPartnerTabs: a partner-cancelled PO is not asked to be imported', () =>
   assert.equal(computeEdiPartnerTabs(work.orders, { today: T0 }).noSalesOrder.length, 0)
 })
 
+
+// ── Straight-to-DC routing (Nima, 2026-08-05) ────────────────────────────────
+// "our Bloomingdales have been routed and they are going straight to the DC via
+// UPS ground and Fedex Ground… in some cases we may ship freight directly to the
+// dc address not just the merge centers."
+//
+// The addresses are harvested from the real Macy's routing notifications, so these
+// assertions double as a record of what those emails actually said.
+test('a DC-direct Bloomingdale\'s shipment ships to the DC, not the merge center', () => {
+  const direct = routingShipTo({ dc: 'Minooka', direct: true })
+  assert.equal(direct.street, '601 Midpoint Road')   // verbatim from project 9004296
+  assert.equal(direct.zip, '60447')
+
+  // ...and the merge-center path is untouched.
+  const merged = routingShipTo({ dc: 'Minooka', direct: false, mergeCenter: 'CA' })
+  assert.equal(merged, MERGE_CENTERS.CA)
+  assert.equal(merged.city, 'Santa Fe Springs')
+})
+
+test('direct is about the DESTINATION, never the carrier', () => {
+  // Freight can go direct to a DC too, so the same DC resolves identically
+  // regardless of how it moves — nothing here consults a carrier at all.
+  assert.equal(routingShipTo({ dc: 'Hayward', direct: true }).street, '28701 Hall Road')
+  assert.equal(routingShipTo({ dc: 'Hayward', direct: true }), MACYS_DCS.Hayward)
+})
+
+test('an unknown DC returns null so the BOL asks rather than inventing an address', () => {
+  // Joppa is a real Bloomingdale's DC (src/model/dc.js) that no notification has
+  // named yet — it must NOT resolve to a plausible-looking guess.
+  assert.equal(MACYS_DCS.Joppa, undefined)
+  assert.equal(routingShipTo({ dc: 'Joppa', direct: true }), null)
+})
+
+// ⚠️ THE BUG THIS ALMOST SHIPPED. routing_shipment.dc stores the ABBREVIATION
+// ('SC','CL','HA' — dcAbbrev in dc.js), while the harvested addresses are keyed on
+// the full DC name the notification prints. Keying one with the other returns null
+// silently, which would have shown "no stored address" for every DC on the board.
+// The key-matching test below passed the whole time; only reading a real routing
+// row caught it.
+test('a DC resolves from its stored ABBREVIATION, not just its full name', () => {
+  assert.equal(macysDc('SC'), MACYS_DCS.Secaucus)
+  assert.equal(macysDc('CL'), MACYS_DCS.Minooka)
+  assert.equal(macysDc('CG'), MACYS_DCS['China Grove DC'])
+  assert.equal(macysDc('Secaucus'), MACYS_DCS.Secaucus)   // full name still works
+  assert.equal(macysDc('JP'), null)                       // Joppa: still unknown
+  assert.equal(macysDc(null), null)
+  // ...and the ship-to path uses the same resolution, so both agree.
+  assert.equal(routingShipTo({ dc: 'HA', direct: true }), MACYS_DCS.Hayward)
+})
+
+test('every harvested DC key matches a DC name the app already parses', () => {
+  // Keyed on dc.js's own names so a shipment's DC joins through with no second
+  // naming scheme to drift. If someone renames a DC, this fails loudly.
+  for (const key of Object.keys(MACYS_DCS)) {
+    assert.ok(DC_ABBREV[key], `MACYS_DCS key "${key}" is not a known DC name in dc.js`)
+  }
+})
+
+// ── Nordstrom's routing portal (Nima's screenshot, 2026-08-05) ───────────────
+test("a Nordstrom supplier PO splits into our PO and its destination DC", () => {
+  // Verbatim from request 5189002RR000000061.
+  const p = parseSupplierPo('50073677-89')
+  assert.equal(p.poNumber, '50073677')
+  assert.equal(p.dc, '89')
+  // ⚠️ The portal writes the DC unpadded; orders + routing_shipment store it
+  // padded. Matching on the wrong one is a SILENT no-match.
+  assert.equal(p.dcPadded, '089')
+  // the per-line form carries a line suffix
+  assert.equal(parseSupplierPo('50073677-89_01').poNumber, '50073677')
+  assert.equal(parseSupplierPo('50073677-89_01').dcPadded, '089')
+  assert.equal(parseSupplierPo('not-a-po'), null)
+  assert.equal(parseSupplierPo(null), null)
+})
+
+test('the stored Nordstrom DC 089 matches what the portal prints', () => {
+  // Portal: destination facility 89 / PORTLAND DC / 5703 N MARINE DR / PORTLAND OR
+  // 97203. If someone edits this table, this fails rather than a BOL going out with
+  // a wrong address.
+  const dc = NORDSTROM_DCS['089']
+  assert.match(dc.street, /5703 N(orth)? Marine Dr/i)
+  assert.equal(dc.city, 'Portland')
+  assert.equal(dc.state, 'OR')
+  assert.match(dc.zip, /^97203/)
+  // both the padded and unpadded keys resolve to the same DC — the portal uses one
+  // form and our data the other.
+  assert.equal(NORDSTROM_DCS['89'].street, dc.street)
+})

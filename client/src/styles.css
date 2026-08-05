@@ -2561,3 +2561,43 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .shipWin.sev-mid  { color: #ffd08a; }
 .shipWin.sev-hi   { color: #ffb3ad; font-weight: 600; }
 .shipWin .winDelta { opacity: 0.75; }
+
+/* ── First hour (Nima, 2026-08-04) ────────────────────────────────────────────
+   The anti-paralysis panel: one thing, then a few, then a count. Deliberately
+   the loudest thing on the page — if it competes visually with the 84-leg
+   timeline underneath it, it has failed at its only job. */
+.fh { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px 14px;
+  margin-bottom: 18px; background: linear-gradient(180deg, rgba(88,166,255,0.06), transparent 70%); }
+.fhHead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.fhHead h2 { margin: 0; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.fhWhen { color: var(--muted); font-size: 12px; }
+
+.fhNow { border: 1px solid rgba(88,166,255,0.35); border-radius: 10px; padding: 14px 16px;
+  background: rgba(88,166,255,0.07); }
+.fhNow.late { border-color: rgba(248,81,73,0.45); background: rgba(248,81,73,0.07); }
+.fhNowTag { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.fhNow.late .fhNowTag { color: var(--hi); }
+.fhNowVerb { font-size: 19px; font-weight: 650; color: var(--text); line-height: 1.15; }
+.fhNowLabel { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.fhNowMeta { display: flex; gap: 12px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.fhLate { color: var(--hi); font-weight: 600; }
+.fhNoCut { font-style: italic; }
+.fhEst { margin-left: auto; font-variant-numeric: tabular-nums; }
+.fhNowActions { display: flex; gap: 8px; margin-top: 12px; }
+.fhGo, .fhDone { border: 1px solid var(--line); background: transparent; color: var(--text);
+  border-radius: 7px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.fhGo:hover { border-color: var(--accent); color: var(--accent); }
+.fhDone:hover { border-color: #3fb950; color: #3fb950; }
+
+.fhThen { margin-top: 14px; }
+.fhThenHead { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.fhThen ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.fhThen li { display: flex; gap: 10px; align-items: baseline; font-size: 13px; min-width: 0; }
+.fhThenVerb { color: var(--accent); flex: none; opacity: 0.85; }
+.fhThenLabel { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.fhRest { display: flex; gap: 14px; align-items: center; margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+/* Muted hard: the archive count must be visible but must never read as urgent. */
+.fhArchive { opacity: 0.62; }
+.fhTotal { margin-left: auto; font-variant-numeric: tabular-nums; }

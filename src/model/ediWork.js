@@ -53,6 +53,32 @@ export const CANCEL_SOON_DAYS = 7
 // act, short enough that the chip means today-or-tomorrow.
 export const ROUTE_SOON_DAYS = 2
 
+// ── Past cancel is TWO different jobs, not one (Nima, 2026-08-04) ────────────
+//
+// `cancelState === 'passed'` treated 3 days past and 534 days past identically,
+// and the day plan gave both priority 0 with deadline = now. Measured on the live
+// board: of 31 EDI legs, **28 were more than 14 days past cancel — 17 of them over
+// a YEAR** — and 0 were within 14 days. So the first eight things the plan asked
+// for every morning were 2025 archive, sitting on top of the 3 legs that were
+// actually about today.
+//
+// That is the paralysis Nima described, mechanically: "im paralyzied by the amount
+// of work… i end up jumping from task to task". The list was not wrong about the
+// facts, it was wrong about WHICH JOB each fact implies:
+//
+//   · a few days past cancel  → a live chargeback fight; chase it now
+//   · a year past cancel      → a close / write-off decision; doing it today
+//                               changes nothing, and it is not morning work
+//
+// So a stale one stays VISIBLE and countable (never hidden — "nothing sits
+// ignored") but stops competing for the first hour.
+//
+// 14 days is a deliberate, adjustable line: past a fortnight the partner has long
+// since cancelled or charged back, so nothing is being rescued. Today ANY boundary
+// between 14 and 90 gives the same split (1 leg sits in that whole band), so this
+// is a knob, not a cliff — worth revisiting with Nima once it has been lived with.
+export const STALE_CANCEL_DAYS = 14
+
 function daysSince(dateish, today) {
   if (!dateish) return null
   return Math.floor((today - new Date(dateish).getTime()) / DAY)
@@ -198,10 +224,15 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   // A cancelled PO's cancel-after date is moot — without the gate, Shopbop's
   // zeroed re-send (which keeps its window) escalates a dead PO to cancel
   // danger as the date approaches.
+  // `cancelStale` = passed so long ago that it is a close-out decision rather than
+  // today's work. See STALE_CANCEL_DAYS for why this split exists at all.
+  let cancelStale = false
   if (!closed && !partnerCancelled && order.cancelAfter && order.stageRank < 3) {
     const d = daysSince(order.cancelAfter, today)
-    if (d != null && d >= 0) { cancelState = 'passed'; cancelDays = d }
-    else if (d != null && -d <= CANCEL_SOON_DAYS) { cancelState = 'soon'; cancelDays = -d }
+    if (d != null && d >= 0) {
+      cancelState = 'passed'; cancelDays = d
+      cancelStale = d > STALE_CANCEL_DAYS
+    } else if (d != null && -d <= CANCEL_SOON_DAYS) { cancelState = 'soon'; cancelDays = -d }
   }
 
   // ── the ROUTING deadline, which lands earlier than the cancel date ─────────
@@ -290,7 +321,11 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   } else {
     needed = 'Review — state unclear'
   }
-  if (cancelState === 'passed') needed = `⚠ Cancel date passed ${cancelDays}d ago — ${needed || 'review'}`
+  // A stale one asks to be CLOSED, not chased. Saying "⚠ act now" about a PO that
+  // died 18 months ago is what taught Nima to ignore the whole list.
+  if (cancelState === 'passed' && cancelStale) {
+    needed = `Close it out — cancel date passed ${cancelDays}d ago, nothing left to rescue`
+  } else if (cancelState === 'passed') needed = `⚠ Cancel date passed ${cancelDays}d ago — ${needed || 'review'}`
   // The routing deadline leads only when the cancel date has NOT already passed —
   // once the shipment is late outright, "route it by Tuesday" is no longer the
   // useful sentence. Says ROUTE explicitly so it can't be read as a ship date.
@@ -311,6 +346,7 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
     age850,
     cancelState,
     cancelDays,
+    cancelStale,
     // The routing deadline, kept apart from cancelState on purpose (never summed
     // into it) — one is "the partner cancels", the other is "we miss our slot".
     routeState,

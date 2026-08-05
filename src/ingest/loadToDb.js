@@ -716,6 +716,10 @@ export async function fetchRoutingShipments(db = pool) {
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
             fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
+            ship_direct AS "shipDirect", consigned_to AS "consignedTo",
+            tracking_numbers AS "trackingNumbers",
+            routing_request_number AS "routingRequestNumber",
+            routing_request_line AS "routingRequestLine",
             bol_generated_at AS "bolGeneratedAt", created_at AS "createdAt", updated_at AS "updatedAt"
      FROM routing_shipment
      ORDER BY created_at DESC`,
@@ -982,13 +986,32 @@ const SHIPMENT_REF_COLS = {
   trailerNumber: 'trailer_number',
   sealNumber: 'seal_number',
   fedexPickupNumber: 'fedex_pickup_number',
+  // Straight-to-DC routing (Nima, 2026-08-05) — see db/schema.sql.
+  shipDirect: 'ship_direct',
+  consignedTo: 'consigned_to',
+  trackingNumbers: 'tracking_numbers',
+  // Nordstrom's portal references (Nima, 2026-08-05) — see db/schema.sql.
+  routingRequestNumber: 'routing_request_number',
+  routingRequestLine: 'routing_request_line',
+}
+
+// tracking_numbers is TEXT[]; everything else here is scalar. A shipment is many
+// cartons and UPS/FedEx issue one number per carton, so the UI hands over a
+// free-typed list and this is the single place it becomes an array — splitting on
+// commas, spaces and newlines because all three happen when numbers are pasted
+// out of a carrier email.
+const toTrackingArray = (v) => {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean)
+  if (v == null || v === '') return []
+  return String(v).split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean)
 }
 export async function updateShipmentRefs(id, fields = {}, db = pool) {
   const sets = []
   const vals = []
   for (const [k, col] of Object.entries(SHIPMENT_REF_COLS)) {
     if (k in fields) {
-      vals.push(fields[k] === '' ? null : fields[k])
+      if (col === 'tracking_numbers') vals.push(toTrackingArray(fields[k]))
+      else vals.push(fields[k] === '' ? null : fields[k])
       sets.push(`${col} = $${vals.length}`)
     }
   }

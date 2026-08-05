@@ -92,7 +92,25 @@ export function pickedWorkLeg(o) {
 export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = {}) {
   const now = opts.now ?? Date.now()
   const at = (h) => { const d = new Date(now); d.setHours(h, 0, 0, 0); return d.getTime() }
-  const times = { NOON: at(12), THREE: at(15) }
+  // ── Nima's real cutoffs (2026-08-05) ───────────────────────────────────────
+  // Asked where the noon deadline came from, he described an actual chain:
+  //
+  //   "if we have an[] if back in our posession thats not EDI and not marked as
+  //    packed we generally want to get it done before noon to make sure it can get
+  //    invoiced so if it can ship that day it will. We need to give invoice around
+  //    12-2 for same day creation the earlier the better chance the invoice is
+  //    created that day. We also want the label to be made or shipment to be
+  //    routed before 2:00pm."
+  //
+  // So it is a pipeline of three, not one blanket noon:
+  //   NOON  mark it packed  (so it can enter the invoice window at all)
+  //   12–2  raise the invoice — 2pm is the hard edge, earlier is better odds
+  //   2PM   label made / routed
+  //
+  // The invoice leg had been hardcoded to NOON with no stated basis, which was the
+  // invented-urgency shape flagged that morning. Noon is the START of his invoice
+  // window, not its deadline — the deadline is TWO.
+  const times = { NOON: at(12), TWO: at(14), THREE: at(15) }
   const items = []
 
   // Which orders are still waiting on a carrier label. Used to hold the invoice
@@ -130,7 +148,13 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
     // Now the real deadline decides, and the partner cutoff only applies when it is
     // actually the operative one — Nordstrom's noon is a next-day-pickup cutoff, so
     // it binds the day before the cancel date, not every day forever.
-    if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
+    // A cancel date that passed a YEAR ago is a close-out decision, not the first
+    // thing to do this morning. Measured: 28 of 31 EDI legs were >14 days past
+    // cancel (17 over a year) and they held priority 0 with deadline = now, so the
+    // top of every day's plan was 2025 archive. Kept on the plan — "nothing sits
+    // ignored" — but as fill work with no cutoff, so it sinks instead of shouting.
+    if (o.work.cancelStale) { deadline = null; priority = 4 }
+    else if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
     else if (o.work.routeState === 'passed') { deadline = now; priority = 0 }
     else if (o.work.routeState === 'soon') {
       // The partner's own cutoff instant when they have one (noon for Nordstrom),
@@ -145,7 +169,11 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
       id: 'edi-' + o.businessNumber,
       label: (o.businessNumber ? `PO ${o.businessNumber} · ${short} routing` : `${short} routing`).slice(0, 60),
       group: `${short} routing`,
-      kind: 'edi_route', deadline, durationMin: dur('edi_route'), priority,
+      // A stale one is its OWN kind, so the first-hour view can count "to close
+      // out" separately from "to do today" rather than summing two unlike jobs.
+      kind: o.work.cancelStale ? 'close_out' : 'edi_route',
+      deadline, durationMin: dur(o.work.cancelStale ? 'close_out' : 'edi_route'), priority,
+      closeOut: !!o.work.cancelStale,
       nav: 'edi',
     })
   }
@@ -237,9 +265,14 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
           label: `${o.soNumber} · ${leg.label}`.slice(0, 60),
           group: leg.group,
           kind: leg.kind,
-          deadline: leg.severity >= 3 ? times.THREE : null,
+          // mark_packed IS Nima's noon case: an IF back in our hands that NetSuite
+          // still calls picked. Marking it packed is what lets it be invoiced at
+          // all, so missing noon costs the whole day downstream. A `chase` leg has
+          // no such cutoff of ours — the warehouse holds it, so it keeps severity's
+          // afternoon nudge instead of a deadline we cannot meet alone.
+          deadline: leg.kind === 'mark_packed' ? times.NOON : leg.severity >= 3 ? times.THREE : null,
           durationMin: dur(leg.kind),
-          priority: leg.severity >= 3 ? 1 : 2,
+          priority: leg.kind === 'mark_packed' ? 1 : leg.severity >= 3 ? 1 : 2,
           courtTheirs: !!leg.courtTheirs,
           nav: 'kanban',
         })
@@ -266,7 +299,10 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
       items.push({
         id: 'inv-' + o.soNumber, label: `${o.soNumber} · Invoice ${o.customer}`.slice(0, 60),
         group: 'Boutique invoicing',
-        kind: 'invoice', deadline: times.NOON, durationMin: dur('invoice'), priority: 2,
+        // 2pm, not noon: noon is when his invoice window OPENS. Same-day creation
+        // needs it in by 2, and earlier is better odds — so the cutoff is TWO and
+        // EDF still sorts it ahead of anything later.
+        kind: 'invoice', deadline: times.TWO, durationMin: dur('invoice'), priority: 2,
         nav: 'table',
       })
     }
