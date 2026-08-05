@@ -44,7 +44,10 @@ export const SPINE = [
   { key: 'REACHED_APPROVED', docType: 'IF', label: 'Approved for shipping' },
   { key: 'PAID', docType: 'INV', label: 'Paid in full' },
   { key: 'ROUTED', docType: 'DC', label: 'Routed (BOL generated)' },
-  { key: 'DEPARTED', docType: 'IF', label: 'Departed' },
+  // ⚠️ NOT a physical departure — see eventsFromFulfillments. The key stays
+  // 'DEPARTED' so thousands of existing rows keep resolving; the LABEL is what
+  // users read, and it has to say what the event actually witnesses.
+  { key: 'DEPARTED', docType: 'IF', label: 'Marked shipped in NetSuite' },
   { key: 'ASN_SENT', docType: 'ASN', label: '856 transmitted' },
   { key: 'INVOICE_SENT', docType: 'INV', label: '810 transmitted' },
   { key: 'FILED', docType: 'IF', label: 'Signed paper filed' },
@@ -154,8 +157,22 @@ export function eventsFromFulfillments(fulfillments = []) {
     out.push(evt('IF_CREATED', 'IF', f.ifNumber, f.soNumber, f.ifDate))
     if (isPacked(f.status)) out.push(evt('PACKED', 'IF', f.ifNumber, f.soNumber, null))
     if (isShipped(f.status)) {
-      // actual_ship_date is the real departure. Without one we still know it
-      // departed, so record it as observed rather than dropping the event.
+      // ⚠️ THIS IS A PAPER EVENT, NOT A PHYSICAL ONE — corrected 2026-08-05.
+      //
+      // This used to read "actual_ship_date is the real departure." Nima:
+      // "i have to mark as shipped for bloomingdales to generate the ASN in
+      // preparation of its departure. Its to get ahead of it but it hasn't
+      // left the moment i mark as shipped."
+      //
+      // So on the EDI lane, marking shipped is deliberately done BEFORE the
+      // truck comes — it is what triggers the 856. Proven live the same day:
+      // IF7459 (PO 8040313, DC CL) was Shipped and invoiced on INV11455 while
+      // its cartons were still on our floor waiting for the UPS pickup.
+      //
+      // The event is still worth recording — a human really did mark it, and
+      // that act sends the ASN. It just must never be read as "it left."
+      // Physical departure needs carrier evidence (the first UPS movement
+      // scan), which the app does not hold yet.
       out.push(evt('DEPARTED', 'IF', f.ifNumber, f.soNumber, f.actualShipDate))
     }
   }

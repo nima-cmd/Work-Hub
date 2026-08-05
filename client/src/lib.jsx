@@ -6,6 +6,7 @@ import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
 import { imagesFor } from './data/characterImages.js'
 import { dcBreakdown } from '../../src/model/dc.js'
+import { cardCustody } from '../../src/model/custody.js'
 
 // Channel tag + colored customer name (Nima, 2026-07-20) — one consistent
 // color per account across every view, so Nordstrom/Bloomingdale's/Shopbop/
@@ -756,48 +757,12 @@ export function DcTagButtons({ group, dcList }) {
   )
 }
 
-// Physical custody of a pipeline card from the scan ledger (Nima, 2026-07-22):
-// is it with the warehouse (scanned OUT, not back), back with us (scanned IN),
-// or still with us / not shipped (an Item Fulfillment that's printed but hasn't
-// started its journey). EDI cards track their per-DC cartons; others track IFs.
-// dcList (routing feed ∪ custody scans, [{ dc }]) is preferred for EDI groups —
-// the DC isn't in the order ship-to, so parsing members finds none. Falls back
-// to the member parse when no dcList is supplied.
-export function cardCustody(card, events = [], dcList) {
-  const ediDcs = (dcList && dcList.length ? dcList.map((d) => d.dc) : dcBreakdown(card?.members || []).filter((r) => r.abbrev).map((r) => r.abbrev))
-  const dcDocs = ediDcs.map((dc) => ({ type: 'DC', num: `${card.poNumber}:${dc}` }))
-  const ifDocs = (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
-  const hasEvents = (ds) => ds.some((d) => events.some((e) => e.docType === d.type && e.docNumber === d.num))
-
-  // ⚠️ AN EDI SHIPMENT CAN BE SCANNED TWO WAYS, and the board has to honour both
-  // (found 2026-08-02). Scan Bay accepts our printed per-DC cargo tag
-  // (`DC:<po>:<abbrev>`) AND the NetSuite packing slip's own `IF####` QR — see
-  // recordCustodyScan. This used to read DC tokens ONLY for an EDI group, so
-  // Bloomingdale's PO 8040313 had all 13 of its fulfilments scanned OUT and the
-  // card still read "with us · not shipped" and sat in Picked. The scans were in
-  // the ledger the whole time; the card just wasn't looking at them.
-  //
-  // Whichever evidence the crew actually produced wins, and the denominator
-  // follows it so the "3/5" fraction keeps counting the same kind of thing.
-  const docs = card?.isGroup && card.source === 'edi'
-    ? (hasEvents(dcDocs) || !hasEvents(ifDocs) ? dcDocs : ifDocs)
-    : ifDocs
-  if (!docs.length) return null
-  let out = 0, scanned = 0
-  for (const d of docs) {
-    const evs = events.filter((e) => e.docType === d.type && e.docNumber === d.num)
-    if (!evs.length) continue
-    const t = (type) => Math.max(0, ...evs.filter((e) => e.eventType === type).map((e) => +new Date(e.occurredAt)))
-    const outT = t('CUSTODY_OUT'), inT = t('CUSTODY_IN')
-    if (outT || inT) scanned++
-    if (outT > inT) out++
-  }
-  // Terminology (Nima, 2026-07-22): scanned OUT → "With Nestor"; scanned back
-  // IN → "Ball's in our court".
-  if (out > 0) return { state: 'warehouse', label: `◫ With Nestor${docs.length > 1 ? ` ${out}/${docs.length}` : ''}` }
-  if (scanned > 0) return { state: 'returned', label: "✓ Ball's in our court" }
-  return { state: 'idle', label: '🏷 With us · not shipped' }
-}
+// Physical custody now lives in the model so it can be unit-tested — see
+// src/model/custody.js. Re-exported here because every caller imports it from
+// lib.jsx.
+// ⚠️ `import` then `export`, NOT `export … from` — a re-export creates no local
+// binding, so CustodyBadge below (which calls it) crashed the whole board.
+export { cardCustody }
 
 export function CustodyBadge({ card, events, dcList }) {
   const c = cardCustody(card, events, dcList)
