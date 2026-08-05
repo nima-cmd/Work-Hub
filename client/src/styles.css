@@ -2667,3 +2667,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cuSteps input { accent-color: var(--accent); }
 .cuStepLink { color: var(--accent); text-decoration: none; font-size: 10.5px; }
 .cuStepLink:hover { text-decoration: underline; }
+/* "The partner accepted the 856" — evidence beside the manual close button,
+   never a replacement for it (src/model/closeReady.js). */
+.rt-closeReady { font-size: 11px; color: var(--good, #4fd18a); border: 1px solid rgba(79,209,138,0.4);
+  background: rgba(79,209,138,0.08); border-radius: 6px; padding: 2px 7px; margin-left: 6px; }
+.rt-shipBtn.ready { border-color: rgba(79,209,138,0.55); color: var(--good, #4fd18a); }

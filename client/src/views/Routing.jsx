@@ -685,11 +685,21 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
             </button>
           )}
           {onShip && (
-            <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '')} disabled={busy === 'ship' + s.id}
-              title={s.shippedAt ? 'Move back to the active queue' : 'Shipment has physically left — archive it to the Shipped tab (record kept)'}
+            <button className={'btnGhost rt-shipBtn' + (s.shippedAt ? ' on' : '') + (s.closeReady?.ok ? ' ready' : '')}
+              disabled={busy === 'ship' + s.id}
+              title={s.shippedAt
+                ? 'Move back to the active queue'
+                : s.closeReady
+                  ? `${s.closeReady.ok ? 'Ready: ' : 'Not confirmed yet — '}${s.closeReady.why}`
+                  : 'Shipment has physically left — archive it to the Shipped tab (record kept)'}
               onClick={() => onShip(s)}>
               {s.shippedAt ? '↩ Un-ship' : '🚚 Mark shipped'}
             </button>
+          )}
+          {/* Evidence, not an action — the button above is still the only way
+              a BOL closes. See src/model/closeReady.js. */}
+          {s.closeReady?.ok && (
+            <span className="rt-closeReady" title={s.closeReady.why}>✓ confirmed by the partner</span>
           )}
 
           <BolActions s={s} />
