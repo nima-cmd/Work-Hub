@@ -1065,6 +1065,9 @@ test('pickedWorkLeg names the action from the flag, worst severity first', () =>
   assert.equal(both.kind, 'chase')
 })
 
+const noonOf = (t) => { const d = new Date(t); d.setHours(12, 0, 0, 0); return d.getTime() }
+const twoOf = (t) => { const d = new Date(t); d.setHours(14, 0, 0, 0); return d.getTime() }
+
 test('buildRouteItems splits the bench and never asks for an invoice before the label', () => {
   const T0 = new Date('2026-07-28T09:00:00').getTime()
   const three = (() => { const d = new Date(T0); d.setHours(15, 0, 0, 0); return d.getTime() })()
@@ -1109,10 +1112,17 @@ test('buildRouteItems splits the bench and never asks for an invoice before the 
   assert.equal(byId.get('bench-SO12307').kind, 'chase')
   assert.equal(byId.get('bench-SO12307').deadline, three)   // severity 3 → today
   assert.equal(byId.get('bench-SO12313').kind, 'mark_packed')
-  assert.equal(byId.get('bench-SO12313').deadline, null)    // severity 2 → fill work
+  // ⚠️ REWRITTEN 2026-08-05. This asserted `null` — mark_packed as fill work —
+  // which was right only while nobody knew why noon existed. Nima then explained
+  // it: an IF back in our hands and not yet marked packed must be packed before
+  // NOON, because that is what lets it enter the 12–2 invoice window and ship the
+  // same day. So it carries a real cutoff now, and it is his, not invented.
+  assert.equal(byId.get('bench-SO12313').deadline, noonOf(T0))
 
-  // severity 0 no longer hides real invoice work
+  // severity 0 no longer hides real invoice work, and it lands on Nima's 2pm
+  // invoice cutoff rather than the noon one that was never his.
   assert.ok(byId.has('inv-SO12389'))
+  assert.equal(byId.get('inv-SO12389').deadline, twoOf(T0))
   // ...but the invoice is NEVER named before the label (Nima's sequence)
   assert.ok(!byId.has('inv-SO12374'))
   assert.equal(byId.get('label-IF7410').kind, 'label')
