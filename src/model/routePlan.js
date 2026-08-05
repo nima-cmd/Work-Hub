@@ -21,6 +21,13 @@ export const DEFAULT_DURATIONS_MIN = {
   email_reply: 5,       // reply / acknowledge
   planning: 30,         // PO/OC / container planning
   ship: 12,             // generate label + hand off
+  // The bench work behind a PICKED order, plus the label that opens the ship
+  // sequence (added 2026-08-04 with the day-plan leg split — see routeItems.js).
+  // These are deliberately SHORT: none of them is physical packing.
+  label: 6,             // make a carrier label for a packed IF
+  chase: 5,             // call/email the warehouse about an IF it's holding
+  mark_packed: 3,       // flip a returned IF to Packed in NetSuite — a keystroke
+  handoff: 6,           // print the custody label and scan it OUT
   default: 10,
 }
 

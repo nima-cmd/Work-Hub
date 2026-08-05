@@ -25,7 +25,7 @@ import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiPartnerTabs } from '../src/model/ediPartnerTabs.js'
 import { normalizeDocNumber } from '../src/model/netsuiteDocs.js'
 import { computeRoute } from '../src/model/routePlan.js'
-import { buildRouteItems, applyDayPlan } from '../src/model/routeItems.js'
+import { buildRouteItems, applyDayPlan, pickedWorkLeg } from '../src/model/routeItems.js'
 import { fromEdiPackagesVolume, fromShipCentralQueue } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
 import { parseBoxDims, splitPoDc, mapEdiPackageRows } from '../src/ingest/ediPackagesLive.js'
@@ -969,6 +969,101 @@ test('buildRouteItems draws tasks, EDI actions and shippable orders', () => {
   assert.equal(measured.durationMin, 25)        // real duration_min wins
   assert.equal(measured.deadline, noon)         // real due_at wins
   assert.equal(measured.scheduled, true)
+})
+
+// ── The day plan's boutique bench (2026-08-04) ───────────────────────────────
+// The regression these lock down: ONE leg ("Invoice <customer>") was queued for
+// any boutique order below INVOICED with severity, and live all 14 of those legs
+// were PICKED orders that cannot be invoiced at all, while the 2 orders that
+// genuinely needed an invoice were excluded by the same rule's severity gate.
+test('pickedWorkLeg names the action from the flag, worst severity first', () => {
+  const chase = pickedWorkLeg({ flags: [{ key: 'WAREHOUSE_HOLDS', label: 'IF7453 with warehouse 5d — chase it', severity: 3 }] })
+  assert.equal(chase.kind, 'chase')
+  assert.equal(chase.courtTheirs, true)
+  // the sentence IS the flag's own label — never re-worded, so it can't drift
+  assert.equal(chase.label, 'IF7453 with warehouse 5d — chase it')
+
+  const packed = pickedWorkLeg({ flags: [{ key: 'BACK_NOT_PACKED', label: 'IF7443 returned from warehouse — mark it packed', severity: 2 }] })
+  assert.equal(packed.kind, 'mark_packed')
+  assert.ok(!packed.courtTheirs)                  // ours: a NetSuite keystroke
+
+  // an IF scanned out under 3 days ago is in flight, not late → no leg at all
+  assert.equal(pickedWorkLeg({ flags: [{ key: 'WITH_WAREHOUSE', label: 'out 1d', severity: 0 }] }), null)
+  assert.equal(pickedWorkLeg({ flags: [] }), null)
+
+  // two actionable flags → lead with the urgent one, not the first pushed
+  const both = pickedWorkLeg({ flags: [
+    { key: 'BACK_NOT_PACKED', label: 'mark it packed', severity: 2 },
+    { key: 'WAREHOUSE_HOLDS', label: 'chase it', severity: 3 },
+  ] })
+  assert.equal(both.kind, 'chase')
+})
+
+test('buildRouteItems splits the bench and never asks for an invoice before the label', () => {
+  const T0 = new Date('2026-07-28T09:00:00').getTime()
+  const three = (() => { const d = new Date(T0); d.setHours(15, 0, 0, 0); return d.getTime() })()
+  const orders = [
+    // was "Invoice Boca" — is really the warehouse's court
+    { soNumber: 'SO12307', customer: 'The Boca Raton', stage: STAGE.PICKED, severity: 3, location: 'Boutique',
+      flags: [{ key: 'WAREHOUSE_HOLDS', label: 'IF7453 with warehouse 5d — chase it', severity: 3 }] },
+    // was "Invoice Red Balloon" — is really a keystroke of ours
+    { soNumber: 'SO12313', customer: 'Red Balloon Ltd', stage: STAGE.PICKED, severity: 2, location: 'Boutique',
+      flags: [{ key: 'BACK_NOT_PACKED', label: 'IF7443 returned from warehouse — mark it packed', severity: 2 }] },
+    // severity 0 and PACKED: the genuine invoice work the old gate excluded
+    { soNumber: 'SO12389', customer: 'Robertson Madison LLC', stage: STAGE.PACKED, severity: 0, location: 'Boutique', flags: [] },
+    // packed but its label is still outstanding → the label leg owns it
+    { soNumber: 'SO12374', customer: 'Julian Gold', stage: STAGE.PACKED, severity: 0, location: 'Boutique', flags: [] },
+    // Parcel-lane wholesale that channels.js buckets as its OWN channel, not
+    // 'boutique'. The old leg tested channelKey — a DISPLAY classifier — so this
+    // order's work was invisible to the day plan. Live case: SO12344.
+    { soNumber: 'SO12344', customer: 'Saint Bernard', stage: STAGE.PICKED, severity: 3, location: 'Warehouse', source: 'boutique',
+      flags: [{ key: 'BACK_NOT_PACKED', label: 'IF7456 returned from warehouse — mark it packed', severity: 2 },
+              { key: 'STALE', label: '15d pending — chase it', severity: 3 }] },
+    // EDI stays out: it moves on routing + a BOL and has its own feeder.
+    { soNumber: 'SO11988', customer: 'Nordstrom - 568', stage: STAGE.PICKED, severity: 3, source: 'edi',
+      flags: [{ key: 'WAREHOUSE_HOLDS', label: 'IF9 with warehouse 9d — chase it', severity: 3 }] },
+  ]
+  const labelGaps = {
+    needsLabel: [
+      { ifNumber: 'IF7410', soNumber: 'SO12374', customer: 'Julian Gold', ageDays: 0 },
+      { ifNumber: 'IF7412', soNumber: 'SO12330', customer: 'Robertson Madison LLC', ageDays: 4 },
+    ],
+    // In China awaiting collection — never a label leg of ours, and no cutoff of
+    // ours to miss (the truck is theirs to send). See src/model/labelGap.js.
+    fobPickup: [
+      { ifNumber: 'IF7414', soNumber: 'SO12394', customer: 'Yagi Tsusho LTD.', ageDays: 6 },
+    ],
+  }
+  const items = buildRouteItems(orders, [], null, { now: T0, labelGaps })
+  const byId = new Map(items.map((i) => [i.id, i]))
+
+  // no PICKED order is ever labelled "Invoice" again
+  assert.ok(!byId.has('inv-SO12307'))
+  assert.ok(!byId.has('inv-SO12313'))
+  assert.equal(byId.get('bench-SO12307').kind, 'chase')
+  assert.equal(byId.get('bench-SO12307').deadline, three)   // severity 3 → today
+  assert.equal(byId.get('bench-SO12313').kind, 'mark_packed')
+  assert.equal(byId.get('bench-SO12313').deadline, null)    // severity 2 → fill work
+
+  // severity 0 no longer hides real invoice work
+  assert.ok(byId.has('inv-SO12389'))
+  // ...but the invoice is NEVER named before the label (Nima's sequence)
+  assert.ok(!byId.has('inv-SO12374'))
+  assert.equal(byId.get('label-IF7410').kind, 'label')
+  assert.equal(byId.get('label-IF7410').deadline, null)     // same-day gap → no cutoff
+  assert.equal(byId.get('label-IF7412').deadline, three)    // 4 days old → today
+
+  // A China/FOB shipment gets a CONFIRMATION leg, never a label leg — the truck
+  // is theirs to send, so no cutoff of ours and no label we would ever make.
+  assert.ok(!byId.has('label-IF7414'))
+  assert.equal(byId.get('fob-IF7414').kind, 'chase')
+  assert.equal(byId.get('fob-IF7414').courtTheirs, true)
+  assert.equal(byId.get('fob-IF7414').deadline, null)
+  assert.doesNotMatch(byId.get('fob-IF7414').label, /Label/)
+
+  // the parcel lane is decided by `source`, never by the display channel
+  assert.equal(byId.get('bench-SO12344').kind, 'mark_packed')
+  assert.ok(!byId.has('bench-SO11988'))                     // EDI has its own feeder
 })
 
 test('applyDayPlan merges done + switches to manual order when a sortIndex exists', () => {

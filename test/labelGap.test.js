@@ -51,6 +51,31 @@ test('freight is its own lane, labelled or not, held or not', () => {
   )
 })
 
+// Nima, 2026-08-04, on what FOB Pending Approval actually is: "a shipment that is
+// in china pending a pick up usually confirmed by our china warehouse but that's
+// with someone in our NY office." We never dispatch it, so we never make its
+// label — measured live, 12 of 12 China fulfilments carry ZERO tracking numbers
+// while 11 have already shipped. Calling it "needs a label" invented work.
+test('the China/FOB lane never asks for a label, held or not', () => {
+  assert.equal(
+    labelGapKind({ labelled: false, lane: 'fob', heldForPayment: false }),
+    LABEL_GAP.FOB_PICKUP,
+  )
+  // ...and payment does NOT swallow it, same rule as every other lane: the
+  // outstanding STEP is asked for first, the money is only ever context.
+  assert.equal(
+    labelGapKind({ labelled: false, lane: 'fob', heldForPayment: true }),
+    LABEL_GAP.FOB_PICKUP,
+  )
+  // A label on a China shipment would be genuinely unusual evidence that it moved
+  // some other way, so it is allowed back into the normal labelled branch rather
+  // than being forced to stay FOB.
+  assert.equal(
+    labelGapKind({ labelled: true, lane: 'fob', heldForPayment: false }),
+    LABEL_GAP.LABELLED_NOT_SHIPPED,
+  )
+})
+
 // ── the sentence on the row ──────────────────────────────────────────────────
 
 test('a held, unlabelled row names the label as the action and the balance as context', () => {
@@ -88,7 +113,7 @@ test('a labelled, clear row asks for the status transition', () => {
 // previous versions of this logic went unnoticed.
 test('the sentence always agrees with the kind', () => {
   for (const labelled of [true, false]) {
-    for (const lane of ['parcel', 'freight']) {
+    for (const lane of ['parcel', 'freight', 'fob']) {
       for (const heldForPayment of [true, false]) {
         const row = { labelled, lane, heldForPayment, ifNumber: 'IF1', invoiceNumber: 'INV1', amountRemaining: 10 }
         const kind = labelGapKind(row)
@@ -96,6 +121,11 @@ test('the sentence always agrees with the kind', () => {
         if (kind === LABEL_GAP.HELD_FOR_PAYMENT) assert.match(needed, /^Held for payment/)
         if (kind === LABEL_GAP.NEEDS_LABEL) assert.match(needed, /no carrier label/)
         if (kind === LABEL_GAP.FREIGHT_BOL_LANE) assert.match(needed, /Freight\/BOL/)
+        if (kind === LABEL_GAP.FOB_PICKUP) {
+          assert.match(needed, /awaiting pickup/)
+          // it must never name a label — that was the whole defect
+          assert.doesNotMatch(needed, /label/)
+        }
         if (kind === LABEL_GAP.LABELLED_NOT_SHIPPED) assert.match(needed, /mark IF1 shipped/)
       }
     }

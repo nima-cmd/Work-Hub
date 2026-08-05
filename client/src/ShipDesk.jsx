@@ -170,9 +170,16 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
   // cleared by chasing a factory, exactly like filing's pre-epoch backlog.
   const inboundLate = inbound?.counts?.late ?? 0
 
-  // The oldest ACTIONABLE parcel item, named. Freight is excluded on purpose —
-  // an un-BOL'd freight shipment isn't a label problem and would only inflate
-  // the headline age.
+  // The China/FOB pickup lane (2026-08-04). Its own chip for the same reason
+  // freight has one: the goods are already abroad awaiting collection, so no
+  // label and no BOL is outstanding and adding it to either number would invent
+  // work. See src/model/labelGap.js.
+  const fobPickup = labelGaps.counts?.fobPickup ?? 0
+
+  // The oldest ACTIONABLE parcel item, named. Freight and FOB are excluded on
+  // purpose — neither is a label problem, and both would only inflate the
+  // headline age. ⚠️ This is why the headline reads 4d and not 6d: IF7414 is the
+  // older item but it is in China awaiting a pickup, and it carries its own chip.
   const oldest = [...(labelGaps.labelledNotShipped || []), ...(labelGaps.needsLabel || [])]
     .sort(byAgeDesc)[0]
 
@@ -183,6 +190,8 @@ export function CourtStrip({ labelGaps, custody, bay, orders = [], ediGaps, asnC
       title: 'Packed with no carrier label — still physically here. Includes shipments whose payment has not cleared: the label is made first, then the invoice, then the ship decision, so waiting on money is no reason to leave the label unmade' },
     { key: 'freight', n: freight, label: 'need routing', tone: 'info', to: 'routing',
       title: 'EDI/freight lane — these move on a BOL, not a parcel label' },
+    { key: 'fobPickup', n: fobPickup, label: 'FOB, awaiting pickup', tone: 'info', to: 'command',
+      title: 'These are sitting in China waiting to be collected — the China warehouse confirms the pickup and someone in the NY office holds the thread. We never dispatch them, so we never make a label: 12 of 12 China fulfilments have carried zero tracking numbers. Info tone because the action is a confirmation, not anything anyone in this warehouse can do — but it is aged here so it cannot sit forgotten' },
     { key: 'heldForPayment', n: heldForPayment, label: 'held for payment', tone: 'info', to: 'launch',
       title: 'Labelled, packed and correctly waiting: money is owed and actually due, so these must not ship yet — the package is ready and the money is all that is left. Derived from the invoice terms and what is still outstanding, so it stays right whether or not anyone has maintained the Shipping Status field. The one thing that field can still do is waive the hold: an explicit Approved For Shipping is the NY office saying ship it regardless of payment. Net 30/45/60 and paid-in-full invoices are never held here, and a payment-held shipment with no label yet counts under "need a label" instead, not here' },
     { key: 'needsInvoice', n: needsInvoice, label: 'need an invoice', tone: 'warn', to: 'kanban',

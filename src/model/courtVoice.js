@@ -45,6 +45,10 @@ const LINE = {
   // was paid by some other route is not something this app can see.
   asnUnannounced: (n) => `${n} shipment${n === 1 ? '' : 's'} the partner was never told about — worth clearing before they chargeback.`,
   invoiceUnannounced: (n) => `${n} invoice${n === 1 ? '' : 's'} never went out to the partner. Worth a look.`,
+  // Deliberately NOT in PRIORITY above: the collection happens in China and the
+  // thread sits with the NY office, so this must never outrank a lane Nima can
+  // finish himself. It only ever speaks when nothing else is on the board.
+  fobPickup: (n) => `${n === 1 ? 'One FOB shipment is' : `${n} FOB shipments are`} in China awaiting pickup — NY has the thread.`,
 }
 
 // The line the crew member says. `chips` is the strip's own filtered list, so a

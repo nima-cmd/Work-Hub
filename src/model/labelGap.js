@@ -22,24 +22,38 @@
 // step and it is work regardless of what payment is doing. Payment only decides
 // the fate of a shipment whose label already exists.
 
-// The four outcomes, deliberately kept as separate kinds rather than one backlog
+// The five outcomes, deliberately kept as separate kinds rather than one backlog
 // (the never-lump rule): each names a DIFFERENT action, and summing them produces
 // a number nobody can act on.
 export const LABEL_GAP = {
   NEEDS_LABEL: 'NEEDS_LABEL',                 // parcel, no label → make it
   FREIGHT_BOL_LANE: 'FREIGHT_BOL_LANE',       // freight, moves on a BOL, not a label
+  FOB_PICKUP: 'FOB_PICKUP',                   // sits in China awaiting collection
   HELD_FOR_PAYMENT: 'HELD_FOR_PAYMENT',       // labelled and ready; money is what's left
   LABELLED_NOT_SHIPPED: 'LABELLED_NOT_SHIPPED', // it left; NetSuite wasn't told
 }
 
 // `labelled` = carries at least one carrier tracking number.
-// `lane`     = 'parcel' | 'freight' (EDI partners move LTL under a BOL and will
-//              never carry a parcel tracking number, so listing them as needing a
-//              label was pure noise — 12 of the first 16 hits).
+// `lane`     = 'parcel' | 'freight' | 'fob'.
+//              • freight — EDI partners move LTL under a BOL and will never carry
+//                a parcel tracking number, so listing them as needing a label was
+//                pure noise (12 of the first 16 hits).
+//              • fob — the goods are in CHINA awaiting a pickup, confirmed by our
+//                China warehouse and coordinated by someone in the NY office
+//                (Nima, 2026-08-04). We never dispatch it, so we never make its
+//                label: measured live, 12 of 12 China fulfilments carry ZERO
+//                tracking numbers and 11 of them have already shipped. Calling
+//                this "needs a label" invented work that will never be done —
+//                and it put the single largest number on the board ($90,654,
+//                IF7414) at the top of the wrong queue.
 // `heldForPayment` = the DERIVED payment gate (src/model/paymentGate.js), which
 //              includes the NY waiver.
 export function labelGapKind({ labelled, lane, heldForPayment } = {}) {
-  if (!labelled) return lane === 'freight' ? LABEL_GAP.FREIGHT_BOL_LANE : LABEL_GAP.NEEDS_LABEL
+  if (!labelled) {
+    if (lane === 'freight') return LABEL_GAP.FREIGHT_BOL_LANE
+    if (lane === 'fob') return LABEL_GAP.FOB_PICKUP
+    return LABEL_GAP.NEEDS_LABEL
+  }
   return heldForPayment ? LABEL_GAP.HELD_FOR_PAYMENT : LABEL_GAP.LABELLED_NOT_SHIPPED
 }
 
@@ -60,6 +74,14 @@ export function labelGapNeeded({
       return `Shipped on ${labelCount} label(s) — mark ${ifNumber} shipped in NetSuite`
     case LABEL_GAP.FREIGHT_BOL_LANE:
       return 'Freight/BOL lane — routed on a BOL, not a parcel label'
+    case LABEL_GAP.FOB_PICKUP:
+      // Names the CONFIRMATION as the action, because that is the only part of
+      // this lane anyone here touches — the China warehouse confirms the pickup
+      // and the NY office holds the thread. The balance rides along as context
+      // (it's the largest on the board) but it is NOT what is being asked for.
+      return heldForPayment
+        ? `FOB — in China awaiting pickup; confirm with the China warehouse / NY office (${money(amountRemaining)} owed on ${invoiceNumber})`
+        : 'FOB — in China awaiting pickup; confirm with the China warehouse / NY office'
     default:
       // The label is named as the action even when payment is also holding the
       // departure, because making it is the next step either way. The balance
