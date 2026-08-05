@@ -15,16 +15,33 @@
 // A resolution always wins over inference, and is always visibly flagged.
 
 import { poVersionInfo } from './ediPoDiff.js'
-import { minusBusinessDays, routingLeadDays, toDay } from './shipWindow.js'
+import { routingDeadline, routingCutoffHour } from './shipWindow.js'
 
 // The routing deadline for one EDI order, or null when the partner has no stated
-// routing lead (everyone but Bloomingdale's) or the partner sent no cancel date.
+// routing lead or sent no cancel date.
+//
 // `order.tradingPartner` is what names the partner here — partnerKey reads
 // location+customer, and an EDI review order carries the partner instead.
 export function routeByFor(order, cancelAfter) {
-  const lead = routingLeadDays({ customer: order?.tradingPartner || '' })
-  const cancel = toDay(cancelAfter)
-  return lead && cancel != null ? minusBusinessDays(cancel, lead) : null
+  return routingDeadline({ customer: order?.tradingPartner || '' }, cancelAfter)
+}
+
+// Does this partner's deadline carry a time of day (Nordstrom's noon) rather than
+// being "some time that day"? Decides whether lateness is judged to the hour.
+export function routeCutoffHourFor(order) {
+  return routingCutoffHour({ customer: order?.tradingPartner || '' })
+}
+
+// How the deadline reads on a card. Names the date, and the hour only when the
+// partner actually has a cutoff — saying "by 12pm" to a partner with no stated
+// cutoff would invent a precision we were never given.
+export function routeDeadlineText(routeBy, cutoffHour) {
+  if (routeBy == null) return 'routing'
+  const d = new Date(routeBy)
+  const date = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  if (cutoffHour == null) return date
+  const hour = cutoffHour % 12 === 0 ? 12 : cutoffHour % 12
+  return `${date} ${hour}${cutoffHour < 12 ? 'am' : 'pm'}`
 }
 
 const DAY = 86400000
@@ -207,10 +224,14 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   let routeState = null // 'passed' | 'soon' | null
   let routeDays = null
   const routeBy = order.routed ? null : routeByFor(order, order.cancelAfter)
+  const routeCutoffHour = routeCutoffHourFor(order)
   if (!closed && !partnerCancelled && !order.routed && routeBy != null && order.stageRank < 3) {
-    const d = daysSince(routeBy, today)
-    if (d != null && d >= 0) { routeState = 'passed'; routeDays = d }
-    else if (d != null && -d <= ROUTE_SOON_DAYS) { routeState = 'soon'; routeDays = -d }
+    // Compared as INSTANTS, not whole days, because Nordstrom's deadline is noon —
+    // day-precision math would call 3pm on the deadline day "still today" and hand
+    // back a next-day pickup that is already gone.
+    const ms = routeBy - today
+    if (ms <= 0) { routeState = 'passed'; routeDays = Math.max(0, Math.round(-ms / DAY)) }
+    else if (ms <= ROUTE_SOON_DAYS * DAY) { routeState = 'soon'; routeDays = Math.round(ms / DAY) }
   }
 
   // ── what's needed next (first thing that blocks progress) ─────────────────
@@ -273,8 +294,12 @@ export function deriveWork(order, resolution = null, today = Date.now()) {
   // The routing deadline leads only when the cancel date has NOT already passed —
   // once the shipment is late outright, "route it by Tuesday" is no longer the
   // useful sentence. Says ROUTE explicitly so it can't be read as a ship date.
-  else if (routeState === 'passed') needed = `⚠ Routing was due ${routeDays}d ago (3 business days before cancel) — ${needed || 'route it'}`
-  else if (routeState === 'soon') needed = `⏱ Route within ${routeDays}d — 3 business days before the cancel date — ${needed || 'route it'}`
+  // The lead differs by partner (3 business days for Bloomingdale's, noon the day
+  // before for Nordstrom), so the sentence states the ACTUAL deadline rather than
+  // hardcoding one partner's rule — the previous draft said "3 business days" to
+  // everyone, which would have been wrong for every Nordstrom PO.
+  else if (routeState === 'passed') needed = `⚠ Routing was due ${routeDeadlineText(routeBy, routeCutoffHour)} — ${needed || 'route it'}`
+  else if (routeState === 'soon') needed = `⏱ Route by ${routeDeadlineText(routeBy, routeCutoffHour)} — ${needed || 'route it'}`
 
   return {
     closed,

@@ -606,7 +606,7 @@ test('ediWork: Bloomingdale\'s routing deadline fires ahead of the cancel date',
   assert.equal(due.routeState, 'passed')          // Aug 5 IS the deadline
   assert.equal(due.cancelState, 'soon')           // the cancel date is merely near
   assert.match(due.needed, /Routing was due/)
-  assert.match(due.needed, /3 business days/)
+  assert.match(due.needed, /Wed, Aug 5/)   // names the real deadline, not one partner's rule
 
   // ⚠️ The false-positive guard. All 4 live Bloomingdale's POs were ALREADY routed
   // the day this shipped — ungated, this flag would have been 4-for-4 wrong.
@@ -615,9 +615,20 @@ test('ediWork: Bloomingdale\'s routing deadline fires ahead of the cancel date',
   assert.equal(alreadyRouted.routeBy, null)
   assert.doesNotMatch(alreadyRouted.needed || '', /Routing/)
 
-  // Nordstrom has no stated routing lead, so it gets no second deadline.
+  // Nordstrom's rule is a different SHAPE — noon the day before, for next-day
+  // pickup — so a cancel date 5 days out is not yet its deadline.
   const nord = deriveWork({ ...edi850(3), cancelAfter: '2026-08-10' }, null, AUG5)
   assert.equal(nord.routeState, null)
+  // ...but the day before, noon binds.
+  const AUG7_9AM = new Date(2026, 7, 7, 9, 0, 0).getTime()   // Fri, cancel is Mon Aug 10
+  const nordDue = deriveWork({ ...edi850(3), cancelAfter: '2026-08-10' }, null, AUG7_9AM)
+  assert.equal(nordDue.routeState, 'soon')
+  assert.equal(new Date(nordDue.routeBy).getHours(), 12)     // noon, not midnight
+  assert.match(nordDue.needed, /Route by .*12pm/)
+  // 3pm on the deadline day is LATE — day-precision math would call it "still today"
+  // and hand back a next-day pickup that is already gone.
+  const AUG7_3PM = new Date(2026, 7, 7, 15, 0, 0).getTime()
+  assert.equal(deriveWork({ ...edi850(3), cancelAfter: '2026-08-10' }, null, AUG7_3PM).routeState, 'passed')
 
   // Once the cancel date itself has passed, "route it by Tuesday" is not the
   // useful sentence any more — the outright miss leads.
@@ -1002,13 +1013,22 @@ test('buildRouteItems draws tasks, EDI actions and shippable orders', () => {
     { soNumber: 'SO8', customer: 'Shop Y', stage: STAGE.PACKED, severity: 1, location: 'Boutique' },
   ]
   const ediWork = { orders: [
-    { businessNumber: 'PO7', tradingPartner: 'Nordstrom (EDI)', stageRank: 1, work: { closed: false, cancelState: 'ok' } },
+    // ⚠️ REWRITTEN 2026-08-04, and the change is the point. This PO used to assert
+    // that ANY early-stage Nordstrom order earns a noon routing leg. That rule
+    // measured 18-for-18 false on live data (14 POs 380–534 days past their cancel
+    // date, 4 cancelling months out, none due), so a calm Nordstrom PO with no
+    // urgency must now produce NO leg. `routeState`/`cancelState` decide, not the
+    // partner's name.
+    { businessNumber: 'PO7', tradingPartner: 'Nordstrom (EDI)', stageRank: 1, work: { closed: false, cancelState: null, routeState: null } },
+    { businessNumber: 'PO8', tradingPartner: 'Nordstrom (EDI)', stageRank: 1, work: { closed: false, cancelState: null, routeState: 'soon', routeBy: noon } },
   ] }
   const items = buildRouteItems(orders, tasks, ediWork, { now: T0 })
   const ids = items.map((i) => i.id)
   assert.ok(ids.includes('task-1'))
   assert.ok(!ids.includes('task-3'))            // done tasks excluded
-  assert.ok(ids.includes('edi-PO7'))            // Nordstrom early-stage → routing leg
+  assert.ok(!ids.includes('edi-PO7'))           // calm Nordstrom PO → no leg at all
+  assert.ok(ids.includes('edi-PO8'))            // ...but a real routing cutoff does
+  assert.equal(items.find((i) => i.id === 'edi-PO8').deadline, noon)  // its OWN cutoff instant
   assert.ok(ids.includes('ship-SO9'))           // approved-for-shipping → ship leg
   const measured = items.find((i) => i.id === 'task-2')
   assert.equal(measured.durationMin, 25)        // real duration_min wins
@@ -2286,14 +2306,25 @@ test('the routing deadline is 3 BUSINESS days before Bloomingdale\'s cancel date
 })
 
 test('no routing deadline is invented for partners we were not told about', () => {
-  // Nordstrom is documented as rigid and no routing lead has been stated. Assuming
-  // one would fabricate urgency — the mirror of assuming a headstart.
+  // Nima, 2026-08-04, on the others: "as far as we know no". So Saks/Shopbop/NMG
+  // get nothing — assuming a lead fabricates urgency, the mirror of assuming a
+  // headstart. (Nordstrom DOES have one, but as a noon cutoff — see below.)
+  const saks = shipWindow({
+    customer: 'Saks Fifth Avenue', ediWindow: { cancelAfter: '2026-08-10' },
+  }, AUG2)
+  assert.equal(saks.routingLeadDays, 0)
+  assert.equal(saks.routeBy, null)
+  assert.equal(saks.daysToRoute, null)
+
+  // Nordstrom: one day's lead, and the deadline lands at NOON rather than midnight.
+  // "nordstrom needs to be routed by 12 in the afternoon for next day pick up so if
+  // the cancel day is the next day, it needs to be routed before 12."
   const nord = shipWindow({
     customer: 'Nordstrom - 584', ediWindow: { cancelAfter: '2026-08-10' },
   }, AUG2)
-  assert.equal(nord.routingLeadDays, 0)
-  assert.equal(nord.routeBy, null)
-  assert.equal(nord.daysToRoute, null)
+  assert.equal(nord.routingLeadDays, 1)
+  assert.equal(isoDay(nord.routeBy), '2026-08-07')          // Fri before a Mon cancel
+  assert.equal(new Date(nord.routeBy).getHours(), 12)
 
   // ...and no partner cancel date means nothing to count back from.
   const noWindow = shipWindow({ customer: "Bloomingdale's - 059", shipDate: '2026-08-20' }, AUG2)

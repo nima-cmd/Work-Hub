@@ -79,10 +79,50 @@ const HEADSTART = { bloomingdales: DC_HEADSTART_DAYS }
 // module's existing rule for headstarts applies in mirror image here: inventing a
 // lead time we were not told about would fabricate urgency, exactly as assuming a
 // headstart would ship early. Other partners get 0 until Nima says otherwise.
-export const ROUTING_LEAD_BUSINESS_DAYS = { bloomingdales: 3 }
+// ── ...and Nordstrom's is a CUTOFF, not a lead (Nima, 2026-08-04) ────────────
+//
+//   "as far as we know no [for the others] though nordstrom needs to be routed by
+//    12 in the afternoon for next day pick up so if the cancel day is the next
+//    day, it needs to be routed before 12 in the afternoon"
+//
+// A different shape from Bloomingdale's. Nordstrom's lead is ONE day — route today,
+// pick up tomorrow — but it carries a TIME OF DAY: miss noon and you have lost the
+// next-day pickup, so the deadline is noon on the day before the cancel date.
+//
+// ⚠️ The reason this matters is that the day plan already stamped EVERY early-stage
+// Nordstrom PO with a blanket noon deadline, and measured 2026-08-04 it was
+// 18-for-18 wrong: 14 of those POs had cancel dates 380–534 days PAST, 4 cancelled
+// 36–118 days out, and none cancelled today or tomorrow. Every one rendered
+// "⚠ MISSES CUTOFF" every day — the largest block of false urgency on the board.
+// A cutoff that is always on is not a cutoff.
+export const ROUTING_LEAD_BUSINESS_DAYS = { bloomingdales: 3, nordstrom: 1 }
+
+// The hour on the routing day by which the request must be in. Only Nordstrom has
+// stated one; for everyone else the deadline is the whole day.
+export const ROUTING_CUTOFF_HOUR = { nordstrom: 12 }
 
 export function routingLeadDays(order) {
   return ROUTING_LEAD_BUSINESS_DAYS[partnerKey(order)] || 0
+}
+
+export function routingCutoffHour(order) {
+  return ROUTING_CUTOFF_HOUR[partnerKey(order)] ?? null
+}
+
+// The routing deadline as a real instant: the lead walked back in business days,
+// then the partner's cutoff hour applied if it has one. Without a cutoff hour it
+// stays at local midnight, i.e. "some time that day", which is how the
+// Bloomingdale's rule was stated.
+export function routingDeadline(order, cancelAfter) {
+  const lead = routingLeadDays(order)
+  const cancel = toDay(cancelAfter)
+  if (!lead || cancel == null) return null
+  const day = minusBusinessDays(cancel, lead)
+  const hour = routingCutoffHour(order)
+  if (hour == null) return day
+  const d = new Date(day)
+  d.setHours(hour, 0, 0, 0)
+  return d.getTime()
 }
 
 // Walk back n business days, skipping Saturday and Sunday. Holidays are NOT
@@ -162,8 +202,11 @@ export function shipWindow(order, today = new Date()) {
   // EDI disagrees with the partner on 12 of 12 open POs and usually reads LATER,
   // so deriving a routing deadline from it would push the deadline out rather
   // than pull it in. No cancelAfter → no routing deadline, not a guessed one.
+  // Via routingDeadline so the partner's cutoff HOUR is applied too (Nordstrom's
+  // noon) — computing the day here and forgetting the hour is how the two halves of
+  // this rule would drift apart.
   const routeLead = routingLeadDays(order)
-  const routeBy = routeLead && cancel != null ? minusBusinessDays(cancel, routeLead) : null
+  const routeBy = routingDeadline(order, edi?.cancelAfter)
 
   // Already gone → the deadline is moot. Worth stating rather than assuming:
   // the OVERDUE flag this module replaced did NOT check, so a shipped order

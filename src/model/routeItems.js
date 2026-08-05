@@ -116,12 +116,28 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
 
   // ── EDI routing actions ──
   for (const o of (ediWork?.orders || []).filter((o) => !o.work.closed)) {
-    const partner = (o.tradingPartner || '').toLowerCase()
     const short = (o.tradingPartner || '').replace(/\s*\(.*$/, '')
     let deadline = null, priority = 3
-    if (partner.includes('nordstrom') && o.stageRank < 3) { deadline = times.NOON; priority = 1 }
-    else if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
-    else if (o.work.cancelState === 'soon') { deadline = times.THREE; priority = 1 }
+    // ⚠️ ORDER MATTERS, and it used to be wrong. The first test was
+    // `partner.includes('nordstrom') && stageRank < 3` → a blanket noon cutoff,
+    // which (a) measured 18-for-18 FALSE on 2026-08-04 — 14 of those POs had cancel
+    // dates 380–534 days PAST and 4 cancelled 36–118 days out, none due today — and
+    // (b) being tested FIRST, it SWALLOWED `cancelState === 'passed'`, so the 14
+    // genuinely blown POs were handed a noon deadline at priority 1 instead of
+    // priority 0. The same "answered the wrong question first" shape as the label
+    // vs payment ordering (PR #49).
+    //
+    // Now the real deadline decides, and the partner cutoff only applies when it is
+    // actually the operative one — Nordstrom's noon is a next-day-pickup cutoff, so
+    // it binds the day before the cancel date, not every day forever.
+    if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
+    else if (o.work.routeState === 'passed') { deadline = now; priority = 0 }
+    else if (o.work.routeState === 'soon') {
+      // The partner's own cutoff instant when they have one (noon for Nordstrom),
+      // else lean on the afternoon cutoff the rest of the board uses.
+      deadline = o.work.routeBy ?? times.THREE
+      priority = 1
+    } else if (o.work.cancelState === 'soon') { deadline = times.THREE; priority = 1 }
     else continue
     // lead with the PO so it's never lost to truncation (long partner names
     // like "Saks Fifth Avenue & Saks OFF 5th" would otherwise eat the number)
