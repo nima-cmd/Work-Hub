@@ -1588,7 +1588,7 @@ const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", charact
   from_address AS "fromAddress", from_name AS "fromName", subject, snippet, status,
   needs_type AS "needsType", needs_note AS "needsNote",
   netsuite_doc_type AS "netsuiteDocType", netsuite_doc_number AS "netsuiteDocNumber",
-  urgency, recurring_key AS "recurringKey", instance_key AS "instanceKey", completion_mode AS "completionMode",
+  urgency, urgency_override AS "urgencyOverride", recurring_key AS "recurringKey", instance_key AS "instanceKey", completion_mode AS "completionMode",
   verify_key AS "verifyKey", checklist, due_at AS "dueAt", duration_min AS "durationMin",
   created_at AS "createdAt", completed_at AS "completedAt"`
 
@@ -1673,8 +1673,13 @@ export async function updateTaskNeeds({ id, needsType, needsNote, netsuiteDocTyp
 }
 
 // urgency: 'hi' | 'mid' | 'lo' | null
+// Nima setting urgency by hand writes urgency_override, NOT urgency (2026-08-05).
+// `urgency` is also written by recurring templates, so the old single field could
+// not distinguish his choice from a default — which is why 16 of 34 tasks read 'hi'
+// without anyone having decided that. Passing null clears the override and hands the
+// task back to src/model/taskUrgency.js.
 export async function updateTaskUrgency(id, urgency, db = pool) {
-  await db.query('UPDATE quest_tasks SET urgency = $2 WHERE id = $1', [id, urgency || null])
+  await db.query('UPDATE quest_tasks SET urgency_override = $2 WHERE id = $1', [id, urgency || null])
 }
 
 // Daily Flight Plan scheduling (Nima, 2026-07-28). Either field may be passed

@@ -1036,6 +1036,18 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] DE
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS routing_request_number TEXT;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS routing_request_line   TEXT;
 
+-- Derived urgency with a manual override (Nima, 2026-08-05): "if the app can learn
+-- and set urgency with a manual overrid it be best."
+--
+-- `urgency` stays as-is (recurring TEMPLATES write it, and legacy rows carry it), and
+-- the effective urgency is now COMPUTED at read time by src/model/taskUrgency.js.
+-- The override is a separate column on purpose: the old single field was written
+-- both by a template and by Nima, so there was no way to tell what he had actually
+-- chosen from what defaulted. Measured before the change: 16 of 34 open tasks were
+-- 'hi' and 18 were unset, with zero 'mid' and zero 'lo' — a field that is either
+-- maximum or nothing cannot order a day.
+ALTER TABLE quest_tasks ADD COLUMN IF NOT EXISTS urgency_override TEXT;
+
 -- routing_auth: a routing authorization is its OWN entity, not a per-shipment
 -- field (Nima, 2026-07-22). One auth number covers a SET of shipments — it can
 -- cover everything routed in one go, or there can be several auths each
