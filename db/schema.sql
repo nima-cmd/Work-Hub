@@ -1438,3 +1438,42 @@ UPDATE recurring_task_templates SET active = false
 DELETE FROM quest_tasks
  WHERE status = 'open'
    AND recurring_key IN ('weaver-netsuite-update', 'airtable-daily-reminder', 'csv-freshness-monitor');
+
+-- ── The ShipStation push had no memory (2026-08-05) ──────────────────────────
+-- `pushToShipstation` created orders and wrote NOTHING down, so Work-Hub could
+-- not tell that a label existed at all. The cost, measured the day it was found:
+-- 19 Bloomingdale's cartons on PO 8040313/8040291 had labels bought and real
+-- tracking numbers in ShipStation while every one of their IFs still read
+-- `Picked` here — no tracking, no invoice, no ASN, and nothing anywhere able to
+-- say the next step was owed. Nima: "you can see we haven't even gotten through
+-- all our emails… this is an example of us getting derailed."
+--
+-- One row per pushed order, keyed on the orderKey we mint (`WH-<IF>[-<carton>]`)
+-- — which ShipStation treats as PERMANENT identity: a deleted key can never be
+-- recreated (see the shipstation-label-pipeline notes). The tracking columns are
+-- filled later by a read-only harvest, so a row exists from the moment of the
+-- push and simply gains evidence.
+CREATE TABLE IF NOT EXISTS shipstation_order (
+  order_key       TEXT PRIMARY KEY,      -- 'WH-IF7469-2' — ours, permanent
+  if_number       TEXT,                  -- the fulfilment it belongs to
+  carton_no       INTEGER,               -- null for boutique (one order per IF)
+  order_number    TEXT,                  -- what prints as label line 1
+  scope           TEXT,                  -- 'edi' | 'boutique'
+  store_id        INTEGER,
+  shipstation_id  BIGINT,                -- orderId returned by the API
+  po_number       TEXT,
+  dc              TEXT,
+  pushed_at       TIMESTAMPTZ DEFAULT now(),
+  -- ── filled by the read-only harvest, never by the push ──
+  tracking_number TEXT,
+  carrier_code    TEXT,
+  service_code    TEXT,
+  ship_date       DATE,                  -- ShipStation's own, NOT a departure
+  shipment_cost   NUMERIC,
+  voided          BOOLEAN,
+  label_at        TIMESTAMPTZ,           -- when the label was actually bought
+  harvested_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_shipstation_order_if  ON shipstation_order(if_number);
+CREATE INDEX IF NOT EXISTS idx_shipstation_order_po  ON shipstation_order(po_number, dc);
+CREATE INDEX IF NOT EXISTS idx_shipstation_order_trk ON shipstation_order(tracking_number);

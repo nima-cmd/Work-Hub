@@ -2082,3 +2082,75 @@ export async function fetchTaskActivity({ date } = {}, db = pool) {
   )
   return rows
 }
+
+// ── ShipStation push memory (Nima, 2026-08-05) ───────────────────────────────
+//
+// The push used to create orders and write nothing down, so nothing here could
+// tell that a label existed — 19 Bloomingdale's cartons had real tracking in
+// ShipStation while every IF still read `Picked`. These two functions are the
+// memory: `recordShipstationOrders` at push time, `applyShipstationTracking`
+// when the read-only harvest finds a label.
+//
+// The push half NEVER writes tracking columns, and the harvest half never
+// invents a row: an orderKey we did not push is not ours to claim.
+export async function recordShipstationOrders(records = [], db = pool) {
+  const rows = records.filter((r) => r?.orderKey)
+  if (!rows.length) return 0
+  const cols = ['order_key', 'if_number', 'carton_no', 'order_number', 'scope', 'store_id', 'shipstation_id', 'po_number', 'dc']
+  const values = []
+  const tuples = rows.map((r, i) => {
+    values.push(r.orderKey, r.ifNumber ?? null, r.cartonNo ?? null, r.orderNumber ?? null,
+                r.scope ?? null, r.storeId ?? null, r.shipstationId ?? null, r.poNumber ?? null, r.dc ?? null)
+    const base = i * cols.length
+    return `(${cols.map((_, k) => `$${base + k + 1}`).join(',')}, now())`
+  })
+  // pushed_at refreshes on a re-push because that is when the order was last
+  // asserted. Tracking columns are deliberately absent from the update list —
+  // a re-push must never erase evidence the harvest has already found.
+  const updates = cols.slice(1).map((c) => `${c} = COALESCE(EXCLUDED.${c}, shipstation_order.${c})`).join(', ')
+  await db.query(
+    `INSERT INTO shipstation_order (${cols.join(', ')}, pushed_at)
+     VALUES ${tuples.join(',')}
+     ON CONFLICT (order_key) DO UPDATE SET ${updates}, pushed_at = now()`,
+    values,
+  )
+  return rows.length
+}
+
+// Harvested shipment facts → the rows we already own. UPDATE-only, keyed on
+// order_key: ShipStation holds ~99,000 shipments, virtually none of them ours.
+export async function applyShipstationTracking(shipments = [], db = pool) {
+  let applied = 0
+  for (const s of shipments) {
+    if (!s?.orderKey) continue
+    const { rowCount } = await db.query(
+      `UPDATE shipstation_order
+          SET tracking_number = $2, carrier_code = $3, service_code = $4, ship_date = $5,
+              shipment_cost = $6, voided = $7, label_at = $8, harvested_at = now()
+        WHERE order_key = $1`,
+      [s.orderKey, s.trackingNumber ?? null, s.carrierCode ?? null, s.serviceCode ?? null,
+       s.shipDate ?? null, s.shipmentCost ?? null, s.voided ?? null, s.labelAt ?? null],
+    )
+    applied += rowCount
+  }
+  return applied
+}
+
+// Everything we have pushed, newest first — the join the routing cards read.
+export async function fetchShipstationOrders({ ifNumbers = null, poNumber = null } = {}, db = pool) {
+  const where = [], args = []
+  if (ifNumbers?.length) { args.push(ifNumbers); where.push(`if_number = ANY($${args.length})`) }
+  if (poNumber) { args.push(poNumber); where.push(`po_number = $${args.length}`) }
+  const { rows } = await db.query(
+    `SELECT order_key AS "orderKey", if_number AS "ifNumber", carton_no AS "cartonNo",
+            order_number AS "orderNumber", scope, store_id AS "storeId", po_number AS "poNumber", dc,
+            pushed_at AS "pushedAt", tracking_number AS "trackingNumber", carrier_code AS "carrierCode",
+            service_code AS "serviceCode", ship_date AS "shipDate", shipment_cost AS "shipmentCost",
+            voided, label_at AS "labelAt", harvested_at AS "harvestedAt"
+       FROM shipstation_order
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY pushed_at DESC, order_key`,
+    args,
+  )
+  return rows
+}

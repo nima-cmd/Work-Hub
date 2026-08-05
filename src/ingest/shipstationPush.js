@@ -95,27 +95,48 @@ export async function pushOrders(orders = [], { dryRun = false, request = ssRequ
 // Build the EDI (DC-direct parcel) orders for the shipments given. One order per
 // CARTON: a parcel is one label, and there is no such thing as one master label
 // covering a DC's cartons — that is a BOL, i.e. the freight lane.
+// `records` rides alongside `orders` so the push can be REMEMBERED (2026-08-05).
+// It is built in this same loop on purpose: the alternative — a second function
+// that re-derives if/carton/po/dc from the order object — is the two-copies shape
+// that has produced a bug in this repo every time it has been tried. The record
+// is not sent to ShipStation; only `orders` is.
 export function ediOrdersFor(shipments = [], { storeId, now } = {}) {
-  const out = []
+  const out = [], records = []
   for (const s of shipments) {
     const w = s.labels
     if (!w?.applicable || !w.cartons) continue
     // Freight and FOB never get a parcel label; `applicable` already encodes that.
-    for (const line of w.lines) out.push(buildEdiOrder({ shipment: s, line, storeId, now }))
+    for (const line of w.lines) {
+      const order = buildEdiOrder({ shipment: s, line, storeId, now })
+      out.push(order)
+      records.push({
+        orderKey: order.orderKey, orderNumber: order.orderNumber, scope: 'edi', storeId,
+        ifNumber: line.ifNumber, cartonNo: line.cartonNo ?? line.seq ?? null,
+        poNumber: line.poNumber ?? null, dc: s.dc ?? null,
+      })
+    }
   }
-  return out
+  return { orders: out, records }
 }
 
 // Boutique orders ship WITHOUT weight or dimensions on purpose — Nima boxes them in
 // ShipStation exactly like retail. An order with no address is skipped and reported
 // rather than pushed half-formed: a label to nowhere is worse than a missing one.
 export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) {
-  const orders = [], skipped = []
+  const orders = [], skipped = [], records = []
   for (const r of rows) {
     if (!r.address?.zip) { skipped.push({ ifNumber: r.fulfilment?.ifNumber, reason: 'no ship-to address' }); continue }
-    orders.push(buildBoutiqueOrder({ ...r, storeId, upsAccount, now }))
+    const order = buildBoutiqueOrder({ ...r, storeId, upsAccount, now })
+    orders.push(order)
+    // No carton number: a boutique fulfilment pushes as ONE order and the box is
+    // chosen in ShipStation, so there is nothing to number.
+    records.push({
+      orderKey: order.orderKey, orderNumber: order.orderNumber, scope: 'boutique', storeId,
+      ifNumber: r.fulfilment?.ifNumber ?? null, cartonNo: null,
+      poNumber: r.order?.poNumber ?? null, dc: null,
+    })
   }
-  return { orders, skipped }
+  return { orders, skipped, records }
 }
 
 // ── Boutique ship-to addresses, from NetSuite ───────────────────────────────
