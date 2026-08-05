@@ -44,6 +44,7 @@
 import * as Q from '../server/queries.js'
 import { pool } from '../src/db.js'
 import { LIVE_SYNCS } from '../src/model/syncHealth.js'
+import { FILING_LEDGER_START } from '../src/model/filing.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -150,6 +151,47 @@ inb.counts.late + inb.counts.awaiting <= inbTotal
     `${inb.counts.late} + ${inb.counts.awaiting} <= ${inbTotal}`)
   : bad('inbound late + awaiting fit inside the container list',
     `${inb.counts.late} + ${inb.counts.awaiting} > ${inbTotal}`)
+
+// ── promises that were only comments (shape iv) ──────────────────────────────
+// Each of these was an assertion in prose that nothing verified. A comment
+// claiming a scope rule is not the scope rule — that is how a page ended up
+// listing shipments that had already left, and how the header's `waiting` figure
+// spent its life at zero. Cheap to assert, so now they are asserted.
+
+// queries.js: "Placeholder orders are EXCLUDED here, at the single read path
+// every work view uses."
+const orders = await Q.getOrders()
+const { rows: phRows } = await pool.query(`SELECT COUNT(*) n FROM orders WHERE is_placeholder IS TRUE`)
+const leaked = orders.filter((o) => o.isPlaceholder).length
+leaked
+  ? bad('placeholder orders never reach getOrders', `${leaked} leaked`)
+  : ok('placeholder orders never reach getOrders', `${phRows[0].n} placeholder(s) held back`)
+
+// queries.js: "China-Warehouse orders are EXCLUDED — they ship FOB direct."
+const chinaInBay = bay.filter((s) => /china/i.test(s.location || '')).map((s) => s.ifNumber)
+chinaInBay.length
+  ? bad('China/FOB never appears on the dock', `present: ${chinaInBay.join(', ')}`)
+  : ok('China/FOB never appears on the dock', 'collected abroad, has its own lane')
+
+// filing.js: shipments that departed before the epoch "are never counted as due".
+// Both directions, because the split is only honest if neither side leaks.
+const epoch = new Date(FILING_LEDGER_START)
+const preEpochDue = unf.due.filter((r) => new Date(r.shippedAt) < epoch).length
+const postEpochBacklog = unf.backlog.filter((r) => new Date(r.shippedAt) >= epoch).length
+preEpochDue || postEpochBacklog
+  ? bad('the filing epoch split leaks in neither direction',
+    `${preEpochDue} pre-epoch in due, ${postEpochBacklog} post-epoch in backlog`)
+  : ok('the filing epoch split leaks in neither direction', `epoch ${FILING_LEDGER_START}`)
+
+// queries.js: held-for-payment rows are "never added to any actionable number".
+// The headline age is the one that would quietly absorb them.
+const maxHeldAge = Math.max(0, ...lg.heldForPayment.map((h) => h.ageDays ?? 0))
+const maxActionable = Math.max(0, ...[...lg.needsLabel, ...lg.labelledNotShipped].map((h) => h.ageDays ?? 0))
+lg.oldestAgeDays === maxActionable
+  ? ok('the headline age ignores parked and non-parcel lanes',
+    `oldest ${lg.oldestAgeDays} = oldest actionable ${maxActionable} (oldest held is ${maxHeldAge})`)
+  : bad('the headline age ignores parked and non-parcel lanes',
+    `oldest ${lg.oldestAgeDays} but oldest actionable is ${maxActionable}`)
 
 // ── sync health: a sync that silently stops being reported reads as healthy ──
 const sh = await Q.getSyncHealth()
