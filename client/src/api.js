@@ -942,3 +942,13 @@ export async function fetchOverdueInvoices() {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// Push parcel shipments into ShipStation as orders. Buying the label stays a human
+// action there — this never purchases anything.
+export async function pushToShipstation(body = {}) {
+  const res = await fetch('/api/shipstation/push', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'push failed')
+  return res.json()
+}

@@ -3,7 +3,7 @@ import {
   fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
-  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed,
+  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
@@ -60,6 +60,7 @@ export default function Routing() {
   const [tab, setTab] = useState('active') // 'active' | 'shipped'
 
   const [pulled, setPulled] = useState(null) // last NetSuite pull's result line
+  const [pushed, setPushed] = useState(null) // last ShipStation push's result line
 
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
@@ -135,6 +136,16 @@ export default function Routing() {
     if (!confirm(`Void BOL ${s.bolNumber}? The number stays retired and is never reused.`)) return
     run('void' + s.id, () => voidRoutingShipment(s.id))
   }
+  async function onPushShipstation() {
+    setBusy('ss')
+    try {
+      const r = await pushToShipstation({ scope: 'edi' })
+      setPushed(r)
+      setErr(r.failed ? `${r.failed} of ${r.candidates} carton(s) failed to reach ShipStation` : null)
+    } catch (e) {
+      setErr('ShipStation push failed: ' + e.message)
+    } finally { setBusy(null) }
+  }
   const onSaveRefs = (id, fields) => run('refs' + id, () => setShipmentRefs(id, fields))
   const onShip = (s) => run('ship' + s.id, () => setShipmentShipped(s.id, !s.shippedAt))
   // Toggle the routed flag with no paperwork attached — Nordstrom never gets a
@@ -203,6 +214,14 @@ export default function Routing() {
                   title="Re-read the carton records straight from NetSuite — use this as you finish packing">
             {busy === 'pull' ? '⟳ Pulling from NetSuite…' : '⟳ Pull from NetSuite'}
           </button>
+          {/* Queue the DC-direct parcel cartons in ShipStation so labels can be
+              bought there rather than typed. Creates/updates orders ONLY — nothing
+              is purchased, and a re-push updates in place (orderKey is the carton's
+              stable identity), so it is safe to press twice. */}
+          <button className="btn" disabled={busy === 'ss'} onClick={onPushShipstation}
+                  title="Create/update ShipStation orders for the DC-direct parcel cartons. Never buys a label.">
+            {busy === 'ss' ? '⇪ Pushing…' : '⇪ Push to ShipStation'}
+          </button>
           <button className="btnGhost" disabled={busy === 'pull'} onClick={load}
                   title="Re-read what the app already has — does not go back to NetSuite">↻ Reload
           </button>
@@ -215,6 +234,15 @@ export default function Routing() {
           {pulled.skipped
             ? `NetSuite returned no cartons — the feed was left untouched (${pulled.skipped}).`
             : `Pulled ${pulled.cartons} carton${pulled.cartons === 1 ? '' : 's'} from NetSuite across ${pulled.loaded} PO-DC group${pulled.loaded === 1 ? '' : 's'}.`}
+        </div>
+      )}
+
+      {/* Says what to do NEXT — a queued order is not a label until someone buys it,
+          and leaving that implicit is how a shipment sits unshipped. */}
+      {pushed && (
+        <div className={'banner ' + (pushed.failed ? 'warn' : 'ok')}>
+          ⇪ ShipStation: {pushed.pushed} carton{pushed.pushed === 1 ? '' : 's'} queued
+          {pushed.failed ? `, ${pushed.failed} failed` : ''} — buy the labels in ShipStation. Nothing was purchased.
         </div>
       )}
 

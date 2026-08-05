@@ -9,6 +9,12 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
+import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses } from '../src/ingest/shipstationPush.js'
+import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
+
+// The API-created store ("Api Shipments"). Overridable per deploy; the account's
+// other stores are the Shopify/retail ones and must not receive these.
+const SHIPSTATION_STORE_ID = Number(process.env.SHIPSTATION_STORE_ID || 351819)
 import { macysDc, parcelBilling } from '../src/model/bolAddresses.js'
 import { SOURCE_LABELS, REQUIRED_SOURCES, SOURCE_LINKS } from '../src/ingest/detect.js'
 import {
@@ -1409,6 +1415,41 @@ async function fetchShipmentStoreCartons(ids = []) {
 // The label worksheet as CSV, for a carrier's batch-import tool (Nima, 2026-08-05:
 // "If this is something we can make as an export to import into UPS let me know").
 // One row per carton, because that is one label.
+// Push the parcel shipments into ShipStation so labels can be bought there instead
+// of typed. NOTHING IS PURCHASED — see src/ingest/shipstationPush.js.
+//
+// `scope`: 'edi' (DC-direct cartons, weights and dims included) or 'boutique'
+// (no packages — the box is chosen in ShipStation, like retail).
+export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId = SHIPSTATION_STORE_ID } = {}) {
+  if (scope === 'boutique') {
+    // Boutique fulfilments that are packed and still here.
+    const { rows } = await pool.query(
+      `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
+              o.customer
+       FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+       WHERE f.actual_ship_date IS NULL AND f.status ILIKE 'packed'
+         AND o.source = 'boutique' AND COALESCE(o.location,'') NOT ILIKE '%china%'
+       ORDER BY f.if_number`)
+    // Addresses live only in NetSuite — Neon has no address column at all.
+    const addrs = await fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL })
+    const { orders, skipped } = boutiqueOrdersFor(
+      rows.map((r) => ({ order: r, fulfilment: { ifNumber: r.ifNumber }, address: addrs.get(r.ifNumber) })),
+      { storeId },
+    )
+    const res = await pushOrders(orders, { dryRun })
+    return { ...res, scope, skipped, candidates: rows.length }
+  }
+
+  const routing = await getRouting()
+  const list = Array.isArray(routing) ? routing : (routing.shipments || [])
+  // Parcel only: freight moves on a BOL and FOB is collected abroad, both of which
+  // `labels.applicable` already excludes. Shipped ones are done.
+  const shipments = list.filter((s) => s.labels?.applicable && !s.shippedAt && /ups/i.test(s.carrier || ''))
+  const orders = ediOrdersFor(shipments, { storeId })
+  const res = await pushOrders(orders, { dryRun })
+  return { ...res, scope, shipments: shipments.length, candidates: orders.length }
+}
+
 export async function getLabelWorksheetCsv({ bolNumber = null } = {}) {
   const r = await getRouting()
   const list = Array.isArray(r) ? r : (r.shipments || [])

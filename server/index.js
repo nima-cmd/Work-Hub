@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  setFulfillmentPrepped, getLabelWorksheetCsv, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  setFulfillmentPrepped, getLabelWorksheetCsv, pushToShipstation, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
@@ -216,6 +216,17 @@ app.post('/api/print-label', async (req, res) => {
 // invoiced early (Nima, 2026-08-05). See src/model/prepped.js.
 // Label worksheet as CSV. ?bol=NB1731256 for one shipment, omitted for all of
 // today's DC-direct ones. A download, so it opens straight into a carrier's import.
+// Push parcel shipments into ShipStation. Creates/updates orders only — buying the
+// label stays a human action in ShipStation.
+app.post('/api/shipstation/push', async (req, res) => {
+  try {
+    res.json(await pushToShipstation(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
 app.get('/api/label-worksheet.csv', async (req, res) => {
   try {
     const { csv, cartons } = await getLabelWorksheetCsv({ bolNumber: req.query.bol || null })
