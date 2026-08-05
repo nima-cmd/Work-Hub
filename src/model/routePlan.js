@@ -28,6 +28,7 @@ export const DEFAULT_DURATIONS_MIN = {
   chase: 5,             // call/email the warehouse about an IF it's holding
   mark_packed: 3,       // flip a returned IF to Packed in NetSuite — a keystroke
   handoff: 6,           // print the custody label and scan it OUT
+  close_out: 4,         // decide-and-close a PO whose window died long ago
   default: 10,
 }
 

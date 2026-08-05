@@ -1778,6 +1778,9 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   const items = rows.map((r) => {
     const tracking = r.trackingNumbers || []
     const labelled = tracking.length > 0
+    // Has step 2 happened? A labelled parcel with no invoice has NOT reached the
+    // ship decision — see src/model/labelGap.js for the 9-of-9 live miss.
+    const invoiced = !!r.invoiceNumber
     const ageDays = r.ifDate ? Math.floor((today - new Date(r.ifDate)) / day) : null
     // Which shipping lane is this? EDI partners (Bloomingdale's / Nordstrom /
     // ShopBop) move on LTL FREIGHT under a BOL — they will NEVER carry a UPS
@@ -1827,7 +1830,7 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       // owed. While `heldForPayment` was tested first it swallowed exactly that:
       // IF7414 ($90,654 owed, 6 days, the board's oldest item) and IF7412 ($3,140)
       // had ZERO labels and still read as "correctly parked".
-      kind: labelGapKind({ labelled, lane, heldForPayment }),
+      kind: labelGapKind({ labelled, lane, heldForPayment, invoiced }),
       ageDays,
       // WHICH DATE to type when marking it shipped (Nima's step 6).
       //
@@ -1849,7 +1852,7 @@ export async function getLabelGaps({ today = new Date() } = {}) {
       // Derived from the same classifier as `kind`, so the sentence on the row and
       // the chip that counts it can never disagree.
       needed: labelGapNeeded({
-        labelled, lane, heldForPayment, ifNumber: r.ifNumber,
+        labelled, lane, heldForPayment, invoiced, ifNumber: r.ifNumber,
         invoiceNumber: r.invoiceNumber, invoiceTerms: r.invoiceTerms,
         amountRemaining: r.amountRemaining, labelCount: tracking.length,
       }),
@@ -1872,6 +1875,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   // board sits (IF7414, $90,654).
   const fobPickup = items.filter((i) => i.kind === 'FOB_PICKUP')
     .sort((a, b) => (b.ageDays ?? 0) - (a.ageDays ?? 0))
+  // Labelled, waiting on its invoice. Its own list so it can never be confused with
+  // a shipment that actually left (9 of 9 were, on 2026-08-05).
+  const needsInvoice = items.filter((i) => i.kind === 'NEEDS_INVOICE')
+    .sort((a, b) => (b.ageDays ?? 0) - (a.ageDays ?? 0))
   // Correctly parked, not work: money is owed and due, so these must NOT move.
   // Surfaced so the count is visible (and so a shipped-anyway exception can't
   // hide), but never added to any actionable number — the never-lump rule.
@@ -1887,12 +1894,14 @@ export async function getLabelGaps({ today = new Date() } = {}) {
     needsLabel,
     freight, // kept separate so the parcel lists stay actionable, not buried
     fobPickup,
+    needsInvoiceLabelled: needsInvoice,
     heldForPayment,
     counts: {
       labelledNotShipped: labelledNotShipped.length,
       needsLabel: needsLabel.length,
       freight: freight.length,
       fobPickup: fobPickup.length,
+      needsInvoiceLabelled: needsInvoice.length,
       heldForPayment: heldForPayment.length,
       // The expensive subset: marking these today books them in the wrong month.
       monthClose: monthCloseCount(labelledNotShipped),

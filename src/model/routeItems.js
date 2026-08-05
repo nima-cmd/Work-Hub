@@ -130,7 +130,13 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
     // Now the real deadline decides, and the partner cutoff only applies when it is
     // actually the operative one — Nordstrom's noon is a next-day-pickup cutoff, so
     // it binds the day before the cancel date, not every day forever.
-    if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
+    // A cancel date that passed a YEAR ago is a close-out decision, not the first
+    // thing to do this morning. Measured: 28 of 31 EDI legs were >14 days past
+    // cancel (17 over a year) and they held priority 0 with deadline = now, so the
+    // top of every day's plan was 2025 archive. Kept on the plan — "nothing sits
+    // ignored" — but as fill work with no cutoff, so it sinks instead of shouting.
+    if (o.work.cancelStale) { deadline = null; priority = 4 }
+    else if (o.work.cancelState === 'passed') { deadline = now; priority = 0 }
     else if (o.work.routeState === 'passed') { deadline = now; priority = 0 }
     else if (o.work.routeState === 'soon') {
       // The partner's own cutoff instant when they have one (noon for Nordstrom),
@@ -145,7 +151,11 @@ export function buildRouteItems(orders = [], tasks = [], ediWork = null, opts = 
       id: 'edi-' + o.businessNumber,
       label: (o.businessNumber ? `PO ${o.businessNumber} · ${short} routing` : `${short} routing`).slice(0, 60),
       group: `${short} routing`,
-      kind: 'edi_route', deadline, durationMin: dur('edi_route'), priority,
+      // A stale one is its OWN kind, so the first-hour view can count "to close
+      // out" separately from "to do today" rather than summing two unlike jobs.
+      kind: o.work.cancelStale ? 'close_out' : 'edi_route',
+      deadline, durationMin: dur(o.work.cancelStale ? 'close_out' : 'edi_route'), priority,
+      closeOut: !!o.work.cancelStale,
       nav: 'edi',
     })
   }

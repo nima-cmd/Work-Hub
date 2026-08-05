@@ -3,6 +3,7 @@ import { fetchEdiReview, fetchDayPlan, reorderDayPlan, resetDayPlan, setPlanItem
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeRoute } from '../../../src/model/routePlan.js'
 import { buildRouteItems, applyDayPlan } from '../../../src/model/routeItems.js'
+import FirstHour from './FirstHour.jsx'
 
 // Daily Flight Plan (Nima, 2026-07-28) — the "flight route" for the day. The
 // route engine (src/model/routePlan.js) and the live-data adapter
@@ -112,6 +113,13 @@ export default function FlightPlan({ orders = [], tasks = [], labelGaps = null, 
 
   return (
     <div className="fpView">
+      {/* One thing, then a few, then a count. Fed from the SAME route as the
+          timeline below so the two can never disagree — see FirstHour.jsx. */}
+      <FirstHour
+        route={plan.route} summary={plan.summary} now={now}
+        onNavigate={onNavigate} onCheck={check} busy={busy}
+      />
+
       <header className="fpHead">
         <div className="fpTitle">
           <h2>◈ Today's Flight Plan</h2>

@@ -29,6 +29,7 @@ export const LABEL_GAP = {
   NEEDS_LABEL: 'NEEDS_LABEL',                 // parcel, no label → make it
   FREIGHT_BOL_LANE: 'FREIGHT_BOL_LANE',       // freight, moves on a BOL, not a label
   FOB_PICKUP: 'FOB_PICKUP',                   // sits in China awaiting collection
+  NEEDS_INVOICE: 'NEEDS_INVOICE',             // labelled, but step 2 isn't done yet
   HELD_FOR_PAYMENT: 'HELD_FOR_PAYMENT',       // labelled and ready; money is what's left
   LABELLED_NOT_SHIPPED: 'LABELLED_NOT_SHIPPED', // it left; NetSuite wasn't told
 }
@@ -48,12 +49,30 @@ export const LABEL_GAP = {
 //                IF7414) at the top of the wrong queue.
 // `heldForPayment` = the DERIVED payment gate (src/model/paymentGate.js), which
 //              includes the NY waiver.
-export function labelGapKind({ labelled, lane, heldForPayment } = {}) {
+// `invoiced` = the fulfilment carries an invoice number.
+//
+// ⚠️ THE SEQUENCE HAS TO BE WALKED ALL THE WAY, and this was the fifth time that
+// lesson cost something (2026-08-05). The labelled branch jumped straight to a ship
+// decision, so a parcel that had been labelled but NOT YET INVOICED read as
+// "it left; NetSuite wasn't told". Live that morning it was **9 of 9 wrong**: every
+// one was `Packed`, carried 1–2 real tracking numbers, had NO invoice, and had not
+// shipped. Acting on it would have marked nine orders Shipped with no invoice
+// raised — worse than a merely noisy chip.
+//
+// And those same nine were ALSO counted under the strip's "need an invoice", so two
+// chips gave opposite advice about one set of shipments — precisely the defect
+// PR #48 fixed one step earlier in the flow. Nima's order is
+// LABEL → INVOICE → SHIP DECISION, so each step must be asked in that order, and a
+// step that isn't done yet stops the walk.
+export function labelGapKind({ labelled, lane, heldForPayment, invoiced } = {}) {
   if (!labelled) {
     if (lane === 'freight') return LABEL_GAP.FREIGHT_BOL_LANE
     if (lane === 'fob') return LABEL_GAP.FOB_PICKUP
     return LABEL_GAP.NEEDS_LABEL
   }
+  // Freight has no parcel label to begin with, so it never reaches here; for the
+  // parcel lane the invoice is the next step after the label.
+  if (!invoiced) return LABEL_GAP.NEEDS_INVOICE
   return heldForPayment ? LABEL_GAP.HELD_FOR_PAYMENT : LABEL_GAP.LABELLED_NOT_SHIPPED
 }
 
@@ -63,11 +82,15 @@ const money = (n) => `$${Number(n).toLocaleString()}`
 // cannot drift apart — a row whose label says one thing while its chip counts it
 // under another is how the previous two versions of this went unnoticed.
 export function labelGapNeeded({
-  labelled, lane, heldForPayment, ifNumber, invoiceNumber, invoiceTerms,
+  labelled, lane, heldForPayment, invoiced, ifNumber, invoiceNumber, invoiceTerms,
   amountRemaining, labelCount = 0,
 } = {}) {
-  const kind = labelGapKind({ labelled, lane, heldForPayment })
+  const kind = labelGapKind({ labelled, lane, heldForPayment, invoiced })
   switch (kind) {
+    case LABEL_GAP.NEEDS_INVOICE:
+      // Names the invoice, and says the label is DONE — otherwise this reads as a
+      // step backwards to someone who just printed it.
+      return `Labelled (${labelCount}) — now raise the invoice for ${ifNumber}`
     case LABEL_GAP.HELD_FOR_PAYMENT:
       return `Held for payment — ${money(amountRemaining)} owed on ${invoiceNumber} (${invoiceTerms || 'terms unknown'})`
     case LABEL_GAP.LABELLED_NOT_SHIPPED:

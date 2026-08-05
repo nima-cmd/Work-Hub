@@ -74,7 +74,7 @@ const floor = (name, value, existsCount, detail) => {
 const lg = await Q.getLabelGaps({})
 partition('labelGaps kinds account for every packed-not-shipped IF',
   [lg.counts.labelledNotShipped, lg.counts.needsLabel, lg.counts.freight,
-    lg.counts.fobPickup, lg.counts.heldForPayment],
+    lg.counts.fobPickup, lg.counts.needsInvoiceLabelled, lg.counts.heldForPayment],
   lg.items.length,
   'a new lane that never fires, or an IF counted twice, breaks this')
 
@@ -125,6 +125,16 @@ gone.length
   ? bad('nothing on the departures board has already shipped',
     `${gone.length} departed row(s): ${gone.slice(0, 5).map((d) => d.ifNumber).join(', ')}`)
   : ok('nothing on the departures board has already shipped', `${dep.length} still here`)
+
+// Nothing may be called "already shipped, tell NetSuite" without an invoice. On
+// 2026-08-05 nine were, and none had shipped — acting on it would have marked nine
+// orders Shipped with nothing billed. Cheap to assert, so it is asserted.
+const shippedNoInvoice = lg.labelledNotShipped.filter((r) => !r.invoiceNumber)
+shippedNoInvoice.length
+  ? bad('nothing reads as shipped-but-unrecorded without an invoice',
+    `${shippedNoInvoice.length}: ${shippedNoInvoice.slice(0, 5).map((r) => r.ifNumber).join(', ')}`)
+  : ok('nothing reads as shipped-but-unrecorded without an invoice',
+    `${lg.counts.labelledNotShipped} to mark, ${lg.counts.needsInvoiceLabelled} awaiting an invoice`)
 
 // ── filing, cartons, overdue money, EDI delivery, inbound ───────────────────
 const unf = await Q.getUnfiledPaper({})

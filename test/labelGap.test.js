@@ -19,14 +19,14 @@ test('payment only parks a shipment whose label already exists', () => {
   // IF7413 / IF7409: 1 label each, deliberately held. This is the case PR #47
   // fixed — they must NOT read as a forgotten "mark shipped" click.
   assert.equal(
-    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: true }),
+    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: true, invoiced: true }),
     LABEL_GAP.HELD_FOR_PAYMENT,
   )
 })
 
 test('labelled and payment-clear is the real missed-click case', () => {
   assert.equal(
-    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: false }),
+    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: false, invoiced: true }),
     LABEL_GAP.LABELLED_NOT_SHIPPED,
   )
 })
@@ -71,9 +71,33 @@ test('the China/FOB lane never asks for a label, held or not', () => {
   // some other way, so it is allowed back into the normal labelled branch rather
   // than being forced to stay FOB.
   assert.equal(
-    labelGapKind({ labelled: true, lane: 'fob', heldForPayment: false }),
+    labelGapKind({ labelled: true, lane: 'fob', heldForPayment: false, invoiced: true }),
     LABEL_GAP.LABELLED_NOT_SHIPPED,
   )
+})
+
+// ⚠️ The 2026-08-05 miss, and the fifth time the "walk the steps in order" lesson
+// cost something. Overnight nine parcels were packed and labelled; the board then
+// said "mark shipped" about all nine, and 9 of 9 had NO invoice and had not shipped.
+// Acting on it would have marked nine orders Shipped with nothing billed.
+test('a labelled parcel with no invoice is at step 2, not the ship decision', () => {
+  assert.equal(
+    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: false, invoiced: false }),
+    LABEL_GAP.NEEDS_INVOICE,
+  )
+  // ...and payment cannot pull it forward either: with no invoice there is no
+  // balance to be held against, so the invoice is unambiguously the next step.
+  assert.equal(
+    labelGapKind({ labelled: true, lane: 'parcel', heldForPayment: true, invoiced: false }),
+    LABEL_GAP.NEEDS_INVOICE,
+  )
+  const s = labelGapNeeded({
+    labelled: true, lane: 'parcel', heldForPayment: false, invoiced: false,
+    ifNumber: 'IF7442', labelCount: 1,
+  })
+  assert.match(s, /raise the invoice for IF7442/)
+  assert.match(s, /Labelled \(1\)/)          // credits the label already printed
+  assert.doesNotMatch(s, /shipped/)          // never claims a departure
 })
 
 // ── the sentence on the row ──────────────────────────────────────────────────
@@ -91,7 +115,7 @@ test('a held, unlabelled row names the label as the action and the balance as co
 
 test('a held, labelled row states the hold, not a missed click', () => {
   const s = labelGapNeeded({
-    labelled: true, lane: 'parcel', heldForPayment: true,
+    labelled: true, lane: 'parcel', heldForPayment: true, invoiced: true,
     ifNumber: 'IF7413', invoiceNumber: 'INV11361', invoiceTerms: 'Due on receipt',
     amountRemaining: 158, labelCount: 1,
   })
@@ -101,7 +125,7 @@ test('a held, labelled row states the hold, not a missed click', () => {
 
 test('a labelled, clear row asks for the status transition', () => {
   const s = labelGapNeeded({
-    labelled: true, lane: 'parcel', heldForPayment: false,
+    labelled: true, lane: 'parcel', heldForPayment: false, invoiced: true,
     ifNumber: 'IF7288', labelCount: 2,
   })
   assert.match(s, /mark IF7288 shipped in NetSuite/)
@@ -115,7 +139,8 @@ test('the sentence always agrees with the kind', () => {
   for (const labelled of [true, false]) {
     for (const lane of ['parcel', 'freight', 'fob']) {
       for (const heldForPayment of [true, false]) {
-        const row = { labelled, lane, heldForPayment, ifNumber: 'IF1', invoiceNumber: 'INV1', amountRemaining: 10 }
+       for (const invoiced of [true, false]) {
+        const row = { labelled, lane, heldForPayment, invoiced, ifNumber: 'IF1', invoiceNumber: 'INV1', amountRemaining: 10, labelCount: 1 }
         const kind = labelGapKind(row)
         const needed = labelGapNeeded(row)
         if (kind === LABEL_GAP.HELD_FOR_PAYMENT) assert.match(needed, /^Held for payment/)
@@ -127,6 +152,12 @@ test('the sentence always agrees with the kind', () => {
           assert.doesNotMatch(needed, /label/)
         }
         if (kind === LABEL_GAP.LABELLED_NOT_SHIPPED) assert.match(needed, /mark IF1 shipped/)
+        if (kind === LABEL_GAP.NEEDS_INVOICE) {
+          assert.match(needed, /raise the invoice/)
+          // must never claim it shipped — that was the 9-of-9 defect
+          assert.doesNotMatch(needed, /shipped/)
+        }
+       }
       }
     }
   }
