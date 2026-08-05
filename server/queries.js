@@ -10,6 +10,7 @@ import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses } from '../src/ingest/shipstationPush.js'
+import { harvestTracking, backfillPushedOrders } from '../src/ingest/shipstationTracking.js'
 import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
 
 // The API-created store ("Api Shipments"). Overridable per deploy; the account's
@@ -53,6 +54,7 @@ import {
   fetchCatalogueSkus, fetchIfStatusByPo,
   fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
   fetchFulfilmentPack, fetchFulfillmentDc,
+  recordShipstationOrders, applyShipstationTracking, fetchShipstationOrders,
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
@@ -1432,12 +1434,13 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId
        ORDER BY f.if_number`)
     // Addresses live only in NetSuite — Neon has no address column at all.
     const addrs = await fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL })
-    const { orders, skipped } = boutiqueOrdersFor(
+    const { orders, skipped, records } = boutiqueOrdersFor(
       rows.map((r) => ({ order: r, fulfilment: { ifNumber: r.ifNumber }, address: addrs.get(r.ifNumber) })),
       { storeId },
     )
     const res = await pushOrders(orders, { dryRun })
-    return { ...res, scope, skipped, candidates: rows.length }
+    const recorded = await rememberPush(records, res, dryRun)
+    return { ...res, scope, skipped, candidates: rows.length, recorded }
   }
 
   const routing = await getRouting()
@@ -1445,9 +1448,40 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId
   // Parcel only: freight moves on a BOL and FOB is collected abroad, both of which
   // `labels.applicable` already excludes. Shipped ones are done.
   const shipments = list.filter((s) => s.labels?.applicable && !s.shippedAt && /ups/i.test(s.carrier || ''))
-  const orders = ediOrdersFor(shipments, { storeId })
+  const { orders, records } = ediOrdersFor(shipments, { storeId })
   const res = await pushOrders(orders, { dryRun })
-  return { ...res, scope, shipments: shipments.length, candidates: orders.length }
+  const recorded = await rememberPush(records, res, dryRun)
+  return { ...res, scope, shipments: shipments.length, candidates: orders.length, recorded }
+}
+
+// Write down what we just pushed. A dry run records NOTHING — it did not happen.
+// Only orders ShipStation actually accepted are remembered, with the orderId it
+// handed back, so a failed create never leaves a row claiming a label exists.
+async function rememberPush(records = [], res = {}, dryRun = false) {
+  if (dryRun || !records.length) return 0
+  const idByKey = new Map((res.results || []).filter((r) => r.ok).map((r) => [r.orderKey, r.orderId]))
+  const accepted = records
+    .filter((r) => idByKey.has(r.orderKey))
+    .map((r) => ({ ...r, shipstationId: idByKey.get(r.orderKey) }))
+  return recordShipstationOrders(accepted)
+}
+
+// Read-only: pull what the carrier did back onto the orders we pushed. Never
+// marks anything shipped — see src/ingest/shipstationTracking.js.
+export async function syncShipstationTracking({ pages = 3, backfill = false } = {}) {
+  // Orders pushed before this table existed have no row to harvest onto.
+  let backfilled = 0
+  if (backfill) {
+    const b = await backfillPushedOrders({ pages })
+    if (b.ok) backfilled = await recordShipstationOrders(b.records)
+  }
+  const known = await fetchShipstationOrders()
+  if (!known.length) return { ok: true, known: 0, applied: 0, scanned: 0 }
+  const ours = new Set(known.map((k) => k.orderKey))
+  const h = await harvestTracking({ ours, pages })
+  if (!h.ok) return { ok: false, error: h.error, configured: h.configured, known: known.length, applied: 0, scanned: h.scanned }
+  const applied = await applyShipstationTracking(h.rows)
+  return { ok: true, known: known.length, matched: h.rows.length, applied, scanned: h.scanned, backfilled }
 }
 
 export async function getLabelWorksheetCsv({ bolNumber = null } = {}) {
@@ -1493,6 +1527,17 @@ export async function getRouting() {
   // printed to cross-dock the carton onward. See src/model/labelWorksheet.js.
   const worksheetRows = await fetchShipmentStoreCartons(shipments.filter((s) => s.shipDirect).map((s) => s.id))
 
+  // Parcels we pushed to ShipStation, indexed by IF (Nima, 2026-08-05: "we now
+  // have tracking we can add to the routing cards"). Joined on the IF rather
+  // than PO+DC because rows recovered by the backfill carry no DC — the order in
+  // ShipStation never knew one.
+  const parcelsByIf = new Map()
+  for (const p of await fetchShipstationOrders()) {
+    if (!p.ifNumber) continue
+    if (!parcelsByIf.has(p.ifNumber)) parcelsByIf.set(p.ifNumber, [])
+    parcelsByIf.get(p.ifNumber).push(p)
+  }
+
   for (const s of shipments) {
     s.netsuite = netsuiteShippedVerdict(s.memberPos || [], ifsByPo)
     s.labels = buildLabelWorksheet(
@@ -1506,6 +1551,26 @@ export async function getRouting() {
       },
       worksheetRows.get(s.id) || [],
     )
+    // ⚠️ A tracking number is NOT evidence the carton left — the label can be
+    // bought days early, and on this lane marking shipped is itself done ahead
+    // of the pickup to trigger the ASN. So this is reference, deliberately
+    // reported as counts rather than as a state ("3 of 4 labelled", never
+    // "shipped"). See src/ingest/shipstationTracking.js.
+    const ifs = [...new Set((s.labels?.lines || []).map((l) => l.ifNumber).filter(Boolean))]
+    const parcels = ifs.flatMap((n) => parcelsByIf.get(n) || [])
+    s.parcels = parcels.length
+      ? {
+          pushed: parcels.length,
+          labelled: parcels.filter((p) => p.trackingNumber && !p.voided).length,
+          voided: parcels.filter((p) => p.voided).length,
+          items: parcels.map((p) => ({
+            orderKey: p.orderKey, ifNumber: p.ifNumber, cartonNo: p.cartonNo,
+            orderNumber: p.orderNumber, trackingNumber: p.trackingNumber,
+            carrier: p.carrierCode, shipDate: p.shipDate, voided: p.voided,
+          })),
+        }
+      : null
+
     const live = lineages[String(s.bolNumber)] || null
     const snap = snapshots[s.id] || null
     s.edi = live

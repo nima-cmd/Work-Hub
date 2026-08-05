@@ -696,6 +696,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
           <RefSummary s={s} />
           <LabelWorksheet s={s} />
           <EdiTrail s={s} />
+          <Parcels s={s} />
           <EmailLinks docType="ROUTING_SHIPMENT" docNumber={s.id} compact />
           <button className="rt-editToggle" onClick={() => setEditing((e) => !e)}>
             {editing ? '▾ Route info' : '✎ Route info'}
@@ -848,6 +849,46 @@ function RefSummary({ s }) {
   return (
     <div className="rt-refSummary">
       {bits.map(([k, v]) => <span key={k} className="rt-refBit"><span className="muted">{k}</span> {v}</span>)}
+    </div>
+  )
+}
+
+// The parcels we pushed to ShipStation for this BOL, and what came back
+// (Nima, 2026-08-05: "we now have tracking we can add to the routing cards").
+//
+// ⚠️ Reported as COUNTS, never as a state. A tracking number means a label was
+// bought — not that the carton left. On this lane the label and the "mark
+// shipped" that triggers the ASN both happen deliberately ahead of the pickup,
+// so "3 of 4 labelled" is the only honest sentence here.
+function Parcels({ s }) {
+  const [open, setOpen] = useState(false)
+  const p = s.parcels
+  if (!p) return null
+  const waiting = p.pushed - p.labelled - p.voided
+  return (
+    <div className="rt-ediTrail">
+      <button className="rt-ediToggle" onClick={() => setOpen((o) => !o)}
+        title="Parcel orders pushed to ShipStation for this BOL. A label is bought by hand in ShipStation.">
+        {open ? '▾' : '▸'} Parcels
+        <span className="rt-ediChip">{p.labelled} of {p.pushed} labelled</span>
+        {waiting > 0 && <span className="rt-ediChip pending">{waiting} awaiting a label</span>}
+        {p.voided > 0 && <span className="rt-ediChip bad">{p.voided} voided</span>}
+      </button>
+      {open && (
+        <div className="rt-ediBody">
+          {p.items.map((it) => (
+            <div key={it.orderKey} className={'rt-ediRow' + (it.voided ? ' bad' : '')}>
+              <span className="rt-ediNum">{it.orderNumber}</span>
+              <span className="muted">{it.ifNumber}{it.cartonNo ? ` · carton ${it.cartonNo}` : ''}</span>
+              {it.trackingNumber
+                ? <a className="rt-ediNum" href={`https://www.ups.com/track?tracknum=${it.trackingNumber}`}
+                     target="_blank" rel="noreferrer">{it.trackingNumber}</a>
+                : <span className="muted">no label yet</span>}
+              {it.voided && <span className="muted">voided</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
