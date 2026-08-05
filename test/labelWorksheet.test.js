@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildLabelWorksheet, labelLine, worksheetCsv, CSV_COLUMNS } from '../src/model/labelWorksheet.js'
+import { parcelBilling } from '../src/model/bolAddresses.js'
 
 // Nima, 2026-08-05: "i dont need the name and the carton count i do need how each
 // carton in the shipment its weight and dimension. If this is something we can make
@@ -9,9 +10,11 @@ import { buildLabelWorksheet, labelLine, worksheetCsv, CSV_COLUMNS } from '../sr
 // A DC-direct shipment has ONE address and many stores, so PO + store is what
 // distinguishes the labels; weight and dimensions are what the carrier needs.
 
+// Built through parcelBilling, the real path — so the fixture cannot pass values the
+// app would never resolve.
 const SHIP = {
   bolNumber: 'NB1731256', dc: 'CG', carrier: 'UPS GRND', shipDirect: true,
-  freightTerms: 'Third Party Bill', billToAccount: '5R12Y0',
+  billing: parcelBilling({ partner: "Bloomingdale's", carrier: 'UPS GRND' }),
   address: { name: "Macy's CFC China Grove DC", street: '1305 Liberty Ridge Rd', city: 'China Grove', state: 'NC', zip: '28023' },
 }
 const IF7469 = {
@@ -86,6 +89,48 @@ test('the CSV is one row per carton with the address and billing repeated', () =
   assert.equal(lines[2].split(',')[8], '47')          // ...and the other's
   assert.ok(lines[1].includes('Third Party Bill'))
   assert.ok(lines[1].includes('5R12Y0'))
+  // ⚠️ UPS validates a third-party account against its postal code; without it the
+  // import is rejected or silently bills the shipper — i.e. us, for Macy's freight.
+  assert.ok(lines[1].includes('30083'))
+  // Carrier and Service are separate: "UPS GRND" is not a service level.
+  assert.ok(lines[1].includes('Ground'))
+})
+
+// ── the standing rules (Nima, 2026-08-05) ───────────────────────────────────
+// "For Bloomingdales its always ground the account number is 5R12Y0 and the zip code
+// is 30083 for fedex its also always ground letting us select collect"
+test("Bloomingdale's UPS defaults to third-party billing with the zip", () => {
+  const b = parcelBilling({ partner: "Bloomingdale's", carrier: 'UPS GRND' })
+  assert.equal(b.service, 'Ground')
+  assert.equal(b.terms, 'Third Party Bill')
+  assert.equal(b.account, '5R12Y0')
+  assert.equal(b.accountZip, '30083')
+  assert.equal(b.fromRule, true)   // nothing was typed; the rule supplied it
+})
+
+test("Bloomingdale's FedEx is collect on our own account, with no third-party zip", () => {
+  const b = parcelBilling({ partner: "Bloomingdale's", carrier: 'FEDEX GROUND- PARCEL-COLLECT (FDEG)' })
+  assert.equal(b.service, 'Ground')
+  assert.equal(b.terms, 'Collect')
+  assert.equal(b.account, null)
+  assert.equal(b.accountZip, null)   // never inherits Macy's zip
+})
+
+test('a stored value overrides the rule, and never borrows the rule\'s zip', () => {
+  // Recording an exception must not be silently overwritten by the standing rule...
+  const b = parcelBilling({ partner: "Bloomingdale's", carrier: 'UPS GRND', billToAccount: 'C6J610' })
+  assert.equal(b.account, 'C6J610')
+  // ...and a DIFFERENT account must not inherit 30083, which belongs to Macy's.
+  // Pairing an account with the wrong postal code is how third-party billing
+  // silently falls back to billing the shipper.
+  assert.equal(b.accountZip, null)
+})
+
+test('a partner with no stated parcel rule gets nothing invented', () => {
+  const b = parcelBilling({ partner: 'Nordstrom', carrier: 'UPS GRND' })
+  assert.equal(b.terms, null)
+  assert.equal(b.account, null)
+  assert.equal(b.service, null)
 })
 
 test('the CSV quotes fields containing commas', () => {
