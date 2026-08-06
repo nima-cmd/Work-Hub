@@ -27,15 +27,22 @@
 // same mistake `FOB_PICKUP` was created to undo in labelGap.js. So a zero cost is a
 // COMPLETE answer, not an absent one.
 //
-// ── ⚠️ WE CHECK PRESENCE, NOT EQUALITY, AND THAT IS DELIBERATE ──────────────
+// ── THE INVOICE MUST EQUAL WHAT THE CARRIER CHARGED ─────────────────────────
 //
-// NetSuite's `shippingCost` on an invoice is what the CUSTOMER is charged. ShipStation's
-// `shipmentCost` is what the CARRIER charged us. Those are different numbers whenever
-// there is any markup — INV11451 carries 33.97 against a ShipStation figure that was
-// not the same. So this reports "no figure recorded" and SHOWS ours alongside as
-// reference; it never claims a mismatch it cannot interpret. If Nima confirms the
-// invoice figure is meant to equal the carrier cost, tighten to equality then — not
-// on an assumption.
+// Nima, 2026-08-06, asked directly: *"we want to charge the customer what were charged
+// exactly."* So freight is passed through at cost — no markup — and the invoice figure
+// is checkable against `shipmentCost`, not merely checkable for presence.
+//
+// ⚠️ This was written the other way an hour earlier, deliberately: presence only,
+// because a marked-up figure would have made every row a false mismatch and there was
+// no way to tell markup from error. The rule changed because the ANSWER arrived, not
+// because the first version was careless — and if the pricing policy ever changes back,
+// this is the paragraph to revisit.
+//
+// ⚠️ MULTI-BOX SUMS. One invoice covers a fulfilment, and a fulfilment can carry several
+// labels (IF7443 has two). So the expected figure is the SUM of that fulfilment's live
+// labels, never one of them — comparing against a single carton would under-bill every
+// multi-box shipment.
 //
 // ── THE INVOICE IS THE PRIORITY, BUT IT CANNOT PRECEDE ITSELF ───────────────
 //
@@ -50,6 +57,13 @@ export const RECORD_GAP = {
   TRACKING_MISMATCH: 'TRACKING_MISMATCH', // it has tracking, but not THIS shipment's
   AWAITING_INVOICE: 'AWAITING_INVOICE', // there is a cost to record and no invoice yet
   COST_MISSING: 'COST_MISSING',         // the invoice exists and carries no figure
+  COST_MISMATCH: 'COST_MISMATCH',       // the invoice figure isn't what the carrier charged
+}
+
+// Freight is passed through at cost, so a cent is a real difference — but floating
+// point is not. Compare to the cent.
+export function sameMoney(a, b) {
+  return Math.round(Number(a || 0) * 100) === Math.round(Number(b || 0) * 100)
 }
 
 // Two tracking numbers are the same shipment if they match once case and separators
@@ -102,15 +116,23 @@ export function labelRecordGap({
     return gap(RECORD_GAP.COST_MISSING,
       `${invoiceNumber} carries no freight figure — ShipStation charged $${cost.toFixed(2)}`, { enter: cost })
   }
+  if (!sameMoney(invoiceShippingCost, cost)) {
+    const billed = Number(invoiceShippingCost)
+    const delta = billed - cost
+    return gap(RECORD_GAP.COST_MISMATCH,
+      `${invoiceNumber} bills $${billed.toFixed(2)} but the carrier charged $${cost.toFixed(2)}`
+      + ` (${delta > 0 ? 'over' : 'under'} by $${Math.abs(delta).toFixed(2)})`,
+      { enter: cost })
+  }
   return { kind: RECORD_GAP.OK, ok: true,
-    reason: `tracking recorded · ${invoiceNumber} carries $${Number(invoiceShippingCost).toFixed(2)} (we paid $${cost.toFixed(2)})` }
+    reason: `tracking recorded · ${invoiceNumber} bills $${cost.toFixed(2)}, matching the carrier` }
 }
 
 // Roll a set of per-shipment verdicts into the counts a surface can show. Kept as
 // separate kinds rather than one total — each names a different action (the
 // never-lump rule), and AWAITING_INVOICE is a wait, not a task.
 export function summarizeLabelRecords(verdicts = []) {
-  const counts = { ok: 0, trackingMissing: 0, trackingMismatch: 0, awaitingInvoice: 0, costMissing: 0, voided: 0 }
+  const counts = { ok: 0, trackingMissing: 0, trackingMismatch: 0, awaitingInvoice: 0, costMissing: 0, costMismatch: 0, voided: 0 }
   for (const v of verdicts) {
     if (v.kind === RECORD_GAP.OK) counts.ok++
     else if (v.kind === RECORD_GAP.VOIDED) counts.voided++
@@ -118,8 +140,9 @@ export function summarizeLabelRecords(verdicts = []) {
     else if (v.kind === RECORD_GAP.TRACKING_MISMATCH) counts.trackingMismatch++
     else if (v.kind === RECORD_GAP.AWAITING_INVOICE) counts.awaitingInvoice++
     else if (v.kind === RECORD_GAP.COST_MISSING) counts.costMissing++
+    else if (v.kind === RECORD_GAP.COST_MISMATCH) counts.costMismatch++
   }
   // What needs a keystroke NOW — deliberately excludes awaitingInvoice.
-  counts.actionable = counts.trackingMissing + counts.trackingMismatch + counts.costMissing
+  counts.actionable = counts.trackingMissing + counts.trackingMismatch + counts.costMissing + counts.costMismatch
   return counts
 }

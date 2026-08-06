@@ -70,14 +70,30 @@ if (invNumbers.length) {
   }
 }
 
+// ⚠️ One invoice covers a FULFILMENT, and a fulfilment can carry several labels
+// (IF7443 has two). Freight is passed through at cost, so the figure the invoice must
+// carry is the SUM of that fulfilment's live labels — comparing against a single carton
+// would under-bill every multi-box shipment.
+const costByIf = new Map()
+for (const l of labels) {
+  if (l.voided) continue
+  costByIf.set(l.if_number, (costByIf.get(l.if_number) || 0) + Number(l.shipment_cost || 0))
+}
+// Only the FIRST label of a fulfilment carries the cost comparison, or a two-box
+// shipment would report the same money gap twice.
+const seenIf = new Set()
+
 const results = labels.map((l) => {
   const invoiceNumber = invoiceByIf.get(l.if_number) || null
   const seen = invoiceNumber ? invoiceCost.get(invoiceNumber) : null
   // If we could not READ the invoice, treat the figure as unknown rather than absent.
   const unreadable = invoiceNumber && seen && !seen.ok
+  const first = !seenIf.has(l.if_number)
+  if (!l.voided) seenIf.add(l.if_number)
   const verdict = labelRecordGap({
     ssTracking: l.tracking_number,
-    ssCost: Number(l.shipment_cost || 0),
+    // The fulfilment's whole freight bill, attributed to its first label only.
+    ssCost: first ? (costByIf.get(l.if_number) || 0) : 0,
     voided: l.voided,
     nsTracking: nsTracking.get(l.if_number) || [],
     invoiceNumber: unreadable ? null : invoiceNumber,
@@ -121,6 +137,7 @@ console.log(`  recorded ................ ${counts.ok}`)
 console.log(`  tracking not entered .... ${counts.trackingMissing}`)
 console.log(`  tracking doesn't match .. ${counts.trackingMismatch}`)
 console.log(`  freight figure missing .. ${counts.costMissing}`)
+console.log(`  freight doesn't match ... ${counts.costMismatch}   (must equal the carrier charge)`)
 console.log(`  awaiting an invoice ..... ${counts.awaitingInvoice}   (a wait, not a task)`)
 console.log(`  voided .................. ${counts.voided}`)
 
@@ -142,9 +159,60 @@ for (const r of results) {
 }
 console.log(`  shipper account by tracking prefix: ${Object.entries(byAcct).map(([a, n]) => `${a}×${n}`).join(' · ')}`)
 
-console.log(counts.actionable
-  ? `\n✗ ${counts.actionable} label(s) need a keystroke in NetSuite.\n`
-  : '\n✓ Every bought label is recorded in NetSuite.\n')
+// ── The OTHER lane: labels made in NetSuite ─────────────────────────────────
+//
+// ⚠️ Everything above starts from `shipstation_order`, so it can only see labels bought
+// in ShipStation — and as of 2026-08-06 labels are made in NETSUITE
+// (src/model/labelSource.js). A check scoped to the lane we just turned off would read
+// clean forever while the real work went unchecked.
+//
+// For a NetSuite-made label we do NOT hold the carrier charge (sync:ups-costs harvests
+// from ShipStation), so the amount cannot be verified — only its PRESENCE. That is
+// still decisive, because freight is passed through at cost (Nima: "charge the customer
+// what were charged exactly"), so a fulfilment that carries a label and an invoice
+// billing $0 is under-billing by definition.
+const { rows: nsLabelled } = await pool.query(`
+  SELECT f.if_number, f.invoice_number, o.customer,
+         COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) AS labels
+  FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+  WHERE o.source = 'boutique' AND f.invoice_number IS NOT NULL
+    AND COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) > 0
+    AND f.if_date >= '2026-07-01'
+    AND NOT EXISTS (SELECT 1 FROM shipstation_order s
+                    WHERE s.if_number = f.if_number AND s.tracking_number IS NOT NULL)
+  ORDER BY f.if_number`)
+
+const nsUnbilled = []
+if (nsLabelled.length) {
+  const invs = [...new Set(nsLabelled.map((r) => r.invoice_number))]
+  const iq = await runSuiteQL(
+    `SELECT id, tranid FROM transaction WHERE tranid IN (${invs.map((i) => `'${i}'`).join(',')})`)
+  const freight = new Map()
+  for (const row of (iq.rows || [])) {
+    const r = await restGet(`invoice/${row.id}`)
+    // A failed read is unknown, not zero — it must not become an accusation.
+    if (r.ok) freight.set(row.tranid, r.data?.shippingCost ?? null)
+  }
+  for (const r of nsLabelled) {
+    const f = freight.get(r.invoice_number)
+    if (f === undefined) continue                 // unreadable — say nothing
+    if (Number(f || 0) === 0) nsUnbilled.push({ ...r, freight: f })
+  }
+}
+
+if (nsUnbilled.length) {
+  console.log(`\n  NETSUITE-MADE LABELS BILLING $0 FREIGHT — ${nsUnbilled.length} invoice(s)`)
+  console.log('  (amount not verifiable — we hold no carrier charge for a NetSuite label — but')
+  console.log('   freight is passed through at cost, so a label with $0 billed is under-billed)')
+  for (const r of nsUnbilled) {
+    console.log(`  ✗ ${pad(r.if_number, 9)} ${pad(r.invoice_number, 11)} ${r.labels} label(s)  ${r.customer}`)
+  }
+}
+
+const total = counts.actionable + nsUnbilled.length
+console.log(total
+  ? `\n✗ ${counts.actionable} ShipStation label(s) + ${nsUnbilled.length} NetSuite-labelled invoice(s) need attention.\n`
+  : '\n✓ Every label is recorded and billed in NetSuite.\n')
 
 await pool.end()
-process.exit(counts.actionable ? 1 : 0)
+process.exit(total ? 1 : 0)

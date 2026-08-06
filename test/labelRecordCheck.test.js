@@ -3,7 +3,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { labelRecordGap, summarizeLabelRecords, sameTracking, RECORD_GAP } from '../src/model/labelRecordCheck.js'
+import { labelRecordGap, summarizeLabelRecords, sameTracking, sameMoney, RECORD_GAP } from '../src/model/labelRecordCheck.js'
 
 test('the live IF7451 case — tracking entered, figure left at zero', () => {
   // Nima entered 1ZC6J6100316963945 and ShipStation had charged $31.44. No invoice yet.
@@ -96,4 +96,44 @@ test('garbage input is never reported as a gap', () => {
   for (const a of [undefined, {}, { ssTracking: null }]) {
     assert.equal(labelRecordGap(a).ok, true)
   }
+})
+
+// ── Freight is passed through at cost (Nima, 2026-08-06) ────────────────────
+// "we want to charge the customer what were charged exactly." So the invoice figure is
+// checkable against the carrier charge, not merely checkable for presence.
+
+test('an invoice that bills exactly what the carrier charged is OK', () => {
+  const v = labelRecordGap({
+    ssTracking: '1ZC6J6100316963945', ssCost: 31.44, nsTracking: ['1ZC6J6100316963945'],
+    invoiceNumber: 'INV11499', invoiceShippingCost: 31.44,
+  })
+  assert.equal(v.ok, true)
+  assert.match(v.reason, /bills \$31\.44, matching the carrier/)
+})
+
+test('under-billing is caught and the shortfall named', () => {
+  const v = labelRecordGap({
+    ssTracking: '1ZC6J6100316963945', ssCost: 31.44, nsTracking: ['1ZC6J6100316963945'],
+    invoiceNumber: 'INV11499', invoiceShippingCost: 23.56,
+  })
+  assert.equal(v.kind, RECORD_GAP.COST_MISMATCH)
+  assert.match(v.reason, /bills \$23\.56 but the carrier charged \$31\.44/)
+  assert.match(v.reason, /under by \$7\.88/)
+  assert.equal(v.enter, 31.44)
+})
+
+test('over-billing is caught too — pass-through cuts both ways', () => {
+  const v = labelRecordGap({
+    ssTracking: '1ZC6J6100316963945', ssCost: 23.56, nsTracking: ['1ZC6J6100316963945'],
+    invoiceNumber: 'INV11499', invoiceShippingCost: 33.97,
+  })
+  assert.equal(v.kind, RECORD_GAP.COST_MISMATCH)
+  assert.match(v.reason, /over by \$10\.41/)
+})
+
+test('cents matter but floating point does not', () => {
+  assert.equal(sameMoney(31.44, 31.44), true)
+  assert.equal(sameMoney(0.1 + 0.2, 0.3), true)   // would fail a raw === comparison
+  assert.equal(sameMoney(31.44, 31.45), false)    // a cent is a real difference
+  assert.equal(sameMoney(null, 0), true)
 })
