@@ -75,7 +75,23 @@ export function cardCustody(card, events = [], dcList) {
   // Terminology (Nima, 2026-07-22): scanned OUT → "With Nestor"; scanned back
   // IN → "Ball's in our court".
   if (out > 0) return { state: 'warehouse', label: `◫ With Nestor${docs.length > 1 ? ` ${out}/${docs.length}` : ''}` }
-  if (scanned > 0) return { state: 'returned', label: "✓ Ball's in our court" }
+  // ⚠️ THE RETURNED BRANCH CARRIED NO FRACTION, so a card with two fulfilments and ONE
+  // of them scanned back read "✓ Ball's in our court" — the whole card claimed to be
+  // home while the second had never been scanned at all (Nima found this on a wrongly
+  // grouped boutique PO, 2026-08-06). The warehouse branch above always showed its
+  // fraction; this one silently rounded up.
+  //
+  // An unscanned member is not "back" — it is the never-scanned blind spot at card
+  // level, and it must say so rather than borrow its sibling's evidence.
+  if (scanned > 0) {
+    if (scanned < docs.length) {
+      return {
+        state: 'partial',
+        label: `✓ Back ${scanned}/${docs.length} — ${docs.length - scanned} never scanned`,
+      }
+    }
+    return { state: 'returned', label: "✓ Ball's in our court" }
+  }
   return { state: 'idle', label: '🏷 With us · not shipped' }
 }
 

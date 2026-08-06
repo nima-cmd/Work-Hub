@@ -35,7 +35,14 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   // column. Shipped/departed cards stay put (their scans are historical).
   const custodyOf = (o) => (o.stage === 'SHIPPED' ? null : cardCustody(o, events, poDcs[o.poNumber]))
   const withNestor = grouped.filter((o) => custodyOf(o)?.state === 'warehouse').sort(bySev)
-  const ballsInCourt = grouped.filter((o) => custodyOf(o)?.state === 'returned').sort(bySev)
+  // ⚠️ 'partial' BELONGS HERE TOO (2026-08-06). cardCustody gained that state when the
+  // returned branch stopped rounding a part-scanned card up to fully-back. Filtering on
+  // 'returned' alone would have made such a card vanish from the board completely — it
+  // leaves its stage column via `inCustody` below and would land in neither custody
+  // column. Hiding a card is worse than the over-claim this replaced.
+  const ballsInCourt = grouped
+    .filter((o) => ['returned', 'partial'].includes(custodyOf(o)?.state))
+    .sort(bySev)
   const inCustody = new Set([...withNestor, ...ballsInCourt].map(cardKey))
 
   // Build the columns in flow order; drop the two custody columns in right after

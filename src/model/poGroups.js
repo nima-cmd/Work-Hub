@@ -6,9 +6,26 @@
 // (orders.po_number = otherRefNum) into one line, WITHOUT hiding the fan-out:
 // each group keeps its member SOs (locations, IFs) for drill-down.
 //
-// Orders with no PO number stay individual. Grouping is by po_number ALONE —
-// the "customer" differs across a Bloomingdale's PO (store suffixes), so it
+// Orders with no PO number stay individual. Within EDI, grouping is by po_number
+// ALONE — the "customer" differs across a Bloomingdale's PO (store suffixes), so it
 // can't be part of the key.
+//
+// ⚠️ GROUPING IS AN EDI CONCEPT AND IS NOW GATED ON IT (Nima, 2026-08-06).
+//
+// The paragraph above always said this rule exists for "Bloomingdale's/Nordstrom", but
+// the code grouped by po_number for EVERYONE — a comment describing one mechanism while
+// the code implemented a broader one. A boutique that happens to reuse a PO across two
+// sales orders is TWO shipments, not one consolidated freight movement, and rolling
+// them up hid that.
+//
+// Live when this was fixed: 5 boutique POs / 10 sales orders wrongly grouped —
+// Four Seasons Maui PO05658, Four Seasons Hualalai PO15131, Julian Gold 72426N,
+// Robertson Madison 80126, Joseph Wexner RBR-12.
+//
+// ⚠️ It also broke SCANNING, which is how Nima found it. A grouped card's custody is
+// computed over ALL its members' fulfilments, so scanning ONE of two read as the whole
+// group being back (see cardCustody in custody.js — the `returned` branch carried no
+// fraction). Ungrouping makes a boutique scan unambiguous: one card, one IF.
 
 import { STAGE_RANK } from './stages.js'
 
@@ -85,8 +102,12 @@ export function groupOrdersByPo(orders = []) {
     byPo.get(po).push(o)
   }
   for (const [po, members] of byPo) {
-    const forcePo = members.some((m) => m.source === 'edi')
-    out.push(members.length === 1 && !forcePo ? members[0] : mergeGroup(po, members))
+    // EDI POs always group — even a single-SO one, because the fan-out arrives over
+    // time and the EDI board expects a group card. Everything else stays individual,
+    // however many sales orders share the PO.
+    const isEdi = members.some((m) => m.source === 'edi')
+    if (!isEdi) { out.push(...members); continue }
+    out.push(mergeGroup(po, members))
   }
   return out
 }
