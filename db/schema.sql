@@ -1477,3 +1477,57 @@ CREATE TABLE IF NOT EXISTS shipstation_order (
 CREATE INDEX IF NOT EXISTS idx_shipstation_order_if  ON shipstation_order(if_number);
 CREATE INDEX IF NOT EXISTS idx_shipstation_order_po  ON shipstation_order(po_number, dc);
 CREATE INDEX IF NOT EXISTS idx_shipstation_order_trk ON shipstation_order(tracking_number);
+
+-- ── Manhattan Active TMS tenders (Nordstrom) ────────────────────────────────
+-- `cpadmin@support.manh.com` answers a routing request with "Tender Accepted for
+-- Shipment S…". That email is the only place the ACCEPTED pickup datetime, the
+-- carrier, and the per-DC SRR (routing request number) exist. See
+-- src/model/manhattanTender.js for the parse rules and the two traps (SRR grain is
+-- the DC, not the SPO; the email drops our DC's leading zero).
+--
+-- Kept as its own record rather than written onto routing_shipment: ship_date,
+-- carrier and routing_request_number are all hand-entered by Nima in the Routing
+-- view, and a sync that silently overwrites a hand-entered field is how a surface
+-- stops being trustworthy. `npm run check:tenders` reports the disagreement.
+--
+-- ⚠️ A tender can arrive more than once (S000137008 came twice, 2h27m apart,
+-- byte-identical). shipment_id is the identity — a re-send upserts.
+CREATE TABLE IF NOT EXISTS tms_tender (
+  shipment_id       TEXT PRIMARY KEY,
+  partner           TEXT NOT NULL DEFAULT 'Nordstrom',
+  message_id        TEXT,               -- the Gmail message this was parsed from
+  tendered_at       TIMESTAMPTZ,        -- when the acceptance email arrived
+  pickup_at         TIMESTAMPTZ,        -- "Planned Time of 1st Stop", zone-resolved
+  pickup_raw        TEXT,               -- kept verbatim; the zone is part of the value
+  carrier           TEXT,
+  -- Template fields: identical on every tender since 2026-05. Stored, never keyed on.
+  origin_facility   TEXT,
+  origin_city       TEXT,
+  origin_state      TEXT,
+  dest_facility     TEXT,
+  dest_city         TEXT,
+  dest_state        TEXT,
+  total_cartons     INTEGER,            -- the tender's own checksum against our cartons
+  total_weight_lb   NUMERIC,
+  total_volume_cuft NUMERIC,
+  srr_pairing       TEXT,               -- by_dc_order | count_mismatch | no_srr
+  srr_count         INTEGER,
+  spo_count         INTEGER,
+  created_at        TIMESTAMPTZ DEFAULT now(),
+  updated_at        TIMESTAMPTZ DEFAULT now()
+);
+
+-- One row per DC on the tender — the same grain as routing_shipment (partner, DC).
+-- `dc` is NORMALIZED (leading zeros stripped) so it joins; `dc_raw` keeps what the
+-- email actually said.
+CREATE TABLE IF NOT EXISTS tms_tender_stop (
+  shipment_id TEXT NOT NULL REFERENCES tms_tender(shipment_id) ON DELETE CASCADE,
+  dc          TEXT NOT NULL,
+  dc_raw      TEXT,
+  seq         INTEGER NOT NULL,         -- first-appearance order; how the SRR was paired
+  srr         TEXT,                     -- NULL when the counts disagreed — never guessed
+  po_numbers  TEXT[] NOT NULL DEFAULT '{}',
+  PRIMARY KEY (shipment_id, dc)
+);
+CREATE INDEX IF NOT EXISTS idx_tms_tender_stop_dc  ON tms_tender_stop(dc);
+CREATE INDEX IF NOT EXISTS idx_tms_tender_stop_srr ON tms_tender_stop(srr);

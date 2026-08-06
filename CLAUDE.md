@@ -31,6 +31,8 @@ npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
+npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
+npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 
 ```
 
@@ -92,6 +94,8 @@ src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
 src/ingest/shipstationCosts.js  harvest what UPS actually billed (read-only)
 src/ingest/warehouseFeed.js  open PO lines + item-location qtys → the Naghedi-Warehouse app's Supabase (docs/warehouse-po-feed.md; shared-DB rules in docs/SHARED_DATA_PROTOCOL.md)
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account
+src/model/manhattanTender.js  parse Nordstrom's TMS tender email; SRR's grain is the DC
+src/ingest/manhattanTender.js pull + persist tenders; reconcile vs routing_shipment
 server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client
 client/src/views/        Dashboard · Kanban · TableView · Calendar
