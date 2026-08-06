@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseTenderEmail, parsePickup, parseSpo, normalizeDc, pickupLocalYmd,
-  reconcileTender, summarizeTenderDiffs, matchStop, SRR_PAIRING, TENDER_DIFF,
+  reconcileTender, summarizeTenderDiffs, matchStop, planTenderApply, SRR_PAIRING, TENDER_DIFF,
 } from '../src/model/manhattanTender.js'
 
 // The live 2026-08-06 tender, verbatim in structure. 9 SRRs, 9 SPOs, 9 DCs.
@@ -254,4 +254,55 @@ test('a PARTIAL match still names the missing stops', () => {
   assert.equal(r.matched, 3)
   assert.equal(r.outOfScope, false)
   assert.equal(r.diffs.filter((d) => d.kind === TENDER_DIFF.NO_SHIPMENT).length, 6)
+})
+
+// ── planTenderApply — the click, not the cron ─────────────────────────────────
+
+test('accepting the tender rewrites the date and fills the carrier', () => {
+  const p = planTenderApply(parseTenderEmail(S190212), LIVE_ROWS)
+  assert.equal(p.outOfScope, false)
+  assert.equal(p.shipments, 9, 'all nine BOLs in one press')
+  assert.equal(p.changes, 18, 'a date and a carrier each')
+  assert.equal(p.conflicts, 0)
+  assert.equal(p.pickupDate, '2026-08-10')
+  const e = p.edits.find((x) => x.dc === '89')
+  assert.deepEqual(e.set, { shipDate: '2026-08-10', carrier: 'CTE Carrier' })
+  assert.equal(e.bolNumber, 'NB1731254')
+})
+
+test('⚠️ a hand-keyed SRR is NEVER overwritten — a disagreement stays visible', () => {
+  const rows = LIVE_ROWS.map((r) => (r.dc === '569' ? { ...r, routingRequestNumber: '5189002RR000000099' } : r))
+  const p = planTenderApply(parseTenderEmail(S190212), rows)
+  const e = p.edits.find((x) => x.dc === '569')
+  assert.ok(!('routingRequestNumber' in e.set), 'his number stands')
+  assert.deepEqual(e.kept, [{ field: 'routingRequestNumber', ours: '5189002RR000000099', theirs: '5189002RR000000053' }])
+  assert.equal(p.conflicts, 1)
+})
+
+test('an EMPTY SRR is filled', () => {
+  const rows = LIVE_ROWS.map((r) => ({ ...r, routingRequestNumber: null }))
+  const p = planTenderApply(parseTenderEmail(S190212), rows)
+  assert.equal(p.edits.find((x) => x.dc === '89').set.routingRequestNumber, '5189002RR000000061')
+  assert.equal(p.conflicts, 0)
+})
+
+test('applying an already-applied tender plans nothing — the button goes quiet', () => {
+  const rows = LIVE_ROWS.map((r) => ({ ...r, shipDate: '2026-08-10', carrier: 'CTE Carrier' }))
+  const p = planTenderApply(parseTenderEmail(S190212), rows)
+  assert.deepEqual(p.edits, [])
+  assert.equal(p.changes, 0)
+})
+
+test('a historical tender plans nothing at all', () => {
+  const june = parseTenderEmail({
+    subject: 'Tender Accepted for Shipment S000145602', receivedAt: '2026-06-03T20:44:18Z',
+    body: `<div><b>ShipmentId :</b> S000145602 </div>
+      <p><b> Planned Time of 1st Stop:</b> 4 June 2026 08:00:00 PDT</p>
+      <div><b>SRR :</b> [5189002RR000000040, 5189002RR000000041, 5189002RR000000042]</div>
+      <div><b>SPO :</b> [50125052-599, 50125052-584, 50125052-569]</div>
+      <div><b>Carrier :</b> CTE Carrier  </div>`,
+  })
+  const p = planTenderApply(june, LIVE_ROWS)
+  assert.equal(p.outOfScope, true)
+  assert.deepEqual(p.edits, [])
 })

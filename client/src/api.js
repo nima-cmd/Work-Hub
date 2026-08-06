@@ -681,6 +681,14 @@ export async function setShipmentRefs(id, fields) {
   return res.json()
 }
 
+// Accept a partner TMS tender — writes its pickup date + carrier onto every routing
+// shipment it covers. Returns { applied, changes, conflicts, routing }.
+export async function applyTender(tenderShipmentId) {
+  const res = await fetch(`/api/routing/tender/${tenderShipmentId}/apply`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
+  return res.json()
+}
+
 export async function setShipmentShipped(id, shipped = true) {
   const res = await fetch(`/api/routing/shipment/${id}/shipped`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
