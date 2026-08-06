@@ -9,7 +9,7 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
-import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses } from '../src/ingest/shipstationPush.js'
+import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods } from '../src/ingest/shipstationPush.js'
 import { harvestTracking, backfillPushedOrders } from '../src/ingest/shipstationTracking.js'
 import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
 
@@ -1466,18 +1466,41 @@ async function fetchShipmentStoreCartons(ids = []) {
 // (no packages — the box is chosen in ShipStation, like retail).
 export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId = SHIPSTATION_STORE_ID } = {}) {
   if (scope === 'boutique') {
-    // Boutique fulfilments that are packed and still here.
+    // ⚠️ THIS FILTERED ON `packed` UNTIL 2026-08-06, WHICH IS THE DONE PILE.
+    // Nima: "We want the shipstation to only pick up our picked not packed — if it's
+    // packed ShipStation done its job or the label was created elsewhere." Measured
+    // that day: 9 orders live in ShipStation, all 9 Packed and 8 already carrying a
+    // NetSuite tracking number, while 4 UPS `Picked` fulfilments that genuinely needed
+    // labels were absent. He was seeing what he had already made.
+    //
+    // The status filter is deliberately WIDE now (unshipped, not china) and
+    // src/model/shipstationEligible.js decides — so a fulfilment that is Packed with
+    // no label anywhere still reaches a verdict and gets NAMED rather than filtered
+    // away silently. `tracking_numbers` rides along because an existing label ends the
+    // question regardless of what the status claims.
     const { rows } = await pool.query(
       `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
-              o.customer
+              o.customer, f.status,
+              COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) AS "labelCount"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
-       WHERE f.actual_ship_date IS NULL AND f.status ILIKE 'packed'
+       WHERE f.actual_ship_date IS NULL
          AND o.source = 'boutique' AND COALESCE(o.location,'') NOT ILIKE '%china%'
        ORDER BY f.if_number`)
-    // Addresses live only in NetSuite — Neon has no address column at all.
-    const addrs = await fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL })
+    // Addresses live only in NetSuite — Neon has no address column at all. The
+    // requested carrier/service too, and deliberately in a SEPARATE call (see
+    // fetchBoutiqueShipMethods for why folding them together is a trap).
+    const [addrs, methods] = await Promise.all([
+      fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL }),
+      fetchBoutiqueShipMethods(rows.map((r) => r.ifNumber), { runSuiteQL }),
+    ])
     const { orders, skipped, records } = boutiqueOrdersFor(
-      rows.map((r) => ({ order: r, fulfilment: { ifNumber: r.ifNumber }, address: addrs.get(r.ifNumber) })),
+      rows.map((r) => ({
+        order: r, fulfilment: { ifNumber: r.ifNumber, status: r.status },
+        address: addrs.get(r.ifNumber),
+        labelCount: Number(r.labelCount) || 0,
+        carrier: methods.get(r.ifNumber)?.carrier ?? null,
+        shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
+      })),
       { storeId },
     )
     const res = await pushOrders(orders, { dryRun })

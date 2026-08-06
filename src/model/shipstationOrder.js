@@ -45,6 +45,14 @@ export const UPS_ACCOUNTS = {
 
 export const FIELD_LIMIT = 26
 
+// "IF7409" already says IF, so `IF ${ifNumber}` printed "IF IF7409" on a real label.
+// Idempotent: prefix only what is not already prefixed.
+export function withPrefix(prefix, value) {
+  const v = String(value ?? '').trim()
+  if (!v) return ''
+  return new RegExp(`^${prefix}`, 'i').test(v) ? v : `${prefix} ${v}`
+}
+
 // Trim to what ShipStation will accept, without a silent midway truncation that
 // turns one PO number into a different-looking one.
 export function fit(s, limit = FIELD_LIMIT) {
@@ -109,7 +117,14 @@ export function buildEdiOrder({ shipment, line, storeId, now = new Date() }) {
 // so no SKU list fits in 26 characters and picking one of forty would be arbitrary.
 // It carries the OTHER document reference instead, so the label shows both without
 // repeating itself.
-export function buildBoutiqueOrder({ order, fulfilment, address, storeId, upsAccount = UPS_ACCOUNTS.bigBox, now = new Date() }) {
+//
+// `serviceCode` comes from the fulfilment's REQUESTED ship method, resolved by
+// src/model/shipstationEligible.js — it is NOT defaulted here. It used to be
+// hardcoded `ups_ground`, which silently downgraded anyone who asked for a faster
+// service; an order whose service we cannot name is now held rather than pushed, so
+// by the time this runs the code is known.
+export function buildBoutiqueOrder({ order, fulfilment, address, storeId, serviceCode, upsAccount = UPS_ACCOUNTS.bigBox, now = new Date() }) {
+  if (!serviceCode) throw new Error(`buildBoutiqueOrder: no serviceCode for ${fulfilment?.ifNumber} — eligibility must resolve it before the order is built`)
   const po = order.poNumber || null
   return {
     orderKey: `WH-${fulfilment.ifNumber}`,
@@ -121,7 +136,7 @@ export function buildBoutiqueOrder({ order, fulfilment, address, storeId, upsAcc
     items: [{ sku: order.soNumber, name: `${order.soNumber} · ${order.customer || ''}`.trim(), quantity: 1 }],
     // No weight/dimensions ON PURPOSE — boxed in ShipStation.
     carrierCode: 'ups',
-    serviceCode: 'ups_ground',
+    serviceCode, // the REQUESTED service, never a default — see above.
     packageCode: 'package',
     advancedOptions: {
       storeId,
@@ -132,7 +147,11 @@ export function buildBoutiqueOrder({ order, fulfilment, address, storeId, upsAcc
         ? billing({ terms: order.freightTerms || 'Third Party Bill', account: order.billToAccount, zip: order.billToZip })
         : { billToParty: 'my_other_account', billToMyOtherAccount: upsAccount }),
       customField1: fit(order.soNumber),
-      customField2: fit(po ? `SO ${order.soNumber}` : `IF ${fulfilment.ifNumber}`),  // printed line 2
+      // ⚠️ Prefixed only when the number does not already carry one: soNumber is
+      // "SO12374" and ifNumber is "IF7409", so the naive `IF ${ifNumber}` printed
+      // "IF IF7409" on line 2 of a real label (Nima, 2026-08-05). Fixed at the
+      // source, because a printed label is the one place it is permanent.
+      customField2: fit(po ? withPrefix('SO', order.soNumber) : withPrefix('IF', fulfilment.ifNumber)),  // printed line 2
       customField3: fit(order.customer || ''),
     },
   }

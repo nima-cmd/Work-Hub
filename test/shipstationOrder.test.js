@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildEdiOrder, buildBoutiqueOrder, billing, cleanStreet, fit, UPS_ACCOUNTS, FIELD_LIMIT,
+  buildEdiOrder, buildBoutiqueOrder, billing, cleanStreet, fit, withPrefix, UPS_ACCOUNTS, FIELD_LIMIT,
 } from '../src/model/shipstationOrder.js'
 
 // Every rule here was learned against the live API on 2026-08-05 and confirmed on a
@@ -75,7 +75,7 @@ test('a boutique order names the Big Box account explicitly', () => {
     order: { soNumber: 'SO12328', poNumber: null, customer: 'I Am More' },
     fulfilment: { ifNumber: 'IF7442' },
     address: { addressee: 'I Am More', addr1: '6 Spencer Pl', city: 'Scarsdale', state: 'NY', zip: '10583' },
-    storeId: 351819, now: NOW,
+    serviceCode: 'ups_ground', storeId: 351819, now: NOW,
   })
   assert.equal(o.advancedOptions.billToParty, 'my_other_account')
   assert.equal(o.advancedOptions.billToMyOtherAccount, UPS_ACCOUNTS.bigBox)
@@ -86,7 +86,7 @@ test('boutique ships with NO weight or dimensions, on purpose', () => {
   // Nima boxes them in ShipStation like retail. Absent, not missing.
   const o = buildBoutiqueOrder({
     order: { soNumber: 'SO12328', customer: 'I Am More' }, fulfilment: { ifNumber: 'IF7442' },
-    address: { addr1: '6 Spencer Pl', city: 'Scarsdale', state: 'NY', zip: '10583' }, storeId: 1, now: NOW,
+    address: { addr1: '6 Spencer Pl', city: 'Scarsdale', state: 'NY', zip: '10583' }, storeId: 1, serviceCode: 'ups_ground', now: NOW,
   })
   assert.equal(o.weight, undefined)
   assert.equal(o.dimensions, undefined)
@@ -96,17 +96,17 @@ test('boutique references the PO when there is one, else the sales order', () =>
   // Live: 10 of 14 boutique IFs have no customer PO.
   const withPo = buildBoutiqueOrder({
     order: { soNumber: 'SO12374', poNumber: '72426N', customer: 'Julian Gold' },
-    fulfilment: { ifNumber: 'IF7410' }, address: { addr1: '1 A St', city: 'X', state: 'TX', zip: '7' }, storeId: 1, now: NOW,
+    fulfilment: { ifNumber: 'IF7410' }, address: { addr1: '1 A St', city: 'X', state: 'TX', zip: '7' }, storeId: 1, serviceCode: 'ups_ground', now: NOW,
   })
   assert.equal(withPo.orderNumber, '72426N')
-  assert.equal(withPo.advancedOptions.customField2, 'SO SO12374')   // the other reference
+  assert.equal(withPo.advancedOptions.customField2, 'SO12374')   // the other reference, no doubled prefix
 
   const noPo = buildBoutiqueOrder({
     order: { soNumber: 'SO12328', poNumber: null, customer: 'I Am More' },
-    fulfilment: { ifNumber: 'IF7442' }, address: { addr1: '1 A St', city: 'X', state: 'NY', zip: '1' }, storeId: 1, now: NOW,
+    fulfilment: { ifNumber: 'IF7442' }, address: { addr1: '1 A St', city: 'X', state: 'NY', zip: '1' }, storeId: 1, serviceCode: 'ups_ground', now: NOW,
   })
   assert.equal(noPo.orderNumber, 'SO12328')
-  assert.equal(noPo.advancedOptions.customField2, 'IF IF7442')      // never repeats line 1
+  assert.equal(noPo.advancedOptions.customField2, 'IF7442')      // never repeats line 1
 })
 
 test('printed fields respect the 26-character limit', () => {
@@ -128,4 +128,29 @@ test('a duplicated street tail is stripped, but a real street is untouched', () 
   assert.equal(cleanStreet('28701 Hall Road', { city: 'Hayward', state: 'CA', zip: '94545' }), '28701 Hall Road')
   // never returns empty — a blank street is undeliverable
   assert.equal(cleanStreet('Scarsdale, NY 10583', { city: 'Scarsdale', state: 'NY', zip: '10583' }), 'Scarsdale, NY 10583')
+})
+
+test('line 2 never doubles a prefix the number already carries', () => {
+  // A real printed label read "IF IF7409" (Nima, 2026-08-05): ifNumber is already
+  // "IF7409". Idempotent, and it must not stop prefixing a bare number.
+  assert.equal(withPrefix('IF', 'IF7409'), 'IF7409')
+  assert.equal(withPrefix('IF', '7409'), 'IF 7409')
+  assert.equal(withPrefix('SO', 'SO12374'), 'SO12374')
+  assert.equal(withPrefix('SO', '12374'), 'SO 12374')
+  assert.equal(withPrefix('IF', ''), '')
+
+  const noPo = buildBoutiqueOrder({
+    order: { soNumber: 'SO12328', poNumber: null, customer: 'I Am More' },
+    fulfilment: { ifNumber: 'IF7442' }, address: { addr1: '1 A St', city: 'X', state: 'NY', zip: '1' },
+    storeId: 1, serviceCode: 'ups_ground', now: NOW,
+  })
+  assert.equal(noPo.advancedOptions.customField2, 'IF7442')   // was "IF IF7442"
+})
+
+test('the boutique builder refuses to invent a service level', () => {
+  // Silently defaulting to Ground is how someone who asked for 2nd Day gets Ground.
+  assert.throws(() => buildBoutiqueOrder({
+    order: { soNumber: 'SO1', customer: 'X' }, fulfilment: { ifNumber: 'IF1' },
+    address: { addr1: '1 A St', city: 'X', state: 'NY', zip: '1' }, storeId: 1, now: NOW,
+  }), /no serviceCode/)
 })
