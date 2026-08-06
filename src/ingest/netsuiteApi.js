@@ -194,3 +194,57 @@ export async function runSuiteQL(sql, opts = {}) {
   // Callers must treat this as incomplete (and the sync logs it).
   return { ok: true, rows, truncated }
 }
+
+// ── REST record reads (2026-08-06) ──────────────────────────────────────────
+//
+// ⚠️ THE REST RECORD IS RICHER THAN SUITEQL, AND THAT IS NOT A DETAIL.
+//
+// Four transaction columns — thirdpartyacct, thirdpartycarrier, thirdpartyzipcode,
+// thirdpartycountry — PARSE in SuiteQL and then return ZERO ROWS. That is this
+// account's NOT_EXPOSED signature (the same one that once made a sales order's DC
+// field look absent), and it is indistinguishable from "no data" unless you compare
+// against a query you know returns rows.
+//
+// The REST record answers all of them: a salesorder record carries 121–125 fields
+// including `shipMethod` as a READABLE NAME ("UPS® Ground", "Fedex", "DHL Express")
+// where SuiteQL gives only an opaque id, plus `thirdPartyAcct`. The customer record
+// adds `thirdPartyZipCode` and `thirdPartyCarrier`.
+//
+// ⚠️ And it needs NO new permission. The itemfulfillment record does — NetSuite asks
+// for 'Transactions -> Fulfill Sales Orders' at EDIT level even to GET it, which
+// would give this read-only integration the ability to fulfill orders. Reading the
+// SALES ORDER instead avoids that entirely, so we do.
+//
+// ⚠️ Field names are camelCase here and the casing is not guessable: it is
+// `thirdPartyZipCode`, capital C, which an explicit key list spelled
+// `thirdPartyZipcode` silently misses. Prefer scanning keys over asserting them.
+export async function restGet(path, { env, _fetch = fetch } = {}) {
+  const creds = netsuiteCreds(env)
+  if (!creds) return { ok: false, configured: false, data: null }
+  const baseUrl = `https://${normalizeAccount(creds.account)}.suitetalk.api.netsuite.com/services/rest/record/v1/${String(path).replace(/^\/+/, '')}`
+  const authHeader = buildAuthHeader({ method: 'GET', baseUrl, creds })
+  let res
+  try {
+    res = await _fetch(baseUrl, { headers: { Authorization: authHeader, 'Content-Type': 'application/json' } })
+  } catch (e) {
+    return { ok: false, status: 'network', error: String(e.message), data: null }
+  }
+  const text = await res.text()
+  if (!res.ok) {
+    // NetSuite states the missing permission verbatim in o:errorDetails — surface it
+    // rather than a bare status, because that string is the whole diagnosis.
+    let detail = text.slice(0, 300)
+    try { detail = JSON.parse(text)['o:errorDetails']?.[0]?.detail || detail } catch { /* keep raw */ }
+    return { ok: false, status: res.status, error: detail, data: null }
+  }
+  return { ok: true, data: text ? JSON.parse(text) : null }
+}
+
+// A NetSuite REST field is either a scalar or a { id, refName } reference. The name
+// is what carries meaning ("UPS® Ground"); the id is the thing SuiteQL already gave
+// us and could not resolve.
+export function refName(field) {
+  if (field == null) return null
+  if (typeof field === 'object') return field.refName ?? field.id ?? null
+  return field
+}

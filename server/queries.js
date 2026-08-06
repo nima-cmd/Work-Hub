@@ -9,9 +9,9 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
-import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods } from '../src/ingest/shipstationPush.js'
+import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
 import { harvestTracking, backfillPushedOrders } from '../src/ingest/shipstationTracking.js'
-import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
+import { runSuiteQL, restGet, refName } from '../src/ingest/netsuiteApi.js'
 
 // The API-created store ("Api Shipments"). Overridable per deploy; the account's
 // other stores are the Shopify/retail ones and must not receive these.
@@ -1489,9 +1489,13 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId
     // Addresses live only in NetSuite — Neon has no address column at all. The
     // requested carrier/service too, and deliberately in a SEPARATE call (see
     // fetchBoutiqueShipMethods for why folding them together is a trap).
-    const [addrs, methods] = await Promise.all([
+    const soByIf = new Map(rows.map((r) => [r.ifNumber, r.soNumber]))
+    const [addrs, methods, details] = await Promise.all([
       fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL }),
       fetchBoutiqueShipMethods(rows.map((r) => r.ifNumber), { runSuiteQL }),
+      // The service NAME and who pays, from the sales order REST record — the carrier
+      // GROUP that `methods` returns cannot distinguish Fedex from DHL from UPS.
+      fetchBoutiqueShipDetails(rows.map((r) => r.ifNumber), soByIf, { runSuiteQL, restGet, refName }),
     ])
     const { orders, skipped, records } = boutiqueOrdersFor(
       rows.map((r) => ({
@@ -1500,6 +1504,10 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId
         labelCount: Number(r.labelCount) || 0,
         carrier: methods.get(r.ifNumber)?.carrier ?? null,
         shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
+        shipMethodName: details.get(r.ifNumber)?.shipMethodName ?? null,
+        thirdPartyAcct: details.get(r.ifNumber)?.thirdPartyAcct ?? null,
+        thirdPartyZip: details.get(r.ifNumber)?.thirdPartyZip ?? null,
+        readFailed: details.get(r.ifNumber)?.readFailed ?? false,
       })),
       { storeId },
     )

@@ -136,3 +136,94 @@ test('the service map is an allow-list, not a default', () => {
   // If this ever grows a fallback, the mis-ship guard is gone.
   assert.deepEqual(Object.keys(UPS_SERVICE_BY_METHOD), ['4'])
 })
+
+// ── Who pays (added 2026-08-06, after a real mis-billing) ───────────────────
+//
+// IF7405 (Saint Bernard) was pushed billed to Naghedi's Big Box account while the
+// customer holds UPS 782847. Nothing was purchased, so no money moved — but unset
+// billing defaults to OUR account, so the failure direction is always us paying.
+
+test('a customer third-party account is billed to the customer, not to us', () => {
+  const v = shipstationEligibility({
+    status: 'Picked', shipMethodName: 'UPS® Ground',
+    thirdPartyAcct: '782847', thirdPartyZip: '75247',
+  })
+  assert.equal(v.push, true)
+  assert.equal(v.serviceCode, 'ups_ground')
+  assert.deepEqual(v.billTo, { party: 'third_party', account: '782847', zip: '75247' })
+})
+
+test('no third-party account means our own account, explicitly', () => {
+  // IF7451/7453/7455 — genuinely ours to pay.
+  const v = shipstationEligibility({ status: 'Picked', shipMethodName: 'UPS® Ground' })
+  assert.equal(v.push, true)
+  assert.equal(v.billTo, null)   // caller falls back to the named Big Box account
+})
+
+test('a third-party account with no postal code is HELD', () => {
+  // UPS validates third-party billing on the account zip, and the fallback direction
+  // is us paying, so a missing zip is not a thing to push through.
+  const v = shipstationEligibility({
+    status: 'Picked', shipMethodName: 'UPS® Ground', thirdPartyAcct: '782847', thirdPartyZip: null,
+  })
+  assert.equal(v.push, false)
+  assert.equal(v.hold, HOLD.THIRD_PARTY_NO_ZIP)
+  assert.match(v.reason, /782847/)
+})
+
+test('a FAILED read never reads as "no third party"', () => {
+  // The whole reason this hold exists: absent billing data bills us.
+  const v = shipstationEligibility({ status: 'Picked', shipMethodName: 'UPS® Ground', readFailed: true })
+  assert.equal(v.push, false)
+  assert.equal(v.hold, HOLD.SHIP_DETAIL_UNREADABLE)
+})
+
+test('the service NAME beats the carrier group, which cannot tell them apart', () => {
+  // ⚠️ transaction.shipcarrier is a GROUP: "FedEx/USPS/More" covers BOTH Fedex
+  // (IF7452) and DHL Express (IF7450). Gating on it held the right two orders for the
+  // wrong reason, and would misclassify a "More"-group order that is really UPS.
+  const dhl = shipstationEligibility({ status: 'Picked', carrier: 'FedEx/USPS/More', shipMethodName: 'DHL Express' })
+  assert.equal(dhl.hold, HOLD.CARRIER_NOT_SET_UP)
+  assert.match(dhl.reason, /DHL Express is not set up/)
+
+  const fedex = shipstationEligibility({ status: 'Picked', carrier: 'FedEx/USPS/More', shipMethodName: 'Fedex' })
+  assert.match(fedex.reason, /Fedex is not set up/)
+
+  // The group says not-UPS; the NAME says UPS and wins.
+  const ups = shipstationEligibility({ status: 'Picked', carrier: 'FedEx/USPS/More', shipMethodName: 'UPS® Ground' })
+  assert.equal(ups.push, true)
+})
+
+test('the ® in the NetSuite service name is not load-bearing', () => {
+  for (const n of ['UPS® Ground', 'UPS Ground', 'ups ground', '  UPS®  Ground  ']) {
+    assert.equal(shipstationEligibility({ status: 'Picked', shipMethodName: n }).serviceCode, 'ups_ground', n)
+  }
+})
+
+test('a named UPS service we have not mapped is still held', () => {
+  const v = shipstationEligibility({ status: 'Picked', shipMethodName: 'UPS 2nd Day Air' })
+  assert.equal(v.push, false)
+  assert.equal(v.hold, HOLD.UNKNOWN_SERVICE)
+  assert.match(v.reason, /"UPS 2nd Day Air"/)
+})
+
+// The live set again, now with the REST data. The billing column is the new part.
+test('the live lane bills three to us and one to the customer', () => {
+  const LIVE = [
+    { if: 'IF7405', status: 'Picked', shipMethodName: 'UPS® Ground', thirdPartyAcct: '782847', thirdPartyZip: '75247' },
+    { if: 'IF7450', status: 'Picked', shipMethodName: 'DHL Express', thirdPartyAcct: '953308190' },
+    { if: 'IF7451', status: 'Picked', shipMethodName: 'UPS® Ground' },
+    { if: 'IF7452', status: 'Picked', shipMethodName: 'Fedex', thirdPartyAcct: '401715762' },
+    { if: 'IF7453', status: 'Picked', shipMethodName: 'UPS® Ground' },
+    { if: 'IF7455', status: 'Picked', shipMethodName: 'UPS® Ground' },
+  ]
+  const { push, held } = partitionForShipstation(LIVE)
+  assert.deepEqual(push.map((p) => p.row.if), ['IF7405', 'IF7451', 'IF7453', 'IF7455'])
+  // ⚠️ The correction: IF7405 goes on the CUSTOMER's account. It was pushed on ours.
+  assert.deepEqual(push.find((p) => p.row.if === 'IF7405').billTo,
+    { party: 'third_party', account: '782847', zip: '75247' })
+  for (const k of ['IF7451', 'IF7453', 'IF7455']) {
+    assert.equal(push.find((p) => p.row.if === k).billTo, null, k)
+  }
+  assert.deepEqual(held.map((h) => h.row.if), ['IF7450', 'IF7452'])
+})
