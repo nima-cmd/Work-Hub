@@ -25,7 +25,7 @@ import { deriveSource } from '../model/source.js'
 import {
   loadOrders, loadFulfillments, loadInvoices, recordSnapshot, loadEdiFulfillments,
   loadPurchaseOrders, prunePurchaseOrders, loadOrderConfirmations, pruneOrderConfirmations,
-  pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+  pruneOrders, stampApprovedForShipping, stampShippedValue, clearDepartedCustody, clearDepartedDcCustody,
   deriveOrderEvents,
   loadEdiPackages, loadCatalogueSkus,
   loadShipCentralQueue, pruneShipCentralQueue,
@@ -122,6 +122,7 @@ export async function importBatch(files) {
     await stampApprovedForShipping(records, db) // launch-day ledger for the Launch Bay delay warning
     await stampShippedValue(records, db) // snapshot shipped $ for the header credits
     await clearDepartedCustody(records, db) // close custody + prune box rows for IFs that shipped
+    await clearDepartedDcCustody(db) // and the per-DC cargo tags, which nothing closed before
     const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
     // Last, because it reads the tables the loaders above have just written.
     const events = await deriveOrderEvents({ mode: 'sync' }, db)

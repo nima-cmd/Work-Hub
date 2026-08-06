@@ -44,6 +44,7 @@ import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src
 import { splitUnfiled } from '../src/model/filing.js'
 import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
+import { dcTagDeparture } from '../src/model/custody.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
@@ -398,6 +399,46 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
     WHERE NOT c.cleared
   `)
 
+  // ⚠️ THE DC LANE HAD NO EQUIVALENT OF THE IF LANE'S `actual_ship_date IS NULL`
+  // BELT-AND-SUSPENDERS (2026-08-06), and `NOT cleared` alone was worthless here
+  // because nothing had ever written a DC CUSTODY_CLEARED: 41 live tags, 0 cleared,
+  // 32 of them on POs that had wholly shipped and been invoiced. They rendered as
+  // "back in our hands · sitting 14d with no movement" and dominated the register's
+  // "52 back in our hands" headline.
+  //
+  // clearDepartedDcCustody now writes the marker at ingest, so this is the guard,
+  // not the fix — and it deliberately calls the SAME dcTagDeparture the ingest side
+  // calls rather than re-stating the rule in SQL. Two copies of one rule is how the
+  // packed_status counters drifted (see the counter-truth audit); there is one rule
+  // here and both readers ask it.
+  const dcLive = await (async () => {
+    if (!dcRows.length) return dcRows
+    const pos = [...new Set(dcRows.map((r) => String(r.docNumber).split(':')[0]))]
+    const { rows: ifs } = await pool.query(`
+      SELECT o.po_number AS po, o.dc, f.if_number AS "ifNumber", f.actual_ship_date AS "actualShipDate"
+      FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+      WHERE o.po_number = ANY($1::text[])
+    `, [pos])
+    const byPo = new Map()
+    for (const r of ifs) {
+      if (!byPo.has(r.po)) byPo.set(r.po, [])
+      byPo.get(r.po).push(r)
+    }
+    return dcRows.filter((r) => {
+      // Same latest-OUT-vs-latest-IN test `shape` below applies, computed here
+      // because the verdict needs it before shaping: a tag still out with the
+      // warehouse is never closed by a ship date (see dcTagDeparture).
+      const outT = r.custodyOut ? new Date(r.custodyOut).getTime() : 0
+      const inT = r.custodyIn ? new Date(r.custodyIn).getTime() : 0
+      const state = inT >= outT && inT > 0 ? 'returned' : 'with_warehouse'
+      return !dcTagDeparture({
+        docNumber: r.docNumber,
+        fulfilments: byPo.get(String(r.docNumber).split(':')[0]) || [],
+        state,
+      }).departed
+    })
+  })()
+
   const now = today.getTime()
   const shape = (r, extra) => {
     const outT = r.custodyOut ? new Date(r.custodyOut).getTime() : 0
@@ -424,7 +465,7 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
   const bolByKey = new Map()
   for (const s of ships) for (const po of (s.memberPos || [])) bolByKey.set(`${po}|${s.dc}`, s)
 
-  const dcResults = dcRows.map((r) => {
+  const dcResults = dcLive.map((r) => {
     const [po, abbrev] = String(r.docNumber).split(':')
     const key = `${po}|${abbrev || ''}`
     const ship = bolByKey.get(key)
