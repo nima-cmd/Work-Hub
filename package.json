@@ -22,6 +22,7 @@
     "check:shipstation": "node --env-file=.env.local scripts/check-shipstation.js",
     "check:asn-cartons": "node --env-file=.env.local scripts/check-asn-cartons.js",
     "check:warehouse-feed": "node --env-file=.env.local scripts/check-warehouse-feed.js",
+    "check:label-records": "node --env-file=.env.local scripts/check-label-records.js",
     "check:counters": "node --env-file=.env.local scripts/check-counters.js",
     "zpl": "node scripts/zpl-print.js",
     "zpl:watch": "node scripts/zpl-print.js --watch",
