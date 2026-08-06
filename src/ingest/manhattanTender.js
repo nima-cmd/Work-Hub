@@ -13,8 +13,12 @@ import { parseTenderEmail, reconcileTender } from '../model/manhattanTender.js'
 // null for anything without a ShipmentId — a mailbox is not a schema.
 export const TENDER_QUERY = 'from:cpadmin@support.manh.com subject:"Tender Accepted" in:anywhere'
 
-export async function fetchTenders({ max = 100 } = {}) {
-  const messages = await searchMessages({ query: TENDER_QUERY, max })
+export async function fetchTenders({ max = 100, sinceDays = null } = {}) {
+  // The scheduled caller passes a small window so the common case is ONE cheap search
+  // returning nothing — tenders arrive a few times a month, not a few times an hour.
+  // The CLI passes none and sweeps everything.
+  const query = sinceDays ? `${TENDER_QUERY} newer_than:${sinceDays}d` : TENDER_QUERY
+  const messages = await searchMessages({ query, max })
   const parsed = []
   for (const m of messages) {
     const t = parseTenderEmail({
@@ -86,8 +90,8 @@ export async function upsertTenders(tenders, { dryRun = false } = {}) {
   return { tenders: tenders.length, stops, dryRun: false }
 }
 
-export async function syncTenders({ max = 100, dryRun = false } = {}) {
-  const { fetched, parsed, tenders } = await fetchTenders({ max })
+export async function syncTenders({ max = 100, dryRun = false, sinceDays = null } = {}) {
+  const { fetched, parsed, tenders } = await fetchTenders({ max, sinceDays })
   const written = await upsertTenders(tenders, { dryRun })
   return { fetched, parsed, shipments: tenders.length, ...written, tenders }
 }
