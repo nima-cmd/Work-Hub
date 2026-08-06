@@ -3,6 +3,7 @@
 // (which loads .env.local for the Neon connection).
 
 import express from 'express'
+import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -1360,6 +1361,24 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('EDI carton feed failed (recurring tasks still checked):', e.message)
       }
     }
+    // The partner TMS tender emails — the ACCEPTED pickup datetime, carrier and per-DC
+    // SRR, which exist nowhere else. Wired here deliberately: this module shipped
+    // earlier today with NO caller, which is the exact defect documented three
+    // comments above (PR #16's NetSuite sync drifted for a week unnoticed). A sync
+    // with no caller looks identical to a sync with nothing to do.
+    //
+    // Windowed to 7 days so the usual cycle is one cheap search that finds nothing —
+    // tenders arrive a few times a month. `npm run sync:tenders` sweeps the full
+    // mailbox. Gmail creds only; no NetSuite or Orderful dependency.
+    let tenders = null
+    if (process.env.GOOGLE_REFRESH_TOKEN) {
+      try {
+        const r = await syncTenders({ sinceDays: 7 })
+        tenders = { fetched: r.fetched, shipments: r.shipments, stops: r.stops }
+      } catch (e) {
+        console.error('tender sync failed (recurring tasks still checked):', e.message)
+      }
+    }
     // Carton-level ASN reconciliation — did every carton that left get announced
     // on an 856 the partner received? Needs BOTH integrations (NetSuite for the
     // cartons, Orderful for the manifests), and self-limits to once every
@@ -1377,7 +1396,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       }
     }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, asnCartons, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, tenders, asnCartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
