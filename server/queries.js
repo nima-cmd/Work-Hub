@@ -45,6 +45,7 @@ import { splitUnfiled } from '../src/model/filing.js'
 import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
+import { pushingAllowed, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
@@ -1464,7 +1465,17 @@ async function fetchShipmentStoreCartons(ids = []) {
 //
 // `scope`: 'edi' (DC-direct cartons, weights and dims included) or 'boutique'
 // (no packages — the box is chosen in ShipStation, like retail).
-export async function pushToShipstation({ scope = 'edi', dryRun = false, storeId = SHIPSTATION_STORE_ID } = {}) {
+export async function pushToShipstation({ scope = 'edi', dryRun = false, force = false, storeId = SHIPSTATION_STORE_ID } = {}) {
+  // ⚠️ Labels are made in NetSuite for now — see src/model/labelSource.js for the three
+  // costs that decided it. This gates ORDER CREATION only; the read-only harvest, the
+  // cost sync, the rate quotes and check:label-records all keep working. A dry run is
+  // still allowed because it writes nothing and is how you see what WOULD go.
+  if (!dryRun && !pushingAllowed({ force })) {
+    return {
+      scope, skipped: true, blocked: true, reason: PUSH_DISABLED_REASON,
+      results: [], candidates: 0, recorded: 0,
+    }
+  }
   if (scope === 'boutique') {
     // ⚠️ THIS FILTERED ON `packed` UNTIL 2026-08-06, WHICH IS THE DONE PILE.
     // Nima: "We want the shipstation to only pick up our picked not packed — if it's
