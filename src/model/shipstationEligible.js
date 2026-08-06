@@ -54,10 +54,30 @@
 // agreed to pay, or billing the ecom account for wholesale. Unset billing defaults to
 // UPS 18GE01, so "we couldn't tell" must never become "push it anyway".
 
-// The UPS ship-method IDs we can name. Deliberately a allow-list, not a default:
+// The UPS ship-method IDs we can name. Deliberately an allow-list, not a default:
 // an unrecognised method is held, never shipped as Ground.
+//
+// ⚠️ SUPERSEDED BY UPS_SERVICE_BY_NAME — kept only because the id path is still what
+// SuiteQL can see, and a caller with no REST access falls back to it.
 export const UPS_SERVICE_BY_METHOD = {
   4: 'ups_ground',
+}
+
+// The REAL service map, keyed on the sales order's `shipMethod` NAME as NetSuite
+// spells it — including the ® — because that is the only place the service level is
+// legible (the id resolves nowhere on this role).
+//
+// ⚠️ STILL AN ALLOW-LIST. "Fedex" and "DHL Express" are deliberately ABSENT rather
+// than mapped to a UPS code: neither is set up in ShipStation, and an order we cannot
+// name a service for is held, never guessed. Add a line here as each carrier goes live.
+export const UPS_SERVICE_BY_NAME = {
+  'ups® ground': 'ups_ground',
+  'ups ground': 'ups_ground',
+}
+
+// Normalise for lookup without losing the distinction between two real services.
+export function serviceKey(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 export const HOLD = {
@@ -74,6 +94,14 @@ export const HOLD = {
   NOT_DOMESTIC: 'NOT_DOMESTIC',
   UNKNOWN_SERVICE: 'UNKNOWN_SERVICE',
   THIRD_PARTY_UNREADABLE: 'THIRD_PARTY_UNREADABLE',
+  // A third-party account with no postal code: UPS validates third-party billing on
+  // the account's zip, so pushing without it either fails at label time or falls back
+  // to billing US — and the fallback is the expensive direction.
+  THIRD_PARTY_NO_ZIP: 'THIRD_PARTY_NO_ZIP',
+  // ⚠️ A FAILED READ MUST NEVER READ AS "NO THIRD PARTY". Absent billing data defaults
+  // to Naghedi's account, so a network blip would quietly move someone else's freight
+  // cost onto us. Unknown is held, not assumed.
+  SHIP_DETAIL_UNREADABLE: 'SHIP_DETAIL_UNREADABLE',
   NO_ADDRESS: 'NO_ADDRESS',
 }
 
@@ -85,9 +113,10 @@ export const HOLD = {
 // `freightTerms` — when it names a third party we cannot read, hold (see header).
 // `hasAddress`   — a label to nowhere is worse than a missing one.
 export function shipstationEligibility({
-  status, labelCount = 0, carrier, shipMethod, country, freightTerms, hasAddress = true,
+  status, labelCount = 0, carrier, shipMethod, shipMethodName, country, freightTerms, hasAddress = true,
+  thirdPartyAcct = null, thirdPartyZip = null, readFailed = false,
 } = {}) {
-  const hold = (kind, reason) => ({ push: false, serviceCode: null, hold: kind, reason })
+  const hold = (kind, reason) => ({ push: false, serviceCode: null, billTo: null, hold: kind, reason })
 
   // A label that already exists ends it, whatever the status says — the two disagree
   // in the wild and the label is the harder evidence.
@@ -100,7 +129,21 @@ export function shipstationEligibility({
   }
   if (!hasAddress) return hold(HOLD.NO_ADDRESS, 'no ship-to address in NetSuite')
 
-  if (!/ups/i.test(String(carrier || ''))) {
+  // ⚠️ A read failure is NOT "no third party" — see HOLD.SHIP_DETAIL_UNREADABLE.
+  if (readFailed) {
+    return hold(HOLD.SHIP_DETAIL_UNREADABLE, 'could not read the service or billing from NetSuite — pushing would default the freight to our own account')
+  }
+
+  // The SERVICE NAME decides, not the carrier group. `shipcarrier` is a group:
+  // "FedEx/USPS/More" covers both Fedex and DHL Express, so it can neither confirm
+  // nor deny UPS. When the name is available it is authoritative; the group is only a
+  // fallback for callers with no REST access.
+  const named = shipMethodName != null && String(shipMethodName).trim() !== ''
+  if (named) {
+    if (!/ups/i.test(String(shipMethodName))) {
+      return hold(HOLD.CARRIER_NOT_SET_UP, `${shipMethodName} is not set up in ShipStation yet — make this label manually`)
+    }
+  } else if (!/ups/i.test(String(carrier || ''))) {
     return hold(HOLD.CARRIER_NOT_SET_UP, `${carrier || 'no carrier'} is not set up in ShipStation yet — make this label manually`)
   }
   // Absent country is treated as domestic: US is the unstated default in this data,
@@ -108,15 +151,32 @@ export function shipstationEligibility({
   if (country && !/^(us|usa|united states)$/i.test(String(country).trim())) {
     return hold(HOLD.NOT_DOMESTIC, `ships to ${country} — only domestic UPS is set up in ShipStation`)
   }
-  if (/third\s*party/i.test(String(freightTerms || ''))) {
-    return hold(HOLD.THIRD_PARTY_UNREADABLE, 'freight terms name a third party, and NetSuite will not expose the account — set the billing manually')
+  // ── WHO PAYS ────────────────────────────────────────────────────────────
+  //
+  // Resolvable now (the sales order's thirdPartyAcct + the customer's
+  // thirdPartyZipCode), so this no longer holds on principle — it BILLS correctly.
+  // ⚠️ An account with no zip is still held: UPS validates third-party billing on the
+  // account's postal code, and the failure direction is us paying.
+  let billTo = null
+  if (thirdPartyAcct) {
+    if (!thirdPartyZip) {
+      return hold(HOLD.THIRD_PARTY_NO_ZIP, `third-party account ${thirdPartyAcct} has no postal code on the customer — set the billing manually`)
+    }
+    billTo = { party: 'third_party', account: String(thirdPartyAcct), zip: String(thirdPartyZip) }
+  } else if (/third\s*party/i.test(String(freightTerms || ''))) {
+    // Terms say someone else pays but no account is readable — never fall back to
+    // ours, which is what unset billing does.
+    return hold(HOLD.THIRD_PARTY_UNREADABLE, 'freight terms name a third party but no account is readable — set the billing manually')
   }
 
-  const serviceCode = UPS_SERVICE_BY_METHOD[Number(shipMethod)]
+  const serviceCode = named
+    ? UPS_SERVICE_BY_NAME[serviceKey(shipMethodName)]
+    : UPS_SERVICE_BY_METHOD[Number(shipMethod)]
   if (!serviceCode) {
-    return hold(HOLD.UNKNOWN_SERVICE, `UPS method ${shipMethod ?? '(none)'} is not mapped to a service — pushing it would guess the service level`)
+    const what = named ? `"${shipMethodName}"` : `method ${shipMethod ?? '(none)'}`
+    return hold(HOLD.UNKNOWN_SERVICE, `UPS ${what} is not mapped to a service — pushing it would guess the service level`)
   }
-  return { push: true, serviceCode, hold: null, reason: null }
+  return { push: true, serviceCode, billTo, hold: null, reason: null }
 }
 
 // Split a candidate list into what to push and what to warn about, preserving the
@@ -126,7 +186,7 @@ export function partitionForShipstation(rows = [], read = (r) => r) {
   const push = [], held = []
   for (const r of rows) {
     const v = shipstationEligibility(read(r))
-    if (v.push) push.push({ row: r, serviceCode: v.serviceCode })
+    if (v.push) push.push({ row: r, serviceCode: v.serviceCode, billTo: v.billTo })
     else held.push({ row: r, hold: v.hold, reason: v.reason })
   }
   return { push, held }

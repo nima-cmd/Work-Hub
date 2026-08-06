@@ -135,15 +135,29 @@ export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) 
     labelCount: r.labelCount ?? 0,
     carrier: r.carrier,
     shipMethod: r.shipMethod,
+    shipMethodName: r.shipMethodName,
     country: r.address?.country,
     freightTerms: r.order?.freightTerms,
     hasAddress: !!r.address?.zip,
+    thirdPartyAcct: r.thirdPartyAcct,
+    thirdPartyZip: r.thirdPartyZip,
+    readFailed: r.readFailed,
   }))
   for (const h of held) {
     skipped.push({ ifNumber: h.row.fulfilment?.ifNumber, hold: h.hold, reason: h.reason })
   }
-  for (const { row: r, serviceCode } of push) {
-    const order = buildBoutiqueOrder({ ...r, storeId, upsAccount, serviceCode, now })
+  for (const { row: r, serviceCode, billTo } of push) {
+    // ⚠️ The resolved third party overrides whatever the row carried. buildBoutiqueOrder
+    // bills our own Big Box account when it sees no billToAccount, so leaving this to
+    // the row's own fields is how IF7405 got pushed on OUR account while the customer
+    // had UPS 782847.
+    const order = buildBoutiqueOrder({
+      ...r,
+      order: billTo
+        ? { ...r.order, billToAccount: billTo.account, billToZip: billTo.zip, freightTerms: 'Third Party Bill' }
+        : r.order,
+      storeId, upsAccount, serviceCode, now,
+    })
     orders.push(order)
     // No carton number: a boutique fulfilment pushes as ONE order and the box is
     // chosen in ShipStation, so there is nothing to number.
@@ -197,6 +211,91 @@ export async function fetchBoutiqueShipMethods(ifNumbers = [], { runSuiteQL } = 
   if (!r.ok) return out
   for (const row of r.rows) {
     out.set(row.tranid, { carrier: row.shipcarrier || null, shipMethod: row.shipmethod ?? null })
+  }
+  return out
+}
+
+// ── The requested service AND who pays, from the SALES ORDER record ─────────
+//
+// ⚠️ THIS SUPERSEDES fetchBoutiqueShipMethods ABOVE, WHICH READ THE WRONG THING.
+//
+// `transaction.shipcarrier` is a carrier GROUP, not a carrier: "FedEx/USPS/More"
+// covers BOTH Fedex and DHL Express (proven — IF7450 is DHL Express and IF7452 is
+// Fedex, and SuiteQL calls both "FedEx/USPS/More"). Gating on the group happened to
+// hold the right two orders on 2026-08-06, for the wrong reason, and it would
+// misclassify a "More"-group order that is actually UPS.
+//
+// The sales order REST record carries `shipMethod` as a READABLE NAME — "UPS®
+// Ground", "Fedex", "DHL Express" — which is the actual service, and `thirdPartyAcct`,
+// which is who pays. The customer record adds `thirdPartyZipCode`, which UPS needs to
+// validate third-party billing, and which is NOT on the sales order.
+//
+// ⚠️ WHY THE SALES ORDER AND NOT THE ITEM FULFILMENT: the itemfulfillment REST record
+// demands 'Transactions -> Fulfill Sales Orders' at **EDIT** level even for a GET,
+// which would hand this deliberately read-only integration the power to fulfil
+// orders. The sales order needs no extra permission at all.
+//
+// ⚠️ WHY THIS MATTERS, CONCRETELY: on 2026-08-06 IF7405 (Saint Bernard) was pushed
+// billed to Naghedi's own Big Box account while the customer has UPS account 782847.
+// Nothing had been purchased, so no money moved — but that is Naghedi paying freight
+// the customer's account covers, which is the exact class of error
+// src/model/upsRates.js exists to prevent. It was missed because the customer record
+// was sampled for five other fulfilments and generalised from.
+export async function fetchBoutiqueShipDetails(ifNumbers = [], soByIf = new Map(), { runSuiteQL, restGet, refName } = {}) {
+  const out = new Map()
+  if (!ifNumbers.length || !runSuiteQL || !restGet) return out
+  const soNumbers = [...new Set(ifNumbers.map((n) => soByIf.get(n)).filter(Boolean))]
+  if (!soNumbers.length) return out
+
+  // The SO internal id, which SuiteQL gives cheaply and REST needs.
+  const list = soNumbers.map((n) => `'${String(n).replace(/'/g, "''")}'`).join(',')
+  const q = await runSuiteQL(`SELECT id, tranid, entity FROM transaction WHERE tranid IN (${list})`)
+  if (!q.ok) return out
+  const meta = new Map(q.rows.map((r) => [r.tranid, { id: r.id, customerId: r.entity }]))
+
+  // One customer can own several fulfilments, so the zip is fetched once per customer.
+  const custCache = new Map()
+  const customerZip = async (customerId) => {
+    if (!customerId) return null
+    if (custCache.has(customerId)) return custCache.get(customerId)
+    const c = await restGet(`customer/${customerId}`)
+    // ⚠️ Scan the keys rather than asserting the spelling: it is `thirdPartyZipCode`
+    // with a capital C, and an explicit `thirdPartyZipcode` finds nothing silently.
+    let zip = null, carrier = null
+    if (c.ok && c.data) {
+      for (const k of Object.keys(c.data)) {
+        if (/^thirdpartyzipcode$/i.test(k)) zip = refName(c.data[k])
+        if (/^thirdpartycarrier$/i.test(k)) carrier = refName(c.data[k])
+      }
+    }
+    const v = { zip: zip || null, carrier: carrier || null }
+    custCache.set(customerId, v)
+    return v
+  }
+
+  for (const ifNumber of ifNumbers) {
+    const so = soByIf.get(ifNumber)
+    const m = so ? meta.get(so) : null
+    if (!m) continue
+    const r = await restGet(`salesorder/${m.id}`)
+    if (!r.ok || !r.data) {
+      // A read failure must not read as "no third party" — that would bill us.
+      out.set(ifNumber, { shipMethodName: null, thirdPartyAcct: null, thirdPartyZip: null, readFailed: true, error: r.error || null })
+      continue
+    }
+    let shipMethodName = null, thirdPartyAcct = null
+    for (const k of Object.keys(r.data)) {
+      if (/^shipmethod$/i.test(k)) shipMethodName = refName(r.data[k])
+      if (/^thirdpartyacct$/i.test(k)) thirdPartyAcct = refName(r.data[k])
+    }
+    const cust = thirdPartyAcct ? await customerZip(m.customerId) : { zip: null, carrier: null }
+    out.set(ifNumber, {
+      shipMethodName: shipMethodName || null,
+      thirdPartyAcct: thirdPartyAcct || null,
+      thirdPartyZip: cust.zip,
+      thirdPartyCarrier: cust.carrier,
+      readFailed: false,
+    })
   }
   return out
 }
