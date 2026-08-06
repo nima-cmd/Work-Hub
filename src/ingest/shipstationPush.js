@@ -24,6 +24,7 @@
 // See src/model/shipstationOrder.js for the field rules.
 
 import { buildEdiOrder, buildBoutiqueOrder } from '../model/shipstationOrder.js'
+import { partitionForShipstation } from '../model/shipstationEligible.js'
 
 const BASE = 'https://ssapi.shipstation.com'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -122,11 +123,27 @@ export function ediOrdersFor(shipments = [], { storeId, now } = {}) {
 // Boutique orders ship WITHOUT weight or dimensions on purpose — Nima boxes them in
 // ShipStation exactly like retail. An order with no address is skipped and reported
 // rather than pushed half-formed: a label to nowhere is worse than a missing one.
+// ⚠️ The gate is now src/model/shipstationEligible.js, not an address check. Two of
+// Nima's corrections on 2026-08-06 land here: the scope was inverted (Packed is the
+// DONE pile), and only domestic UPS is set up in ShipStation. Everything declined is
+// returned in `skipped` WITH ITS REASON so the warning names the fix — several of
+// these are "make this label by hand", which is an instruction, not an error.
 export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) {
   const orders = [], skipped = [], records = []
-  for (const r of rows) {
-    if (!r.address?.zip) { skipped.push({ ifNumber: r.fulfilment?.ifNumber, reason: 'no ship-to address' }); continue }
-    const order = buildBoutiqueOrder({ ...r, storeId, upsAccount, now })
+  const { push, held } = partitionForShipstation(rows, (r) => ({
+    status: r.order?.status ?? r.fulfilment?.status,
+    labelCount: r.labelCount ?? 0,
+    carrier: r.carrier,
+    shipMethod: r.shipMethod,
+    country: r.address?.country,
+    freightTerms: r.order?.freightTerms,
+    hasAddress: !!r.address?.zip,
+  }))
+  for (const h of held) {
+    skipped.push({ ifNumber: h.row.fulfilment?.ifNumber, hold: h.hold, reason: h.reason })
+  }
+  for (const { row: r, serviceCode } of push) {
+    const order = buildBoutiqueOrder({ ...r, storeId, upsAccount, serviceCode, now })
     orders.push(order)
     // No carton number: a boutique fulfilment pushes as ONE order and the box is
     // chosen in ShipStation, so there is nothing to number.
@@ -156,6 +173,34 @@ export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) 
 // ⚠️ transactionShippingAddress keys on the ADDRESS id, not the transaction id —
 // querying it by transaction returns an empty row rather than an error, which looks
 // exactly like "this customer has no address".
+// The requested carrier and service, from NetSuite (Nima, 2026-08-06: "We need
+// shipstation to also pick up the requested shipping method as it's generally
+// selected upon selection").
+//
+// ⚠️ DELIBERATELY A SEPARATE QUERY FROM fetchBoutiqueAddresses, not two more columns
+// on its first SELECT. A NOT_EXPOSED column makes SuiteQL return ZERO ROWS instead of
+// erroring — proven the same day against `thirdpartyacct` — so folding these in would
+// mean that the day a field's permission changes, the ADDRESS lookup silently returns
+// nothing and every order is skipped as "no ship-to address". Kept apart, a
+// permission change costs us the carrier (which then holds the order, safely) and
+// nothing else.
+//
+// `shipmethod` resolves to an opaque ID: `shipitem` and every sibling table return
+// empty on the bot role. src/model/shipstationEligible.js maps the IDs we can name
+// and holds the rest rather than guessing a service level.
+export async function fetchBoutiqueShipMethods(ifNumbers = [], { runSuiteQL } = {}) {
+  const out = new Map()
+  if (!ifNumbers.length || !runSuiteQL) return out
+  const list = ifNumbers.map((n) => `'${String(n).replace(/'/g, "''")}'`).join(',')
+  const r = await runSuiteQL(
+    `SELECT tranid, shipcarrier, shipmethod FROM transaction WHERE tranid IN (${list})`)
+  if (!r.ok) return out
+  for (const row of r.rows) {
+    out.set(row.tranid, { carrier: row.shipcarrier || null, shipMethod: row.shipmethod ?? null })
+  }
+  return out
+}
+
 export async function fetchBoutiqueAddresses(ifNumbers = [], { runSuiteQL } = {}) {
   const out = new Map()
   if (!ifNumbers.length || !runSuiteQL) return out

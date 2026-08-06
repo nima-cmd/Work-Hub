@@ -60,14 +60,18 @@ test('backfill reads an EDI carton and a boutique order apart, and skips foreign
 // The record is built in the SAME loop as the order it describes, so the two
 // cannot drift — the failure mode this repo hits every time it keeps two copies.
 test('every pushed order gets exactly one record, aligned by key', () => {
+  // Since 2026-08-06 the rows must also satisfy the eligibility gate — Picked, no
+  // existing label, domestic UPS on a mapped service (src/model/shipstationEligible.js).
   const rows = [{
-    order: { soNumber: 'SO12371', poNumber: null, customer: 'Turner & Co' },
-    fulfilment: { ifNumber: 'IF7409' },
+    order: { soNumber: 'SO12371', poNumber: null, customer: 'Turner & Co', status: 'Picked' },
+    fulfilment: { ifNumber: 'IF7409', status: 'Picked' },
     address: { zip: '19807', city: 'Wilmington', state: 'DE', street1: '14 Guyencourt Road' },
+    carrier: 'UPS', shipMethod: '4', labelCount: 0,
   }, {
-    order: { soNumber: 'SO12999', poNumber: null, customer: 'No Address Inc' },
-    fulfilment: { ifNumber: 'IF7999' },
+    order: { soNumber: 'SO12999', poNumber: null, customer: 'No Address Inc', status: 'Picked' },
+    fulfilment: { ifNumber: 'IF7999', status: 'Picked' },
     address: null,   // skipped, and must NOT be recorded as pushed
+    carrier: 'UPS', shipMethod: '4', labelCount: 0,
   }]
   const { orders, skipped, records } = boutiqueOrdersFor(rows, { storeId: 351819 })
   assert.equal(orders.length, 1)
