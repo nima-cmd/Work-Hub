@@ -47,6 +47,8 @@ import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { closeReadiness } from '../src/model/closeReady.js'
+import { loadTenders } from '../src/ingest/manhattanTender.js'
+import { reconcileTender, matchStop } from '../src/model/manhattanTender.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -1578,6 +1580,49 @@ export async function getLabelWorksheetCsv({ bolNumber = null } = {}) {
   return { csv: worksheetCsv(sheets), sheets: sheets.length, cartons: sheets.reduce((n, w) => n + w.cartons, 0) }
 }
 
+// Attach the accepted tender to each routing shipment it covers.
+//
+// ⚠️ Tenders are walked newest-pickup-first and an already-annotated shipment is left
+// alone. Nordstrom reuses the same DC numbers every cycle, so without that the May
+// tender could overwrite August's on a DC whose PO list we no longer hold. The PO
+// overlap in matchStop is the primary guard; this is the tiebreak behind it.
+//
+// Soft-fails: the tender tables are additive and a deploy that has not migrated yet
+// must not take the whole Routing board down with it.
+async function annotateTenders(shipments) {
+  if (!shipments.length) return
+  let tenders = []
+  try {
+    tenders = await loadTenders({ limit: 50 })
+  } catch (e) {
+    console.error('tender annotation skipped:', e.message)
+    return
+  }
+  for (const t of tenders) {
+    const report = reconcileTender(t, shipments)
+    if (report.outOfScope) continue // a past cycle, not a disagreement
+    for (const stop of t.stops) {
+      const s = matchStop(stop, shipments)
+      if (!s || s.tender) continue
+      const diffs = report.diffs
+        .filter((d) => d.shipmentId === s.id)
+        .map((d) => ({ kind: d.kind, ours: d.ours, theirs: d.theirs, detail: d.detail }))
+      s.tender = {
+        shipmentId: t.shipmentId,
+        pickupAt: t.pickupAt,
+        pickupDate: report.pickupYmd,
+        pickupRaw: t.pickupRaw,
+        carrier: t.carrier,
+        srr: stop.srr,
+        cartons: t.totalCartons,
+        cartonsAgree: report.cartonsAgree,
+        agrees: diffs.length === 0,
+        diffs,
+      }
+    }
+  }
+}
+
 export async function getRouting() {
   const [packages, shipments, auths, holds] = await Promise.all([
     fetchEdiPackages(), fetchRoutingShipments(), fetchRoutingAuths(), fetchRoutingHolds(),
@@ -1684,6 +1729,13 @@ export async function getRouting() {
       netsuiteConfirmed: !!s.netsuite?.confirmed,
     })
   }
+
+  // What Nordstrom's TMS actually ACCEPTED, against what we asked for. We choose a
+  // ship_date when we submit routing; the tender email is the answer, and until now it
+  // lived only in Nima's inbox. Attached per shipment as evidence — never written over
+  // ship_date / carrier / routing_request_number, which are all his hand entry.
+  // See src/model/manhattanTender.js.
+  await annotateTenders(shipments)
 
   const byKey = new Map()
   for (const s of shipments) byKey.set(s.dcPoKey, s)

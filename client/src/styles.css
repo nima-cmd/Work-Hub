@@ -1881,6 +1881,12 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-cellL { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
 
 .rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
+/* The partner TMS's accepted tender, beside what this card claims. Evidence, not an
+   overwrite — see TenderLine in Routing.jsx. */
+.rt-tender { font-size: 11px; color: var(--mid); background: rgba(90,140,220,0.10); border: 1px solid rgba(90,140,220,0.35); border-radius: 6px; padding: 5px 8px; display: grid; gap: 2px; }
+.rt-tender b { color: var(--fg); font-weight: 600; }
+.rt-tenderHead { font-weight: 600; letter-spacing: .02em; text-transform: uppercase; font-size: 10px; opacity: .75; }
+.rt-tender.agrees { background: transparent; border-color: transparent; opacity: .55; padding: 2px 0; }
 
 /* Pack check (2026-08-02) — every unit on the IF vs every unit in a carton. */
 .rt-pack { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; border-radius: 6px; padding: 5px 8px; }

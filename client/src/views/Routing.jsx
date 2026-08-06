@@ -598,6 +598,44 @@ function LabelWorksheet({ s }) {
   )
 }
 
+// What the partner's TMS ACCEPTED, next to what we asked for.
+//
+// We pick a ship date when we submit a routing request; Nordstrom's Manhattan Active
+// TMS answers with the datetime the truck will actually come, and that answer used to
+// live only in Nima's inbox. Shown as EVIDENCE, deliberately not applied: ship date,
+// carrier and SRR are all hand-entered on this very card, and a sync that silently
+// overwrote them would make the card stop being worth reading.
+//
+// Nothing renders on lanes with no tender (Bloomingdale's routes through its own
+// portal), and nothing renders when the tender agrees — a row that always shows is a
+// row nobody reads.
+function TenderLine({ tender }) {
+  if (!tender) return null
+  const date = tender.diffs.find((d) => d.kind === 'pickup_date')
+  const carrier = tender.diffs.find((d) => d.kind === 'carrier')
+  const srr = tender.diffs.find((d) => d.kind === 'srr')
+  if (tender.agrees) {
+    return (
+      <div className="rt-tender agrees" title={`Tender ${tender.shipmentId} — ${tender.pickupRaw}`}>
+        ✓ tender {tender.shipmentId} agrees · pickup {tender.pickupDate}
+      </div>
+    )
+  }
+  return (
+    <div className="rt-tender" title={`Tender ${tender.shipmentId} accepted — ${tender.pickupRaw}`}>
+      <div className="rt-tenderHead">Tender {tender.shipmentId} accepted</div>
+      {date && (
+        <div>
+          pickup <b>{date.theirs}</b> — this card says {date.ours || 'no date'}
+        </div>
+      )}
+      {carrier && <div>carrier <b>{carrier.theirs}</b>{carrier.ours ? ` — card says ${carrier.ours}` : ' — not set on this card'}</div>}
+      {srr && <div>SRR <b>{srr.theirs}</b>{srr.ours ? ` — card says ${srr.ours}` : ' — not set on this card'}</div>}
+      {tender.cartonsAgree === true && <div className="muted">{tender.cartons} cartons reconciled</div>}
+    </div>
+  )
+}
+
 function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
@@ -632,6 +670,8 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
       </div>
 
       <PackCheck pack={g.pack} />
+
+      <TenderLine tender={s?.tender} />
 
       {g.cubicRoundingDiffers && (
         <div className="rt-warn" title="The feed's summed per-row rounded cubic feet differs from a single round-up of the raw total.">

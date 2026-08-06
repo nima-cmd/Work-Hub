@@ -151,6 +151,42 @@ export async function fetchThread(threadId) {
   return (messages || []).map(normalizeMessage)
 }
 
+// Arbitrary Gmail search, for mail that is NOT part of the unread-inbox transmission
+// feed. `fetchInboxMessages` is deliberately bound to `is:unread in:inbox` — a tender
+// email Nima has already opened is still the authoritative record of when the truck
+// comes, so a feed that goes blind the moment he reads it is the wrong tool.
+//
+// Same `format=full` + batched-concurrency shape as the inbox pull.
+export async function searchMessages({ query, max = 100 } = {}) {
+  if (!query) throw new Error('searchMessages needs a query')
+  const token = await getAccessToken()
+
+  const ids = []
+  let pageToken
+  do {
+    const url = new URL(`${GMAIL_API}/messages`)
+    url.searchParams.set('q', query)
+    url.searchParams.set('maxResults', String(Math.min(500, max)))
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+    const page = await apiFetch(token, url)
+    for (const m of page.messages || []) ids.push(m.id)
+    pageToken = ids.length < max ? page.nextPageToken : undefined
+  } while (pageToken)
+
+  const CONCURRENCY = 10
+  const messages = []
+  const wanted = ids.slice(0, max)
+  for (let i = 0; i < wanted.length; i += CONCURRENCY) {
+    const batch = wanted.slice(i, i + CONCURRENCY).map((id) => {
+      const url = new URL(`${GMAIL_API}/messages/${id}`)
+      url.searchParams.set('format', 'full')
+      return apiFetch(token, url)
+    })
+    messages.push(...(await Promise.all(batch)).map(normalizeMessage))
+  }
+  return messages
+}
+
 // Used to detect "we replied" — a message in the thread FROM this address,
 // dated after the task was created, means the reply-needed task is done.
 export async function getProfile() {
