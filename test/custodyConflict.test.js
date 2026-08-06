@@ -55,3 +55,35 @@ test('the shipped-derived event does not claim the goods left', () => {
   assert.doesNotMatch(label, /depart/i)
   assert.match(label, /marked shipped/i)
 })
+
+// ⚠️ A part-scanned card must not borrow its sibling's evidence (2026-08-06). Found via
+// a wrongly grouped boutique PO: two fulfilments, one scanned back, and the card read
+// "✓ Ball's in our court" — the whole card claiming to be home while the second had
+// never been scanned at all. The warehouse branch always showed its fraction; the
+// returned branch silently rounded up.
+test('one of two scanned back reads as partial, not fully returned', () => {
+  const card = {
+    isGroup: true, source: 'boutique', poNumber: 'PO05658',
+    fulfillments: [{ ifNumber: 'IF9001', status: 'Packed' }, { ifNumber: 'IF9002', status: 'Packed' }],
+  }
+  const ev = [
+    { docType: 'IF', docNumber: 'IF9001', eventType: 'CUSTODY_OUT', occurredAt: '2026-08-06T10:00:00Z' },
+    { docType: 'IF', docNumber: 'IF9001', eventType: 'CUSTODY_IN', occurredAt: '2026-08-06T11:00:00Z' },
+  ]
+  const partial = cardCustody(card, ev)
+  assert.equal(partial.state, 'partial')
+  assert.match(partial.label, /Back 1\/2 — 1 never scanned/)
+
+  // Both scanned back → the plain terminology Nima set.
+  const both = [...ev, { docType: 'IF', docNumber: 'IF9002', eventType: 'CUSTODY_IN', occurredAt: '2026-08-06T11:30:00Z' }]
+  const done = cardCustody(card, both)
+  assert.equal(done.state, 'returned')
+  assert.equal(done.label, "✓ Ball's in our court")
+})
+
+test('a single-fulfilment card never reads as partial', () => {
+  // docs.length === 1, so scanned === docs.length whenever there is any scan at all.
+  const card = { fulfillments: [{ ifNumber: 'IF1', status: 'Packed' }] }
+  const c = cardCustody(card, [{ docType: 'IF', docNumber: 'IF1', eventType: 'CUSTODY_IN', occurredAt: '2026-08-06T11:00:00Z' }])
+  assert.equal(c.state, 'returned')
+})

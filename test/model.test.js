@@ -932,15 +932,16 @@ test('computeAffection: affection + RPG stats per completed quest, ignores open'
 
 // ── poGroups: collapse the buyer-PO fan-out ──────────────────────────────────
 test('groupOrdersByPo rolls same-PO SOs into one group, leaves blank-PO orders alone', () => {
-  const o = (so, po, cust, stage, sev, days) => ({
+  // `source` is now load-bearing: grouping is an EDI concept and is gated on it.
+  const o = (so, po, cust, stage, sev, days, source = 'edi') => ({
     soNumber: so, poNumber: po, customer: cust, stage, stageRank: 0, severity: sev, daysPending: days,
-    nextAction: 'x', flags: [], fulfillments: [{ ifNumber: 'IF' + so }], invoices: [],
+    source, nextAction: 'x', flags: [], fulfillments: [{ ifNumber: 'IF' + so }], invoices: [],
   })
   const orders = [
     o('SO1', '7590875', "Bloomingdale's - 0001 NY", 'PICKED_NEEDS_PACK', 2, 5),
     o('SO2', '7590875', "Bloomingdale's - 0002 Boca", 'APPROVED_FOR_SHIPPING', 3, 9),
-    o('SO3', '', 'Some Boutique', 'OPEN_NEEDS_FULFILLMENT', 1, 2),
-    o('SO4', '80126', 'Robertson Madison', 'OPEN_NEEDS_FULFILLMENT', 0, 1), // lone PO → stays single
+    o('SO3', '', 'Some Boutique', 'OPEN_NEEDS_FULFILLMENT', 1, 2, 'boutique'),
+    o('SO4', '80126', 'Robertson Madison', 'OPEN_NEEDS_FULFILLMENT', 0, 1, 'boutique'), // boutique → never groups
   ]
   const rows = groupOrdersByPo(orders)
   const grp = rows.find((r) => r.isGroup)
@@ -2680,4 +2681,36 @@ test('the stored Nordstrom DC 089 matches what the portal prints', () => {
   // both the padded and unpadded keys resolve to the same DC — the portal uses one
   // form and our data the other.
   assert.equal(NORDSTROM_DCS['89'].street, dc.street)
+})
+
+// ⚠️ Grouping is an EDI concept, gated on it since 2026-08-06. Nima found this on the
+// Mission Quests board: Four Seasons Maui (PO05658) and Hualalai (PO15131) each had two
+// sales orders rolled into one card. For a boutique that is TWO shipments, not one
+// consolidated freight movement — and it broke scanning, because a grouped card's
+// custody spans all its members' fulfilments.
+test('a boutique reusing one PO across sales orders is NEVER grouped', () => {
+  const o = (so, po, source) => ({
+    soNumber: so, poNumber: po, customer: 'Four Seasons Maui', stage: 'OPEN_NEEDS_FULFILLMENT',
+    stageRank: 0, severity: 0, daysPending: 1, source, nextAction: 'x', flags: [],
+    fulfillments: [{ ifNumber: 'IF' + so }], invoices: [],
+  })
+  const rows = groupOrdersByPo([o('SO12294', 'PO05658', 'boutique'), o('SO12296', 'PO05658', 'boutique')])
+  assert.equal(rows.filter((r) => r.isGroup).length, 0)
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows.map((r) => r.soNumber).sort(), ['SO12294', 'SO12296'])
+
+  // The same shape on the EDI lane still groups — that is what the feature is for.
+  const edi = groupOrdersByPo([o('SO1', 'P1', 'edi'), o('SO2', 'P1', 'edi')])
+  assert.equal(edi.filter((r) => r.isGroup).length, 1)
+  assert.equal(edi.length, 1)
+})
+
+test('a lone EDI PO still becomes a group; a lone boutique PO does not', () => {
+  const mk = (so, source) => ({
+    soNumber: so, poNumber: 'P9', customer: 'X', stage: 'OPEN_NEEDS_FULFILLMENT', stageRank: 0,
+    severity: 0, daysPending: 0, source, nextAction: 'x', flags: [], fulfillments: [], invoices: [],
+  })
+  // EDI fan-out arrives over time, so a single-SO PO is still a group card.
+  assert.equal(groupOrdersByPo([mk('SO1', 'edi')])[0].isGroup, true)
+  assert.equal(groupOrdersByPo([mk('SO1', 'boutique')])[0].isGroup, undefined)
 })
