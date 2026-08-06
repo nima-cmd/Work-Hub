@@ -33,6 +33,7 @@ npm run check:warehouse-feed # is the warehouse-app feed live? names the missing
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
 npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
+npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
 
 ```
 
@@ -96,6 +97,8 @@ src/ingest/warehouseFeed.js  open PO lines + item-location qtys → the Naghedi-
 src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 src/model/manhattanTender.js  parse Nordstrom's TMS tender email; SRR's grain is the DC
 src/ingest/manhattanTender.js pull + persist tenders; reconcile vs routing_shipment
+src/model/slackCatchUp.js  Slack as a catch-up lane; lanes are addressing FACTS, never a score
+src/ingest/slack.js       reads the 7 chosen channels + all DMs (needs a USER token, xoxp-)
 server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client
 client/src/views/        Dashboard · Kanban · TableView · Calendar

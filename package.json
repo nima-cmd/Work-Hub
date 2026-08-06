@@ -36,7 +36,8 @@
     "backfill:fulfillment-dc": "node --env-file=.env.local scripts/backfill-fulfillment-dc.js",
     "sync:shipstation-tracking": "node --env-file=.env.local scripts/sync-shipstation-tracking.js",
     "sync:tenders": "node --env-file=.env.local scripts/sync-tenders.js",
-    "check:tenders": "node --env-file=.env.local scripts/check-tenders.js"
+    "check:tenders": "node --env-file=.env.local scripts/check-tenders.js",
+    "check:slack": "node --env-file=.env.local scripts/check-slack.js"
   },
   "dependencies": {
     "concurrently": "^10.0.3",
