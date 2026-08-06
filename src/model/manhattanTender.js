@@ -399,6 +399,65 @@ export function reconcileTender(tender, shipments = []) {
   }
 }
 
+/**
+ * Plan what "accept this tender" would change. Returns the edits ONLY — the caller
+ * writes them.
+ *
+ * This is the click, not the cron. `reconcileTender` deliberately never proposes a
+ * value because a sync must not overwrite a hand-entered field; an explicit press of a
+ * button that says "the tender says Monday" is a different act, and the ONE place the
+ * overwrite is legitimate.
+ *
+ * Three fields, three different rules, and the differences matter:
+ *
+ *   ship_date              OVERWRITTEN. It is the whole point — we wrote the date we
+ *                          asked for, the tender is the date we were given.
+ *   carrier                SET when it differs. Ours is null on every Nordstrom row.
+ *   routing_request_number FILLED ONLY WHEN EMPTY. ⚠️ Never overwritten, even though
+ *                          the pairing reproduced Nima's hand entry 9 for 9 — that
+ *                          pairing is an inference from the SRR/DC order, and if it
+ *                          ever disagrees with what he typed, the honest outcome is a
+ *                          visible disagreement he resolves, not a silent correction
+ *                          by a rule that could be wrong.
+ *
+ * An out-of-scope (historical) tender plans nothing.
+ */
+export function planTenderApply(tender, shipments = []) {
+  const report = reconcileTender(tender, shipments)
+  if (report.outOfScope) return { shipmentId: tender.shipmentId, outOfScope: true, edits: [] }
+
+  const pickupYmd = report.pickupYmd
+  const edits = []
+  for (const stop of tender.stops) {
+    const s = matchStop(stop, shipments)
+    if (!s) continue
+    const set = {}
+    const kept = []
+    if (pickupYmd && ymd(s.shipDate) !== pickupYmd) set.shipDate = pickupYmd
+    if (tender.carrier && (s.carrier || null) !== tender.carrier) set.carrier = tender.carrier
+    if (stop.srr) {
+      if (!s.routingRequestNumber) set.routingRequestNumber = stop.srr
+      else if (s.routingRequestNumber !== stop.srr) {
+        kept.push({ field: 'routingRequestNumber', ours: s.routingRequestNumber, theirs: stop.srr })
+      }
+    }
+    if (Object.keys(set).length || kept.length) {
+      edits.push({ shipmentId: s.id, dc: stop.dc, bolNumber: s.bolNumber || null, set, kept })
+    }
+  }
+  return {
+    shipmentId: tender.shipmentId,
+    outOfScope: false,
+    pickupDate: pickupYmd,
+    carrier: tender.carrier,
+    edits,
+    // Named so a caller can say "9 BOLs" out loud before writing anything.
+    shipments: edits.length,
+    changes: edits.reduce((n, e) => n + Object.keys(e.set).length, 0),
+    conflicts: edits.reduce((n, e) => n + e.kept.length, 0),
+  }
+}
+
 export function summarizeTenderDiffs(reports = []) {
   const by = (k) => reports.flatMap((r) => r.diffs).filter((d) => d.kind === k)
   return {

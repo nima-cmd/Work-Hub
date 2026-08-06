@@ -1887,6 +1887,10 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-tender b { color: var(--fg); font-weight: 600; }
 .rt-tenderHead { font-weight: 600; letter-spacing: .02em; text-transform: uppercase; font-size: 10px; opacity: .75; }
 .rt-tender.agrees { background: transparent; border-color: transparent; opacity: .55; padding: 2px 0; }
+.rt-tenderApply { margin-top: 4px; justify-self: start; font-size: 11px; padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  background: rgba(90,140,220,0.18); border: 1px solid rgba(90,140,220,0.55); color: var(--fg); }
+.rt-tenderApply:hover:not(:disabled) { background: rgba(90,140,220,0.30); }
+.rt-tenderApply:disabled { opacity: .5; cursor: default; }
 
 /* Pack check (2026-08-02) — every unit on the IF vs every unit in a carton. */
 .rt-pack { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; border-radius: 6px; padding: 5px 8px; }

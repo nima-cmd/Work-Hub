@@ -16,7 +16,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
-  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth,
+  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth, applyTender,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive, getLabelGaps, getOverdueInvoices, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
@@ -556,6 +556,18 @@ app.post('/api/routing/shipment/:id/refs', async (req, res) => {
 app.post('/api/routing/shipment/:id/shipped', async (req, res) => {
   try {
     res.json(await setShipmentShipped(req.params.id, req.body?.shipped !== false))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Accept a tender — write its pickup date + carrier onto every routing shipment it
+// covers. The one place a tender writes to routing_shipment, and only ever from an
+// explicit press; the sync and the check merely report the disagreement.
+app.post('/api/routing/tender/:shipmentId/apply', async (req, res) => {
+  try {
+    res.json(await applyTender(req.params.shipmentId))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

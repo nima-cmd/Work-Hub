@@ -47,8 +47,8 @@ import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { closeReadiness } from '../src/model/closeReady.js'
-import { loadTenders } from '../src/ingest/manhattanTender.js'
-import { reconcileTender, matchStop } from '../src/model/manhattanTender.js'
+import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
+import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -2432,6 +2432,38 @@ export async function setShipmentRefs(id, fields = {}) {
     })
   }
   return getRouting()
+}
+
+/**
+ * Accept a tender: write its pickup date and carrier onto every routing shipment it
+ * covers, in one press.
+ *
+ * ⚠️ This is the ONE place a tender writes to routing_shipment, and it exists because a
+ * click is not a cron. `annotateTenders` and `check:tenders` only ever report the
+ * disagreement, precisely so a background sync can never quietly rewrite a field Nima
+ * typed. Pressing a button that says "the tender says Monday" is him deciding.
+ *
+ * A hand-entered SRR is still never overwritten, even here — see planTenderApply.
+ */
+export async function applyTender(tenderShipmentId) {
+  const [tenders, shipments] = await Promise.all([loadTenders({ limit: 50 }), loadRoutingShipments()])
+  const tender = tenders.find((t) => t.shipmentId === tenderShipmentId)
+  if (!tender) throw new Error(`tender ${tenderShipmentId} not found — run \`npm run sync:tenders\``)
+
+  const plan = planTenderApply(tender, shipments)
+  if (plan.outOfScope) throw new Error(`tender ${tenderShipmentId} matches no current routing shipment`)
+
+  for (const e of plan.edits) {
+    if (Object.keys(e.set).length) await updateShipmentRefs(e.shipmentId, e.set)
+  }
+  return {
+    applied: plan.edits.filter((e) => Object.keys(e.set).length).length,
+    changes: plan.changes,
+    conflicts: plan.conflicts,
+    pickupDate: plan.pickupDate,
+    carrier: plan.carrier,
+    routing: await getRouting(),
+  }
 }
 
 export async function saveRoutingAuth(body = {}) {

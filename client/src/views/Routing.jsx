@@ -3,7 +3,7 @@ import {
   fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
-  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation,
+  masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
@@ -132,6 +132,15 @@ export default function Routing() {
     partner: g.partner, dc: g.dc, memberPos: g.memberPos,
     cartons: g.cartons, units: g.units, weightLb: g.weightLb, cubicFeet: g.cubicFeet,
   }))
+  // Accept the partner TMS's tender across every BOL it covers. Confirmed first: it
+  // rewrites a date on several shipments at once, and the count is the point.
+  const onApplyTender = (t) => {
+    if (!confirm(`Accept tender ${t.shipmentId}?\n\nSets pickup ${t.pickupDate}` +
+      `${t.carrier ? ` and carrier ${t.carrier}` : ''} on every BOL it covers.\n` +
+      `A routing request number you typed yourself is never overwritten.`)) return
+    run('tender' + t.shipmentId, async () => (await applyTender(t.shipmentId)).routing)
+  }
+
   const onVoid = (s) => {
     if (!confirm(`Void BOL ${s.bolNumber}? The number stays retired and is never reused.`)) return
     run('void' + s.id, () => voidRoutingShipment(s.id))
@@ -294,6 +303,7 @@ export default function Routing() {
                     onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
                     onShip={g.shipment ? onShip : null}
                     onSetRouted={g.shipment ? onSetRouted : null}
+                    onApplyTender={onApplyTender}
                     groupable={partner === "Bloomingdale's"}
                     groupChecked={g.shipment ? groupSel.has(g.shipment.id) : false}
                     onToggleGroup={g.shipment ? () => toggleGroup(g.shipment.id) : null} />
@@ -308,7 +318,8 @@ export default function Routing() {
               <div className="rt-cards">
                 {activeDetached.map((s) => (
                   <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
-                    auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip} detached />
+                    auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip}
+                    onApplyTender={onApplyTender} detached />
                 ))}
               </div>
             </section>
@@ -609,7 +620,7 @@ function LabelWorksheet({ s }) {
 // Nothing renders on lanes with no tender (Bloomingdale's routes through its own
 // portal), and nothing renders when the tender agrees — a row that always shows is a
 // row nobody reads.
-function TenderLine({ tender }) {
+function TenderLine({ tender, busy, onApply }) {
   if (!tender) return null
   const date = tender.diffs.find((d) => d.kind === 'pickup_date')
   const carrier = tender.diffs.find((d) => d.kind === 'carrier')
@@ -632,11 +643,18 @@ function TenderLine({ tender }) {
       {carrier && <div>carrier <b>{carrier.theirs}</b>{carrier.ours ? ` — card says ${carrier.ours}` : ' — not set on this card'}</div>}
       {srr && <div>SRR <b>{srr.theirs}</b>{srr.ours ? ` — card says ${srr.ours}` : ' — not set on this card'}</div>}
       {tender.cartonsAgree === true && <div className="muted">{tender.cartons} cartons reconciled</div>}
+      {onApply && (
+        <button className="rt-tenderApply" disabled={busy === 'tender' + tender.shipmentId}
+          title="Write the accepted pickup date and carrier onto every BOL this tender covers"
+          onClick={() => onApply(tender)}>
+          {busy === 'tender' + tender.shipmentId ? 'Applying…' : 'Accept tender →'}
+        </button>
+      )}
     </div>
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -671,7 +689,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 
       <PackCheck pack={g.pack} />
 
-      <TenderLine tender={s?.tender} />
+      <TenderLine tender={s?.tender} busy={busy} onApply={onApplyTender} />
 
       {g.cubicRoundingDiffers && (
         <div className="rt-warn" title="The feed's summed per-row rounded cubic feet differs from a single round-up of the raw total.">
