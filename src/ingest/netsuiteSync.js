@@ -826,7 +826,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
   const { withTransaction } = await import('../db.js')
   const {
     loadOrders, loadFulfillments, loadInvoices, recordInvoiceWindow, recordSnapshot,
-    stampApprovedForShipping, stampShippedValue, clearDepartedCustody,
+    stampApprovedForShipping, stampShippedValue, clearDepartedCustody, clearDepartedDcCustody,
     reconcileFulfillments, archiveNetsuiteShippedShipments, refreshShipmentEdiSnapshots,
     deriveOrderEvents, loadPurchaseOrders, prunePurchaseOrders,
     loadOrderConfirmations, pruneOrderConfirmations,
@@ -843,6 +843,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
       await stampApprovedForShipping(pulled.records, db)
       const nCredits = await stampShippedValue(pulled.records, db)
       await clearDepartedCustody(pulled.records, db)
+      await clearDepartedDcCustody(db) // the per-DC cargo tags — nothing closed them before 2026-08-06
       // Kill fulfillments that no longer exist in NetSuite, scoped to the SOs we
       // actually pulled (see reconcileFulfillments — never a whole-table prune).
       const nPhantoms = await reconcileFulfillments(pulled.soNumbers, pulled.ifNumbers, db)

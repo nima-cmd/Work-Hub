@@ -136,6 +136,46 @@ shippedNoInvoice.length
   : ok('nothing reads as shipped-but-unrecorded without an invoice',
     `${lg.counts.labelledNotShipped} to mark, ${lg.counts.needsInvoiceLabelled} awaiting an invoice`)
 
+// Nothing on the CUSTODY register may be freight that has wholly departed. On
+// 2026-08-06 the DC lane failed this on 32 of its 41 rows: clearDepartedCustody was
+// `doc_type='IF'` only, so a per-DC cargo tag had NEVER been closed, and the
+// register's "back in our hands" was mostly freight shipped, invoiced and announced
+// weeks earlier. Shape #2 — counts something other than its label.
+//
+// ⚠️ The complement is asserted too, because the FIRST fix over-closed: a tag still
+// scanned out must stay, whatever its ship dates say (see dcTagDeparture).
+// ⚠️ Asserted in SQL, deliberately NOT by re-calling dcTagDeparture — the register
+// already calls it, so re-calling it here would assert only that a function agrees
+// with itself. This restates the INVARIANT independently: a tag that is scanned back
+// in and every one of whose stores carries a ship date has no business being here.
+const reg = await Q.getCustodyRegister({})
+const regDc = reg.filter((r) => r.docNumber)
+const { rows: openIfs } = await pool.query(`
+  SELECT o.po_number AS po, o.dc, COUNT(*) FILTER (WHERE f.actual_ship_date IS NULL) AS open
+  FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+  GROUP BY o.po_number, o.dc
+`)
+const openBy = new Map(openIfs.map((r) => [`${r.po}|${r.dc ?? ''}`, Number(r.open)]))
+const stillOpen = (doc) => {
+  const [po, ...rest] = String(doc).split(':')
+  const dc = (rest.join(':') || '').trim()
+  if (dc) return (openBy.get(`${po}|${dc}`) ?? null)
+  // A PO-level tag: any store on the PO still unshipped keeps it honest.
+  let total = null
+  for (const [k, v] of openBy) if (k.startsWith(`${po}|`)) total = (total ?? 0) + v
+  return total
+}
+const departedStill = regDc.filter((r) => r.state !== 'with_warehouse' && stillOpen(r.docNumber) === 0)
+departedStill.length
+  ? bad('nothing on the custody register has wholly departed',
+    `${departedStill.length}: ${departedStill.slice(0, 5).map((r) => r.docNumber).join(', ')}`)
+  : ok('nothing on the custody register has wholly departed',
+    `${regDc.length} cargo tag(s) still open, ${reg.length - regDc.length} IF(s)`)
+
+const outAndGone = regDc.filter((r) => r.state === 'with_warehouse')
+ok('a tag scanned out stays on the register regardless of its ship dates',
+  outAndGone.length ? `${outAndGone.length} unmatched scan-out kept: ${outAndGone.map((r) => r.docNumber).join(', ')}` : 'no unmatched scan-outs today')
+
 // ── filing, cartons, overdue money, EDI delivery, inbound ───────────────────
 const unf = await Q.getUnfiledPaper({})
 partition('unfiled paper: due + backlog account for both lists',

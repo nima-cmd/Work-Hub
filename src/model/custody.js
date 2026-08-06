@@ -78,3 +78,81 @@ export function cardCustody(card, events = [], dcList) {
   if (scanned > 0) return { state: 'returned', label: "✓ Ball's in our court" }
   return { state: 'idle', label: '🏷 With us · not shipped' }
 }
+
+// ── Closing a per-DC cargo tag (2026-08-06) ─────────────────────────────────
+//
+// ⚠️ THE DC LANE OF THE CUSTODY REGISTER HAD NEVER BEEN CLOSED — NOT ONCE.
+// `clearDepartedCustody` writes CUSTODY_CLEARED for `doc_type='IF'` only, and the
+// DC half of getCustodyRegister filters on `NOT cleared` with no equivalent of the
+// IF half's `actual_ship_date IS NULL` guard. So a cargo tag stayed on the
+// register forever after its freight left.
+//
+// Measured live the day this was written: **41 DC tags, `cleared` false on all 41,
+// and 32 of them (78%) belonged to POs whose every IF had shipped** — invoiced,
+// 856s delivered, 47/47 cartons announced. They rendered as "back in our hands ·
+// sitting 14d with no movement", with no identifier, and the register's headline
+// read "52 back in our hands" while most of that was freight long gone. CLAUDE.md
+// shape #2: a counter that counts something other than its label.
+//
+// ── WHY THE UNIT IS THE DC, NOT THE PO ──────────────────────────────────────
+//
+// One PO fans out to one sales order per store, and the stores are split across
+// several DCs — PO 8040313 has tags for CI/CL/HA/SC/ST. Testing "every IF on the
+// PO has shipped" would be wrong in BOTH directions: it holds DC SC open because
+// DC ST's stores haven't gone, and it clears DC ST the moment the PO happens to
+// finish. `orders.dc` carries exactly the abbreviation the tag's doc_number uses
+// (verified against all 41 live rows: `8040313:SC` ↔ `dc='SC'`), so the tag can be
+// scoped to its own stores.
+//
+// A tag with an EMPTY abbreviation (`7527086:`) is a PO-level tag printed when no
+// DC was known, so the whole PO is its honest scope.
+//
+// ⚠️ NO MATCHING FULFILMENT MEANS WE CANNOT PROVE A DEPARTURE, so the tag STAYS on
+// the register. An empty scope trivially satisfies "every one has shipped", and
+// that is exactly how a closing rule silently clears the rows it understands
+// least. Departure needs positive evidence, never the absence of a counter-example.
+//
+// `departedAt` is the LATEST ship date in scope — the day the last store on the
+// tag was marked shipped. Same basis the IF lane's CUSTODY_CLEARED already uses.
+// ⚠️ It is a keystroke, not an observed departure ([[marked-shipped-is-not-departed]]),
+// which is fine for closing a register but is not carrier evidence.
+//
+// ── ⚠️ PAPERWORK DOES NOT OVERRULE AN UNMATCHED CUSTODY_OUT ──────────────────
+//
+// `state` is the tag's own scan state ('with_warehouse' | 'returned'). A tag scanned
+// OUT and never scanned back is, on the only PHYSICAL evidence there is, still with
+// Nestor — and marking the fulfilments shipped is a keystroke that happens BEFORE
+// the truck for exactly this partner. Closing such a tag because the paperwork says
+// shipped is the precise rule cardCustody above refuses to adopt, and PR #64 caught
+// it one surface over; it would have reported goods gone while they sat on the dock.
+//
+// Caught on live data in this very change: 32 tags qualified on the ship dates, and
+// ONE of them (`7527086:`, out since 07-30) was still scanned out. Closing it would
+// have destroyed the single most useful thing the register could say about it —
+// that a return scan was missed a week ago and nobody noticed. So it stays, and the
+// existing conflict badge keeps naming the disagreement. A stale scan gap is a
+// signal, not clutter.
+export function dcTagDeparture({ docNumber, fulfilments = [], state } = {}) {
+  const [poNumber, ...rest] = String(docNumber || '').split(':')
+  const abbrev = (rest.join(':') || '').trim() || null
+
+  if (state === 'with_warehouse') {
+    return { departed: false, departedAt: null, shipped: 0, total: 0, poNumber, dc: abbrev,
+      reason: 'scanned out and never scanned back — a ship date cannot close it' }
+  }
+  // A PO-level tag owns the whole PO; a per-DC tag owns only its own DC's stores.
+  const scope = abbrev ? fulfilments.filter((f) => f.dc === abbrev) : fulfilments.slice()
+
+  if (!scope.length) {
+    return { departed: false, departedAt: null, shipped: 0, total: 0, poNumber, dc: abbrev,
+      reason: 'no fulfilment matches this tag — cannot prove it left' }
+  }
+  const dates = scope.map((f) => f.actualShipDate || null)
+  const shipped = dates.filter(Boolean).length
+  if (shipped < scope.length) {
+    return { departed: false, departedAt: null, shipped, total: scope.length, poNumber, dc: abbrev,
+      reason: `${scope.length - shipped} of ${scope.length} not marked shipped` }
+  }
+  const departedAt = dates.reduce((m, d) => (m && new Date(m) >= new Date(d) ? m : d), null)
+  return { departed: true, departedAt, shipped, total: scope.length, poNumber, dc: abbrev, reason: null }
+}

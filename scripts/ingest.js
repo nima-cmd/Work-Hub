@@ -18,7 +18,7 @@ import {
   loadPurchaseOrders, prunePurchaseOrders,
   loadOrderConfirmations, pruneOrderConfirmations,
   fetchOrderConfirmations, fetchPurchaseOrders, fetchOcPoLinks,
-  stampApprovedForShipping, stampShippedValue, clearDepartedCustody, deriveOrderEvents,
+  stampApprovedForShipping, stampShippedValue, clearDepartedCustody, clearDepartedDcCustody, deriveOrderEvents,
   loadShipCentralQueue, pruneShipCentralQueue,
 } from '../src/ingest/loadToDb.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -97,6 +97,7 @@ const { nOrders, nFul, nInv, nPruned, nPo, nPoPruned, nOc, nOcPruned, nScq, nScq
   await stampApprovedForShipping(records, db) // launch-day ledger (Launch Bay delay warning)
   await stampShippedValue(records, db) // snapshot shipped $ for the header credits
   await clearDepartedCustody(records, db) // close custody + prune box rows for IFs that shipped
+  await clearDepartedDcCustody(db) // and the per-DC cargo tags, which nothing closed before
   const nPruned = hasMaster ? await pruneOrders(orders.map((o) => o.soNumber), db) : 0
   const nPo = await loadPurchaseOrders(poRows, db)
   const nPoPruned = poRows.length ? await prunePurchaseOrders(poRows, db) : 0

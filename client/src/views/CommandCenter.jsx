@@ -452,9 +452,13 @@ export default function CommandCenter({ orders, tasks = [], labelGaps = null, cu
                 <span className="opStat"><b>{custodyStats.out}</b> with warehouse</span>
                 <span className="opStat ok"><b>{custodyStats.back}</b> back in our hands</span>
               </div>
+              {/* A register row is EITHER an IF or a per-DC cargo tag, and this only
+                  ever read ifNumber — so every DC row rendered nameless AND they all
+                  shared an undefined React key. Invisible while 32 departed tags
+                  padded the list; obvious once they were cleared. */}
               {custodyStats.stale.map((c) => (
-                <div key={c.ifNumber} className="miniRow sev-hi">
-                  <span className="miniSo">{c.ifNumber}</span>
+                <div key={c.ifNumber || c.docNumber} className="miniRow sev-hi">
+                  <span className="miniSo">{c.ifNumber || c.docNumber}</span>
                   <span className="miniCust">sitting {c.ageDays}d with no movement</span>
                 </div>
               ))}

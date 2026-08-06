@@ -6,6 +6,7 @@
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
 import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
+import { dcTagDeparture } from '../model/custody.js'
 import { foldInvoiceRows, invoiceUpsertSql, invoiceWindowUpsertSql } from './invoiceUpsert.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
@@ -2015,6 +2016,67 @@ export async function clearDepartedCustody(records, db = pool) {
       [r.ifNumber, so, summary, r.actualShipDate],
     )
     await db.query(`DELETE FROM fulfillment_boxes WHERE if_number=$1`, [r.ifNumber])
+    n++
+  }
+  return n
+}
+
+// The same cleanup for the OTHER kind of custody doc (2026-08-06).
+//
+// ⚠️ clearDepartedCustody above is `doc_type='IF'` ONLY, and nothing else ever
+// closed a per-DC cargo tag — so the DC lane of the custody register had never been
+// cleared once. Live when this was written: 41 tags, 0 cleared, 32 of them on POs
+// whose every IF had shipped and been invoiced. See dcTagDeparture in
+// src/model/custody.js for the rule and why its unit is the DC and not the PO.
+//
+// This works off the ledger rather than off a `records` array, because a DC tag has
+// no NetSuite record of its own — it is something WE printed. It is otherwise the
+// same shape: idempotent via the CUSTODY_CLEARED marker, only touches tags that
+// were actually scanned, and no boxes to prune (boxes are captured per IF).
+export async function clearDepartedDcCustody(db = pool) {
+  const { rows: tags } = await db.query(`
+    SELECT doc_number,
+           -- The tag's own scan state, which dcTagDeparture needs: a tag still OUT
+           -- must never be closed by a ship date. Same latest-OUT-vs-latest-IN test
+           -- getCustodyRegister uses.
+           CASE WHEN MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_IN') IS NOT NULL
+                 AND MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_IN')
+                     >= COALESCE(MAX(occurred_at) FILTER (WHERE event_type='CUSTODY_OUT'), 'epoch'::timestamptz)
+                THEN 'returned' ELSE 'with_warehouse' END AS state
+    FROM order_events
+    WHERE doc_type='DC' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED')
+    GROUP BY doc_number
+    HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN'))
+       AND NOT bool_or(event_type='CUSTODY_CLEARED')
+  `)
+  if (!tags.length) return 0
+
+  const pos = [...new Set(tags.map((t) => String(t.doc_number).split(':')[0]))]
+  const { rows: ifs } = await db.query(`
+    SELECT o.po_number AS po, o.dc, f.if_number AS "ifNumber", f.actual_ship_date AS "actualShipDate"
+    FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+    WHERE o.po_number = ANY($1::text[])
+  `, [pos])
+  const byPo = new Map()
+  for (const r of ifs) {
+    if (!byPo.has(r.po)) byPo.set(r.po, [])
+    byPo.get(r.po).push(r)
+  }
+
+  let n = 0
+  for (const t of tags) {
+    const docNumber = String(t.doc_number)
+    const po = docNumber.split(':')[0]
+    const verdict = dcTagDeparture({ docNumber, fulfilments: byPo.get(po) || [], state: t.state })
+    if (!verdict.departed) continue
+    // The note records the SCOPE the verdict was reached on, so a closed tag can be
+    // audited later without re-deriving it.
+    const note = `departed — ${verdict.total} fulfilment${verdict.total === 1 ? '' : 's'} marked shipped`
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+       VALUES ('CUSTODY_CLEARED','DC',$1,NULL,$2,'derived',$3)`,
+      [docNumber, note, verdict.departedAt],
+    )
     n++
   }
   return n
