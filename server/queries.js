@@ -45,7 +45,7 @@ import { splitUnfiled } from '../src/model/filing.js'
 import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
-import { pushingAllowed, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
+import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
@@ -1488,12 +1488,15 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
   // costs that decided it. This gates ORDER CREATION only; the read-only harvest, the
   // cost sync, the rate quotes and check:label-records all keep working. A dry run is
   // still allowed because it writes nothing and is how you see what WOULD go.
-  if (!dryRun && !pushingAllowed({ force })) {
-    return {
-      scope, skipped: true, blocked: true, reason: PUSH_DISABLED_REASON,
-      results: [], candidates: 0, recorded: 0,
-    }
-  }
+  // ⚠️ THIS GATE IS NOW PER-ORDER, NOT GLOBAL (Nima, 2026-08-07: "can we unblock
+  // shipstation label for anything no the warehouse location"). The double-label
+  // risk lives at the Warehouse location, where NetSuite labels on fulfil; the
+  // partner locations do not. So each candidate is judged on its own location and
+  // a blocked one is NAMED rather than the whole run refusing — see
+  // src/model/labelSource.js for why China and a missing location stay blocked.
+  const locationBlock = (location) => (
+    pushingAllowed({ force, location }) ? null : (pushBlockedForLocation(location) ?? PUSH_DISABLED_REASON)
+  )
   if (scope === 'boutique') {
     // ⚠️ THIS FILTERED ON `packed` UNTIL 2026-08-06, WHICH IS THE DONE PILE.
     // Nima: "We want the shipstation to only pick up our picked not packed — if it's
@@ -1509,25 +1512,35 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     // question regardless of what the status claims.
     const { rows } = await pool.query(
       `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
-              o.customer, f.status,
+              o.customer, o.location, f.status,
               COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) AS "labelCount"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
        WHERE f.actual_ship_date IS NULL
          AND o.source = 'boutique' AND COALESCE(o.location,'') NOT ILIKE '%china%'
        ORDER BY f.if_number`)
+    // Location gate first, so a Warehouse fulfilment never reaches the builder.
+    // Held rows carry their own reason — a boutique order at the Warehouse is not
+    // a defect, it is NetSuite's to label.
+    const locationHeld = []
+    const pushable = []
+    for (const r of rows) {
+      const why = locationBlock(r.location)
+      if (why) locationHeld.push({ ifNumber: r.ifNumber, soNumber: r.soNumber, reason: why })
+      else pushable.push(r)
+    }
     // Addresses live only in NetSuite — Neon has no address column at all. The
     // requested carrier/service too, and deliberately in a SEPARATE call (see
     // fetchBoutiqueShipMethods for why folding them together is a trap).
-    const soByIf = new Map(rows.map((r) => [r.ifNumber, r.soNumber]))
+    const soByIf = new Map(pushable.map((r) => [r.ifNumber, r.soNumber]))
     const [addrs, methods, details] = await Promise.all([
-      fetchBoutiqueAddresses(rows.map((r) => r.ifNumber), { runSuiteQL }),
-      fetchBoutiqueShipMethods(rows.map((r) => r.ifNumber), { runSuiteQL }),
+      fetchBoutiqueAddresses(pushable.map((r) => r.ifNumber), { runSuiteQL }),
+      fetchBoutiqueShipMethods(pushable.map((r) => r.ifNumber), { runSuiteQL }),
       // The service NAME and who pays, from the sales order REST record — the carrier
       // GROUP that `methods` returns cannot distinguish Fedex from DHL from UPS.
-      fetchBoutiqueShipDetails(rows.map((r) => r.ifNumber), soByIf, { runSuiteQL, restGet, refName }),
+      fetchBoutiqueShipDetails(pushable.map((r) => r.ifNumber), soByIf, { runSuiteQL, restGet, refName }),
     ])
     const { orders, skipped, records } = boutiqueOrdersFor(
-      rows.map((r) => ({
+      pushable.map((r) => ({
         order: r, fulfilment: { ifNumber: r.ifNumber, status: r.status },
         address: addrs.get(r.ifNumber),
         labelCount: Number(r.labelCount) || 0,
@@ -1542,18 +1555,45 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     )
     const res = await pushOrders(orders, { dryRun })
     const recorded = await rememberPush(records, res, dryRun)
-    return { ...res, scope, skipped, candidates: rows.length, recorded }
+    return {
+      ...res, scope, skipped: [...(skipped || []), ...locationHeld],
+      candidates: pushable.length, seen: rows.length, locationHeld: locationHeld.length, recorded,
+    }
   }
 
   const routing = await getRouting()
   const list = Array.isArray(routing) ? routing : (routing.shipments || [])
   // Parcel only: freight moves on a BOL and FOB is collected abroad, both of which
   // `labels.applicable` already excludes. Shipped ones are done.
-  const shipments = list.filter((s) => s.labels?.applicable && !s.shippedAt && /ups/i.test(s.carrier || ''))
+  const parcel = list.filter((s) => s.labels?.applicable && !s.shippedAt && /ups/i.test(s.carrier || ''))
+  // The location gate applies here too — CHECKED, not assumed. An EDI shipment's
+  // location is the partner's, so none of them should be Warehouse or China; but
+  // "should be" is what the comment on the invoiced-stage promotion said, and that
+  // mechanism was never running. So look it up: the member POs carry the location.
+  const locByPo = new Map()
+  const memberPos = [...new Set(parcel.flatMap((s) => s.memberPos || []))]
+  if (memberPos.length) {
+    const { rows: locRows } = await pool.query(
+      'SELECT po_number, MIN(location) AS location FROM orders WHERE po_number = ANY($1) GROUP BY po_number',
+      [memberPos])
+    for (const r of locRows) locByPo.set(String(r.po_number), r.location)
+  }
+  const locationHeld = []
+  const shipments = parcel.filter((s) => {
+    for (const po of s.memberPos || []) {
+      const why = locationBlock(locByPo.get(String(po)))
+      if (why) { locationHeld.push({ bolNumber: s.bolNumber, dc: s.dc, po, reason: why }); return false }
+    }
+    return true
+  })
   const { orders, records } = ediOrdersFor(shipments, { storeId })
   const res = await pushOrders(orders, { dryRun })
   const recorded = await rememberPush(records, res, dryRun)
-  return { ...res, scope, shipments: shipments.length, candidates: orders.length, recorded }
+  return {
+    ...res, scope, shipments: shipments.length, seen: parcel.length,
+    skipped: locationHeld, locationHeld: locationHeld.length,
+    candidates: orders.length, recorded,
+  }
 }
 
 // Write down what we just pushed. A dry run records NOTHING — it did not happen.
