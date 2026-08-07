@@ -14,7 +14,7 @@
 
 import PDFDocument from 'pdfkit'
 import { dcLabel } from '../src/model/dc.js'
-import { SHIP_FROM, COMMODITY, shipToFor } from '../src/model/bolAddresses.js'
+import { SHIP_FROM, COMMODITY, shipToFor, bolAuthLine } from '../src/model/bolAddresses.js'
 
 const M = 24
 const RED = '#c00'
@@ -177,9 +177,17 @@ function render(doc, shipment, kind) {
   const siH = isMaster ? 34 : 24
   boxOutline(doc, M, y, W, siH)
   doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000').text('SPECIAL INSTRUCTIONS:', M + 4, y + 3)
-  doc.font('Helvetica-Bold').fontSize(9).fillColor(RED)
-    .text(`Macy's Auth / Appt # ${shipment.authNumber || '________'}`, M + 4, y + 12)
-  if (isMaster) doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(L.masterNote, M + 4, y + 23)
+  // Lines are laid out in sequence rather than at fixed offsets, so a Nordstrom
+  // BOL (no auth line — see bolAuthLine) leaves the box legitimately blank
+  // instead of printing a Macy's reference, and the box height below is
+  // unchanged either way so nothing in the VICS grid shifts.
+  const authLine = bolAuthLine(shipment)
+  let siY = y + 12
+  if (authLine) {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(RED).text(authLine, M + 4, siY)
+    siY += 11
+  }
+  if (isMaster) doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(L.masterNote, M + 4, siY)
   y += siH + 3
 
   // ── Customer Order Information ────────────────────────────────────────────
