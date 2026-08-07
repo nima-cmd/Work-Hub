@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react'
 import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
-import { createTasksBulk, fetchPoDcs } from '../api.js'
+import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
+import {
+  TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK,
+  missionTab, postCustodyState, routingForPo, fulfilledNeverScanned,
+} from '../../../src/model/postCustody.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -23,6 +27,13 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   // the order ship-to, so the DC-tag button gets it from here instead.
   const [poDcs, setPoDcs] = useState({})
   useEffect(() => { fetchPoDcs().then(setPoDcs).catch(() => {}) }, [])
+  // Routing shipments — the possession tab needs them to tell "route it" from
+  // "the carrier is booked". A card carries no shipment id; the PO is looked up
+  // inside memberPos (routingForPo).
+  const [shipments, setShipments] = useState([])
+  useEffect(() => { fetchRouting().then((r) => setShipments(r?.shipments || [])).catch(() => {}) }, [])
+  // Opens on the possession tab: it is the one that answers "what do I do now".
+  const [tab, setTab] = useState(TAB.ACTION)
 
   const grouped = groupOrdersByPo(orders)
   const cardKey = (o) => o.soNumber // group rows set soNumber = poNumber
@@ -34,26 +45,90 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   // "Ball's in our court". A scanned card leaves its stage column for the custody
   // column. Shipped/departed cards stay put (their scans are historical).
   const custodyOf = (o) => (o.stage === 'SHIPPED' ? null : cardCustody(o, events, poDcs[o.poNumber]))
-  const withNestor = grouped.filter((o) => custodyOf(o)?.state === 'warehouse').sort(bySev)
-  // ⚠️ 'partial' BELONGS HERE TOO (2026-08-06). cardCustody gained that state when the
-  // returned branch stopped rounding a part-scanned card up to fully-back. Filtering on
-  // 'returned' alone would have made such a card vanish from the board completely — it
-  // leaves its stage column via `inCustody` below and would land in neither custody
-  // column. Hiding a card is worse than the over-claim this replaced.
-  const ballsInCourt = grouped
-    .filter((o) => ['returned', 'partial'].includes(custodyOf(o)?.state))
-    .sort(bySev)
-  const inCustody = new Set([...withNestor, ...ballsInCourt].map(cardKey))
 
-  // Build the columns in flow order; drop the two custody columns in right after
-  // Packed. Cards routed into a custody column are excluded from their stage.
+  // THREE TABS (Nima, 2026-08-07 — "we may want to break it up into three tabs
+  // in terms of mission quest kanban so we have more screen space", and
+  // confirmed after: "making in our posseson its own tab is a good idea").
+  //
+  // What this replaced: ONE row of up to ten columns, in which every actionable
+  // card collapsed into a single "Ball's in Our Court" pile. Measured 2026-08-07:
+  // 26 cards there (16 Picked, 7 Invoiced, 3 Approved) with every stage column
+  // behind it at 0 and only Shipped populated past it. The board could say the
+  // goods were here and nothing about what they needed.
+  //
+  // ⚠️ 'partial' belongs with 'returned' (2026-08-06): cardCustody gained that
+  // state when the returned branch stopped rounding a part-scanned card up to
+  // fully-back, and filtering on 'returned' alone made such a card vanish from
+  // the board entirely. Both are "in our possession", so both start tab ③ —
+  // missionTab holds that rule and is tested.
+  const cards = grouped.map((o) => {
+    const custody = custodyOf(o)
+    const fulfilments = o.fulfillments || []
+    const departed = o.stage === 'SHIPPED'
+    const t = missionTab({ fulfilments, custodyState: custody?.state ?? null, departed })
+    // Only the possession tab asks the question, so only it pays for the answer.
+    const pc = t === TAB.ACTION
+      ? postCustodyState({ ...o, fulfilments, departed, routing: routingForPo(shipments, o.poNumber) })
+      : null
+    return { o, custody, tab: t, pc }
+  })
+  const onTab = (t) => cards.filter((c) => c.tab === t)
+  const tabCounts = {
+    [TAB.ORDERS]: onTab(TAB.ORDERS).length,
+    [TAB.FULFILMENT]: onTab(TAB.FULFILMENT).length,
+    [TAB.ACTION]: onTab(TAB.ACTION).length,
+  }
+  // How much of the possession tab is actually OURS to move — the number the old
+  // board could never give. Live 2026-08-07: 4 work against 87 watching.
+  const workCount = onTab(TAB.ACTION).filter((c) => c.pc?.isWork).length
+
   const columns = []
-  for (const s of STAGE_ORDER) {
-    const items = grouped.filter((o) => o.stage === s && !inCustody.has(cardKey(o))).sort(bySev)
-    if (items.length) columns.push({ key: s, label: STAGE_SHORT[s], items })
-    if (s === 'PACKED_PENDING_NEXT') {
-      if (withNestor.length) columns.push({ key: 'with_nestor', label: 'With Nestor', items: withNestor, custody: true })
-      if (ballsInCourt.length) columns.push({ key: 'balls_in_court', label: "Ball's in Our Court", items: ballsInCourt, custody: true })
+  if (tab === TAB.ORDERS) {
+    // Pending Approval, then Pending Fulfillment — "sales orders that have no
+    // fulfilment".
+    for (const s of ['ON_HOLD_APPROVAL', 'OPEN_NEEDS_FULFILLMENT']) {
+      const items = onTab(TAB.ORDERS).filter((c) => c.o.stage === s).map((c) => c.o).sort(bySev)
+      if (items.length) columns.push({ key: s, label: STAGE_SHORT[s], items })
+    }
+    // Anything else that landed here (a stage we didn't name) still gets drawn,
+    // rather than being silently dropped off the board.
+    const named = new Set(['ON_HOLD_APPROVAL', 'OPEN_NEEDS_FULFILLMENT'])
+    const rest = onTab(TAB.ORDERS).filter((c) => !named.has(c.o.stage)).map((c) => c.o).sort(bySev)
+    if (rest.length) columns.push({ key: 'other_orders', label: 'Other', items: rest })
+  } else if (tab === TAB.FULFILMENT) {
+    // His words: "if something fullfilled with no scan out we need to be aware
+    // since it should be happening one after another." That gap gets its own
+    // column rather than sitting quietly inside a stage.
+    const gap = onTab(TAB.FULFILMENT)
+      .filter((c) => (c.o.fulfillments || []).some(fulfilledNeverScanned))
+      .map((c) => c.o).sort(bySev)
+    const nestor = onTab(TAB.FULFILMENT)
+      .filter((c) => c.custody?.state === 'warehouse')
+      .map((c) => c.o).sort(bySev)
+    const gapKeys = new Set(gap.map(cardKey))
+    if (gap.length) columns.push({ key: 'never_scanned', label: 'Fulfilled — never scanned out', items: gap, custody: true })
+    if (nestor.length) columns.push({ key: 'with_nestor', label: 'With Nestor — being packed', items: nestor.filter((o) => !gapKeys.has(cardKey(o))), custody: true })
+    const shown = new Set([...gap, ...nestor].map(cardKey))
+    const rest = onTab(TAB.FULFILMENT).filter((c) => !shown.has(cardKey(c.o))).map((c) => c.o).sort(bySev)
+    if (rest.length) columns.push({ key: 'other_ff', label: 'Fulfilled', items: rest })
+  } else {
+    // ③ In Our Possession — one column per post-custody state, in flow order,
+    // each saying what the card is waiting ON. Work columns are marked; the rest
+    // are watches, and saying so is the point (28 tendered EDI cards were once
+    // reported as "nothing done").
+    const byState = new Map()
+    for (const c of onTab(TAB.ACTION)) {
+      if (!c.pc) continue // no fulfilment → nothing to name; see postCustody.js
+      if (!byState.has(c.pc.key)) byState.set(c.pc.key, [])
+      byState.get(c.pc.key).push(c)
+    }
+    for (const k of PC_ORDER) {
+      const items = (byState.get(k) || []).sort((a, b) => b.o.severity - a.o.severity)
+      if (!items.length) continue
+      columns.push({
+        key: k, label: PC_LABEL[k], work: PC_IS_WORK[k],
+        items: items.map((c) => c.o), waiting: new Map(items.map((c) => [cardKey(c.o), c.pc.waitingOn])),
+      })
     }
   }
 
@@ -106,6 +181,19 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
 
   return (
     <div className="kanbanWrap">
+      <div className="rt-tabs" style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        {[TAB.ORDERS, TAB.FULFILMENT, TAB.ACTION].map((t) => (
+          <button key={t} className={'tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
+            {TAB_LABEL[t]} <span className="count">{tabCounts[t]}</span>
+          </button>
+        ))}
+        {tab === TAB.ACTION && (
+          <span className="hint" style={{ margin: 0, alignSelf: 'center' }}>
+            {workCount ? `${workCount} to act on` : 'nothing to act on'} · {tabCounts[TAB.ACTION] - workCount} waiting
+          </span>
+        )}
+      </div>
+
       {/* selection / task-composer toolbar */}
       <div className="questBar">
         <span className="hint" style={{ margin: 0 }}>
@@ -158,10 +246,10 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
       )}
 
       <div className="kanban">
-        {columns.map(({ key: colKey, label, items, custody }) => (
-          <div className={'col' + (custody ? ' col-custody col-' + colKey : '')} key={colKey}>
+        {columns.map(({ key: colKey, label, items, custody, work, waiting }) => (
+          <div className={'col' + (custody ? ' col-custody col-' + colKey : '') + (work ? ' col-work' : '')} key={colKey}>
             <div className="colHead">
-              {label} <span className="count">{items.length}</span>
+              {work && <span title="ours to move now">▶ </span>}{label} <span className="count">{items.length}</span>
             </div>
             {items.map((o) => {
               const key = cardKey(o)
@@ -177,6 +265,13 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
                   <div className="cust"><ChannelTag order={o} /> <CustomerName order={o} /></div>
+                  {/* What this card is WAITING ON — the sentence comes from the
+                      same call as the column it sits in, so the two cannot drift
+                      (the labelGap lesson: a row's sentence and its kind must be
+                      one derivation). */}
+                  {waiting?.get(cardKey(o)) && (
+                    <div className={'pcWaiting' + (work ? ' pcWork' : '')}>{waiting.get(cardKey(o))}</div>
+                  )}
                   <ShipWindow window={o.shipWindow} />
                   <CustodyBadge card={o} events={events} dcList={poDcs[o.poNumber]} />
                   {o.isGroup

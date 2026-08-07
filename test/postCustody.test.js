@@ -23,6 +23,11 @@ test('a fulfilment created but never scanned out stays on the Fulfilment tab', (
   assert.equal(missionTab({ fulfilments: [ff()], custodyState: null }), TAB.FULFILMENT)
   assert.equal(fulfilledNeverScanned({ custodyOut: null, custodyIn: null }), true)
   assert.equal(fulfilledNeverScanned({ custodyOut: '2026-08-01', custodyIn: null }), false)
+  // ⚠️ but a SHIPPED fulfilment is not this gap. Live, the column was 3 for 3
+  // false: IF7142/IF7231/IF7238 shipped before custody scanning existed, so they
+  // can never carry a scan and there is nothing left to do about them.
+  assert.equal(fulfilledNeverScanned({ custodyOut: null, custodyIn: null, status: 'Shipped' }), false)
+  assert.equal(fulfilledNeverScanned({ custodyOut: null, custodyIn: null, status: 'Picked' }), true)
 })
 
 test('goods back in our possession START the action tab, part-scanned included', () => {
