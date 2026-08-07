@@ -101,6 +101,16 @@ export async function getOrders() {
             'packedStatus', f.packed_status, 'daysPending', f.days_pending,
             'invoice', f.invoice_number, 'actualShipDate', f.actual_ship_date,
             'ifDate', f.if_date,
+            -- Does a carrier label exist for this fulfilment? The post-custody
+            -- board needs it to tell "make the label" from "mark it packed"
+            -- (src/model/postCustody.js): for a boutique parcel the label is
+            -- what makes the order packable, and marking packed is what raises
+            -- the invoice. A BOOLEAN, not the numbers — the board never shows
+            -- them and the tracking list is long.
+            -- ⚠️ TEXT[], not text. Comparing it to an empty string is a
+            -- malformed array literal and 500s the whole /api/orders endpoint.
+            -- (And no backticks in here — this is inside a JS template literal.)
+            'labelled', COALESCE(array_length(f.tracking_numbers, 1), 0) > 0,
             'custodyOut', (SELECT MAX(e.occurred_at) FROM order_events e
                            WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_OUT'),
             'custodyIn',  (SELECT MAX(e.occurred_at) FROM order_events e
@@ -125,7 +135,13 @@ export async function getOrders() {
           json_build_object(
             'invNumber', i.inv_number, 'status', i.status,
             'shippingStatus', i.shipping_status,
-            'amountRemaining', i.amount_remaining, 'shipDate', i.ship_date
+            'amountRemaining', i.amount_remaining, 'shipDate', i.ship_date,
+            -- Terms are what make a balance mean something: paymentBlocked()
+            -- needs them to tell "Due on receipt and owed" from "Net 30, not due
+            -- yet" and from "No Payment Required". Without them a board reads
+            -- every balance as a hold — the shape behind the retracted
+            -- "70 departed shipments unpaid", where 105 of 109 simply weren't due.
+            'terms', i.terms
           ) ORDER BY i.inv_number
         )
         FROM invoices i WHERE i.so_number = o.so_number
