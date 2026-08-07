@@ -115,7 +115,15 @@ export function missionTab({ fulfilments = [], custodyState = null, departed = f
 
 // A fulfilment that was created but never scanned out — the gap Nima wants to
 // see, because the two steps are meant to happen back to back.
-export function fulfilledNeverScanned({ custodyOut, custodyIn } = {}) {
+//
+// ⚠️ A SHIPPED fulfilment is NOT this gap. Live 2026-08-07 the column was 3 for 3
+// false — IF7142, IF7231 and IF7238 all shipped long ago and carry no scan
+// because custody scanning did not exist yet. Those are the pre-custody rows
+// [[ship-date-retro-audit]] already established are uncheckable forever, and
+// nothing can be done about them now. The gap is only meaningful while the goods
+// have not left.
+export function fulfilledNeverScanned({ custodyOut, custodyIn, status } = {}) {
+  if (/shipped/i.test(status || '')) return false
   return !custodyOut && !custodyIn
 }
 

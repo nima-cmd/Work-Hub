@@ -2682,3 +2682,15 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-closeReady { font-size: 11px; color: var(--good, #4fd18a); border: 1px solid rgba(79,209,138,0.4);
   background: rgba(79,209,138,0.08); border-radius: 6px; padding: 2px 7px; margin-left: 6px; }
 .rt-shipBtn.ready { border-color: rgba(79,209,138,0.55); color: var(--good, #4fd18a); }
+
+/* Post-custody: what a card in our possession is waiting on (Mission Quests
+   tab ③). The sentence is rendered from the same derivation as its column, so a
+   card can never say one thing while sitting under another. */
+.pcWaiting {
+  font-size: 11px; line-height: 1.35; margin: 4px 0 2px;
+  color: var(--muted); border-left: 2px solid var(--line); padding-left: 6px;
+}
+.pcWaiting.pcWork { color: var(--text); border-left-color: var(--accent); }
+/* A work column is visually distinct from a watch column because that
+   distinction is the whole point of the tab — 4 of 91 cards were ours to move. */
+.col.col-work > .colHead { color: var(--accent); }
