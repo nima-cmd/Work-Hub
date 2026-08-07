@@ -211,3 +211,24 @@ export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DE
   const missing = ['street', 'city', 'state', 'zip'].filter((k) => !block[k])
   return { block, missing }
 }
+
+// The Special Instructions auth line. The auth / appointment number is a MACY'S
+// mechanism: a Bloomingdale's routing notification returns one and the Macy's
+// guide requires it in this box. Nordstrom routes through its own Manhattan TMS
+// and has no equivalent — so the line printed a COMPETITOR'S NAME above an empty
+// blank on every Nordstrom BOL (Nima, 2026-08-07: "we don't need Macy's
+// reference in special instructions… we do need the authorization number but
+// that's only for Bloomingdale's. We don't want to reference Macy's in a BOL to
+// Nordstrom"). Live when this was written: 18 of 18 Bloomingdale's shipments
+// carry an auth_number, 0 of 9 Nordstrom ones do.
+//
+// ⚠️ Keyed on the PARTNER, not on whether authNumber happens to be set. Those
+// look identical on today's data and are not the same rule: a Bloomingdale's
+// BOL whose auth hasn't come back yet must still print the blank to fill in,
+// because that blank is the prompt. Suppressing on an empty value would hide a
+// required field exactly when it's outstanding — the field-provenance shape in
+// CLAUDE.md's counter-bug list.
+export function bolAuthLine({ partner, authNumber } = {}) {
+  if (partner === 'Nordstrom') return null
+  return `Macy's Auth / Appt # ${authNumber || '________'}`
+}

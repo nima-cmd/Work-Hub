@@ -11,7 +11,7 @@ import {
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
 import { shipWindow, shipWindowFlags, isoDay } from '../src/model/shipWindow.js'
-import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS } from '../src/model/bolAddresses.js'
+import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -2681,6 +2681,35 @@ test('the stored Nordstrom DC 089 matches what the portal prints', () => {
   // both the padded and unpadded keys resolve to the same DC — the portal uses one
   // form and our data the other.
   assert.equal(NORDSTROM_DCS['89'].street, dc.street)
+})
+
+// ⚠️ Nima, 2026-08-07: "we don't want to reference Macy's in a BOL to Nordstrom."
+// The Special Instructions box printed "Macy's Auth / Appt # ________" on EVERY BOL,
+// so all 9 live Nordstrom BOLs carried a competitor's name above an empty blank.
+test('a Nordstrom BOL carries no Macy\'s reference in Special Instructions', () => {
+  assert.equal(bolAuthLine({ partner: 'Nordstrom', authNumber: null }), null)
+  // even if an auth number somehow got onto a Nordstrom shipment, the Macy's
+  // wording must not reach its BOL.
+  assert.equal(bolAuthLine({ partner: 'Nordstrom', authNumber: '00052835555S' }), null)
+})
+
+test("a Bloomingdale's BOL still prints the Macy's auth — blank included", () => {
+  assert.equal(
+    bolAuthLine({ partner: "Bloomingdale's", authNumber: '00052835555S' }),
+    "Macy's Auth / Appt # 00052835555S",
+  )
+  // ⚠️ THE POINT OF THE PARTNER KEY: an auth that hasn't come back from the routing
+  // notification yet must still print its blank, because the blank is the prompt to
+  // fill it in. Keying the suppression on `authNumber` being empty would look
+  // identical on today's data (18/18 Bloomingdale's set, 0/9 Nordstrom) and would
+  // silently drop a REQUIRED field exactly when it is outstanding.
+  assert.equal(
+    bolAuthLine({ partner: "Bloomingdale's", authNumber: null }),
+    "Macy's Auth / Appt # ________",
+  )
+  // an unknown/absent partner is treated as the Macy's lane (the default before
+  // Nordstrom was ever routed here) rather than silently blanking the field.
+  assert.match(bolAuthLine({}), /^Macy's Auth/)
 })
 
 // ⚠️ Grouping is an EDI concept, gated on it since 2026-08-06. Nima found this on the
