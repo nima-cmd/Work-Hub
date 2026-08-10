@@ -9,8 +9,8 @@ import {
   fromPoReceiving, fromOcPipeline,
 } from '../src/ingest/savedSearches.js'
 import { detectSource } from '../src/ingest/detect.js'
-import { buildPipeline, computeFlags } from '../src/model/pipeline.js'
-import { shipWindow, shipWindowFlags, isoDay } from '../src/model/shipWindow.js'
+import { buildPipeline, computeFlags, ageClock, ageFlags } from '../src/model/pipeline.js'
+import { shipWindow, shipWindowFlags, isoDay, PACK_LEAD_DAYS } from '../src/model/shipWindow.js'
 import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
@@ -2267,6 +2267,102 @@ test('asn: a blank-SSCC carton still records WHICH fulfilment to go fix', () => 
   assert.equal(blank.length, 1)
   assert.equal(blank[0].sscc, null)
   assert.equal(blank[0].ifNumber, 'IF7439')
+})
+
+// ── The age clock (src/model/pipeline.js) ────────────────────────────────────
+// Measured live 2026-08-10: 153 of 250 orders carried an age flag and exactly
+// ONE was out of runway — 119 had already shipped and 33 still had runway,
+// including SO12344, whose card read "Not due to ship until Aug 18" beside a red
+// "16d pending — chase it".
+
+const AUG10 = new Date(2026, 7, 10)
+
+test('age clock: a shipped order stops ageing — the clock has been met', () => {
+  assert.equal(ageClock({ stage: STAGE.SHIPPED, daysPending: 30 }, null), 'gone')
+  // Also via the window, for an order not yet promoted to the SHIPPED stage.
+  assert.equal(ageClock({ stage: STAGE.PACKED }, { shipped: true, daysToShip: -40 }), 'gone')
+  assert.deepEqual(ageFlags({ daysPending: 30 }, 'gone'), [])
+  // The live shape: SO11975, boutique, shipped, 61 days past its ship date, and
+  // reading STALE at severity 3 until now.
+  const flags = computeFlags(
+    { stage: STAGE.SHIPPED, daysPending: 19, shipDate: '2026-06-10', fulfillments: [{ ifNumber: 'IF1', actualShipDate: '2026-06-10' }] },
+    AUG10,
+  )
+  assert.ok(!flags.some((f) => f.key === 'STALE' || f.key === 'AGING'))
+})
+
+test('age clock: runway left = not late, and it says which date it is measured against', () => {
+  // SO12344: 19 days open, boutique, ships 2026-08-18. Deliberately Picked so it
+  // is not invoiced early (postCustody.js) — a holding state, not a stall.
+  const flags = computeFlags(
+    { stage: STAGE.PICKED, daysPending: 19, shipDate: '2026-08-18', customer: 'Saint Bernard', fulfillments: [{ ifNumber: 'IF7405' }] },
+    AUG10,
+  )
+  assert.ok(!flags.some((f) => f.key === 'STALE'))
+  const aged = flags.find((f) => f.key === 'AGING_WITH_RUNWAY')
+  assert.equal(aged.severity, 0)
+  assert.equal(aged.label, 'Open 19d — not late, ships 2026-08-18')
+  // ...and the generic pick guess goes with it — the same holding state.
+  assert.ok(!flags.some((f) => f.key === 'PICK_STALLED'))
+})
+
+test('age clock: an EDI order is measured against the PARTNER cancel date', () => {
+  // The live Nordstrom block: 12 days open, routed and tendered for pickup, the
+  // SO promising a date the partner has already cancelled on. The runway comes
+  // from cancelAfter, and the chip names that, not the sales order's date.
+  const o = {
+    stage: STAGE.PICKED, daysPending: 12, customer: 'Nordstrom - 599',
+    shipDate: '2026-08-25', ediWindow: { cancelAfter: '2026-08-14' }, fulfillments: [{ ifNumber: 'IF1' }],
+  }
+  const aged = computeFlags(o, AUG10).find((f) => f.key === 'AGING_WITH_RUNWAY')
+  assert.equal(aged.label, 'Open 12d — not late, cancels 2026-08-14')
+})
+
+test('age clock: inside the pack lead, past due, or dateless, the old flags stand', () => {
+  const racing = { stage: STAGE.PICKED, daysPending: 20, fulfillments: [{ ifNumber: 'IF1' }] }
+  // Past due — SO12267's shape, the one genuinely stale order on the live board.
+  assert.equal(ageClock(racing, { daysToShip: -5 }), 'racing')
+  assert.ok(computeFlags({ ...racing, shipDate: '2026-08-05' }, AUG10).some((f) => f.key === 'STALE'))
+  // Inside the pack lead there is no slack left to plead.
+  assert.equal(ageClock(racing, { daysToShip: PACK_LEAD_DAYS }), 'racing')
+  // ⚠️ No honest date anywhere must NOT buy silence — a missing window falls
+  // back to the old behaviour, the only conservative direction here.
+  assert.equal(ageClock(racing, null), 'racing')
+  assert.ok(computeFlags(racing, AUG10).some((f) => f.key === 'STALE'))
+  assert.ok(computeFlags({ ...racing, daysPending: 8 }, AUG10).some((f) => f.key === 'AGING'))
+})
+
+test('age clock: with runway, "mark it packed" waits for the route day', () => {
+  // Marking packed IS the invoice trigger, so this chip at severity 2 was advice
+  // to invoice early. Live 2026-08-10: 13 of 13 BACK_NOT_PACKED rows had runway.
+  const base = {
+    stage: STAGE.PICKED, daysPending: 19, customer: 'Saint Bernard',
+    fulfillments: [{ ifNumber: 'IF7405', custodyIn: '2026-08-01T10:00:00Z' }],
+  }
+  const early = computeFlags({ ...base, shipDate: '2026-08-18' }, AUG10)
+  assert.ok(!early.some((f) => f.key === 'BACK_NOT_PACKED'))
+  const held = early.find((f) => f.key === 'PACK_ON_ROUTE_DAY')
+  assert.equal(held.severity, 0)
+  assert.equal(held.label, 'IF7405 back from the warehouse — mark it packed on the route day, ships 2026-08-18')
+  // ...and it becomes the keystroke again inside the pack lead — the route day.
+  const now = computeFlags({ ...base, shipDate: '2026-08-11' }, AUG10)
+  assert.ok(now.some((f) => f.key === 'BACK_NOT_PACKED' && f.severity === 2))
+  assert.ok(!now.some((f) => f.key === 'PACK_ON_ROUTE_DAY'))
+})
+
+test('age clock: a PREPPED fulfilment still reads as prepped, runway or not', () => {
+  // PREPPED is a human's explicit "our part is done" marker — it outranks the
+  // derived wait, so the runway check must not swallow it.
+  const flags = computeFlags({
+    stage: STAGE.PICKED, daysPending: 19, shipDate: '2026-08-18',
+    fulfillments: [{ ifNumber: 'IF7405', custodyIn: '2026-08-01T10:00:00Z', preppedAt: '2026-08-02T10:00:00Z' }],
+  }, AUG10)
+  assert.ok(flags.some((f) => f.key === 'PREPPED_HELD'))
+  assert.ok(!flags.some((f) => f.key === 'PACK_ON_ROUTE_DAY' || f.key === 'BACK_NOT_PACKED'))
+})
+
+test('age clock: a young order with runway says nothing at all', () => {
+  assert.deepEqual(ageFlags({ daysPending: 6 }, 'slack', { mustShipBy: Date.now() }), [])
 })
 
 // ── Ship windows (src/model/shipWindow.js) ───────────────────────────────────
