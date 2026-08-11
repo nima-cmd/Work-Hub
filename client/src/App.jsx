@@ -49,6 +49,68 @@ function SyncAlarm({ health }) {
   )
 }
 
+// How old the data is, from an ABSOLUTE timestamp plus a local clock tick —
+// never from a cached ageHours, which freezes on screen the moment it is
+// fetched and then quietly under-reports for as long as the tab stays open.
+function ageLabel(lastAt, now) {
+  if (!lastAt) return 'never synced'
+  const mins = Math.floor((now - new Date(lastAt).getTime()) / 60000)
+  if (mins < 0) return 'just now'
+  if (mins < 1) return 'synced just now'
+  if (mins < 60) return `synced ${mins}m ago`
+  const h = Math.floor(mins / 60)
+  if (h < 24) return `synced ${h}h ago`
+  return `synced ${Math.floor(h / 24)}d ago`
+}
+
+// Refresh NetSuite, with the age of the data and the progress of a running pull
+// both ON the button (Nima, 2026-08-11: "if refresh netsuite button can have
+// time stamp on the last update letting us know how old the data is … as well as
+// a load bar when updating. All this can be on the button so we can save space").
+//
+// The bar is filled from real step reporting (src/model/netsuiteRefreshSteps.js
+// → the server's poll payload), not from a timer, and it fills to the steps
+// CONFIRMED FINISHED while the label names the one still in flight. The steps
+// are not equal in length, so it deliberately reads "4 of 11" rather than
+// implying time remaining.
+function NetsuiteRefreshButton({ sync, syncHealth, onRefresh }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  const ns = syncHealth?.syncs?.find((s) => s.key === 'netsuiteLive')
+  const running = sync.state === 'running'
+  const p = sync.step
+  const pct = running ? (p ? p.percent : 0) : 0
+
+  return (
+    <button
+      className={'importBtn nsBtn' + (running ? ' running' : '')}
+      onClick={onRefresh}
+      disabled={running}
+      title={
+        running
+          ? 'Each tick is a query that has come back. The steps are not equal in length, so this counts work done, not time left.'
+          : 'Pull orders, fulfilments and invoices straight from NetSuite now. There is no daily call limit — the only constraint is concurrency, which Celigo has priority on, so this will tell you if it has to wait.' +
+            (ns?.lastAt ? `\n\nLast completed sync: ${new Date(ns.lastAt).toLocaleString()}` : '')
+      }
+    >
+      {running && <span className="nsFill" style={{ width: pct + '%' }} />}
+      {running && <span className="nsPct">{pct}%</span>}
+      <span className="nsMain">{running ? (p ? p.phase + '…' : 'Starting…') : '↻ Refresh NetSuite'}</span>
+      <span className="nsSub">
+        {running
+          ? p
+            ? `${p.label} · ${p.done + 1}/${p.total}`
+            : 'contacting NetSuite'
+          : ageLabel(ns?.lastAt, now)}
+      </span>
+    </button>
+  )
+}
+
 // Shipment credits — "galactic credits", but the number is real dollars.
 // Shipped-this-month + still-waiting-to-leave, themed as a bay readout.
 const fmtCredits = (n) =>
@@ -197,12 +259,16 @@ export default function App() {
       }
       // The pull is detached server-side, so wait on it here. ~93s for a full
       // one; the 3s cadence keeps the pill honest without hammering.
-      setNsSync({ state: 'running', msg: 'Pulling from NetSuite… (about a minute and a half)' })
+      setNsSync({ state: 'running', msg: null, step: null })
       let r = null
       for (let i = 0; i < 100; i++) {
         await new Promise((ok) => setTimeout(ok, 3000))
         const st = await netsuiteRefreshStatus().catch(() => null)
         if (st && !st.running) { r = st.result || {}; break }
+        // The step drives the bar on the button. A poll that fails keeps the
+        // last known step rather than snapping the bar back to zero — the pull
+        // is still running server-side either way.
+        if (st?.step) setNsSync((s) => (s.state === 'running' ? { ...s, step: st.step } : s))
       }
       if (!r) { setNsSync({ state: 'error', msg: 'Still running after 5 minutes — check the server log.' }); return }
       if (r.busy) {
@@ -253,14 +319,7 @@ export default function App() {
           ))}
         </nav>
         <div className="topmeta">
-          <button
-            className="importBtn"
-            onClick={onRefreshNetsuite}
-            disabled={nsSync.state === 'running'}
-            title="Pull orders, fulfilments and invoices straight from NetSuite now. There is no daily call limit — the only constraint is concurrency, which Celigo has priority on, so this will tell you if it has to wait."
-          >
-            {nsSync.state === 'running' ? 'Refreshing…' : '↻ Refresh NetSuite'}
-          </button>
+          <NetsuiteRefreshButton sync={nsSync} syncHealth={syncHealth} onRefresh={onRefreshNetsuite} />
           {nsSync.msg && (
             <span
               className={'pill' + (nsSync.state === 'busy' ? ' warn' : nsSync.state === 'error' ? ' danger' : '')}

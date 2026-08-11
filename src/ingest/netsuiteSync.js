@@ -620,30 +620,34 @@ export function foldOrderConfirmationLines(rows = []) {
 // live at 1,113 invoices vs 104 today; 365 days would be 3,553 if a trail ever
 // needs to reach further. It does NOT widen `orders`, so no working queue,
 // Kanban lane or court-strip count changes.
-export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithinDays = 180, now } = {}) {
+export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithinDays = 180, now, onStep } = {}) {
   if (!netsuiteConfigured()) return { ok: false, configured: false, records: [] }
   const since = windowStart(closedWithinDays, now)
   const invoiceSince = windowStart(Math.max(invoiceWithinDays, closedWithinDays), now)
   const warnings = []
 
-  const run = async (label, sql) => {
+  // `step` is the progress key from src/model/netsuiteRefreshSteps.js — announced
+  // BEFORE the query goes out, so the button names what it is waiting on. Absent
+  // on the scheduled path, which has nobody to report to.
+  const run = async (label, sql, step) => {
+    onStep?.(step)
     const r = await runSuiteQL(sql)
     if (!r.ok) return { fail: `${label}: ${r.needsAuth ? 'auth rejected' : r.error || 'failed'}` }
     if (r.truncated) warnings.push(`${label}: hit the page cap — result is INCOMPLETE`)
     return { rows: r.rows }
   }
 
-  const orders = await run('orders', orderSql(since))
+  const orders = await run('orders', orderSql(since), 'orders')
   if (orders.fail) return { ok: false, error: orders.fail, records: [] }
-  const locs = await run('locations', locationSql(since))
+  const locs = await run('locations', locationSql(since), 'locations')
   if (locs.fail) return { ok: false, error: locs.fail, records: [] }
-  const lines = await run('order lines', orderLineSql(since))
+  const lines = await run('order lines', orderLineSql(since), 'orderLines')
   if (lines.fail) return { ok: false, error: lines.fail, records: [] }
-  const ifs = await run('fulfillments', fulfillmentSql(since))
+  const ifs = await run('fulfillments', fulfillmentSql(since), 'fulfillments')
   if (ifs.fail) return { ok: false, error: ifs.fail, records: [] }
-  const invs = await run('invoices', invoiceSql(since, invoiceSince))
+  const invs = await run('invoices', invoiceSql(since, invoiceSince), 'invoices')
   if (invs.fail) return { ok: false, error: invs.fail, records: [] }
-  const track = await run('tracking', trackingSql(since))
+  const track = await run('tracking', trackingSql(since), 'tracking')
   if (track.fail) return { ok: false, error: track.fail, records: [] }
 
   // first non-null location per SO
@@ -789,8 +793,8 @@ export async function fetchOrderConfirmationLines() {
   }
 }
 
-export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDays = 180, dryRun = false } = {}) {
-  const pulled = await fetchOrderLifecycle({ closedWithinDays, invoiceWithinDays })
+export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDays = 180, dryRun = false, onStep } = {}) {
+  const pulled = await fetchOrderLifecycle({ closedWithinDays, invoiceWithinDays, onStep })
   if (!pulled.ok) return { ok: false, configured: pulled.configured, error: pulled.error }
 
   // ⚠️ AN INVOICE RECORD MUST NOT MINT AN ORDER (2026-08-03). buildPipeline
@@ -813,12 +817,14 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
 
   // Inbound supply. Soft-fails into a warning: a broken PO query should leave the
   // outbound sync — and the existing PO rows — exactly as they were.
+  onStep?.('purchaseOrders')
   const pos = await fetchPurchaseOrderLines({ closedWithinDays })
   const warnings = [...(pulled.warnings || [])]
   if (!pos.ok && pos.configured !== false) warnings.push(`purchase orders: ${pos.error}`)
   if (pos.truncated) warnings.push('purchase orders: hit the page cap — result is INCOMPLETE, not pruning')
 
   // Pre-SO demand, soft-failing on the same terms.
+  onStep?.('orderConfirmations')
   const ocs = await fetchOrderConfirmationLines()
   if (!ocs.ok && ocs.configured !== false) warnings.push(`order confirmations: ${ocs.error}`)
   if (ocs.truncated) warnings.push('order confirmations: hit the page cap — result is INCOMPLETE, not pruning')
@@ -836,9 +842,13 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
   let result
   try {
     result = await withTransaction(async (db) => {
+      onStep?.('saveOrders')
       const nOrders = await loadOrders(orders, db)
+      onStep?.('saveFulfillments')
       const nFul = await loadFulfillments(pulled.records, db)
+      onStep?.('saveInvoices')
       const nInv = await loadInvoices(pulled.records, db)
+      onStep?.('stamps')
       await recordInvoiceWindow(pulled.invoiceSince, db)
       await stampApprovedForShipping(pulled.records, db)
       const nCredits = await stampShippedValue(pulled.records, db)
@@ -846,6 +856,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
       await clearDepartedDcCustody(db) // the per-DC cargo tags — nothing closed them before 2026-08-06
       // Kill fulfillments that no longer exist in NetSuite, scoped to the SOs we
       // actually pulled (see reconcileFulfillments — never a whole-table prune).
+      onStep?.('reconcile')
       const nPhantoms = await reconcileFulfillments(pulled.soNumbers, pulled.ifNumbers, db)
       // Freight NetSuite now says has fully shipped shouldn't still sit on the
       // active routing board (Nima, 2026-08-01 — 7 Bloomingdale's BOLs were
@@ -857,6 +868,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
       // Inbound supply. Prune only on a complete pull, and only ever against a
       // non-empty set (prunePurchaseOrders guards that too) — a received PO drops
       // out of the open window, so its lines should drop off the table with it.
+      onStep?.('savePos')
       let nPos = 0
       let nPosPruned = 0
       if (pos.ok && pos.records.length) {
@@ -867,6 +879,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
       // converts to a Sales Order leaves the scope entirely, and if its lines
       // lingered the app would count the same demand twice — once as an open OC
       // and again as the real order.
+      onStep?.('saveOcs')
       let nOcs = 0
       let nOcsPruned = 0
       if (ocs.ok && ocs.records.length) {
@@ -874,6 +887,7 @@ export async function syncFromNetsuite({ closedWithinDays = 30, invoiceWithinDay
         if (!ocs.truncated) nOcsPruned = await pruneOrderConfirmations(ocs.records, db)
       }
       // Last, because it reads the tables everything above has just written.
+      onStep?.('events')
       const { inserted: nEvents } = await deriveOrderEvents({ mode: 'sync' }, db)
       await recordSnapshot('netsuiteLive', orders.length, new Date(), db)
       const out = { nOrders, nFul, nInv, nCredits, nPhantoms, archived, nEdiRefreshed, nEvents, nPos, nPosPruned, nOcs, nOcsPruned }
