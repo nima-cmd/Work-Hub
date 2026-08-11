@@ -56,3 +56,32 @@ test('partnerForDc: a ShopBop FC is ShopBop, not the Bloomingdale default', () =
   assert.equal(partnerForDc('SC'), "Bloomingdale's")
   assert.equal(partnerForDc('CG'), "Bloomingdale's")
 })
+
+// ── The break-glass push (Nima, 2026-08-11) ──────────────────────────────────
+// "sometimes the netsuite UPS label creator has issues and we're in a rush and
+// printing it in shipstation if we can push the data out would be better than
+// manually creating the label ourself."
+//
+// The override must lift the POLICY block and never the FACT block, so these two
+// guards are asserted to live in different places on purpose.
+
+test('break-glass: force lifts the location policy', async () => {
+  const { pushingAllowed } = await import('../src/model/labelSource.js')
+  // Warehouse is NetSuite's to label — blocked by policy, forceable by a human
+  // who knows NetSuite's label creator is down.
+  assert.equal(pushingAllowed({ location: 'Warehouse' }), false)
+  assert.equal(pushingAllowed({ location: 'Warehouse', force: true }), true)
+})
+
+test('break-glass: force can NEVER lift an existing label', async () => {
+  const { shipstationEligibility, HOLD } = await import('../src/model/shipstationEligible.js')
+  // labelCount lives in the ELIGIBILITY model, which the force flag does not
+  // reach — two live labels on one box is a double charge and a wrong tracking
+  // number on the ASN. There is deliberately no force parameter here to pass.
+  const v = shipstationEligibility({ status: 'Picked', labelCount: 1, carrier: 'UPS', shipMethodName: 'UPS® Ground' })
+  assert.equal(v.push, false)
+  assert.equal(v.hold, HOLD.ALREADY_LABELLED)
+  // Belt and braces: the function takes no `force`, so no caller can smuggle one.
+  const forced = shipstationEligibility({ status: 'Picked', labelCount: 1, carrier: 'UPS', shipMethodName: 'UPS® Ground', force: true })
+  assert.equal(forced.push, false)
+})

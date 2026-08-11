@@ -1,6 +1,6 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask } from './api.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation } from './api.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
@@ -317,6 +317,64 @@ export function LabelButtons({ info }) {
   return (
     <span className="tagBtns">
       {available.map((s) => <OneLabelButton key={s} info={info} size={s} />)}
+    </span>
+  )
+}
+
+// ── Break-glass: push ONE fulfilment to ShipStation ─────────────────────────
+//
+// Nima, 2026-08-11: "sometimes the netsuite UPS label creator has issues and
+// we're in a rush and printing it in shipstation if we can push the data out
+// would be better than manually creating the label ourself."
+//
+// So this is deliberately per-order and human-initiated — the default stays
+// "nothing is pushed", and no scheduled run changed. What it buys in that moment
+// is the address, service and third-party billing already resolved, instead of
+// keying a label from scratch under time pressure.
+//
+// A held order still shows WHY, and offers the force only when the block is
+// POLICY (this location is NetSuite's to label). When the block is a FACT — the
+// box already carries a label — there is no force, because a second live label is
+// a double charge and a wrong tracking number on the ASN. See
+// src/model/shipstationEligible.js (labelCount) and labelSource.js (location).
+export function ShipstationPushButton({ ifNumber, onDone }) {
+  const [state, setState] = useState(null) // { busy, msg, held, canForce }
+  if (!ifNumber) return null
+
+  const run = async (force) => {
+    setState({ busy: true })
+    try {
+      const r = await pushToShipstation({ scope: 'boutique', ifNumbers: [ifNumber], force })
+      if (r.pushed > 0) {
+        setState({ msg: `✓ in ShipStation — buy the label there` })
+        onDone?.(r)
+        return
+      }
+      const held = (r.skipped || [])[0]
+      const reason = held?.reason || (r.seen === 0
+        ? 'not in the push scope — only unshipped, non-China fulfilments are'
+        : 'held, with no reason given')
+      // Only a LOCATION block is forceable; everything else is a fact about the
+      // box or the data, and forcing it would just push something broken.
+      const canForce = !force && /NetSuite/i.test(reason) && !/already has/i.test(reason)
+      setState({ msg: reason, held: true, canForce })
+    } catch (e) {
+      setState({ msg: e.message, held: true })
+    }
+  }
+
+  return (
+    <span className="tagBtns ssPush">
+      <button className="linkBtn" disabled={state?.busy} onClick={() => run(false)}
+              title="Push this fulfilment to ShipStation so the label can be bought there — for when NetSuite's label creator is playing up">
+        {state?.busy ? '→ pushing…' : '→ ShipStation'}
+      </button>
+      {state?.msg && <span className={state.held ? 'muted' : 'good'}> {state.msg}</span>}
+      {state?.canForce && (
+        <button className="linkBtn" onClick={() => {
+          if (window.confirm(`${ifNumber}: NetSuite normally labels this one.\n\nPush it to ShipStation anyway? Only do this if NetSuite's label creator is not working — otherwise you risk two labels on one box.`)) run(true)
+        }}>push anyway</button>
+      )}
     </span>
   )
 }

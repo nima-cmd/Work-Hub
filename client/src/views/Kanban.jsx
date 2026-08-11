@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
+import { isParcelLane } from '../../../src/model/parcelLane.js'
 import {
   TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK,
   missionTab, postCustodyState, routingForPo, fulfilledNeverScanned,
@@ -288,6 +289,15 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                   {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                     <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
                   ))}
+                  {/* Break-glass push, per fulfilment (Nima, 2026-08-11) — for when
+                      NetSuite's UPS label creator is playing up and the data is
+                      better pushed than re-keyed. Offered on the parcel lane only:
+                      an EDI freight shipment's label question is a BOL, not a
+                      parcel label. Nothing is pushed until it's clicked. */}
+                  {!o.isGroup && (o.source !== 'edi' || isParcelLane(o)) &&
+                    (o.fulfillments || []).filter((f) => f.ifNumber && !/shipped/i.test(f.status || '')).map((f) => (
+                      <ShipstationPushButton key={'ss' + f.ifNumber} ifNumber={f.ifNumber} onDone={onRefresh} />
+                    ))}
                   {o.isGroup && o.source === 'edi' && <><DcBreakdown group={o} dcList={poDcs[o.poNumber]} /><DcTagButtons group={o} dcList={poDcs[o.poNumber]} /></>}
                   {o.isGroup && o.source !== 'edi' && <GroupLabelButtons group={o} />}
                 </div>
