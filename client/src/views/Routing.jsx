@@ -6,6 +6,7 @@ import {
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
+import { noBolReason } from '../../../src/model/parcelLane.js'
 import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
@@ -658,6 +659,9 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
+  // Keyed on the group's own partner/DC, which now resolves ShopBop's Amazon FCs
+  // correctly (src/model/dc.js — SBX2 used to come back as Bloomingdale's).
+  const noBol = noBolReason({ customer: g.partner, location: g.partner })
   const canHold = onHold && !detached && !s?.shippedAt
 
   return (
@@ -697,7 +701,14 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
         </div>
       )}
 
-      {!s ? (
+      {!s && noBol ? (
+        // A parcel-lane partner gets no BOL at all. Say so on the card with the
+        // alternative, rather than leaving a button that the server refuses:
+        // Nima was one click from generating one for ShopBop on 2026-08-11, and
+        // a BOL number had already been minted for their previous PO.
+        // src/model/parcelLane.js holds the rule; the server refuses too.
+        <div className="rt-warn rt-noBol">🚫 {noBol}</div>
+      ) : !s ? (
         <button className="btn rt-assign" disabled={busy === g.dcPoKey} onClick={onAssign}
                 title={g.pack?.status === 'short' ? 'This group is short — assigning a BOL now would ship an 856 claiming units that aren’t in the boxes.' : undefined}>
           {busy === g.dcPoKey ? 'Assigning…' : g.pack?.status === 'short' ? 'Assign BOL anyway' : 'Assign BOL'}

@@ -46,6 +46,7 @@ import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
+import { PARCEL_LANE_SQL, isParcelLane, noBolReason } from '../src/model/parcelLane.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
@@ -1510,13 +1511,22 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     // no label anywhere still reaches a verdict and gets NAMED rather than filtered
     // away silently. `tracking_numbers` rides along because an existing label ends the
     // question regardless of what the status claims.
+    //
+    // ⚠️ NOT boutique-only any more (Nima, 2026-08-11). This scope is the PARCEL
+    // lane, not a channel: ShopBop is an EDI partner that ships small parcel, and
+    // `source = 'boutique'` alone excluded it from ShipStation entirely while the
+    // EDI push could only build from a routing shipment — i.e. from a BOL ShopBop
+    // must never receive. See src/model/parcelLane.js. Widening the candidates is
+    // safe because eligibility still decides per fulfilment: anything that isn't
+    // domestic UPS with resolvable billing comes back HELD, with its reason.
     const { rows } = await pool.query(
       `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
               o.customer, o.location, f.status,
               COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) AS "labelCount"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
        WHERE f.actual_ship_date IS NULL
-         AND o.source = 'boutique' AND COALESCE(o.location,'') NOT ILIKE '%china%'
+         AND (o.source = 'boutique' OR ${PARCEL_LANE_SQL})
+         AND COALESCE(o.location,'') NOT ILIKE '%china%'
        ORDER BY f.if_number`)
     // Location gate first, so a Warehouse fulfilment never reaches the builder.
     // Held rows carry their own reason — a boutique order at the Warehouse is not
@@ -2639,8 +2649,37 @@ export async function assignRoutingBol(body = {}) {
   const { partner, dc, memberPos, cartons, units, weightLb, cubicFeet } = body
   if (!partner || !dc) throw new Error('partner and dc are required')
   if (!Array.isArray(memberPos) || !memberPos.length) throw new Error('memberPos is required')
+  // ⚠️ REFUSE AT THE WRITE, not just in the UI. BOL NB1731262 was minted for a
+  // ShopBop PO (POJ00384244) and stored under partner "Bloomingdale's" — the
+  // partner label came from partnerForDc, which resolves any non-numeric DC to
+  // Bloomingdale's, and ShopBop's DC is SBX2. Hiding the button would not have
+  // stopped it: the row already existed. So the rule lives where the number is
+  // handed out. See src/model/parcelLane.js.
+  //
+  // The PO is what identifies the partner here — `partner` is the caller's own
+  // (possibly wrong) label, which is exactly what went wrong the first time.
+  const guard = await parcelLaneBlock(memberPos, partner)
+  if (guard) throw new Error(guard)
   await assignBol({ partner, dc, memberPos, cartons, units, weightLb, cubicFeet })
   return getRouting()
+}
+
+// Look the POs up in `orders` and refuse if any belongs to a parcel-lane partner.
+// Checked against the DATA rather than the passed-in partner string, because the
+// mislabel is the bug: NB1731262 called a ShopBop shipment Bloomingdale's.
+async function parcelLaneBlock(memberPos, partnerLabel) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT customer, location FROM orders WHERE po_number = ANY($1)`,
+    [memberPos.map(String)],
+  )
+  const hit = rows.find((r) => isParcelLane(r))
+  if (hit) return noBolReason(hit)
+  // No rows means we cannot vouch for the POs at all; fall back to the label so a
+  // ShopBop shipment whose orders haven't synced yet still can't slip through.
+  if (!rows.length && isParcelLane({ customer: partnerLabel })) {
+    return noBolReason({ customer: partnerLabel })
+  }
+  return null
 }
 
 export async function voidRouting(id) {
