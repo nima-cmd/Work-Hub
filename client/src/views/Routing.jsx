@@ -259,7 +259,7 @@ export default function Routing() {
       {!data.packageCount ? (
         <div className="rt-empty">
           No routing feed loaded yet. Export <b>EDI Packages Volume</b> (searchid=3947) from NetSuite
-          and use <b>⤓ Import CSV</b> to load it.
+          and load it with <b>⤓ Import CSV</b> on the <b>Health</b> page.
         </div>
       ) : (
         <>

@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { fetchOrders, fetchFreshness, importCsv, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
-import { fmtAge } from './lib.jsx'
+import { useEffect, useState } from 'react'
+import { fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import CommandCenter from './views/CommandCenter.jsx'
@@ -24,14 +23,14 @@ import ScanBay from './views/ScanBay.jsx'
 import CustodyRegister from './views/CustodyRegister.jsx'
 import LaunchBay3D from './views/LaunchBay3D.jsx'
 
-const FRESH_LABEL = { fresh: 'current', warn: 'aging', stale: 'stale', missing: 'not uploaded', unknown: 'unknown' }
-
-// Per-source freshness panel. The header pill shows the WORST source; clicking
-// it lists every required export with its own age, so you know exactly which
-// one to re-pull — a stale IF/Invoice export silently misclassifies orders
-// (they sit at an earlier stage than they really are).
-// Live syncs have stopped arriving (2026-07-31). getFreshness above answers "how
-// old is the source data"; this answers "did the sync actually RUN", which is a
+// The per-source CSV freshness panel used to live here, in the header, on every
+// page. It moved to Health as a backup indicator (Nima, 2026-08-11) — see
+// views/CsvBackup.jsx for why a permanent red pill about a retired path was
+// worse than no pill at all.
+//
+// This one stays app-wide, because it is the opposite case. Freshness answered
+// "how old is the source data" for a feed nobody pulls any more; this answers
+// "did the LIVE sync actually run", which is a
 // different failure and an invisible one — a dead sync looks exactly like a
 // quiet day. Both of this repo's silent-drift incidents were this shape: PR
 // #16's sync had no caller for a week, and the scheduled check returns 200 while
@@ -47,44 +46,6 @@ function SyncAlarm({ health }) {
       <span className="syncAlarmMark">{health.status === 'stale' || health.status === 'never' ? '⛔' : '⚠'}</span>
       {line}
     </div>
-  )
-}
-
-function FreshnessPanel({ fresh }) {
-  const [open, setOpen] = useState(false)
-  if (!fresh) return null
-  const bad = fresh.sources.filter((s) => s.status === 'stale' || s.status === 'missing').length
-  const summary =
-    bad > 0
-      ? `${bad} ${bad === 1 ? 'export' : 'exports'} need re-upload`
-      : fresh.status === 'fresh'
-        ? 'data current'
-        : 'data aging'
-
-  return (
-    <span className="freshWrap">
-      <button className={'pill ' + fresh.status} onClick={() => setOpen((o) => !o)}>
-        {summary} ▾
-      </button>
-      {open && (
-        <div className="freshPanel">
-          <div className="freshHead">Saved-search exports</div>
-          {fresh.sources.map((s) => (
-            <div key={s.key} className="freshRow">
-              <span className={'dot ' + s.status} />
-              <span className="fname">{s.label}</span>
-              <span className={'fage ' + s.status}>
-                {s.status === 'missing' ? 'not uploaded' : fmtAge(s.ageHours)}
-                {(s.status === 'stale' || s.status === 'missing') && ' · re-upload'}
-              </span>
-              {s.url && (
-                <a href={s.url} target="_blank" rel="noreferrer" className="linkBtn" style={{ marginLeft: 4 }}>↗</a>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </span>
   )
 }
 
@@ -150,10 +111,7 @@ export default function App() {
   const [syncHealth, setSyncHealth] = useState(null)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('command')
-  const [fresh, setFresh] = useState(null)
   const [credits, setCredits] = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [notice, setNotice] = useState(null)
   const [arrivals, setArrivals] = useState([])
   // Ship desk + the two other "whose court" feeds. These live here rather than
   // in CommandCenter because the court strip is app-wide now (Nima, 2026-07-31)
@@ -168,11 +126,9 @@ export default function App() {
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
   const [custody, setCustody] = useState(null)
   const [bay, setBay] = useState(null)
-  const fileRef = useRef(null)
 
   function refresh() {
     fetchOrders().then(setOrders).catch((e) => setErr(e.message))
-    fetchFreshness().then(setFresh).catch(() => {})
     fetchCredits().then(setCredits).catch(() => {})
     // New-850 arrival alerts (the cron pulls Orderful and flags fresh POs) —
     // best-effort; the banner just doesn't show if it can't load.
@@ -268,32 +224,6 @@ export default function App() {
     }
   }
 
-  async function onFiles(e) {
-    const files = [...e.target.files]
-    e.target.value = ''
-    if (!files.length) return
-    setImporting(true)
-    setNotice(null)
-    try {
-      const payload = await Promise.all(
-        files.map(async (f) => ({ name: f.name, text: await f.text(), lastModified: f.lastModified })),
-      )
-      const r = await importCsv(payload)
-      const unrec = r.files.filter((f) => !f.recognized)
-      setNotice({
-        ok: true,
-        msg:
-          `Imported ${r.files.length - unrec.length} file(s): ${r.orders} orders · ${r.fulfillments} fulfillments · ${r.invoices} invoices` +
-          (unrec.length ? ` — not recognized: ${unrec.map((u) => u.name).join(', ')}` : ''),
-      })
-      refresh()
-    } catch (e2) {
-      setNotice({ ok: false, msg: 'Import failed: ' + e2.message })
-    } finally {
-      setImporting(false)
-    }
-  }
-
   async function onDismissArrivals() {
     const prev = arrivals
     setArrivals([]) // optimistic
@@ -323,10 +253,6 @@ export default function App() {
           ))}
         </nav>
         <div className="topmeta">
-          <button className="importBtn" onClick={() => fileRef.current?.click()} disabled={importing}>
-            {importing ? 'Importing…' : '⤓ Import CSV'}
-          </button>
-          <input ref={fileRef} type="file" accept=".csv" multiple hidden onChange={onFiles} />
           <button
             className="importBtn"
             onClick={onRefreshNetsuite}
@@ -345,7 +271,6 @@ export default function App() {
               {nsSync.state === 'busy' ? '⏳ ' : nsSync.state === 'error' ? '⚠ ' : ''}{nsSync.msg}
             </span>
           )}
-          <FreshnessPanel fresh={fresh} />
           {credits && <CreditsCounter credits={credits} />}
           {orders && (
             <>
@@ -357,13 +282,6 @@ export default function App() {
       </header>
 
       <main>
-        {importing && (
-          <div className="banner">
-            Importing CSV(s)…
-            <div className="progressBar"><div /></div>
-          </div>
-        )}
-        {notice && <div className={'banner ' + (notice.ok ? 'ok' : 'error')}>{notice.msg}</div>}
         {arrivals.length > 0 && (
           <div className="banner arrival">
             <span className="arrivalGlyph">🆕</span>

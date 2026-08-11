@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps } from '../api.js'
+import CsvBackup from './CsvBackup.jsx'
 
 // Health — what's connected, what's arriving, and what to do when it isn't.
 //
@@ -31,7 +32,7 @@ const SYNC_HINT = {
   never: 'has never run here',
 }
 
-export default function Health() {
+export default function Health({ onRefresh }) {
   const [h, setH] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -126,6 +127,10 @@ export default function Health() {
         A sync is expected roughly every 90 minutes — the scheduled check asks for every 10, but
         GitHub throttles it. Flagged as late after {syncs.warnHours}h and stopped after {syncs.staleHours}h.
       </div>
+
+      {/* The retired CSV path lives here and nowhere else (Nima, 2026-08-11) —
+          it is a backup for a NetSuite outage, not a daily status readout. */}
+      <CsvBackup onRefresh={onRefresh} />
 
       <ShippedWhileOwing />
       <OverdueInvoices />
