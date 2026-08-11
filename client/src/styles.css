@@ -2257,9 +2257,13 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* Crew voice on the strip (2026-08-02) — a face and a line instead of a label.
    Capped width so a long line can never push the chips off screen. */
 .courtVoice { display: flex; align-items: center; gap: 7px; margin-right: 4px; min-width: 0; }
+/* 44px, not 28 (Nima, 2026-08-11: "can we make the bugs picture bigger"). The
+   crew roster draws the same faces at 50px, so at 28 Bugs read as a shrunken
+   thumbnail next to her own line — and the line is the one sentence on the strip
+   that's meant to be read first. */
 .courtVoiceFace {
-  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; overflow: hidden;
-  display: grid; place-items: center; font-size: 13px;
+  flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%; overflow: hidden;
+  display: grid; place-items: center; font-size: 18px;
   background: var(--panel2); border: 1px solid var(--line);
 }
 .courtVoiceFace img { width: 100%; height: 100%; object-fit: cover; display: block; }

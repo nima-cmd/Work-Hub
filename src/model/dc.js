@@ -85,8 +85,24 @@ export function dcLabel(code) {
 // (584/599/569…); Bloomingdale's are our 2-letter warehouse abbreviations. This
 // is the one signal the routing rollup needs to split shipments by partner and
 // to know Nordstrom needs a unit count in its portal entry (Nima, 2026-07-22).
+//
+// ⚠️ IT WAS A TWO-WAY TEST, AND THE ELSE BRANCH WAS A GUESS. Anything
+// non-numeric fell to Bloomingdale's, so ShopBop's Amazon FC codes — SBX2, SDF4,
+// ABE2, PHX3 — came back as Bloomingdale's. That is how BOL NB1731262 was minted
+// for ShopBop PO POJ00384244 and stored under Bloomingdale's (found 2026-08-11),
+// and it is the same shape as the Macy's auth line that printed on 9 Nordstrom
+// BOLs in #79: a default standing in for an answer.
+//
+// ShopBop's FCs are named explicitly (Vendor Operations Manual §5.4) rather than
+// pattern-matched, because a 4-character alphanumeric code is not a signal — the
+// next partner's codes would look the same and inherit the wrong name again.
+const SHOPBOP_FCS = new Set(['SBX2', 'SDF4', 'ABE2', 'PHX3', 'MSN5'])
+
 export function partnerForDc(code) {
-  return /^\d+$/.test(String(code || '').trim()) ? 'Nordstrom' : "Bloomingdale's"
+  const c = String(code || '').trim()
+  if (/^\d+$/.test(c)) return 'Nordstrom'
+  if (SHOPBOP_FCS.has(c.toUpperCase())) return 'Shopbop'
+  return "Bloomingdale's"
 }
 
 // Nordstrom's portal names a supplier PO as "<our PO>-<destination DC>"
