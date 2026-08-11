@@ -32,7 +32,7 @@ export default function Catalogue() {
 
       {data.catalogueCount === 0 ? (
         <div className="rt-empty">
-          No catalogue imported yet. Use <b>⤓ Import CSV</b> to load the catalogue export
+          No catalogue imported yet. Use <b>⤓ Import CSV</b> on the <b>Health</b> page to load the catalogue export
           (GTIN/UPC master) — then this shows which open PO SKUs still need uploading.
         </div>
       ) : (
