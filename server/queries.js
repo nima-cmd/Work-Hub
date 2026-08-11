@@ -1484,7 +1484,24 @@ async function fetchShipmentStoreCartons(ids = []) {
 //
 // `scope`: 'edi' (DC-direct cartons, weights and dims included) or 'boutique'
 // (no packages — the box is chosen in ShipStation, like retail).
-export async function pushToShipstation({ scope = 'edi', dryRun = false, force = false, storeId = SHIPSTATION_STORE_ID } = {}) {
+// `ifNumbers` narrows a run to named fulfilments — the break-glass path (Nima,
+// 2026-08-11: "sometimes the netsuite UPS label creator has issues and we're in a
+// rush and printing it in shipstation if we can push the data out would be better
+// than manually creating the label ourself").
+//
+// The DEFAULT IS STILL NOTHING: this is per-order and human-initiated, so no
+// scheduled run starts pushing Warehouse orders. `force` lifts the LOCATION
+// policy only — the judgement of which system is working today is his to make.
+//
+// ⚠️ WHAT FORCE MUST NEVER LIFT: `labelCount > 0`. That check lives in
+// src/model/shipstationEligible.js, not in the location gate, so it is outside
+// force's reach by construction — and it stays that way. A second live label on a
+// box already carrying one is a double charge and a wrong tracking number on the
+// ASN, and certainty about NetSuite being down does not make it safe. Tested.
+export async function pushToShipstation({ scope = 'edi', dryRun = false, force = false, ifNumbers = null, storeId = SHIPSTATION_STORE_ID } = {}) {
+  const only = Array.isArray(ifNumbers) && ifNumbers.length
+    ? new Set(ifNumbers.map((s) => String(s).trim().toUpperCase()))
+    : null
   // ⚠️ Labels are made in NetSuite for now — see src/model/labelSource.js for the three
   // costs that decided it. This gates ORDER CREATION only; the read-only harvest, the
   // cost sync, the rate quotes and check:label-records all keep working. A dry run is
@@ -1533,7 +1550,7 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     // a defect, it is NetSuite's to label.
     const locationHeld = []
     const pushable = []
-    for (const r of rows) {
+    for (const r of rows.filter((r) => !only || only.has(String(r.ifNumber).toUpperCase()))) {
       const why = locationBlock(r.location)
       if (why) locationHeld.push({ ifNumber: r.ifNumber, soNumber: r.soNumber, reason: why })
       else pushable.push(r)
@@ -1567,7 +1584,14 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     const recorded = await rememberPush(records, res, dryRun)
     return {
       ...res, scope, skipped: [...(skipped || []), ...locationHeld],
-      candidates: pushable.length, seen: rows.length, locationHeld: locationHeld.length, recorded,
+      // `seen` is what this RUN looked at, so a per-order push reports 1 rather
+      // than 25 — a count that doesn't mean its label is the bug this repo keeps
+      // finding (npm run check:counters exists for exactly that shape).
+      candidates: pushable.length,
+      seen: only ? rows.filter((r) => only.has(String(r.ifNumber).toUpperCase())).length : rows.length,
+      inScope: rows.length,
+      locationHeld: locationHeld.length, recorded,
+      forced: force || undefined,
     }
   }
 
