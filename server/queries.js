@@ -7,6 +7,7 @@ import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
+import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
@@ -3755,6 +3756,10 @@ export async function startAsnCartonCheck({ force = false } = {}) {
 //      the answer he asked for and it must come back instantly.
 let netsuiteRefreshInFlight = false
 let netsuiteRefreshLast = null   // the last finished result, for the poller
+// Which step is in flight, for the progress bar on the button (Nima,
+// 2026-08-11). Resolved through src/model/netsuiteRefreshSteps.js so the label
+// and the total come from one list — see that file for why this is not a timer.
+let netsuiteRefreshStep = null
 
 // Fast, synchronous: is NetSuite free right now? One tiny read.
 export async function preflightNetsuite() {
@@ -3773,19 +3778,20 @@ export async function startNetsuiteRefresh() {
   if (!pre.ok) return pre
   netsuiteRefreshInFlight = true
   netsuiteRefreshLast = null
-  refreshFromNetsuite({ preflighted: true })
+  netsuiteRefreshStep = null
+  refreshFromNetsuite({ preflighted: true, onStep: (key) => { netsuiteRefreshStep = refreshProgress(key) } })
     .then((r) => { netsuiteRefreshLast = r; console.log('NetSuite refresh:', JSON.stringify(r)) })
     .catch((e) => { netsuiteRefreshLast = { error: e?.message || String(e) } })
-    .finally(() => { netsuiteRefreshInFlight = false })
+    .finally(() => { netsuiteRefreshInFlight = false; netsuiteRefreshStep = null })
   return { started: true }
 }
 
 // What the client polls while the button spins.
 export function netsuiteRefreshStatus() {
-  return { running: netsuiteRefreshInFlight, result: netsuiteRefreshLast }
+  return { running: netsuiteRefreshInFlight, result: netsuiteRefreshLast, step: netsuiteRefreshStep }
 }
 
-export async function refreshFromNetsuite({ preflighted = false } = {}) {
+export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) {
   const { isBusyResponse, netsuiteConfigured, runSuiteQL } = await import('../src/ingest/netsuiteApi.js')
   // A busy signal can also arrive as a string propagated up from a sync, so the
   // same detector is applied to error text, not only to live responses.
@@ -3804,7 +3810,7 @@ export async function refreshFromNetsuite({ preflighted = false } = {}) {
 
     // Same three pulls the schedule does, in the same order. Anything that comes
     // back busy stops the rest — pressing on would be the retry we just refused.
-    const main = await syncFromNetsuite({})
+    const main = await syncFromNetsuite({ onStep })
     if (!main.ok) {
       return busyFrom(main.error)
         ? { busy: true, reason: 'celigo' }
@@ -3814,6 +3820,7 @@ export async function refreshFromNetsuite({ preflighted = false } = {}) {
     let cartons = null
     let dcWarning = null
     try {
+      onStep?.('fulfillmentDc')
       const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
       await syncFulfillmentDc({ since })
     } catch (e) {
@@ -3821,6 +3828,7 @@ export async function refreshFromNetsuite({ preflighted = false } = {}) {
       // pressed the button for are already in. Say so rather than failing.
       dcWarning = e.message
     }
+    onStep?.('cartons')
     const feed = await syncEdiPackagesLive({})
     if (feed.ok) cartons = { loaded: feed.loaded ?? 0, skipped: feed.skipped || null }
     else if (busyFrom(feed.error)) return { busy: true, reason: 'celigo', partial: 'orders are in; the carton feed hit the limit' }
