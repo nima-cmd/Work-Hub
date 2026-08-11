@@ -5,7 +5,7 @@
 
 import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
-import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES } from '../model/orderEvents.js'
+import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES, ifRemovalEvent } from '../model/orderEvents.js'
 import { dcTagDeparture } from '../model/custody.js'
 import { foldInvoiceRows, invoiceUpsertSql, invoiceWindowUpsertSql } from './invoiceUpsert.js'
 
@@ -112,16 +112,53 @@ export async function loadFulfillments(records, db = pool) {
 // and `liveIfNumbers` must be the complete IF set for exactly those SOs. That
 // way a partial sync can never delete fulfillments belonging to orders it didn't
 // look at — unlike prune-by-absence over the whole table.
+// ⚠️ DELETING THE ROW IS NOT THE WHOLE JOB (found 2026-08-11, on IF7452/SO12302
+// being deleted and replaced). The custody register is driven by `order_events`
+// and only LEFT JOINs fulfillments, so a scanned IF whose row vanishes keeps
+// appearing there forever with null SO, null customer and null status — and
+// nothing ever clears it, because a deleted IF never departs. Same ghost shape as
+// the DC lane in #67, arriving from the other direction.
+//
+// So the removal is RECORDED as an event before the row goes. Two reasons to keep
+// the events rather than delete them too:
+//   · the scans genuinely happened — the honest-timestamp rule cuts both ways: we
+//     don't fabricate history and we don't erase it either;
+//   · the ledger is then able to explain why an SO has two IF_CREATED events.
+// `occurred_at` is NOW, i.e. when the absence was observed. NetSuite keeps no
+// record of when a deleted record was deleted, so any earlier date would be a
+// guess dressed as a fact.
 export async function reconcileFulfillments(soNumbers, liveIfNumbers, db = pool) {
   const sos = [...new Set((soNumbers || []).filter((s) => s && s !== 'UNLINKED'))]
   if (!sos.length) return 0
   const live = [...new Set((liveIfNumbers || []).filter(Boolean))]
+  const keep = live.length ? live : ['__none__']
+  // Name them before they go — after the DELETE there is nothing left to read.
+  const { rows: going } = await db.query(
+    `SELECT if_number, so_number, status FROM fulfillments
+      WHERE so_number = ANY($1::text[]) AND if_number <> ALL($2::text[])`,
+    [sos, keep],
+  )
   const { rowCount } = await db.query(
     `DELETE FROM fulfillments
       WHERE so_number = ANY($1::text[])
         AND if_number <> ALL($2::text[])`,
-    [sos, live.length ? live : ['__none__']],
+    [sos, keep],
   )
+  for (const r of going) {
+    // Idempotent on (type, doc): a re-sync must not append a second removal.
+    const already = await db.query(
+      `SELECT 1 FROM order_events WHERE event_type='IF_REMOVED' AND doc_type='IF' AND doc_number=$1`,
+      [r.if_number],
+    )
+    if (already.rowCount) continue
+    const ev = ifRemovalEvent({ ifNumber: r.if_number, soNumber: r.so_number, status: r.status })
+    if (!ev) continue
+    await db.query(
+      `INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+       VALUES ('IF_REMOVED','IF',$1,$2,$3,'derived',NOW())`,
+      [ev.docNumber, ev.soNumber, ev.note],
+    )
+  }
   return rowCount
 }
 
