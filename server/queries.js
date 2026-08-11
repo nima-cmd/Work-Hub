@@ -373,9 +373,14 @@ export async function getCustodyRegister({ today = new Date() } = {}) {
              -- CUSTODY_CLEARED (written at departure) is pinned to the ship DATE
              -- (midnight), not a real clock time, so it can't be compared against
              -- scan timestamps — its mere presence means "this IF has departed".
-             bool_or(event_type='CUSTODY_CLEARED') AS cleared
+             -- IF_REMOVED closes the register too, for a different reason: the
+             -- fulfilment no longer exists in NetSuite (deleted/voided and usually
+             -- replaced). Without it a scanned-then-deleted IF sat here forever
+             -- with null SO/customer/status, since the LEFT JOIN below finds
+             -- nothing and a deleted IF never departs. See reconcileFulfillments.
+             bool_or(event_type IN ('CUSTODY_CLEARED','IF_REMOVED')) AS cleared
       FROM order_events
-      WHERE doc_type='IF' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED')
+      WHERE doc_type='IF' AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED','IF_REMOVED')
       GROUP BY doc_number
       HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN'))  -- had at least one scan
     ) c

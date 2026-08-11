@@ -1531,3 +1531,38 @@ CREATE TABLE IF NOT EXISTS tms_tender_stop (
 );
 CREATE INDEX IF NOT EXISTS idx_tms_tender_stop_dc  ON tms_tender_stop(dc);
 CREATE INDEX IF NOT EXISTS idx_tms_tender_stop_srr ON tms_tender_stop(srr);
+
+-- ── Repair (2026-08-11): close the register on fulfilments NetSuite no longer has
+--
+-- The custody register is driven by order_events and only LEFT JOINs fulfillments,
+-- so an IF that was scanned and then DELETED in NetSuite sits on it forever with a
+-- null SO, customer and status — nothing clears it, because a deleted IF never
+-- departs. reconcileFulfillments now writes IF_REMOVED at the moment it removes a
+-- row, which covers every future case; this closes the one already on the board
+-- (IF7406, deleted around 2026-07-30, verified absent from NetSuite 2026-08-11).
+--
+-- ⚠️ SCOPED TO SCANS OLDER THAN 7 DAYS ON PURPOSE. "Has scans but no fulfilment
+-- row" is also, briefly, what a BRAND-NEW IF looks like: the label is scanned at
+-- the printer the moment the IF is created, minutes before the next sync writes
+-- the row. Marking one of those removed would close the register on live goods —
+-- the dangerous direction. A scan a week old with still no row is not a timing
+-- artifact. Idempotent: NOT EXISTS on (IF_REMOVED, doc).
+INSERT INTO order_events (event_type, doc_type, doc_number, so_number, note, source, occurred_at)
+SELECT 'IF_REMOVED', 'IF', c.doc_number, NULL,
+       'no longer in NetSuite — deleted or voided there (backfilled; the removal date is unknowable)',
+       'derived', NOW()
+FROM (
+  SELECT doc_number, MAX(occurred_at) AS last_scan
+  FROM order_events
+  WHERE doc_type = 'IF'
+  GROUP BY doc_number
+  HAVING bool_or(event_type IN ('CUSTODY_OUT','CUSTODY_IN'))
+     AND NOT bool_or(event_type IN ('CUSTODY_CLEARED','IF_REMOVED'))
+) c
+LEFT JOIN fulfillments f ON f.if_number = c.doc_number
+WHERE f.if_number IS NULL
+  AND c.last_scan < NOW() - INTERVAL '7 days'
+  AND NOT EXISTS (
+    SELECT 1 FROM order_events e
+    WHERE e.event_type = 'IF_REMOVED' AND e.doc_type = 'IF' AND e.doc_number = c.doc_number
+  );

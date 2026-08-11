@@ -73,6 +73,37 @@ export const SPINE_ORDER = new Map([
 const EXTRA_LABEL = {
   SHIPPED_VALUE: 'Shipped value recorded',
   CUSTODY_CLEARED: 'Custody register cleared',
+  // An IF that no longer exists in NetSuite — deleted or voided there, usually
+  // because the order was reworked and a fresh fulfilment took its place (Nima,
+  // 2026-08-11: IF7452 on SO12302). Written by reconcileFulfillments at the
+  // moment the absence is OBSERVED, which is the only honest timestamp available:
+  // NetSuite keeps no record of when a deleted record was deleted.
+  //
+  // ⚠️ Deliberately NOT reusing CUSTODY_CLEARED, which means "closed at
+  // departure". These goods did not depart; the paperwork was withdrawn. Keeping
+  // them distinct is the never-lump rule — one event says the truck left, the
+  // other says the document went away.
+  IF_REMOVED: 'Fulfilment removed in NetSuite',
+}
+
+// The IF_REMOVED event for a fulfilment row that has vanished from NetSuite.
+// Pure so it can be tested: `loadToDb.js` imports the connection pool at module
+// load, so anything asserted about this has to live on this side of the line.
+//
+// `occurred_at` is deliberately NOT returned — the caller stamps NOW(). NetSuite
+// keeps no record of when a deleted record was deleted, so any date derived here
+// would be a guess dressed as a fact (the honest-timestamp rule).
+export function ifRemovalEvent({ ifNumber, soNumber, status } = {}) {
+  if (!ifNumber) return null
+  return {
+    eventType: 'IF_REMOVED',
+    docType: 'IF',
+    docNumber: ifNumber,
+    // 'UNLINKED' is this repo's placeholder for "no sales order", not an SO — writing
+    // it as one would mint a link to a document that doesn't exist.
+    soNumber: soNumber && soNumber !== 'UNLINKED' ? soNumber : null,
+    note: `no longer in NetSuite (was ${status || 'unknown status'}) — deleted or voided there`,
+  }
 }
 
 export const SPINE_LABEL = new Map([
