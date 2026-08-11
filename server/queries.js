@@ -47,6 +47,7 @@ import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { PARCEL_LANE_SQL, isParcelLane, noBolReason } from '../src/model/parcelLane.js'
+import { labelTracking, labelCount, SHIPSTATION_TRACKING_SQL } from '../src/model/labelEvidence.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
@@ -1537,9 +1538,16 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     // safe because eligibility still decides per fulfilment: anything that isn't
     // domestic UPS with resolvable billing comes back HELD, with its reason.
     const { rows } = await pool.query(
+      // ⚠️ labelCount must count labels from BOTH sources. Asking only
+      // f.tracking_numbers meant a label bought through OUR OWN push was
+      // invisible to the gate meant to stop a second one: IF7507 had three
+      // ShipStation labels and still read as unlabelled (2026-08-11). The
+      // ALREADY_LABELLED hold is the one thing `force` can never lift, so it has
+      // to be fed the whole truth. See src/model/labelEvidence.js.
       `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
               o.customer, o.location, f.status,
-              COALESCE(ARRAY_LENGTH(f.tracking_numbers, 1), 0) AS "labelCount"
+              f.tracking_numbers AS "nsTracking",
+              ${SHIPSTATION_TRACKING_SQL} AS "ssTracking"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
        WHERE f.actual_ship_date IS NULL
          AND (o.source = 'boutique' OR ${PARCEL_LANE_SQL})
@@ -1570,7 +1578,7 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
       pushable.map((r) => ({
         order: r, fulfilment: { ifNumber: r.ifNumber, status: r.status },
         address: addrs.get(r.ifNumber),
-        labelCount: Number(r.labelCount) || 0,
+        labelCount: labelCount({ nsTracking: r.nsTracking, ssTracking: r.ssTracking }),
         carrier: methods.get(r.ifNumber)?.carrier ?? null,
         shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
         shipMethodName: details.get(r.ifNumber)?.shipMethodName ?? null,
@@ -2167,6 +2175,10 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            f.if_date        AS "ifDate",
            f.invoice_number AS "invoiceNumber",
            f.tracking_numbers AS "trackingNumbers",
+           -- A label bought in ShipStation lands in shipstation_order, NOT on the
+           -- fulfilment — so asking f.tracking_numbers alone called IF7507's three
+           -- real labels "needs a label" (2026-08-11). See labelEvidence.js.
+           ${SHIPSTATION_TRACKING_SQL} AS "ssTracking",
            o.customer, o.source, o.po_number AS "poNumber", o.dc, o.location,
            i.status         AS "invoiceStatus",
            i.amount_total   AS "invoiceTotal",
@@ -2224,7 +2236,9 @@ export async function getLabelGaps({ today = new Date() } = {}) {
 
   const day = 86_400_000
   const items = rows.map((r) => {
-    const tracking = r.trackingNumbers || []
+    // Both sources, one answer (src/model/labelEvidence.js). NetSuite first, then
+    // whatever ShipStation knows that NetSuite hasn't been told yet.
+    const tracking = labelTracking({ nsTracking: r.trackingNumbers, ssTracking: r.ssTracking })
     const labelled = tracking.length > 0
     // Has step 2 happened? A labelled parcel with no invoice has NOT reached the
     // ship decision — see src/model/labelGap.js for the 9-of-9 live miss.
