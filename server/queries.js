@@ -207,6 +207,12 @@ export async function getOrders() {
       notes: r.notes,
       approvalStatus: r.approval_status,
       billingStatus: r.billing_status,
+      // The ORDER's own payment terms. ⚠️ This mapper is a whitelist, so a new
+      // column reaches no surface until it is named here — `SELECT o.*` above is
+      // not enough. postCustody keys the Net flow on this (2026-08-11), and
+      // without this line it would have read undefined on every card and quietly
+      // put every order back on the old flow.
+      terms: r.terms,
       amountPaid: num(r.amount_paid),
       fulfillments: r.fulfillments,
       invoices: r.invoices,

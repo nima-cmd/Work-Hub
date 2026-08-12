@@ -107,6 +107,9 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
         // into one cargo tag per PO-DC (Nima, 2026-08-02).
         dc: null,
         storeNumber: null,
+        // The ORDER's payment terms — kept under its own name so an invoice
+        // record's `terms` can never win the merge (see mapOrderRow).
+        orderTerms: null,
         // Payment evidence, one entry per invoice record seen for this SO. Kept
         // as a list rather than folded onto the order because the gate must
         // consider EVERY invoice (see invoicedStage) — a single first-wins
@@ -123,7 +126,7 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     'shippingStatus', 'soStatus', 'amountPaid', 'shipDate', 'startDate',
     'endDate', 'cancelDate', 'notes', 'qtyOrdered', 'qtyAllocated',
     'qtyFulfilled', 'isAts', 'invoice', 'approvalStatus', 'actualShipDate',
-    'billingStatus', 'isPlaceholder', 'dc', 'storeNumber',
+    'billingStatus', 'isPlaceholder', 'dc', 'storeNumber', 'orderTerms',
   ]
 
   for (const rec of allRecords) {

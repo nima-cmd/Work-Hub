@@ -151,6 +151,16 @@ export function mapOrderRow(row) {
     isAts: null,
     shipDate: row.shipdate || null,
     startDate: row.trandate || null,
+    // The order's OWN payment terms, as label text ("Net 30", "Due on receipt").
+    //
+    // ⚠️ NAMED `orderTerms`, NOT `terms`, and that is not cosmetic. Invoice
+    // records emit a `terms` of their own (mapInvoiceRow), buildPipeline merges
+    // every record for an SO into one object, and its CARRY copy is
+    // first-non-empty-wins — so a shared name would let whichever record arrived
+    // first decide, silently, which document's terms the flow keys on. They
+    // normally agree, which is exactly what would make the day they disagree
+    // impossible to spot.
+    orderTerms: strOrNull(row.terms),
     // Order value; feeds the shipped-$ credit fallback.
     amountPaid: nOrNull(row.foreigntotal),
     // Terminal orders are, by definition, fully billed — that's what makes the
@@ -247,9 +257,19 @@ const openOrRecent = (since) =>
 // LEFT JOIN, not JOIN: a sales order must never disappear from the sync because
 // its customer row didn't come back.
 export function orderSql(since) {
+  // ⚠️ `terms` is read off the SALES ORDER, not the invoice, and that is the
+  // whole point (Nima, 2026-08-11: a Net order goes to Shipped when the label is
+  // made, and the invoice comes after). The invoice already carries terms — but
+  // under this flow it does not EXIST yet at the moment the terms decide what
+  // happens, so reading them there would answer the question too late to matter.
+  // Verified live: 100 of 100 open sales orders carry terms (Due on receipt 36 ·
+  // Net 60 35 · Net 30 22 · Net 45 7), so there is no null case to guess at.
+  // BUILTIN.DF resolves the id to label text; ⚠️ SuiteQL 500s on GROUP BY over
+  // BUILTIN.DF, so never aggregate on this column — select it and group in JS.
   return `SELECT t.tranid, BUILTIN.DF(t.entity) AS customer, t.status,
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
+                 BUILTIN.DF(t.terms) AS terms,
                  t.foreigntotal, t.otherrefnum,
                  t.custbody_approval_status AS approval_status,
                  t.custbody_is_placeholder AS is_placeholder,
