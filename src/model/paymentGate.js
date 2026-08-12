@@ -45,6 +45,26 @@ export function paymentDue(terms) {
   return true
 }
 
+// Is this order on NET terms specifically? (Nima, 2026-08-11 — the new boutique
+// flow: "an order with net 30 will not go to the pack state when a label is
+// created but the shipped state. These can go out once and invoice is created
+// and printed for them.")
+//
+// ⚠️ Deliberately NOT `!paymentDue(terms)`, though that would pass today's data.
+// paymentDue is also false for "No Payment Required", which is a different
+// arrangement — nothing is ever owed — and folding the two together would put
+// those orders on a flow Nima did not describe. He confirmed the scope as all
+// NET terms (Net 30 / 45 / 60 — 64 of the 100 open orders on 2026-08-11), so
+// this asks that question directly and stays one regex, in one file, shared with
+// paymentDue so the two can never disagree about what "Net" looks like.
+//
+// A null/unknown returns false: an order we cannot prove is on Net terms keeps
+// the OLD flow, which is the direction that fails safe (it asks for a keystroke
+// that is already habit, rather than releasing goods early).
+export function netTerms(terms) {
+  return !!terms && NET_TERMS.test(terms)
+}
+
 // ── THE NY OVERRIDE (Nima, 2026-08-04) ───────────────────────────────────────
 //
 // "We also check for a manual set of the approved to ship on orders that are due

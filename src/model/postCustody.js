@@ -24,7 +24,7 @@
 // surface" when it is packed and waiting for its ship window to open on 08-18
 // (SO12344, already paid $13,636). Before flagging age, ask what it is waiting on.
 
-import { paymentBlocked, clearedReason } from './paymentGate.js'
+import { paymentBlocked, clearedReason, netTerms } from './paymentGate.js'
 
 // A card is either WORK (we act now) or a WATCH (correct, someone else's move).
 // Kept as separate states rather than one backlog — the never-lump rule; summing
@@ -35,7 +35,8 @@ export const PC = {
   EDI_NEEDS_ROUTING: 'EDI_NEEDS_ROUTING',
   EDI_AWAITING_PICKUP: 'EDI_AWAITING_PICKUP',
   EDI_AWAITING_DEPARTURE: 'EDI_AWAITING_DEPARTURE',
-  // ── Boutique: label → mark packed → invoice → payment ────────────────────
+  // ── Boutique: label → mark packed/shipped → invoice → payment ───────────
+  // (which of packed/shipped depends on the terms — see postCustodyState)
   FOB_PICKUP: 'FOB_PICKUP',
   AWAITING_SHIP_WINDOW: 'AWAITING_SHIP_WINDOW',
   NEEDS_LABEL_OR_ROUTING: 'NEEDS_LABEL_OR_ROUTING',
@@ -43,6 +44,9 @@ export const PC = {
   AWAITING_INVOICE: 'AWAITING_INVOICE',
   AWAITING_PAYMENT: 'AWAITING_PAYMENT',
   NEEDS_MARK_SHIPPED: 'NEEDS_MARK_SHIPPED',
+  // Net terms only: NetSuite already says Shipped (that is what making the label
+  // does now), but the goods cannot leave until the invoice is raised.
+  SHIPPED_AWAITING_INVOICE: 'SHIPPED_AWAITING_INVOICE',
   // ── Terminal ─────────────────────────────────────────────────────────────
   DEPARTED: 'DEPARTED',
 }
@@ -61,6 +65,9 @@ export const PC_IS_WORK = {
   [PC.AWAITING_INVOICE]: true,
   [PC.AWAITING_PAYMENT]: false,
   [PC.NEEDS_MARK_SHIPPED]: true,
+  // Work, and the whole reason this state exists: without it these cards read
+  // Departed and vanish while still physically here.
+  [PC.SHIPPED_AWAITING_INVOICE]: true,
   [PC.DEPARTED]: false,
 }
 
@@ -76,6 +83,7 @@ export const PC_LABEL = {
   [PC.AWAITING_INVOICE]: 'Awaiting invoice',
   [PC.AWAITING_PAYMENT]: 'Awaiting payment',
   [PC.NEEDS_MARK_SHIPPED]: 'Mark shipped',
+  [PC.SHIPPED_AWAITING_INVOICE]: 'Invoice it to release',
   [PC.DEPARTED]: 'Departed',
 }
 
@@ -142,8 +150,40 @@ function blockingFulfilment(fulfilments = []) {
 // `shipWindow` is the order's window (src/model/shipWindow.js). `today` is
 // passed in, never read from the clock, so the states are testable.
 export function postCustodyState(card = {}, today = new Date()) {
-  const { source, location, fulfilments = [], invoices = [], routing = null, shipWindow = null, departed = false } = card
+  const { source, location, fulfilments = [], invoices = [], routing = null, shipWindow = null, departed = false, terms = null } = card
   const edi = source === 'edi'
+
+  // ── The Net-terms boutique flow (Nima, 2026-08-11) ──────────────────────────
+  //
+  // "an order with net 30 will not go to the pack state when a label is created
+  // but the shipped state. These can go out once and invoice is created and
+  // printed for them."
+  //
+  // So for a boutique order on Net terms, making the label is what marks it
+  // SHIPPED in NetSuite — and the goods are still standing here afterwards,
+  // waiting for the invoice. Two consequences, both handled below:
+  //
+  //   1. `Shipped` stops meaning "gone" for these. Every terminal check in this
+  //      file has to ask "invoiced?" first, or the card reads Departed and drops
+  //      off the board while it is physically on the floor. ⚠️ Today the
+  //      invariant holds perfectly — 57 of 57 shipped boutique fulfilments are
+  //      invoiced (measured 2026-08-11) — which is exactly why nothing has ever
+  //      needed to check, and exactly why this would have gone unnoticed.
+  //   2. The advice at the label step changes. "Mark it packed, which raises the
+  //      invoice" is the DUE-ON-RECEIPT chain; on Net terms he marks it shipped
+  //      and the invoice follows.
+  //
+  // Scope confirmed with him: all Net terms (30/45/60 — 64 of 100 open orders on
+  // 2026-08-11), boutique only, and "printed" is NOT modelled — the invoice
+  // existing is the signal, and printing is the physical act that follows it.
+  // Tracking the print would mean a new hand-maintained field, which is the
+  // shape that produced `packed_status` and `shipping_status`.
+  const netFlow = !edi && netTerms(terms)
+  // Named apart from the `invoiced` local further down on purpose: that one asks
+  // about the BLOCKING fulfilment, this asks whether the order has an invoice at
+  // all. Both readings are defensible and they are used for different questions,
+  // so they are kept as two names rather than one silently reused.
+  const hasInvoice = invoices.length > 0 || fulfilments.some((f) => !!f?.invoice)
 
   // ── Terminal: it left. Check EVERY kind of evidence before anything else. ─
   //
@@ -153,6 +193,20 @@ export function postCustodyState(card = {}, today = new Date()) {
   // branch to "needs a carrier label", on orders that have already gone and have
   // nothing to label. An empty array also makes `.every()` return TRUE, so the
   // shipped test below must keep its length guard.
+  //
+  // ⚠️ ON THE NET FLOW, "SHIPPED" IS NOT EVIDENCE OF DEPARTURE. It is evidence a
+  // LABEL was made — the goods leave later, once the invoice is raised and
+  // printed. So the release check runs BEFORE all three terminal tests, because
+  // every one of them would otherwise answer "Departed" first and win.
+  //
+  // It requires a fulfilment: an order marked SHIPPED with no fulfilment rows at
+  // all (SO12263, SO12234) never took the label path, so there is nothing here
+  // to release and the old answer is right.
+  if (netFlow && !hasInvoice && fulfilments.length &&
+      (departed || fulfilments.every((f) => /shipped/i.test(f.status || '')))) {
+    return state(PC.SHIPPED_AWAITING_INVOICE,
+      `Marked shipped on ${String(terms).trim()} — raise the invoice and print it, then it can go out`)
+  }
   if (departed) return state(PC.DEPARTED, 'Departed')
   if (fulfilments.length && fulfilments.every((f) => /shipped/i.test(f.status || ''))) {
     return state(PC.DEPARTED, 'Departed')
@@ -242,8 +296,17 @@ export function postCustodyState(card = {}, today = new Date()) {
       // this state names BOTH options and lets the human pick.
       return state(PC.NEEDS_LABEL_OR_ROUTING, 'Needs a carrier label — or a routing, if this one ships freight')
     }
-    // Labelled but not packed: marking packed is the next step, and it is what
-    // raises the invoice.
+    // Labelled but not packed. WHICH keystroke comes next depends on the terms,
+    // and this is the second half of the 2026-08-11 flow change: on Net terms the
+    // label takes it straight to Shipped, skipping Packed entirely, and the
+    // invoice is raised afterwards. Telling him to "mark it packed, which raises
+    // the invoice" would be advice from the other flow — and on these orders it
+    // would raise the invoice a step early, which is the same damage the
+    // BACK_NOT_PACKED chip was doing before PR #83.
+    if (netFlow) {
+      return state(PC.NEEDS_MARK_SHIPPED,
+        `Labelled on ${String(terms).trim()} — mark it shipped, then raise the invoice`)
+    }
     return state(PC.NEEDS_MARK_PACKED, 'Labelled — mark it packed, which raises the invoice')
   }
 
@@ -297,6 +360,7 @@ export function postCustodyState(card = {}, today = new Date()) {
 export const PC_ORDER = [
   PC.EDI_NEEDS_PACK, PC.EDI_NEEDS_ROUTING, PC.EDI_AWAITING_PICKUP, PC.EDI_AWAITING_DEPARTURE,
   PC.NEEDS_LABEL_OR_ROUTING, PC.NEEDS_MARK_PACKED, PC.AWAITING_INVOICE, PC.AWAITING_PAYMENT, PC.NEEDS_MARK_SHIPPED,
+  PC.SHIPPED_AWAITING_INVOICE,
   PC.AWAITING_SHIP_WINDOW, PC.FOB_PICKUP, PC.DEPARTED,
 ]
 

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   PC, TAB, postCustodyState, missionTab, fulfilledNeverScanned, routingForPo,
+  PC_ORDER, PC_LABEL, PC_IS_WORK,
 } from '../src/model/postCustody.js'
 
 const TODAY = new Date('2026-08-07T18:00:00Z')
@@ -254,4 +255,118 @@ test('the routing join finds the PO inside memberPos, preferring the live BOL', 
   assert.equal(routingForPo(shipments, 50073678).bolNumber, 'NEW')
   assert.equal(routingForPo(shipments, '99999'), null)
   assert.equal(routingForPo(shipments, null), null)
+})
+
+// ── The Net-terms flow (Nima, 2026-08-11) ───────────────────────────────────
+// "an order with net 30 will not go to the pack state when a label is created
+// but the shipped state. These can go out once and invoice is created and
+// printed for them."
+
+const net = (o = {}) => ({ source: 'boutique', terms: 'Net 30', ...o })
+
+test('net terms: labelled goes to MARK SHIPPED, not mark packed', () => {
+  // The old advice — "mark it packed, which raises the invoice" — is the
+  // due-on-receipt chain. On Net terms it would raise the invoice a step early.
+  const s = postCustodyState(net({ fulfilments: [ff({ status: 'Picked', labelled: true })] }), TODAY)
+  assert.equal(s.key, PC.NEEDS_MARK_SHIPPED)
+  assert.match(s.waitingOn, /mark it shipped/i)
+  assert.match(s.waitingOn, /Net 30/)
+})
+
+test('due on receipt is UNCHANGED — still mark packed', () => {
+  const s = postCustodyState({
+    source: 'boutique', terms: 'Due on receipt',
+    fulfilments: [ff({ status: 'Picked', labelled: true })],
+  }, TODAY)
+  assert.equal(s.key, PC.NEEDS_MARK_PACKED)
+  assert.match(s.waitingOn, /raises the invoice/)
+})
+
+test('net terms: SHIPPED with no invoice is NOT departed — it is still here', () => {
+  // The whole point. Without this the card reads Departed, leaves the board and
+  // stops ageing, while the goods stand on the floor waiting to be invoiced.
+  const s = postCustodyState(net({
+    fulfilments: [ff({ status: 'Shipped', labelled: true })], invoices: [],
+  }), TODAY)
+  assert.equal(s.key, PC.SHIPPED_AWAITING_INVOICE)
+  assert.equal(s.isWork, true)
+  assert.match(s.waitingOn, /raise the invoice/i)
+})
+
+test('net terms: the order-level SHIPPED stage does not override it either', () => {
+  // `departed` short-circuits before every other test in the file, so the
+  // release check has to run ahead of it or it never fires.
+  const s = postCustodyState(net({
+    departed: true, fulfilments: [ff({ status: 'Shipped', labelled: true })], invoices: [],
+  }), TODAY)
+  assert.equal(s.key, PC.SHIPPED_AWAITING_INVOICE)
+})
+
+test('net terms: once invoiced, shipped means departed again', () => {
+  const s = postCustodyState(net({
+    fulfilments: [ff({ status: 'Shipped', labelled: true })],
+    invoices: [{ invNumber: 'INV1', terms: 'Net 30', amountRemaining: 500 }],
+  }), TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('net terms: an invoice on the fulfilment counts as raised', () => {
+  const s = postCustodyState(net({
+    fulfilments: [ff({ status: 'Shipped', labelled: true, invoice: 'INV1' })], invoices: [],
+  }), TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('the release check needs a fulfilment — a SHIPPED order with none never took the label path', () => {
+  // SO12263 / SO12234 are SHIPPED with zero fulfilment rows. There is nothing
+  // here to release, so the old answer is still the right one.
+  const s = postCustodyState(net({ departed: true, fulfilments: [], invoices: [] }), TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('EDI on net terms is untouched — it keeps the routing chain', () => {
+  // Scope is boutique only. EDI marks shipped to GENERATE the ASN ahead of
+  // pickup, so a shipped-and-uninvoiced EDI card means something else entirely.
+  const s = postCustodyState({
+    source: 'edi', terms: 'Net 60',
+    fulfilments: [ff({ status: 'Shipped', labelled: true })], invoices: [],
+  }, TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('unknown terms keep the OLD flow — never released early on a guess', () => {
+  for (const terms of [null, undefined, '', 'No Payment Required']) {
+    const s = postCustodyState({
+      source: 'boutique', terms,
+      fulfilments: [ff({ status: 'Picked', labelled: true })],
+    }, TODAY)
+    assert.equal(s.key, PC.NEEDS_MARK_PACKED, `terms=${JSON.stringify(terms)}`)
+  }
+})
+
+test('all Net terms take the flow, not just Net 30', () => {
+  for (const terms of ['Net 30', 'Net 45', 'Net 60', '2% Net 30']) {
+    const s = postCustodyState({
+      source: 'boutique', terms,
+      fulfilments: [ff({ status: 'Shipped', labelled: true })], invoices: [],
+    }, TODAY)
+    assert.equal(s.key, PC.SHIPPED_AWAITING_INVOICE, terms)
+  }
+})
+
+// ── The four tables have to stay in step ────────────────────────────────────
+// Kanban builds its columns by walking PC_ORDER and skipping the empty ones, so
+// a state missing from that list FIRES CORRECTLY AND RENDERS NOWHERE — the card
+// silently leaves the board, which is the same disappearance this whole feature
+// exists to prevent. A missing label renders a blank column head; a missing
+// isWork entry reads as `undefined`, i.e. not work, and drops out of the "to act
+// on" count. None of the three throws.
+test('every post-custody state has a label, a work verdict, and a column position', () => {
+  for (const key of Object.values(PC)) {
+    assert.ok(PC_LABEL[key], `${key} has no label`)
+    assert.equal(typeof PC_IS_WORK[key], 'boolean', `${key} has no isWork verdict`)
+    assert.ok(PC_ORDER.includes(key), `${key} is in no column — it would never render`)
+  }
+  assert.equal(PC_ORDER.length, new Set(PC_ORDER).size, 'a state is listed twice')
+  for (const key of PC_ORDER) assert.ok(Object.values(PC).includes(key), `${key} is not a state`)
 })

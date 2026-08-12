@@ -20,9 +20,9 @@ export async function loadOrders(orders, db = pool) {
          (so_number, customer, location, po_number, is_ats, source, stage, so_status,
           qty_ordered, qty_allocated, qty_fulfilled, amount_paid, shipping_status,
           start_date, ship_date, cancel_date, notes, approval_status, billing_status,
-          dc, store_number, is_placeholder,
+          dc, store_number, is_placeholder, terms,
           last_seen, last_movement, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now(), now(), now())
        ON CONFLICT (so_number) DO UPDATE SET
          customer        = COALESCE(EXCLUDED.customer, orders.customer),
          location        = COALESCE(EXCLUDED.location, orders.location),
@@ -50,6 +50,9 @@ export async function loadOrders(orders, db = pool) {
          -- null, which must not wipe what the live pull established.
          is_placeholder  = COALESCE(EXCLUDED.is_placeholder, orders.is_placeholder),
          billing_status  = COALESCE(EXCLUDED.billing_status, orders.billing_status),
+         -- COALESCE like is_ats: the CSV mappers know nothing about terms and send
+         -- null, which must not wipe what the live pull established.
+         terms           = COALESCE(EXCLUDED.terms, orders.terms),
          last_seen       = now(),
          last_movement   = CASE WHEN orders.stage IS DISTINCT FROM EXCLUDED.stage
                                 THEN now() ELSE orders.last_movement END,
@@ -64,6 +67,7 @@ export async function loadOrders(orders, db = pool) {
         o.dc || null, o.storeNumber || null,
         // null (not false) when the source doesn't know — see the COALESCE above.
         o.isPlaceholder ?? null,
+        o.orderTerms || null,
       ],
     )
     n++

@@ -1566,3 +1566,19 @@ WHERE f.if_number IS NULL
     SELECT 1 FROM order_events e
     WHERE e.event_type = 'IF_REMOVED' AND e.doc_type = 'IF' AND e.doc_number = c.doc_number
   );
+
+-- ── The order's own payment terms (2026-08-11) ───────────────────────────────
+-- Nima changed the flow: an order on Net terms goes to Shipped when its label is
+-- made, not to Packed, and it physically goes out once the invoice is raised and
+-- printed. That makes the terms decide the workflow at LABEL time.
+--
+-- `invoices.terms` above already carries the same text, and is still what
+-- paymentGate reads once an invoice exists — but under this flow the invoice
+-- does not exist yet at the moment the terms matter, so it cannot be the source.
+-- Read off the sales order instead (see orderSql); verified live 2026-08-11,
+-- 100 of 100 open sales orders carry it.
+--
+-- Additive and nullable. A null is "we don't know", which src/model/paymentGate
+-- treats as the safe direction (money is due, i.e. the OLD flow) — so rows loaded
+-- before this, and every CSV-imported row, keep the behaviour they had.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS terms TEXT;
