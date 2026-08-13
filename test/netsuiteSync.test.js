@@ -587,3 +587,24 @@ test('orderSql: selects the customer DC over a LEFT JOIN so no order can vanish'
   // LEFT, not inner — a missing customer row must not drop the sales order.
   assert.match(sql, /LEFT JOIN customer c ON c\.id = t\.entity/)
 })
+
+// ── ATS was dead app-wide until 2026-08-13 ──────────────────────────────────
+// Nima spotted it: "SO12473 and SO12447 both are ats order". Both read Yes in
+// NetSuite; all 282 rows in Neon read is_ats = false, so STOCK_SHORT — the sev-3
+// "real stock exception, act now" flag — had never fired once.
+test('mapOrderRow reads the ATS custom field, and only the two known codes', () => {
+  assert.equal(mapOrderRow({ tranid: 'SO1', ats_order: '1' }).isAts, true)
+  assert.equal(mapOrderRow({ tranid: 'SO1', ats_order: '2' }).isAts, false)
+  // Absent or unrecognised stays NULL — never false. false asserts "presold",
+  // which is a claim about stock we have no basis for, and it is exactly the
+  // claim that silenced the flag for every order in the database.
+  assert.equal(mapOrderRow({ tranid: 'SO1' }).isAts, null)
+  assert.equal(mapOrderRow({ tranid: 'SO1', ats_order: '' }).isAts, null)
+  assert.equal(mapOrderRow({ tranid: 'SO1', ats_order: '9' }).isAts, null)
+})
+
+test('orderSql asks for the ATS field at all', () => {
+  // The whole bug was that nothing did. A mapper that reads a column the query
+  // never selects is silently null forever.
+  assert.match(orderSql('2026-01-01'), /custbody_ats_order/)
+})
