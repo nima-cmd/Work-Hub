@@ -162,6 +162,14 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .colHead .count { background: var(--panel2); border-radius: 999px; padding: 0 8px; }
 .kcard { background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
 .kcard .so { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* "Open in NetSuite". Inherits colour so a linked SO number still reads as the card's
+   own heading rather than turning the board into a page of blue links — the ↗ and the
+   hover underline are what say "this goes somewhere". */
+.nsLink { color: inherit; text-decoration: none; cursor: pointer; }
+.nsLink:hover { text-decoration: underline; text-underline-offset: 2px; }
+.nsLinkMark { font-size: .8em; opacity: .45; margin-left: 2px; vertical-align: super; }
+.nsLink:hover .nsLinkMark { opacity: .9; }
 .kcard .cust { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .kcard.selected { border-color: var(--holo); box-shadow: 0 0 0 1px var(--holo), 0 0 12px rgba(79,209,255,0.25); }
 .kcard .krow { display: flex; align-items: center; gap: 6px; }

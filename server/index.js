@@ -5,6 +5,8 @@
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
+import { resolveNetsuiteLink } from '../src/ingest/netsuiteLink.js'
+import { LINK_ERROR, LINK_MESSAGE } from '../src/model/netsuiteLinks.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -1274,6 +1276,36 @@ app.post('/api/netsuite/refresh', async (_req, res) => {
 // Render cuts a request near 100), so this is how the UI learns it finished.
 app.get('/api/netsuite/refresh', (_req, res) => {
   res.json(netsuiteRefreshStatus())
+})
+
+// "Open in NetSuite" (Nima, 2026-08-13). A card prints SO12446 / IF7480 / INV11358;
+// this turns each into one click.
+//
+// A REDIRECT, not a URL the client builds. The internal id and the record type both
+// come from NetSuite, so the client would otherwise need the account id, the
+// recordtype→page table and a lookup round trip of its own — and the moment a page
+// name is duplicated on the client it can drift from the server's. One endpoint, one
+// table, one derivation.
+//
+// ⚠️ Every failure answers in WORDS, never a broken redirect. A link that silently
+// lands on a NetSuite error page reads as NetSuite's fault; this says which of the
+// five things went wrong (see LINK_ERROR).
+app.get('/api/netsuite/open', async (req, res) => {
+  try {
+    const r = await resolveNetsuiteLink(req.query.doc)
+    if (r.ok) return res.redirect(302, r.url)
+    const status = r.error === LINK_ERROR.BAD_DOC ? 400
+      : r.error === LINK_ERROR.NOT_FOUND ? 404
+        : r.error === LINK_ERROR.NOT_CONFIGURED ? 503
+          : r.error === LINK_ERROR.LOOKUP_FAILED ? 502 : 422
+    res.status(status).json({
+      error: r.error, message: LINK_MESSAGE[r.error],
+      doc: req.query.doc || null, recordtype: r.recordtype || null,
+    })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // Carton-level ASN reconciliation — every carton that SHIPPED against every SSCC
