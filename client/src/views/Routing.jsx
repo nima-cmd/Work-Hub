@@ -191,6 +191,8 @@ export default function Routing() {
   if (!data) return <div className="banner">Loading routing feed…</div>
 
   const auths = data.auths || []
+  // Has the Macy's routing-notification reader ever run? See getRouting.
+  const readerLive = !!data.macysRoutingCheckedAt
   const detached = data.detached || []
   // Shipped shipments (physically left) move out of the active board into the
   // Shipped archive tab. Active = everything not-yet-shipped.
@@ -301,7 +303,7 @@ export default function Routing() {
               <h3>{partner} <span className="muted">· {list.length} DC{list.length === 1 ? '' : 's'}</span></h3>
               <div className="rt-cards">
                 {list.map((g) => (
-                  <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy}
+                  <ShipmentCard key={g.dcPoKey} g={g} auths={auths} busy={busy} readerLive={readerLive}
                     onAssign={() => onAssign(g)} onVoid={onVoid} onSaveRefs={onSaveRefs} onHold={onHold}
                     onShip={g.shipment ? onShip : null}
                     onSetRouted={g.shipment ? onSetRouted : null}
@@ -321,7 +323,7 @@ export default function Routing() {
                 {activeDetached.map((s) => (
                   <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
                     auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip}
-                    onApplyTender={onApplyTender} detached />
+                    onApplyTender={onApplyTender} readerLive={readerLive} detached />
                 ))}
               </div>
             </section>
@@ -656,7 +658,7 @@ function TenderLine({ tender, busy, onApply }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, readerLive, detached, groupable, groupChecked, onToggleGroup }) {
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -697,7 +699,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
       {/* Not on the Shipped archive — a departed shipment's authorization is
           history, and the question this answers ("what am I waiting on?") is
           only live while the card is still in the queue. */}
-      {!s?.shippedAt && <AuthSource s={s} g={g} />}
+      {!s?.shippedAt && <AuthSource s={s} g={g} readerLive={readerLive} />}
 
       <TenderLine tender={s?.tender} busy={busy} onApply={onApplyTender} />
 
@@ -932,8 +934,11 @@ function BolActions({ s }) {
 // tell that apart from "the email has not come". The rules and every sentence
 // live in src/model/routingAuthSource.js — pure and tested, because routing
 // logic put in .jsx in this repo has twice ended up untested.
-function AuthSource({ s, g }) {
-  const p = authProvenance({ shipment: s, group: g })
+function AuthSource({ s, g, readerLive }) {
+  // ⚠️ `undefined` and `null` are DIFFERENT arguments here and must stay that way.
+  // undefined = nothing in this app reads that email; null = the reader ran and found
+  // nothing for this card. Passing `readerLive ? null : undefined` is the whole wiring.
+  const p = authProvenance({ shipment: s, group: g, notification: readerLive ? null : undefined })
   if (p.state === AUTH_STATE.APPLIED || p.state === AUTH_STATE.NOT_APPLICABLE) return null
   return (
     <div className={'rt-authSrc' + (p.manual ? ' manual' : '')}>

@@ -4,6 +4,7 @@
 
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
+import { syncMacysRouting } from '../src/ingest/macysRouting.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -1390,6 +1391,28 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('tender sync failed (recurring tasks still checked):', e.message)
       }
     }
+    // The OTHER routing lane: Macy's/Bloomingdale's routing notifications, which
+    // carry the authorization number, carrier and pickup date. Until 2026-08-13
+    // NOTHING read them — the tender sync above is Nordstrom-only — and because
+    // Nima had always keyed them by hand the lane looked automated.
+    //
+    // ⚠️ Wired the same round the module was written. That is now the rule here:
+    // this repo has shipped a sync with no caller TWICE (PR #16, PR #78), and the
+    // second time it happened three comments below the paragraph describing the
+    // first. Applies only on a dual exact match of project AND shipment number;
+    // everything else is left for `npm run check:routing` to shout about.
+    //
+    // Same window and same gate as the tender sync — notifications arrive a few
+    // times a month, so the usual cycle is one cheap search that finds nothing.
+    let macysRouting = null
+    if (process.env.GOOGLE_REFRESH_TOKEN) {
+      try {
+        const r = await syncMacysRouting({ sinceDays: 7 })
+        macysRouting = { fetched: r.fetched, live: r.live, applied: r.applied, fields: r.fields }
+      } catch (e) {
+        console.error('Macy\'s routing sync failed (recurring tasks still checked):', e.message)
+      }
+    }
     // Carton-level ASN reconciliation — did every carton that left get announced
     // on an 856 the partner received? Needs BOTH integrations (NetSuite for the
     // cartons, Orderful for the manifests), and self-limits to once every
@@ -1407,7 +1430,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       }
     }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, tenders, asnCartons, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, tenders, macysRouting, asnCartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
