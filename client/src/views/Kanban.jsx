@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRefList, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
 import { isParcelLane } from '../../../src/model/parcelLane.js'
@@ -262,7 +262,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                     <label className="cardPick" title="Select for a task">
                       <input type="checkbox" checked={sel} onChange={() => toggle(key)} />
                     </label>
-                    <span className="so">{o.isGroup ? `PO ${o.poNumber}` : o.soNumber}</span>
+                    <span className="so">{o.isGroup ? `PO ${o.poNumber}` : <NsLink doc={o.soNumber} />}</span>
                     <SourceBadge source={o.source} />
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
@@ -278,9 +278,13 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                   <CustodyBadge card={o} events={events} dcList={poDcs[o.poNumber]} />
                   {o.isGroup
                     ? <div className="ifs">{o.soNumbers.slice(0, 4).join(', ')}{o.soNumbers.length > 4 ? ` +${o.soNumbers.length - 4}` : ''}</div>
-                    : docRef(o) && (
+                    : docRefList(o).length > 0 && (
                       <div className="ifs">
-                        {docRef(o)}
+                        {/* Each document is its own link — docRef() joins them into one
+                            string, which cannot be clicked per IF/invoice. */}
+                        {docRefList(o).map((d, i) => (
+                          <span key={d}>{i > 0 && ', '}<NsLink doc={d} /></span>
+                        ))}
                         {docDate(o) && <span className="docdate"> · {docDate(o)}</span>}
                       </div>
                     )}
@@ -323,7 +327,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
             {openTasks.map((o) => (
               <div key={o.soNumber} className={'kcard ' + sevClass(o.severity)}>
                 <div className="krow">
-                  <span className="so">{o.soNumber}</span>
+                  <span className="so"><NsLink doc={o.soNumber} /></span>
                   <SourceBadge source={o.source} character={o.character} />
                 </div>
                 <div className="cust">{o.customer}</div>

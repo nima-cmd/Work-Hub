@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation, confirmDeparted } from './api.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
+import { isDocNumber } from '../../src/model/netsuiteLinks.js'
 import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
 import { imagesFor } from './data/characterImages.js'
@@ -303,6 +304,41 @@ function OneLabelButton({ info, size }) {
       {state === 'err' && msg && <span style={{ color: 'var(--hi)' }}> — {msg}</span>}
     </button>
   )
+}
+
+// "Open in NetSuite" (Nima, 2026-08-13). A plain anchor to the server, which looks the
+// document up and 302s — the client never builds a NetSuite URL, because doing so would
+// need the account id and a second copy of the recordtype→page table that could drift
+// from the server's. See src/model/netsuiteLinks.js.
+//
+// ⚠️ A real <a href>, deliberately, not an onClick+fetch. It gets middle-click, ⌘-click,
+// "copy link address" and the browser's own loading state for free, and a NetSuite page
+// is somewhere you want in a NEW tab with your place on the board kept.
+export function NsLink({ doc, children, title }) {
+  if (!doc) return null
+  // ⚠️ Degrades to plain text rather than rendering a link that 400s. A task card's
+  // reference is free text and need not be a document number at all, and a link that
+  // reliably fails is worse than no link — it teaches you to stop trusting the ones
+  // that work.
+  if (!isDocNumber(doc)) return <>{children || doc}</>
+  return (
+    <a className="nsLink" href={`/api/netsuite/open?doc=${encodeURIComponent(doc)}`}
+      target="_blank" rel="noreferrer"
+      title={title || `Open ${doc} in NetSuite`}
+      // The card is clickable in places; opening a document should never also toggle
+      // a selection or expand a row underneath it.
+      onClick={(e) => e.stopPropagation()}>
+      {children || doc}<span className="nsLinkMark" aria-hidden="true">↗</span>
+    </a>
+  )
+}
+
+// docRef() joins the current-stage documents into ONE display string, which cannot be
+// linked per document. This is the same derivation returning the parts — so the two
+// cannot drift, the string version is now built FROM the list rather than beside it.
+export function docRefList(o) {
+  const s = docRef(o)
+  return s ? s.split(',').map((x) => x.trim()).filter(Boolean) : []
 }
 
 export function LabelButtons({ info }) {
