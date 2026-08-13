@@ -1904,6 +1904,16 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-cellL { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
 
 .rt-warn { font-size: 11px; color: var(--mid); background: rgba(217,130,43,0.1); border: 1px solid rgba(217,130,43,0.35); border-radius: 6px; padding: 5px 8px; }
+/* Where an unrouted card's authorization comes from. `.manual` is deliberately the
+   LOUDER of the two: a lane nothing watches is the state that has hurt us, and a
+   quiet grey line is exactly how it stayed invisible for months. */
+.rt-authSrc { font-size: 11px; color: var(--mid); border-radius: 6px; padding: 5px 8px; display: grid; gap: 2px;
+  background: rgba(120,120,130,0.10); border: 1px solid rgba(120,120,130,0.30); }
+.rt-authSrc.manual { background: rgba(217,130,43,0.10); border-color: rgba(217,130,43,0.40); }
+.rt-authSrcHead { font-weight: 600; letter-spacing: .02em; text-transform: uppercase; font-size: 10px; opacity: .8; }
+.rt-authSrc.manual .rt-authSrcHead { color: var(--hi); opacity: 1; }
+.rt-authSrcDetail { color: var(--fg); opacity: .85; }
+
 /* The partner TMS's accepted tender, beside what this card claims. Evidence, not an
    overwrite — see TenderLine in Routing.jsx. */
 .rt-tender { font-size: 11px; color: var(--mid); background: rgba(90,140,220,0.10); border: 1px solid rgba(90,140,220,0.35); border-radius: 6px; padding: 5px 8px; display: grid; gap: 2px; }
