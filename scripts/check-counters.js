@@ -53,6 +53,8 @@ import { pool } from '../src/db.js'
 import { LIVE_SYNCS } from '../src/model/syncHealth.js'
 import { FILING_LEDGER_START } from '../src/model/filing.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
+import { sweepArithmeticFields } from '../src/ingest/arithmeticSweep.js'
+import { unrecorded, vanished, describeFinding, EXPECTED_DERIVED, EXPECTED_CONSTANT } from '../src/model/arithmeticFields.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -271,6 +273,44 @@ const missing = LIVE_SYNCS.map((s) => s.key).filter((k) => !reported.has(k))
 missing.length
   ? bad('every LIVE sync is reported on Health', `absent: ${missing.join(', ')}`)
   : ok('every LIVE sync is reported on Health', `${LIVE_SYNCS.length} live syncs`)
+
+// ── shape (v): A FIELD THAT IS ARITHMETIC ON ANOTHER FIELD ──────────────────
+//
+// The fifth shape, added 2026-08-13 after `transaction.shipdate` turned out to be
+// `trandate + 28` on 1,234 of 1,254 sales orders and drove 51 flags. This script was
+// GREEN throughout, and a distinctness sweep could never have caught it: shipdate had
+// many distinct values and looked completely alive.
+//
+// ⚠️ The assertion is NOT "no findings". Swept live, the rule finds ordinary business
+// facts alongside real bugs (most open PO lines have received nothing, so ordered
+// equals remaining), and a check that fails on those would be red forever and get
+// ignored. What is asserted is that the list has not CHANGED — a newly-derived column
+// is the event that preceded the shipdate bug, and a field that STOPS being derived
+// is news too (it means someone started typing real values).
+const sweep = await sweepArithmeticFields()
+const extra = unrecorded(sweep)
+const stale = vanished(sweep)
+
+extra.derived.length
+  ? bad('no column has newly become arithmetic on another column',
+    extra.derived.map((f) => describeFinding(f)).join(' | '))
+  : ok('no column has newly become arithmetic on another column',
+    `${sweep.pairsTested} column pairs across ${sweep.tables} tables · ${EXPECTED_DERIVED.length} recorded, all still explained`)
+
+extra.constant.length
+  ? bad('no column has newly gone constant',
+    `${extra.constant.map((c) => c.table + '.' + c.column).join(', ')} — one distinct value, the is_ats shape`)
+  : ok('no column has newly gone constant', `${EXPECTED_CONSTANT.length} recorded, each with a reason`)
+
+// A baseline entry the sweep no longer finds. Not a failure — usually GOOD news —
+// but it must be said, because a stale allowlist is how a checker quietly stops
+// checking. `orders.ship_date` leaving this list is the answer to an open question.
+stale.derived.length || stale.constant.length
+  ? bad('every recorded derived/constant field is still derived/constant',
+    `no longer found: ${[...stale.derived, ...stale.constant].map((e) => e.table + '.' + e.column).join(', ')} ` +
+    `— if this is orders.ship_date, someone started typing real ship windows; update the baseline`)
+  : ok('every recorded derived/constant field is still derived/constant',
+    `${EXPECTED_DERIVED.length} derived + ${EXPECTED_CONSTANT.length} constant`)
 
 // ── report ──
 const failed = results.filter((r) => !r.pass)
