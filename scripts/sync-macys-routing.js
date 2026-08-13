@@ -34,7 +34,7 @@ const LABEL = {
   [MISS.UNPAIRED]: '⚠️  block counts disagreed — paired nothing',
   [MISS.AUTH_CONFLICT]: '⚠️  already authorized with a different number',
   [MISS.DC_DISAGREES]: '⚠️  applied, but the consignee names another DC',
-  [MISS.SHIP_DATE_HELD]: 'settled card keeps its ship date',
+  [MISS.SHIP_DATE_DEPARTED]: 'already departed — ship date left as history',
 }
 
 for (const { notification: n, plan } of r.reports) {
@@ -65,7 +65,7 @@ console.log(`\n  ${'─'.repeat(72)}`)
 console.log(`  applied to ${r.applied} card(s), ${r.fields} field(s)${dryRun ? ' (would have)' : ''}`)
 console.log(`  no match ${s.noMatch} · project-only ${s.projectOnly} · shipment-only ${s.shipmentOnly} ` +
   `· unpaired ${s.unpaired} · auth conflict ${s.authConflict} · DC disagrees ${s.dcDisagrees} ` +
-  `· ship date held ${s.shipDateHeld}\n`)
+  `· departed ${s.shipDateDeparted}\n`)
 
 await pool.end()
 process.exit(0)

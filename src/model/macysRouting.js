@@ -234,25 +234,32 @@ export const MISS = {
   UNPAIRED: 'unpaired', // the block's counts disagreed, so it carries no keys
   AUTH_CONFLICT: 'auth_conflict', // already authorized, with a DIFFERENT number
   DC_DISAGREES: 'dc_disagrees', // matched, but the consignee names another DC
-  SHIP_DATE_HELD: 'ship_date_held', // settled card, our date ≠ the pickup date
+  SHIP_DATE_DEPARTED: 'ship_date_departed', // already left — history is not rewritten
 }
 
-// ⚠️ WHEN THE PICKUP DATE MAY OVERWRITE OURS — measured, not assumed.
+// ⚠️ THE PICKUP DATE ALWAYS WINS ON A SHIPMENT THAT HAS NOT LEFT.
 //
-// Across the 23 authorized cards that carry both references, `ship_date` equals the
-// notification's pickup date on only **11**. Two clusters disagree: seven cards read
-// 2026-07-29 against a 07-28 pickup, and five read 2026-08-02 against a 08-04 pickup.
-// So the two are NOT the same field, and blanket-overwriting would have rewritten a
-// dozen hand-set dates that feed shipDateAdvice and the EDI ship-date basis.
+// Nima, 2026-08-13: *"the date the bol is created is the date i generate it for routing,
+// it has nothing to do with what date i think it will ship."*
 //
-// The rule: while a card is still `needs_routing` / `submitted`, its ship_date is the
-// date WE ASKED FOR and the notification is the answer that supersedes it — that is
-// exactly today's case (the five live cards read 2026-08-12 against a 08-18 pickup,
-// six days early, and Nima applied the notification's date by hand). Once a card is
-// `authorized` or `routed` someone has settled it, so a disagreement is SURFACED and
-// nothing is written. Every date change is named in the run output either way; none
-// of this is allowed to be silent.
-const UNSETTLED = new Set(['needs_routing', 'submitted', 'bol_assigned'])
+// So `routing_shipment.ship_date` is NOT a prediction anyone made, and there is nothing
+// to protect by holding it. Confirmed in the client: GroupBar and the refs editor both
+// seed the field with `todayStr()`, and the one row set whose pre-application value we
+// know — today's five cards — read 2026-08-12, identical to their `created_at`, until
+// Nima applied 08-18 by hand this morning. Same family as `transaction.shipdate`
+// (netsuite-fields-that-lie): a column that looks like a date and is an artifact of
+// when a record was made.
+//
+// My first cut got this wrong. It measured that ship_date matches the pickup date on
+// only 11 of 23 cards and read the other 12 as considered dates worth preserving —
+// treating an artifact as evidence, which is exactly the mistake that memory is about.
+// The disagreement was the finding, not the reason to be cautious.
+//
+// The ONE guard that stays: a shipment that has already DEPARTED is history. Its
+// `shipped_at` is the real evidence of when it left (the five cards on the 08-01
+// notification departed 08-03, before their own 08-04 pickup date), and moving a date
+// on a record that is closed cannot help anyone. Surfaced, not written.
+const hasDeparted = (s) => !!s.shippedAt
 
 const norm = (v) => (v == null ? null : String(v).trim() || null)
 const ymd = (d) => {
@@ -369,14 +376,14 @@ export function planRoutingApply(notification, shipments = []) {
     if (notification.carrier && norm(s.carrier) !== notification.carrier) set.carrier = notification.carrier
     if (notification.scac && norm(s.scac) !== notification.scac) set.scac = notification.scac
     if (notification.pickupDate && ymd(s.shipDate) !== notification.pickupDate) {
-      if (!s.shipDate || UNSETTLED.has(String(s.status || ''))) {
+      if (!hasDeparted(s)) {
         set.shipDate = notification.pickupDate
       } else {
         misses.push({
-          kind: MISS.SHIP_DATE_HELD, stop, shipmentId: s.id, bolNumber: s.bolNumber,
+          kind: MISS.SHIP_DATE_DEPARTED, stop, shipmentId: s.id, bolNumber: s.bolNumber,
           ours: ymd(s.shipDate), theirs: notification.pickupDate,
-          detail: `card ${s.bolNumber || s.id} is ${s.status} and says ${ymd(s.shipDate)}; ` +
-            `the notification's pickup is ${notification.pickupDate} — left alone`,
+          detail: `card ${s.bolNumber || s.id} left ${ymd(s.shippedAt)} and says ${ymd(s.shipDate)}; ` +
+            `the notification's pickup was ${notification.pickupDate} — history, left alone`,
         })
       }
     }
@@ -437,6 +444,6 @@ export function summarizeRoutingMisses(reports = []) {
     unpaired: by(MISS.UNPAIRED),
     authConflict: by(MISS.AUTH_CONFLICT),
     dcDisagrees: by(MISS.DC_DISAGREES),
-    shipDateHeld: by(MISS.SHIP_DATE_HELD),
+    shipDateDeparted: by(MISS.SHIP_DATE_DEPARTED),
   }
 }
