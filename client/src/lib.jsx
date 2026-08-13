@@ -1,6 +1,6 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation } from './api.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation, confirmDeparted } from './api.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
@@ -375,6 +375,34 @@ export function ShipstationPushButton({ ifNumber, onDone }) {
           if (window.confirm(`${ifNumber}: NetSuite normally labels this one.\n\nPush it to ShipStation anyway? Only do this if NetSuite's label creator is not working — otherwise you risk two labels on one box.`)) run(true)
         }}>push anyway</button>
       )}
+    </span>
+  )
+}
+
+// "Confirm it left" — Net-terms only (Nima, 2026-08-13). NetSuite says Shipped
+// from the moment the label is made and then hides the order from his searches,
+// so this click is the ONLY record that the goods physically went. No NetSuite
+// side effect; undoable, because a marker that can only be set is a trap.
+export function ConfirmDepartedButton({ ifNumber, onDone }) {
+  const [state, setState] = useState(null)
+  if (!ifNumber) return null
+  const run = async () => {
+    setState({ busy: true })
+    try {
+      await confirmDeparted({ ifNumber, departed: true })
+      setState({ msg: '✓ recorded as gone' })
+      onDone?.()
+    } catch (e) {
+      setState({ msg: e.message, bad: true })
+    }
+  }
+  return (
+    <span className="tagBtns">
+      <button className="linkBtn" disabled={state?.busy} onClick={run}
+              title="Record that this order physically left. NetSuite already reads Shipped — it has since the label was made — so nothing else can tell you this happened.">
+        {state?.busy ? 'recording…' : '✓ it left'}
+      </button>
+      {state?.msg && <span className={state.bad ? 'muted' : 'good'}> {state.msg}</span>}
     </span>
   )
 }

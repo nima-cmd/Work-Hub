@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
 import { isParcelLane } from '../../../src/model/parcelLane.js'
 import {
   TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK,
-  missionTab, postCustodyState, routingForPo, fulfilledNeverScanned,
+  missionTab, postCustodyState, routingForPo, fulfilledNeverScanned, PC,
 } from '../../../src/model/postCustody.js'
+import { isDepartureConfirmed } from '../../../src/model/netDeparture.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -289,6 +290,14 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                   {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                     <LabelButtons key={f.ifNumber} info={{ ifNumber: f.ifNumber, soNumber: o.soNumber, customer: o.customer, poNumber: o.poNumber }} />
                   ))}
+                  {/* "It left." Only on the column that asks for it, so the
+                      button appears exactly where the board says the work is —
+                      and only on the fulfilments still awaiting it, not every IF
+                      on the card. */}
+                  {colKey === PC.SHIPPED_AWAITING_DEPARTURE && !o.isGroup &&
+                    (o.fulfillments || []).filter((f) => f.ifNumber && !isDepartureConfirmed(f)).map((f) => (
+                      <ConfirmDepartedButton key={'dep' + f.ifNumber} ifNumber={f.ifNumber} onDone={onRefresh} />
+                    ))}
                   {/* Break-glass push, per fulfilment (Nima, 2026-08-11) — for when
                       NetSuite's UPS label creator is playing up and the data is
                       better pushed than re-keyed. Offered on the parcel lane only:

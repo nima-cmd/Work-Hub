@@ -953,6 +953,16 @@ export async function fetchOverdueInvoices() {
 
 // Push parcel shipments into ShipStation as orders. Buying the label stays a human
 // action there — this never purchases anything.
+// "Yes, it actually left" — the only departure evidence the Net-terms flow has,
+// since marking shipped now happens at label time (src/model/netDeparture.js).
+export async function confirmDeparted(body = {}) {
+  const res = await fetch('/api/fulfillment/departed', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'could not record it')
+  return res.json()
+}
+
 export async function pushToShipstation(body = {}) {
   const res = await fetch('/api/shipstation/push', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

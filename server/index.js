@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  setFulfillmentPrepped, getLabelWorksheetCsv, pushToShipstation, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
@@ -245,6 +245,17 @@ app.get('/api/label-worksheet.csv', async (req, res) => {
 app.post('/api/fulfillment/prepped', async (req, res) => {
   try {
     res.json(await setFulfillmentPrepped(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// "Yes, it actually left" — the Net-terms flow marks shipped at label time, so
+// this is the only record that the goods physically went (src/model/netDeparture.js).
+app.post('/api/fulfillment/departed', async (req, res) => {
+  try {
+    res.json(await setFulfillmentDeparted(req.body || {}))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
