@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchLedger, fetchOrderLedger } from '../api.js'
 import { SPINE, SPINE_ORDER } from '../../../src/model/orderEvents.js'
+import { NsLink } from '../lib.jsx'
 
 // Ledger — the order history (rebuilt 2026-07-31).
 //
@@ -212,7 +213,7 @@ function OrderTimeline({ order }) {
   return (
     <div className="lgOrder">
       <div className="lgOrderHead">
-        <h3>{order.soNumber}</h3>
+        <h3><NsLink doc={order.soNumber} /></h3>
         <span className="muted">
           {(docs.fulfillments || []).length} fulfilment{(docs.fulfillments || []).length === 1 ? '' : 's'} ·{' '}
           {(docs.invoices || []).length} invoice{(docs.invoices || []).length === 1 ? '' : 's'} ·{' '}

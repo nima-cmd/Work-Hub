@@ -10,7 +10,7 @@ import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
 import { poTimelineSteps, docCountLabel, partnerRefNotes } from '../../../src/model/orderEvents.js'
 import { summarizePoDiff } from '../../../src/model/ediPoDiff.js'
-import { NoteWidget, SeasonBadge, DocLinks } from '../lib.jsx'
+import { NoteWidget, SeasonBadge, DocLinks, NsLink } from '../lib.jsx'
 
 const ISSUE_STATUSES = new Set(['INVALID', 'FAILED', 'REJECTED', 'OVERDUE'])
 const isIssueValue = (v) => ISSUE_STATUSES.has(v)
@@ -795,7 +795,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                     <tbody>
                       {flow.noFulfillment.map((r) => (
                         <tr key={r.soNumber + r.businessNumber}>
-                          <td className="mono">{r.soNumber}</td>
+                          <td className="mono"><NsLink doc={r.soNumber} /></td>
                           <td className="mono">{r.businessNumber}</td>
                           <td className="cust">{r.partner}</td>
                           <td className="cust">{r.stageLabel}</td>
@@ -821,8 +821,8 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                     <tbody>
                       {flow.notShipped.map((r) => (
                         <tr key={r.ifNumber}>
-                          <td className="mono">{r.ifNumber}</td>
-                          <td className="mono">{r.soNumber}</td>
+                          <td className="mono"><NsLink doc={r.ifNumber} /></td>
+                          <td className="mono"><NsLink doc={r.soNumber} /></td>
                           <td className="mono">{r.businessNumber}</td>
                           <td className="cust">{r.partner}</td>
                           <td><span className="flag sev-lo">{r.status || '—'}</span></td>
@@ -929,7 +929,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                       <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
                     </div>
                     <div className="neededLine">→ {o.work.needed}</div>
-                    {o.netsuiteOrder && <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
+                    {o.netsuiteOrder && <div className="poNs"><NsLink doc={o.netsuiteOrder.soNumber} /> · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
                     <div className="resolveRow">
                       <input className="qtyInput" style={{ width: 170 }} placeholder="NetSuite order to confirm (SO/IF/INV#)"
                              value={rd?.netsuiteRef ?? o.work.resolution?.netsuiteRef ?? ''}
@@ -981,7 +981,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                       <span className="poDates">{fmtD(o.shipNotBefore)} → {fmtD(o.cancelAfter)}</span>
                       <span className="cust">{isOpen ? '▾' : '▸'}</span>
                     </div>
-                    {o.netsuiteOrder && <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
+                    {o.netsuiteOrder && <div className="poNs"><NsLink doc={o.netsuiteOrder.soNumber} /> · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>}
                     <div className="verifyDocs">
                       <DocRow d={v.ship} />
                       <DocRow d={v.invoice} />
@@ -1078,7 +1078,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                   </div>
                 )}
                 {o.netsuiteOrder && (
-                  <div className="poNs">{o.netsuiteOrder.soNumber} · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>
+                  <div className="poNs"><NsLink doc={o.netsuiteOrder.soNumber} /> · {o.netsuiteOrder.stageLabel || o.netsuiteOrder.stage}</div>
                 )}
 
                 {isOpen && (
@@ -1165,17 +1165,17 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                     )}
                     {o.netsuiteOrder && (o.netsuiteOrder.itemFulfillments?.length > 0 || o.netsuiteOrder.invoices?.length > 0) && (
                       <div className="allocPos">
-                        <div className="cust">{o.netsuiteOrder.soNumber} — {o.netsuiteOrder.stageLabel}</div>
+                        <div className="cust"><NsLink doc={o.netsuiteOrder.soNumber} /> — {o.netsuiteOrder.stageLabel}</div>
                         {o.netsuiteOrder.itemFulfillments.map((f) => (
                           <div key={f.ifNumber}>
-                            IF {f.ifNumber} · {f.status}
+                            IF <NsLink doc={f.ifNumber} /> · {f.status}
                             {f.actualShipDate && ` · shipped ${fmtD(f.actualShipDate)}`}
                             {f.invoiceNumber && ` · invoice ${f.invoiceNumber}`}
                           </div>
                         ))}
                         {o.netsuiteOrder.invoices.map((i) => (
                           <div key={i.invNumber}>
-                            Invoice {i.invNumber} · {i.status}
+                            Invoice <NsLink doc={i.invNumber} /> · {i.status}
                             {i.amountRemaining > 0 && ` · $${i.amountRemaining} remaining`}
                           </div>
                         ))}

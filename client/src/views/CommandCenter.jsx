@@ -4,7 +4,7 @@ import { ShipDeskSector } from '../ShipDesk.jsx'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
 import { spaceBackdrop } from '../data/spaceBackdrop.js'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, docRef, docDate, SourceBadge, Flags, LinkedText, ChannelTag, channelMeta } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, docRef, DocRefLinks, docDate, NsLink, SourceBadge, Flags, LinkedText, ChannelTag, channelMeta } from '../lib.jsx'
 import { speakLine, taskContext } from '../../../src/model/dialogue.js'
 import { imagesFor } from '../data/characterImages.js'
 
@@ -183,7 +183,7 @@ function TacticalCore({ orders, attention, bayStats, custodyCount, custodyList, 
           <div className="scanTitle cyan">◍ CUSTODY REGISTER</div>
           {custodyList.slice(0, 4).map((c) => (
             <div key={c.ifNumber} className={'scanRow ' + (c.stale ? 'h-red' : c.state === 'with_warehouse' ? 'h-amber' : 'h-green')}>
-              <span className="scanName">{c.ifNumber} · {c.customer || 'unknown'}</span>
+              <span className="scanName"><NsLink doc={c.ifNumber} /> · {c.customer || 'unknown'}</span>
               <span className="scanOpen">{c.boxes > 0 ? `${c.boxes}📦` : ''}</span>
               <span className="scanState">{c.stale ? `STALE ${c.ageDays}d` : c.state === 'with_warehouse' ? 'AT WAREHOUSE' : 'IN HAND'}</span>
             </div>
@@ -222,7 +222,7 @@ function TacticalCore({ orders, attention, bayStats, custodyCount, custodyList, 
 function MiniOrder({ o }) {
   return (
     <div className={'miniRow ' + sevClass(o.severity)}>
-      <span className="miniSo">{o.soNumber}</span>
+      <span className="miniSo"><NsLink doc={o.soNumber} /></span>
       <ChannelTag order={o} />
       <span className="miniCust" style={{ color: channelMeta(o).color }}>{o.customer}</span>
       <span className="miniAge">{dayAge(o)}</span>
@@ -386,7 +386,7 @@ export default function CommandCenter({ orders, tasks = [], labelGaps = null, cu
           {topAttention.map((o) => (
             <div key={o.soNumber} className={'miniCard ' + sevClass(o.severity)}>
               <div className="miniCardTop">
-                <span className="miniSo">{o.soNumber}</span>
+                <span className="miniSo"><NsLink doc={o.soNumber} /></span>
                 <ChannelTag order={o} />
                 <span className="miniCust" style={{ color: channelMeta(o).color }}>{o.customer}</span>
               </div>
@@ -435,7 +435,7 @@ export default function CommandCenter({ orders, tasks = [], labelGaps = null, cu
               </div>
               {bay.filter((s) => s.delayed).map((s) => (
                 <div key={s.ifNumber} className="miniRow sev-hi">
-                  <span className="miniSo">{s.ifNumber}</span>
+                  <span className="miniSo"><NsLink doc={s.ifNumber} /></span>
                   <span className="miniCust">should have launched {s.floatingDays}d ago</span>
                 </div>
               ))}

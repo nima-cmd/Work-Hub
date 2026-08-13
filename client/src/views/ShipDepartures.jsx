@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchShipDepartures } from '../api.js'
-import { SourceBadge, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
+import { SourceBadge, LabelButtons, NoteWidget, ChannelTag, CustomerName, DocLinks, NsLink } from '../lib.jsx'
 
 // Nima's framing (2026-07-16) is unchanged — what can leave TODAY goes first —
 // but the buckets now key on the bay's DERIVED state rather than on the
@@ -47,13 +47,13 @@ export default function ShipDepartures() {
           {items.map((r) => (
             <div key={r.ifNumber} className="kcard">
               <div className="krow">
-                <span className="so">{r.ifNumber}</span>
+                <span className="so"><NsLink doc={r.ifNumber} /></span>
                 <SourceBadge source={r.source} />
               </div>
               <div className="cust"><ChannelTag order={r} /> <CustomerName order={r} />{r.poNumber ? ` · PO ${r.poNumber}` : ''}</div>
               <div className="ifs">
-                {r.soNumber}
-                {r.invoiceNumber && ` · ${r.invoiceNumber}`}
+                <NsLink doc={r.soNumber} />
+                {r.invoiceNumber && <> · <NsLink doc={r.invoiceNumber} /></>}
                 {r.daysPending != null && <span className="docdate"> · {r.daysPending}d pending</span>}
                 <LabelButtons info={r} />
               </div>

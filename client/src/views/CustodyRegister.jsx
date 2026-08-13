@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchCustodyRegister, recordFulfillmentBox, clearCustodyItem, deleteCustodyScan } from '../api.js'
-import { SourceBadge, LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
+import { SourceBadge, LabelButtons, ChannelTag, CustomerName, NsLink } from '../lib.jsx'
 
 // Custody Register (Nima, 2026-07-17) — every IF that entered the custody gap
 // (scanned OUT/IN) and hasn't departed yet. This is the physical-cargo mirror
@@ -133,7 +133,7 @@ export default function CustodyRegister() {
               {items.map((r) => (
                 <div key={r.isDc ? r.docNumber : r.ifNumber} className={'kcard' + (r.stale ? ' stale' : '')}>
                   <div className="krow">
-                    <span className="so">{r.isDc ? r.label : r.ifNumber}</span>
+                    <span className="so">{r.isDc ? r.label : <NsLink doc={r.ifNumber} />}</span>
                     {r.isDc ? <ChannelTag order={r} /> : (r.source && <SourceBadge source={r.source} />)}
                     <button className="linkBtn custodyClear" title="Clear off the register (departed)" onClick={() => clear(r)}>✕ clear</button>
                     <button className="linkBtn custodyDelete" title="Delete the scans (mistake)" onClick={() => remove(r)}>🗑</button>

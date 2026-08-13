@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { SourceBadge } from '../lib.jsx'
+import { SourceBadge, NsLink } from '../lib.jsx'
 import { imagesFor } from '../data/characterImages.js'
 import { departureLabel, departureSummary } from '../../../src/model/departures.js'
 import { fetchCalendarEvents, createManualTask, fetchDepartures, fetchLedgerDaily } from '../api.js'
@@ -208,7 +208,7 @@ function DayItem({ it, onRefresh }) {
     return (
       <div className={'calRow ' + (it.kind === 'Cancel by' ? 'cancel' : '')}>
         <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : 'sev-mid')}>{it.kind}</span>
-        <span className="so">{it.o.soNumber}</span>
+        <span className="so"><NsLink doc={it.o.soNumber} /></span>
         <span className="cust">{it.o.customer}</span>
         <SourceBadge source={it.o.source} />
       </div>
