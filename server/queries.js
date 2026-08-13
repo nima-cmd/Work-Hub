@@ -53,6 +53,7 @@ import { labelTracking, labelCount, SHIPSTATION_TRACKING_SQL } from '../src/mode
 import { closeReadiness } from '../src/model/closeReady.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
+import { lastCheckedAt as macysRoutingLastChecked } from '../src/ingest/macysRouting.js'
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
@@ -1904,6 +1905,12 @@ export async function getRouting() {
   return {
     packages, consolidated, shipments, detached, auths, gaps,
     held, heldKeys: [...heldSet], packageCount: packages.length,
+    // When the Macy's routing-notification reader last ran (null = it never has).
+    // ⚠️ This is what lets a card say "waiting on the notification" instead of
+    // "nothing in this app reads that email" — two sentences that were the same
+    // sentence for months, which is how a hand-entry lane came to look automated.
+    // Cheap: one key out of sync_meta, not a Gmail call per page load.
+    macysRoutingCheckedAt: await macysRoutingLastChecked(),
     // Flat, like `packages`: the view re-consolidates over a PO subset
     // client-side and must be able to recompute the pack check to match.
     fulfilmentPack: [...packByPoDc.values()].flat(),

@@ -2,7 +2,7 @@
   "name": "work-hub",
   "version": "0.1.0",
   "type": "module",
-  "description": "Warehouse order pipeline tracker \u2014 aggregates NetSuite saved-search exports (and later Orderful EDI + Airtable) into one aging-aware view so nothing sits ignored.",
+  "description": "Warehouse order pipeline tracker — aggregates NetSuite saved-search exports (and later Orderful EDI + Airtable) into one aging-aware view so nothing sits ignored.",
   "author": "Nima Erfani",
   "scripts": {
     "test": "node --test",
@@ -36,7 +36,9 @@
     "backfill:fulfillment-dc": "node --env-file=.env.local scripts/backfill-fulfillment-dc.js",
     "sync:shipstation-tracking": "node --env-file=.env.local scripts/sync-shipstation-tracking.js",
     "sync:tenders": "node --env-file=.env.local scripts/sync-tenders.js",
+    "sync:routing": "node --env-file=.env.local scripts/sync-macys-routing.js",
     "check:tenders": "node --env-file=.env.local scripts/check-tenders.js",
+    "check:routing": "node --env-file=.env.local scripts/check-routing.js",
     "check:slack": "node --env-file=.env.local scripts/check-slack.js"
   },
   "dependencies": {

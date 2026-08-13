@@ -24,6 +24,18 @@ try {
   console.error('Gmail sync failed (recurring tasks will still be checked):', e.message)
 }
 
+// The Macy's routing notifications, mirroring the deployed endpoint so the local
+// harness and the cron do the same work — a local script that quietly does LESS is
+// how you verify a lane that isn't actually running in production.
+try {
+  const { syncMacysRouting } = await import('../src/ingest/macysRouting.js')
+  const r = await syncMacysRouting({ sinceDays: 7 })
+  console.log(`Macy's routing: ${r.fetched} email(s), ${r.live} live, ` +
+    `${r.applied} card(s) updated / ${r.fields} field(s)`)
+} catch (e) {
+  console.error('Macy\'s routing sync failed (recurring tasks will still be checked):', e.message)
+}
+
 const created = await ensureRecurringTasks()
 console.log(`Recurring: ${created} new task instance(s) created.`)
 
