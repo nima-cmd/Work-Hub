@@ -204,14 +204,29 @@ test('the same notification applied twice is a no-op', () => {
   assert.equal(plan.misses.length, 0)
 })
 
-// Measured: ship_date equals the pickup date on only 11 of the 23 authorized cards.
-test('a settled card keeps its ship date; an unsettled one takes the pickup date', () => {
-  const settled = planRoutingApply(parse(), [card({ status: 'authorized', shipDate: '2026-08-02' })])
-  assert.equal(settled.applies[0].set.shipDate, undefined)
-  assert.equal(settled.misses.some((m) => m.kind === MISS.SHIP_DATE_HELD), true)
+// Nima: "the date the bol is created is the date i generate it for routing, it has
+// nothing to do with what date i think it will ship." So the stored date is an
+// artifact, not a prediction — the pickup date wins regardless of status. My first
+// cut held it on an `authorized` card, which treated an artifact as evidence.
+test('the pickup date wins on any card that has not left, whatever its status', () => {
+  for (const status of ['needs_routing', 'submitted', 'authorized', 'routed']) {
+    const plan = planRoutingApply(parse(), [card({ status, shipDate: '2026-08-02' })])
+    assert.equal(plan.applies[0].set.shipDate, '2026-08-18', `status ${status}`)
+    assert.equal(plan.misses.length, 0, `status ${status}`)
+  }
+})
 
-  const unsettled = planRoutingApply(parse(), [card({ status: 'submitted', shipDate: '2026-08-02' })])
-  assert.equal(unsettled.applies[0].set.shipDate, '2026-08-18')
+// The one guard that stays: a departed shipment is history, and `shipped_at` is the
+// real evidence of when it left. The 08-01 batch departed 08-03, BEFORE its own 08-04
+// pickup date — writing 08-04 there would claim a date after the freight was gone.
+test('a departed shipment keeps its date — history is surfaced, not rewritten', () => {
+  const plan = planRoutingApply(parse(), [
+    card({ status: 'authorized', shipDate: '2026-08-02', shippedAt: '2026-08-03T00:00:00Z' }),
+  ])
+  assert.equal(plan.applies[0].set.shipDate, undefined)
+  const m = plan.misses.find((x) => x.kind === MISS.SHIP_DATE_DEPARTED)
+  assert.ok(m)
+  assert.match(m.detail, /left 2026-08-03/)
 })
 
 test('a matched card whose DC disagrees is applied AND flagged', () => {

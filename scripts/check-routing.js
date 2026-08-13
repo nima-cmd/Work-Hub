@@ -97,7 +97,7 @@ if (checksumFailed.length) {
 
 // ── 4. things worth seeing but not worth failing on ──────────────────────────
 const notes = reports.flatMap((r) => r.plan.misses)
-  .filter((m) => m.kind === MISS.AUTH_CONFLICT || m.kind === MISS.DC_DISAGREES || m.kind === MISS.SHIP_DATE_HELD)
+  .filter((m) => m.kind === MISS.AUTH_CONFLICT || m.kind === MISS.DC_DISAGREES || m.kind === MISS.SHIP_DATE_DEPARTED)
 if (notes.length) {
   console.log(`\n  ${notes.length} note(s) — a human decided these, so they do not fail the check:`)
   for (const m of notes.slice(0, 15)) console.log(`      ${m.detail}`)
