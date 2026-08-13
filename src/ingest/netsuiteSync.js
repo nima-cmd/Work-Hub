@@ -146,9 +146,13 @@ export function mapOrderRow(row) {
     location: row.location || '',
     poNumber: row.otherrefnum || '',
     soStatus,
-    // The ATS custom field isn't reachable over SuiteQL yet, so leave it null —
-    // loadOrders COALESCEs is_ats so a null preserves whatever the CSV knew.
-    isAts: null,
+    // ATS — ships from stock, vs presold against a PO. THE distinction behind
+    // STOCK_SHORT (see CLAUDE.md: ATS short = act now, non-ATS short = normal).
+    // Anything other than the two known codes stays null rather than guessing a
+    // side; null is honest and keeps the flag quiet, false would assert "presold".
+    isAts: row.ats_order == null || row.ats_order === ''
+      ? null
+      : String(row.ats_order) === '1' ? true : String(row.ats_order) === '2' ? false : null,
     shipDate: row.shipdate || null,
     startDate: row.trandate || null,
     // The order's OWN payment terms, as label text ("Net 30", "Due on receipt").
@@ -270,6 +274,14 @@ export function orderSql(since) {
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
                  BUILTIN.DF(t.terms) AS terms,
+                 -- ⚠️ ATS was DEAD app-wide until 2026-08-13: all 282 orders read
+                 -- is_ats = false, so STOCK_SHORT -- the sev-3 "real stock
+                 -- exception, act now" flag -- could never fire once. The field was
+                 -- only ever written by the retired CSV ("Is ATS Order"), and the
+                 -- live pull sent nothing. A previous note here said the custom
+                 -- field "isn't reachable over SuiteQL yet"; it is, and this is it.
+                 -- customlist_yes_no: '1' = Yes, '2' = No.
+                 t.custbody_ats_order AS ats_order,
                  t.foreigntotal, t.otherrefnum,
                  t.custbody_approval_status AS approval_status,
                  t.custbody_is_placeholder AS is_placeholder,

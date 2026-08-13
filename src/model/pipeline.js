@@ -95,7 +95,12 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
         qtyOrdered: null,
         qtyAllocated: null,
         qtyFulfilled: null,
-        isAts: false,
+        // null, NOT false. ⚠️ This default is what killed ATS: the live sync sent
+        // null meaning "unknown", buildPipeline turned it into `false` meaning
+        // "presold", and loadOrders' COALESCE — written specifically to let a null
+        // preserve the known value — never saw a null to preserve. A guard one
+        // layer down cannot survive a default one layer up.
+        isAts: null,
         approvalStatus: '',
         actualShipDate: null,
         billingStatus: '',
