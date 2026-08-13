@@ -561,6 +561,24 @@ function AuthChip({ a, shipments, busy, onSave, onDelete }) {
 function LabelWorksheet({ s }) {
   const [open, setOpen] = useState(false)
   const w = s.labels
+  // ⚠️ This used to `return null` and say NOTHING. The five Bloomingdale's shipments
+  // authorized for the 2026-08-18 pickup rendered a blank space here — no worksheet,
+  // no reason, no hint that anything was owed. A surface that goes silent when work
+  // is outstanding is worse than one that never existed, because the blank reads as
+  // "nothing to do". Now the reason is always on the card; only genuine work is
+  // styled as a warning, so a merge-center shipment stays quiet in tone.
+  // ⚠️ Gated on `why`, NOT on `w.cartons`. `cartons` is `lines.length`, and the
+  // builder emits a placeholder line for a fulfilment with no carton row — so an
+  // entirely unpacked shipment reports a non-zero count and would have rendered
+  // "Labels to create (2)" for two boxes that do not exist. The model decides
+  // whether there is a usable worksheet; this only draws its answer.
+  if (w?.why) {
+    return (
+      <div className="rt-labels">
+        <div className={w.why.work ? 'rt-labelWhy rt-warn' : 'rt-labelWhy'}>{w.why.text}</div>
+      </div>
+    )
+  }
   if (!w?.applicable || !w.cartons) return null
   return (
     <div className="rt-labels">

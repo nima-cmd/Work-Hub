@@ -11,7 +11,7 @@ import {
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags, ageClock, ageFlags } from '../src/model/pipeline.js'
 import { shipWindow, shipWindowFlags, isoDay, PACK_LEAD_DAYS, isDefaultedShipDate } from '../src/model/shipWindow.js'
-import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine } from '../src/model/bolAddresses.js'
+import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine, shipToFor } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
@@ -2718,10 +2718,15 @@ test('direct is about the DESTINATION, never the carrier', () => {
 })
 
 test('an unknown DC returns null so the BOL asks rather than inventing an address', () => {
-  // Joppa is a real Bloomingdale's DC (src/model/dc.js) that no notification has
-  // named yet — it must NOT resolve to a plausible-looking guess.
-  assert.equal(MACYS_DCS.Joppa, undefined)
-  assert.equal(routingShipTo({ dc: 'Joppa', direct: true }), null)
+  // Joppa USED to be the example here — a real Bloomingdale's DC that no
+  // notification had named. Authorization 00052850381S named it on 2026-08-13
+  // ("JOPPA DC 3300 FASHION WAY JOPPA , MD 21085"), so it is now harvested like
+  // every other row. The RULE is what this test protects, not the example: a DC we
+  // have never seen an address for must resolve to null, never to a guess.
+  assert.equal(MACYS_DCS.Joppa.street, '3300 Fashion Way')   // verbatim, project 9022557
+  assert.equal(MACYS_DCS.Joppa.zip, '21085')
+  assert.equal(routingShipTo({ dc: 'Springfield', direct: true }), null)
+  assert.equal(routingShipTo({ dc: 'ZZ', direct: true }), null)
 })
 
 // ⚠️ THE BUG THIS ALMOST SHIPPED. routing_shipment.dc stores the ABBREVIATION
@@ -2735,7 +2740,7 @@ test('a DC resolves from its stored ABBREVIATION, not just its full name', () =>
   assert.equal(macysDc('CL'), MACYS_DCS.Minooka)
   assert.equal(macysDc('CG'), MACYS_DCS['China Grove DC'])
   assert.equal(macysDc('Secaucus'), MACYS_DCS.Secaucus)   // full name still works
-  assert.equal(macysDc('JP'), null)                       // Joppa: still unknown
+  assert.equal(macysDc('JP'), MACYS_DCS.Joppa)            // harvested 2026-08-13
   assert.equal(macysDc(null), null)
   // ...and the ship-to path uses the same resolution, so both agree.
   assert.equal(routingShipTo({ dc: 'HA', direct: true }), MACYS_DCS.Hayward)
@@ -2898,4 +2903,48 @@ test('the partner 850 window is untouched by any of this', () => {
   // the partner. That flag was firing on 10 orders, every one comparing the
   // partner's real cancel date against NetSuite's arithmetic.
   assert.equal(w.soPastCancel, false)
+})
+
+// ── the BOL's ship-to block honours "direct" ────────────────────────────────────
+//
+// ⚠️ THE LIVE BUG, 2026-08-13. `shipToFor` is what the BOL PDF actually calls
+// (server/bolPdf.js), and it had no `direct` parameter at all — it printed the merge
+// center for every Bloomingdale's shipment, unconditionally. `routingShipTo` above
+// DID handle direct, and nothing in the app ever called it: a correct mechanism,
+// fully tested, wired to nothing. That is CLAUDE.md's fourth counter-bug shape,
+// found in the address layer instead of a counter.
+//
+// The consequence was physical. All five shipments authorized for the 2026-08-18
+// pickup are consigned direct, and a BOL generated for them would have addressed the
+// cartons to Santa Fe Springs, California.
+test('a direct BOL is consigned to the DC itself, not the merge center', () => {
+  const { block, missing } = shipToFor("Bloomingdale's", 'SC', 'Secaucus', { direct: true })
+  assert.equal(block.street, '500 Meadowlands Parkway')
+  assert.equal(block.state, 'NJ')
+  assert.deepEqual(missing, [])
+  // The same DC, routed through the merge center, still prints the merge center —
+  // this adds a case, it does not replace one.
+  const via = shipToFor("Bloomingdale's", 'SC', 'Secaucus', { direct: false, mergeCenter: 'CA' })
+  assert.equal(via.block.city, 'Santa Fe Springs')
+  assert.match(via.block.name, /Mega-Merge CA/)
+})
+
+test('a MASTER BOL is always the merge center — that is what a master consolidates', () => {
+  const { block } = shipToFor("Bloomingdale's", 'SC', 'Secaucus', { direct: true, kind: 'master' })
+  assert.equal(block.city, 'Santa Fe Springs')
+})
+
+test('a direct BOL to an unknown DC asks rather than inventing an address', () => {
+  // The standing rule of this file: a null field renders "(confirm …)" in red. A
+  // guessed address gets trucked; a blank one gets filled in.
+  const { block, missing } = shipToFor("Bloomingdale's", 'ZZ', 'Nowhere', { direct: true })
+  assert.equal(block.street, null)
+  assert.deepEqual(missing, ['street', 'city', 'state', 'zip'])
+})
+
+test('direct never affects Nordstrom, which has no merge centers at all', () => {
+  const a = shipToFor('Nordstrom', '089', 'Portland', { direct: true }).block
+  const b = shipToFor('Nordstrom', '089', 'Portland', { direct: false }).block
+  assert.deepEqual(a, b)
+  assert.equal(a.street, '5703 North Marine Drive')
 })

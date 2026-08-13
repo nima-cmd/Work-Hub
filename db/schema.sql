@@ -1014,6 +1014,19 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ;
 --                 one number per carton. Freight shipments keep using the BOL.
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS ship_direct      BOOLEAN DEFAULT false;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS consigned_to     TEXT;
+-- ⚠️ 2026-08-13: BOTH defaults above were actively wrong, not merely unhelpful.
+-- `ship_direct DEFAULT false` + `merge_center DEFAULT 'CA'` meant every card nobody
+-- hand-edited ASSERTED "consigned via the Santa Fe Springs merge center" — a claim
+-- no human ever made and, on 2026-08-13, one the partner's own notification
+-- contradicted on all five live shipments. The BOL reads these fields, so the
+-- default was one generate away from trucking cartons to the wrong state.
+--
+-- NULL now means "we do not know yet", which is the truth for a card whose routing
+-- notification has not arrived. Readers still fall back to the merge center (see
+-- shipToFor), so behaviour is unchanged for a card that genuinely routes that way —
+-- what changes is that a default can no longer masquerade as an answer.
+ALTER TABLE routing_shipment ALTER COLUMN ship_direct  DROP DEFAULT;
+ALTER TABLE routing_shipment ALTER COLUMN merge_center DROP DEFAULT;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tracking_numbers TEXT[] DEFAULT '{}';
 -- Nordstrom's Supplier Routing Request number (Nima, 2026-08-05). Nordstrom routes
 -- through its own Manhattan-Associates portal, not a routing email:

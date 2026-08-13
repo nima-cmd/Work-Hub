@@ -1006,7 +1006,14 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
-            fedex_pickup_number AS "fedexPickupNumber"
+            fedex_pickup_number AS "fedexPickupNumber",
+            -- ⚠️ These two were absent here while fetchRoutingShipments (the LIST
+            -- query) has selected them all along. This is the by-id path, and the
+            -- by-id path is the one that renders the BOL PDF — so the board could
+            -- show a shipment as DC-direct while its printed BOL consigned it to the
+            -- merge center, with no layer disagreeing out loud. Fixing shipToFor
+            -- alone changed nothing until this column was asked for.
+            ship_direct AS "shipDirect", consigned_to AS "consignedTo"
      FROM routing_shipment WHERE id = $1`,
     [id],
   )

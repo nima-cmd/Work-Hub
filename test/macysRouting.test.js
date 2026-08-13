@@ -137,6 +137,11 @@ test('both keys matching is the only path that writes', () => {
   assert.equal(plan.misses.length, 0)
   assert.deepEqual(plan.applies[0].set, {
     authNumber: '00052850382S', carrier: 'UPS GRND', scac: 'UPSN', shipDate: '2026-08-18',
+    // Where it is CONSIGNED comes off the same notification. This was parsed and
+    // discarded until 2026-08-13, so the card kept the column default — "via the CA
+    // merge center" — while its own authorization said Secaucus, direct.
+    shipDirect: true,
+    consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
   })
   // The live case: the card read six days early and the notification corrects it.
   assert.equal(plan.applies[0].shipDateWas, '2026-08-12')
@@ -197,6 +202,9 @@ test('the same notification applied twice is a no-op', () => {
   const settled = card({
     authNumber: '00052850382S', carrier: 'UPS GRND', scac: 'UPSN',
     shipDate: '2026-08-18', status: 'authorized',
+    // A settled card includes where it is consigned. Leaving these off made the
+    // fixture assert a no-op that the real lane could not deliver.
+    shipDirect: true, consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
   })
   const plan = planRoutingApply(parse(), [settled])
   assert.equal(plan.matched, 1)
@@ -245,4 +253,59 @@ test('summary counts each kind of miss separately, never lumped', () => {
   assert.equal(s.notifications, 2)
   assert.equal(s.projectOnly, 1)
   assert.equal(s.applied, 1)
+})
+
+// ── Where the freight is consigned ──────────────────────────────────────────────
+//
+// ⚠️ THE BUG THESE PROTECT, and it was live. `routing_shipment.ship_direct` DEFAULTS
+// to false and `merge_center` DEFAULTS to 'CA', so a card nobody hand-edited asserted
+// "consigned via the Santa Fe Springs merge center". On 2026-08-13 all five
+// Bloomingdale's cards authorized for the 08-18 pickup read that way, while their own
+// notifications consigned them DIRECT to Secaucus / Los Angeles / Stone Mountain /
+// China Grove / Joppa. The BOL's ship-to block reads these fields.
+//
+// The parser had produced the right answer the whole time; the planner threw it away.
+
+test('the notification decides where the freight is consigned, beating a stored default', () => {
+  // The card carries `false` — the column default, which nobody typed. A COALESCE
+  // would treat that as an answer and change nothing; that is precisely how the
+  // wrong value survived, so the write is keyed on DISAGREEMENT, not on absence.
+  const plan = planRoutingApply(parse(), [card({ shipDirect: false, mergeCenter: 'CA' })])
+  assert.equal(plan.applies[0].set.shipDirect, true)
+  assert.equal(plan.applies[0].set.consignedTo, 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094')
+  // Named on both sides, because a change to the destination must never move quietly.
+  assert.match(plan.applies[0].consigneeWas, /merge center CA/)
+  assert.match(plan.applies[0].consigneeNow, /direct to SECAUCUS/)
+})
+
+test('a card that already agrees is left alone, so a re-run reports no change', () => {
+  const plan = planRoutingApply(parse(), [card({
+    shipDirect: true,
+    consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
+  })])
+  assert.equal(plan.applies[0].set.shipDirect, undefined)
+  assert.equal(plan.applies[0].set.consignedTo, undefined)
+  assert.equal(plan.applies[0].consigneeWas, null)
+})
+
+test('a merge-center notification writes the merge center, not just the direct case', () => {
+  const via = BODY.replace(
+    'Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
+    'Consigned to: SECAUCUS c/o MEGA-MERGE CA 12801 EXCELSIOR DRIVE SANTA FE SPGS , CA 90670',
+  )
+  const plan = planRoutingApply(parse({ body: via }), [card({ shipDirect: true })])
+  assert.equal(plan.applies[0].set.shipDirect, false)
+  assert.equal(plan.applies[0].set.mergeCenter, 'CA')
+})
+
+test('an unparseable consignee writes NOTHING — a non-answer is not evidence', () => {
+  // The rule from routingAuthSource: "we looked and found nothing" must never be
+  // written as if it were a finding. shipDirect null → no field is set.
+  const blank = BODY.replace(
+    'Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
+    'Consigned to:  ',
+  )
+  const plan = planRoutingApply(parse({ body: blank }), [card({ shipDirect: false })])
+  assert.equal(plan.applies[0].set.shipDirect, undefined)
+  assert.equal(plan.applies[0].set.consignedTo, undefined)
 })

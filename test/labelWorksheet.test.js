@@ -146,3 +146,96 @@ test('a freight sheet contributes no CSV rows', () => {
   const freight = buildLabelWorksheet({ ...SHIP, shipDirect: false }, [IF7469])
   assert.equal(worksheetCsv([freight]).trim(), CSV_COLUMNS.join(','))   // header only
 })
+
+// ── why there is no worksheet ───────────────────────────────────────────────────
+//
+// ⚠️ THE SILENCE THIS ENDS. On 2026-08-13 the five Bloomingdale's shipments
+// authorized for the 08-18 pickup reported `applicable:false cartons:0 lines:0` with
+// no explanation anywhere, on any surface. Nothing said whether that meant "this
+// lane never gets parcel labels" or "labels are owed and something is missing" —
+// and a blank space reads as the first even when it is the second.
+//
+// A count of zero is not a reason.
+
+test('a merge-center shipment says so, and is not styled as work', () => {
+  const w = buildLabelWorksheet(
+    { ...SHIP, shipDirect: false, mergeCenter: 'CA', consignedTo: 'SECAUCUS c/o MEGA-MERGE CA ...' },
+    [IF7469])
+  assert.equal(w.applicable, false)
+  assert.equal(w.why.kind, 'freight')
+  assert.equal(w.why.work, false)          // correct, not outstanding — tone matters
+  assert.match(w.why.text, /CA merge center/)
+  assert.match(w.why.text, /NB1731256/)    // it travels on the BOL, named
+})
+
+// ⚠️ Every routing card carries merge_center 'CA' from a COLUMN DEFAULT. Printing it
+// as fact would restate the default this whole change exists to stop trusting, in the
+// one place a human reads it.
+test('the merge center is named only on evidence, never from the column default', () => {
+  const w = buildLabelWorksheet({ ...SHIP, shipDirect: false, mergeCenter: 'CA' }, [IF7469])
+  assert.equal(w.why.kind, 'freight')
+  assert.doesNotMatch(w.why.text, /CA merge center/)
+  assert.match(w.why.text, /No routing notification has confirmed/)
+})
+
+// ⚠️ PR #79 fixed a Nordstrom BOL that printed Macy's name over a blank. The first
+// cut of this line put "consigned via the merge center (CA)" on all NINE live
+// Nordstrom cards — the same defect, in a new place. Nordstrom has no merge centers.
+test('Nordstrom is never told about a Macy\'s merge center', () => {
+  const w = buildLabelWorksheet(
+    { ...SHIP, partner: 'Nordstrom', dc: '089', shipDirect: false, mergeCenter: 'CA' }, [IF7469])
+  assert.equal(w.why.kind, 'freight')
+  assert.doesNotMatch(w.why.text, /merge/i)
+  assert.match(w.why.text, /ships as freight on BOL/)
+})
+
+// ⚠️ The first cut told Nima to pack six shipments whose freight left on 2026-08-05
+// and whose fulfilments all read Shipped. An explanation for an absence must first
+// ask whether the absence still matters.
+test('a departed shipment explains nothing — it is history, not work', () => {
+  const w = buildLabelWorksheet(
+    { ...SHIP, shippedAt: '2026-08-05T22:05:50Z' },
+    [{ poNumber: '8298615', ifNumber: 'IF7469', cartons: [] }])
+  assert.equal(w.why, null)
+})
+
+test('a direct shipment with unpacked fulfilments NAMES them', () => {
+  // The live shape: the shipment is authorized and consigned direct, so labels ARE
+  // the shipping method — but the fulfilments carry no cartons yet. "Pack these" is
+  // the actual next action, and it is per-IF, so the IFs are named rather than
+  // counted.
+  const w = buildLabelWorksheet(SHIP, [
+    { poNumber: '8298615', storeNumber: '0001', ifNumber: 'IF7511', cartons: [] },
+    { poNumber: '8298615', storeNumber: '0053', ifNumber: 'IF7514', cartons: [] },
+  ])
+  assert.equal(w.applicable, true)
+  // ⚠️ `cartons` is line COUNT, and a fulfilment with no carton row still gets a
+  // placeholder line so the gap stays visible — so this reads 2 for a shipment with
+  // nothing packed. That is why the card gates on `why` and not on this number.
+  assert.equal(w.cartons, 2)
+  assert.equal(w.lines.every((l) => l.missing), true)
+  assert.equal(w.why.kind, 'not_packed')
+  assert.equal(w.why.work, true)
+  assert.deepEqual(w.why.ifs, ['IF7511', 'IF7514'])
+  assert.match(w.why.text, /IF7511, IF7514/)
+  assert.match(w.why.text, /Pack them in NetSuite/)
+})
+
+test('one unpacked fulfilment reads as one, not "1 fulfilments"', () => {
+  const w = buildLabelWorksheet(SHIP, [{ poNumber: '8298615', ifNumber: 'IF7511', cartons: [] }])
+  assert.match(w.why.text, /fulfilment IF7511 has no cartons/)
+  assert.match(w.why.text, /Pack it in NetSuite/)
+})
+
+test('a direct shipment with no linked orders is a different problem, said differently', () => {
+  const w = buildLabelWorksheet(SHIP, [])
+  assert.equal(w.why.kind, 'no_orders')
+  assert.equal(w.why.work, true)
+  assert.match(w.why.text, /no order lines are linked/)
+})
+
+test('a worksheet that HAS lines gives no reason, because there is nothing to explain', () => {
+  const w = buildLabelWorksheet(SHIP, [IF7469])
+  assert.equal(w.cartons, 2)
+  assert.equal(w.why, null)
+})

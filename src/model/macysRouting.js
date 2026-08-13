@@ -373,6 +373,28 @@ export function planRoutingApply(notification, shipments = []) {
     // "applied" every ten minutes.
     const set = {}
     if (!norm(s.authNumber)) set.authNumber = notification.authNumber
+    // ── Where it is CONSIGNED, straight off the notification ────────────────
+    //
+    // ⚠️ These three were parsed from day one and thrown away, and the cost was not
+    // cosmetic. `routing_shipment.ship_direct` DEFAULTS to false and `merge_center`
+    // DEFAULTS to 'CA', so a card nobody hand-edited asserts "via the Santa Fe
+    // Springs merge center" — an assertion no one ever made. Every one of the five
+    // 2026-08-18 Bloomingdale's cards read that way while its own notification said
+    // SECAUCUS / LOS ANGELES / STONE MOUNTAIN / CHINA GROVE / JOPPA, direct.
+    //
+    // The notification is the AUTHORITY here, for the same reason it is on the
+    // pickup date (PR #97): it is the partner instructing us where to send the
+    // freight, and our stored value is a default nobody typed. So this is written
+    // whenever it DISAGREES, not only when absent — a COALESCE would be a no-op
+    // against `false`, which is exactly how the wrong value survived.
+    //
+    // `shipDirect` is null when the consignee block is unparseable; null means "we
+    // do not know", and nothing is written from a non-answer.
+    if (stop.shipDirect != null && !!s.shipDirect !== stop.shipDirect) set.shipDirect = stop.shipDirect
+    if (stop.mergeCenter && norm(s.mergeCenter) !== stop.mergeCenter) set.mergeCenter = stop.mergeCenter
+    // Verbatim, so "where did we actually send it" survives our address table
+    // changing under us.
+    if (stop.consignedTo && norm(s.consignedTo) !== norm(stop.consignedTo)) set.consignedTo = stop.consignedTo
     if (notification.carrier && norm(s.carrier) !== notification.carrier) set.carrier = notification.carrier
     if (notification.scac && norm(s.scac) !== notification.scac) set.scac = notification.scac
     if (notification.pickupDate && ymd(s.shipDate) !== notification.pickupDate) {
@@ -393,6 +415,15 @@ export function planRoutingApply(notification, shipments = []) {
       // Named so the run output can say "ship date 2026-08-12 → 2026-08-18" rather
       // than a bare count. A date this lane moves is never allowed to move quietly.
       shipDateWas: set.shipDate ? ymd(s.shipDate) : null,
+      // Same rule as the ship date: a change to where the freight is CONSIGNED is
+      // never allowed to move quietly. This is the field that decides the BOL's
+      // ship-to block, so the run output names both sides.
+      consigneeWas: set.shipDirect !== undefined
+        ? (s.shipDirect ? 'direct to the DC' : `via merge center ${s.mergeCenter || '?'}`)
+        : null,
+      consigneeNow: set.shipDirect !== undefined
+        ? (stop.shipDirect ? `direct to ${stop.dcName || 'the DC'}` : `via merge center ${stop.mergeCenter || '?'}`)
+        : null,
       set, changes: Object.keys(set).length,
     })
   }
