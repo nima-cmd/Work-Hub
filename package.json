@@ -2,7 +2,7 @@
   "name": "work-hub",
   "version": "0.1.0",
   "type": "module",
-  "description": "Warehouse order pipeline tracker — aggregates NetSuite saved-search exports (and later Orderful EDI + Airtable) into one aging-aware view so nothing sits ignored.",
+  "description": "Warehouse order pipeline tracker \u2014 aggregates NetSuite saved-search exports (and later Orderful EDI + Airtable) into one aging-aware view so nothing sits ignored.",
   "author": "Nima Erfani",
   "scripts": {
     "test": "node --test",
@@ -25,6 +25,7 @@
     "check:scan-gaps": "node --env-file=.env.local scripts/check-scan-gaps.js",
     "check:label-records": "node --env-file=.env.local scripts/check-label-records.js",
     "check:counters": "node --env-file=.env.local scripts/check-counters.js",
+    "check:fields": "node --env-file=.env.local scripts/check-fields.js",
     "zpl": "node scripts/zpl-print.js",
     "zpl:watch": "node scripts/zpl-print.js --watch",
     "server": "node --env-file=.env.local server/index.js",

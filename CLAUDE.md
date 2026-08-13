@@ -31,6 +31,7 @@ npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
+npm run check:fields       # which columns are DERIVED, not observed? (is this column always another + N?)
 npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
@@ -70,12 +71,18 @@ NetSuite saved searches ──(manual CSV export)──▶ src/ingest ──▶ 
 - **OC ↔ PO** has no native NetSuite link — the app will own that mapping
   (`oc_po_links` table).
 - **Natural keys** (SO#, IF#, INV#, PO#) are primary keys so re-imports upsert.
-- **Every counter bug here has been one of four shapes** — unreachable branch ·
+- **Every counter bug here has been one of five shapes** — unreachable branch ·
   counts something other than its label · keyed on a hand-set/display field where
-  an objective one exists · a comment describing a mechanism no code implements.
-  `npm run check:counters` mechanically catches the first two. The other two need
-  a human to check a field's provenance — so when a number looks calm, ask what
-  it is keyed on before believing it.
+  an objective one exists · a comment describing a mechanism no code implements ·
+  **a field that is pure arithmetic on another field** (`transaction.shipdate` was
+  `trandate + 28` on 1,234 of 1,254 SOs and drove 51 flags). `npm run check:counters`
+  mechanically catches the first two and the fifth; shapes 3 and 4 still need a human
+  to check a field's provenance — so when a number looks calm, ask what it is keyed
+  on before believing it. `npm run check:fields` is the fifth shape's full report.
+- **A default is not an answer.** `routing_shipment.ship_direct DEFAULT false` +
+  `merge_center DEFAULT 'CA'` made every routing card assert "via the Santa Fe
+  Springs merge center" — a claim nobody made, which the BOL then printed. When a
+  column can be unknown, let it be NULL and say so.
 
 ## Layout
 
@@ -89,6 +96,8 @@ src/model/stages.js      pipeline stages + next-action per stage
 src/model/pipeline.js    merge sources → order; aging + ATS-aware flags
 src/model/source.js      EDI vs boutique classification
 src/model/upsRates.js    UPS wholesale rates + the never-mislabel-the-account rule
+src/model/arithmeticFields.js  is this column always another column + N? (shape 5)
+src/ingest/arithmeticSweep.js  points that rule at every date/number column in Neon
 src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 856
 src/ingest/asnCartonSync.js  runs that check + persists it (the CLI and the cron share it)
 src/ingest/orderfulAsn.js    pull carton SSCCs + PO refs out of an 856 body
