@@ -182,12 +182,49 @@ export const isoDay = (t) => (t == null ? null : new Date(t).toISOString().slice
  * Returns null only when there is no honest date anywhere — never a guessed
  * one. A missing window must leave the board silent, not invent a deadline.
  */
+// ── NetSuite's ship date is not a ship date (2026-08-13) ────────────────────
+//
+// Nima: "the only date i see is the date that the order was created ... the ship
+// window manually being set is the only true ship window if im being honest.
+// Everything else is conjecture."
+//
+// He is right, and it is provable. Across 1,254 sales orders since January,
+// `transaction.shipdate` takes exactly THREE offsets from the order date:
+// +28 (1,234) · +30 (18) · +29 (2). It is a default lead time NetSuite computes,
+// not a date a person enters — which is why he cannot find it on the form. It
+// then PROPAGATES: INV11358 showed "ship date 8/26" purely because its sales
+// order was created on 7/29, while the goods actually left on 8/07.
+//
+// Treating it as a deadline was inventing work: 38 severity-2 "pack now"
+// instructions and 10 "fix this date in NetSuite" flags, all derived from
+// arithmetic on the creation date.
+//
+// So a ship date at one of the default offsets is NOT a window. Anything else IS
+// one — someone typed it — and that keeps this self-correcting: the day a real
+// date is set, the offset stops matching and the window comes back on its own.
+//
+// ⚠️ A hand-set date could coincidentally land on +28 and be read as absent. That
+// is the SAFE direction and it is Nima's own rule: with no window, work from the
+// creation date. The failure is a missing deadline, never a fabricated one.
+const DEFAULT_SHIP_OFFSETS = new Set([28, 29, 30])
+
+export function isDefaultedShipDate(order) {
+  const ship = toDay(order?.shipDate)
+  const made = toDay(order?.startDate)
+  if (ship == null || made == null) return false   // can't prove it — leave it alone
+  return DEFAULT_SHIP_OFFSETS.has(Math.round((ship - made) / 86_400_000))
+}
+
 export function shipWindow(order, today = new Date()) {
   const now = toDay(today)
   const edi = order?.ediWindow || null
   const snb = toDay(edi?.shipNotBefore)
   const cancel = toDay(edi?.cancelAfter)
-  const soShip = toDay(order?.shipDate)
+  // Never a NetSuite-defaulted date — see isDefaultedShipDate above. This is the
+  // ONLY place the sales order's own date enters the window, so gating it here
+  // covers the deadline, the flags, the age clock's runway and soPastCancel at
+  // once, rather than four times over.
+  const soShip = isDefaultedShipDate(order) ? null : toDay(order?.shipDate)
 
   // The binding date: the partner's cancel-after when they sent one, else the
   // sales order's own ship date.
