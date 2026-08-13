@@ -47,7 +47,7 @@ export default function Health({ onRefresh }) {
   if (err) return <div className="banner error">⚠ Couldn’t load health: {err}</div>
   if (!h) return <div className="banner">Checking…</div>
 
-  const { overall, integrations, syncs } = h
+  const { overall, integrations, syncs, fieldAssumptions } = h
 
   return (
     <div className="health">
@@ -128,6 +128,8 @@ export default function Health({ onRefresh }) {
         A sync is expected roughly every 90 minutes — the scheduled check asks for every 10, but
         GitHub throttles it. Flagged as late after {syncs.warnHours}h and stopped after {syncs.staleHours}h.
       </div>
+
+      <FieldAssumptions data={fieldAssumptions} />
 
       {/* The retired CSV path lives here and nowhere else (Nima, 2026-08-11) —
           it is a backup for a NetSuite outage, not a daily status readout. */}
@@ -267,6 +269,72 @@ function OverdueInvoices() {
             })}
           </div>
         </>
+      )}
+    </>
+  )
+}
+
+// ── the field-assumption register ───────────────────────────────────────────
+//
+// Not a bug list. Every serious defect this app has shipped was a field that was
+// present, populated, plausible, and meant something other than what the code read
+// it as — `transaction.shipdate` had a value on 1,254 sales orders and was a default
+// lead time; `is_ats` was false on all 282 orders. Both looked healthy on screen.
+//
+// It lives on Health because Health is where you go when a number looks wrong, and
+// the useful question at that moment is "has this field lied before, and what is it
+// actually keyed on?"
+function FieldAssumptions({ data }) {
+  const [open, setOpen] = useState(false)
+  if (!data) return null
+  const { summary, entries } = data
+  return (
+    <>
+      <h3 className="hlSection">Fields that did not mean what we thought</h3>
+      <div className="muted hlSub">
+        {summary.total} recorded across {summary.shapes.length} shapes.{' '}
+        {/* ⚠️ THE HONEST NUMBER. Most shapes have no mechanical guard — they need a
+            human to ask what a field is keyed on. Implying the checks cover
+            everything would be worse than having no register at all. */}
+        <b>{summary.guarded}</b> are caught by a script;{' '}
+        <b>{summary.unguarded}</b> need someone to ask what a field is keyed on.
+        {summary.repeats.length > 0 && (
+          <> Bitten twice: {summary.repeats.map((r) => <code key={r.field}>{r.field}</code>)}.</>
+        )}
+      </div>
+      <div className="faShapes">
+        {summary.shapes.map((s) => (
+          <div key={s.key} className="faShape">
+            <div className="faShapeTop">
+              <b>{s.label}</b><span className="faCount">{s.count}</span>
+            </div>
+            <div className="muted">{s.blurb}</div>
+            <div className={s.guard ? 'faGuard' : 'faGuard faGuardNone'}>
+              {s.guard ? <>caught by <code>{s.guard}</code></> : 'no script catches this — ask what the field is keyed on'}
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="rt-editToggle" onClick={() => setOpen((o) => !o)}>
+        {open ? '▾' : '⌖'} Every entry ({entries.length})
+      </button>
+      {open && (
+        <div className="faList">
+          {entries.map((e) => (
+            <div key={e.field + e.pr} className="faEntry">
+              <div className="faEntryTop">
+                <code>{e.field}</code>
+                <span className="hlBadge">{e.status}</span>
+                <span className="muted">PR #{e.pr} · {e.date}</span>
+              </div>
+              <div className="faLine"><span className="faKey">assumed</span>{e.assumed}</div>
+              <div className="faLine"><span className="faKey">actually</span>{e.actually}</div>
+              <div className="faLine"><span className="faKey">cost</span>{e.cost}</div>
+              {/* The most transferable line here: the same method finds the next one. */}
+              <div className="faLine"><span className="faKey">caught by</span>{e.caught}</div>
+            </div>
+          ))}
+        </div>
       )}
     </>
   )

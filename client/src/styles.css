@@ -2742,3 +2742,17 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* A work column is visually distinct from a watch column because that
    distinction is the whole point of the tab — 4 of 91 cards were ours to move. */
 .col.col-work > .colHead { color: var(--accent); }
+
+/* ── the field-assumption register (Health) ─────────────────────────────────── */
+.faShapes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin: 8px 0 10px; }
+.faShape { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.45; }
+.faShapeTop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.faCount { font-variant-numeric: tabular-nums; font-weight: 700; }
+.faGuard { margin-top: 5px; font-size: 10px; color: var(--muted); }
+/* A shape no script catches is the one that still needs a human — said, not hidden. */
+.faGuardNone { color: var(--warn, #c08a2e); }
+.faList { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.faEntry { border-left: 2px solid var(--line); padding: 4px 0 4px 10px; font-size: 11px; line-height: 1.5; }
+.faEntryTop { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 3px; }
+.faLine { display: flex; gap: 6px; }
+.faKey { color: var(--muted); min-width: 62px; flex: 0 0 62px; text-align: right; }
