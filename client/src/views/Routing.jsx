@@ -7,6 +7,7 @@ import {
 } from '../api.js'
 import { consolidateRouting } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
+import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
 import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
@@ -693,6 +694,11 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
 
       <PackCheck pack={g.pack} />
 
+      {/* Not on the Shipped archive — a departed shipment's authorization is
+          history, and the question this answers ("what am I waiting on?") is
+          only live while the card is still in the queue. */}
+      {!s?.shippedAt && <AuthSource s={s} g={g} />}
+
       <TenderLine tender={s?.tender} busy={busy} onApply={onApplyTender} />
 
       {g.cubicRoundingDiffers && (
@@ -917,6 +923,26 @@ function BolActions({ s }) {
 }
 
 // Compact read-only summary of whatever references are set.
+// Where this card's authorization comes from, and whether it has arrived
+// (Nima, 2026-08-13). Only on cards that do not have one yet — once the auth is
+// on the card RefSummary already prints it, and a second line would be noise.
+//
+// ⚠️ The point is the NOT_READ state: for months the Bloomingdale's lane was
+// hand entry that looked automated, and a bare "Needs routing" chip could not
+// tell that apart from "the email has not come". The rules and every sentence
+// live in src/model/routingAuthSource.js — pure and tested, because routing
+// logic put in .jsx in this repo has twice ended up untested.
+function AuthSource({ s, g }) {
+  const p = authProvenance({ shipment: s, group: g })
+  if (p.state === AUTH_STATE.APPLIED || p.state === AUTH_STATE.NOT_APPLICABLE) return null
+  return (
+    <div className={'rt-authSrc' + (p.manual ? ' manual' : '')}>
+      <span className="rt-authSrcHead">{p.manual ? '✋' : '✉'} {p.sourceLabel}</span>
+      <span className="rt-authSrcDetail">{p.detail}</span>
+    </div>
+  )
+}
+
 function RefSummary({ s }) {
   const bits = []
   if (s.authNumber) bits.push(['Auth', s.authNumber])
