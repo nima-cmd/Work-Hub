@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps } from '../api.js'
 import CsvBackup from './CsvBackup.jsx'
+import { NsLink } from '../lib.jsx'
 
 // Health — what's connected, what's arriving, and what to do when it isn't.
 //
@@ -173,19 +174,19 @@ function ShippedWhileOwing() {
             <span className="hlDot" />
             <div className="hlRowMain">
               <div className="hlRowTop">
-                <b>{r.ifNumber}</b>
+                <b><NsLink doc={r.ifNumber} /></b>
                 <span className="hlBadge" title="Money outstanding on terms that hold a packed shipment back">
                   {r.dueBeforeShipped ? 'was past due when it shipped' : 'outstanding'}
                 </span>
               </div>
               <div className="hlPowers">
                 {r.customer || <span className="muted">bill-to unknown</span>}
-                {' · '}<b>{money(r.amountRemaining)}</b> on {r.invoiceNumber}
+                {' · '}<b>{money(r.amountRemaining)}</b> on <NsLink doc={r.invoiceNumber} />
                 {' · shipped '}{new Date(r.shippedOn).toLocaleDateString()} ({r.daysSinceShipped}d ago)
                 <span className="muted">
                   {' · '}{r.invoiceTerms || 'terms unknown'}
                   {r.invoiceDueDate ? ` · due ${new Date(r.invoiceDueDate).toLocaleDateString()}` : ''}
-                  {r.soNumber ? ` · ${r.soNumber}` : ''}
+                  {r.soNumber ? <> · <NsLink doc={r.soNumber} /></> : ''}
                 </span>
               </div>
             </div>
@@ -248,7 +249,7 @@ function OverdueInvoices() {
                   <span className="hlDot" />
                   <div className="hlRowMain">
                     <div className="hlRowTop">
-                      <b>{r.invNumber}</b>
+                      <b><NsLink doc={r.invNumber} /></b>
                       <span className="hlBadge" title={inq.hint}>{inq.label}</span>
                     </div>
                     <div className="hlPowers">
@@ -257,7 +258,7 @@ function OverdueInvoices() {
                       {' · '}{r.daysOverdue}d past due
                       <span className="muted">
                         {' · '}{r.terms || 'terms unknown'} · due {new Date(r.dueDate).toLocaleDateString()}
-                        {r.soNumber ? ` · ${r.soNumber}` : ''}
+                        {r.soNumber ? <> · <NsLink doc={r.soNumber} /></> : ''}
                       </span>
                     </div>
                   </div>

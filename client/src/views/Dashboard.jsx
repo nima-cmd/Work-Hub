@@ -1,4 +1,4 @@
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, docDate, SourceBadge, taskToCard, LabelButtons } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRef, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons } from '../lib.jsx'
 
 // Attention-first: what needs action now, up top; pipeline overview above it.
 // `tasks` (open quest_tasks from Gmail/Slack transmissions) are merged into
@@ -33,13 +33,13 @@ export default function Dashboard({ orders, tasks = [] }) {
         {attention.map((o) => (
           <div key={o.soNumber} className={'card ' + sevClass(o.severity)}>
             <div className="cardTop">
-              <span className="so">{o.soNumber} <SourceBadge source={o.source} character={o.character} /></span>
+              <span className="so"><NsLink doc={o.soNumber} /> <SourceBadge source={o.source} character={o.character} /></span>
               <span className="cust">{o.customer}</span>
             </div>
             <div className="next">
               → {o.nextAction}
               {docRef(o) && (
-                <span className="ifs"> · {docRef(o)}{docDate(o) && ` · ${docDate(o)}`}</span>
+                <span className="ifs"> · <DocRefLinks o={o} />{docDate(o) && ` · ${docDate(o)}`}</span>
               )}
             </div>
             <Flags flags={o.flags} />

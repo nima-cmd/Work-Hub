@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
 import { fetchLaunchBay } from '../api.js'
+import { NsLink } from '../lib.jsx'
 import { channelMeta } from '../../../src/model/channels.js'
 import { NoteWidget, ChannelTag, CustomerName, DocLinks } from '../lib.jsx'
 
@@ -283,13 +284,13 @@ export default function LaunchBay3D() {
           <div className="holoDatapad">
             <div className="holoDatapadHead">
               <div>
-                <div className="mono" style={{ fontWeight: 700 }}>{selected.ifNumber || selected.soNumber}</div>
+                <div className="mono" style={{ fontWeight: 700 }}><NsLink doc={selected.ifNumber || selected.soNumber} /></div>
                 <div><ChannelTag order={selected} /> <CustomerName order={selected} /></div>
               </div>
               <button className="linkBtn" onClick={() => setSelected(null)}>✕</button>
             </div>
             <div className="holoDatapadMeta">
-              {selected.soNumber && <span>SO {selected.soNumber}</span>}
+              {selected.soNumber && <span>SO <NsLink doc={selected.soNumber} /></span>}
               {selected.poNumber && <span>PO {selected.poNumber}</span>}
               {selected.delayed
                 ? <span className="sev-hi">Overdue {selected.floatingDays}d</span>

@@ -341,6 +341,15 @@ export function docRefList(o) {
   return s ? s.split(',').map((x) => x.trim()).filter(Boolean) : []
 }
 
+// docRef() as CLICKABLE parts, reading the same as the joined string it replaces.
+// One component rather than the same three-line map in every view — a rule spelled out
+// in several places is the shape that has drifted every time it has been tried here.
+export function DocRefLinks({ o }) {
+  const docs = docRefList(o)
+  if (!docs.length) return null
+  return <>{docs.map((d, i) => <span key={d}>{i > 0 && ', '}<NsLink doc={d} /></span>)}</>
+}
+
 export function LabelButtons({ info }) {
   const [sizes, setSizes] = useState({})
   useEffect(() => {

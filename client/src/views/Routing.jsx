@@ -8,6 +8,7 @@ import {
 import { consolidateRouting } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
 import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
+import { NsLink } from '../lib.jsx'
 import { CARRIERS, macysDc } from '../../../src/model/bolAddresses.js'
 import { checkGroupPack, packSummary } from '../../../src/model/packCheck.js'
 import EmailLinks from '../EmailLinks.jsx'
@@ -383,7 +384,7 @@ function PackWarning({ groups = [] }) {
             <span className="muted">{g.memberPos.join(', ')}</span>
             {g.pack.problems.map((p) => (
               <span key={p.ifNumber} className="rt-gapChip miss">
-                {p.ifNumber} · {p.packedUnits}/{p.ifUnits}
+                <NsLink doc={p.ifNumber} /> · {p.packedUnits}/{p.ifUnits}
                 {p.blankCartons
                   ? ` · ${p.cartons} carton${p.cartons === 1 ? '' : 's'} with no quantity entered`
                   : ` · ${p.short} short`}
@@ -989,7 +990,7 @@ function Parcels({ s }) {
           {p.items.map((it) => (
             <div key={it.orderKey} className={'rt-ediRow' + (it.voided ? ' bad' : '')}>
               <span className="rt-ediNum">{it.orderNumber}</span>
-              <span className="muted">{it.ifNumber}{it.cartonNo ? ` · carton ${it.cartonNo}` : ''}</span>
+              <span className="muted"><NsLink doc={it.ifNumber} />{it.cartonNo ? ` · carton ${it.cartonNo}` : ''}</span>
               {it.trackingNumber
                 ? <a className="rt-ediNum" href={`https://www.ups.com/track?tracknum=${it.trackingNumber}`}
                      target="_blank" rel="noreferrer">{it.trackingNumber}</a>
@@ -1210,7 +1211,7 @@ function PackCheck({ pack }) {
               title={p.blankCartons
                 ? `${p.ifNumber}: ${p.cartons} carton(s) exist but no quantities were entered on them`
                 : `${p.ifNumber}: ${p.packedUnits} of ${p.ifUnits} units packed across ${p.cartons} carton(s)`}>
-          {p.ifNumber} {p.packedUnits}/{p.ifUnits}
+          <NsLink doc={p.ifNumber} /> {p.packedUnits}/{p.ifUnits}
           {p.blankCartons && <em> (cartons have no qty)</em>}
         </span>
       ))}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { STAGE_ORDER, STAGE_SHORT, sevClass, Flags, docRefList, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
 import { isParcelLane } from '../../../src/model/parcelLane.js'
@@ -278,13 +278,9 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                   <CustodyBadge card={o} events={events} dcList={poDcs[o.poNumber]} />
                   {o.isGroup
                     ? <div className="ifs">{o.soNumbers.slice(0, 4).join(', ')}{o.soNumbers.length > 4 ? ` +${o.soNumbers.length - 4}` : ''}</div>
-                    : docRefList(o).length > 0 && (
+                    : docRef(o) && (
                       <div className="ifs">
-                        {/* Each document is its own link — docRef() joins them into one
-                            string, which cannot be clicked per IF/invoice. */}
-                        {docRefList(o).map((d, i) => (
-                          <span key={d}>{i > 0 && ', '}<NsLink doc={d} /></span>
-                        ))}
+                        <DocRefLinks o={o} />
                         {docDate(o) && <span className="docdate"> · {docDate(o)}</span>}
                       </div>
                     )}

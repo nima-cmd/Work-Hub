@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { STAGE_SHORT, sevClass, SourceBadge, docRef, docDate, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, NoteWidget, ChannelTag, CustomerName, DocLinks, TaskLink, buildTaskDocIndex } from '../lib.jsx'
+import { STAGE_SHORT, sevClass, SourceBadge, docRef, DocRefLinks, NsLink, docDate, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, NoteWidget, ChannelTag, CustomerName, DocLinks, TaskLink, buildTaskDocIndex } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 
 // Dense, sortable table — closest to NetSuite/Airtable habits.
@@ -40,14 +40,14 @@ export default function TableView({ orders, tasks = [], onNavigate = () => {}, o
           <td className="mono">
             {o.isGroup
               ? <>{isOpen ? '▾' : '▸'} PO {o.poNumber} <span className="badge edi" style={{ marginLeft: 4 }}>{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span></>
-              : <>{o.soNumber} <SourceBadge source={o.source} /></>}
+              : <><NsLink doc={o.soNumber} /> <SourceBadge source={o.source} /></>}
           </td>
           <td><CustomerName order={o} /></td>
           <td><ChannelTag order={o} /></td>
           <td className="mono">{o.poNumber}</td>
           <td>{STAGE_SHORT[o.stage] || o.stage}</td>
           <td className="mono">
-            {docRef(o)}
+            <DocRefLinks o={o} />
             {docDate(o) && <span className="docdate"> · {docDate(o)}</span>}
             {!o.isGroup && (o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
               <div key={f.ifNumber}>
@@ -68,13 +68,13 @@ export default function TableView({ orders, tasks = [], onNavigate = () => {}, o
         </tr>
         {isOpen && o.members.map((m) => (
           <tr key={m.soNumber} className="groupMember">
-            <td className="mono" style={{ paddingLeft: 24 }}>↳ {m.soNumber} <SourceBadge source={m.source} /></td>
+            <td className="mono" style={{ paddingLeft: 24 }}>↳ <NsLink doc={m.soNumber} /> <SourceBadge source={m.source} /></td>
             <td><CustomerName order={m} /></td>
             <td><ChannelTag order={m} /></td>
             <td className="mono">{m.poNumber}</td>
             <td>{STAGE_SHORT[m.stage] || m.stage}</td>
             <td className="mono">
-              {docRef(m)}
+              <DocRefLinks o={m} />
               {(m.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
                 <div key={f.ifNumber}><LabelButtons info={{ ifNumber: f.ifNumber, soNumber: m.soNumber, customer: m.customer, poNumber: m.poNumber }} /></div>
               ))}
