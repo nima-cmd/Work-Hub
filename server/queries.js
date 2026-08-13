@@ -71,6 +71,7 @@ import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
 import { shipDateAdvice, rankShipDateAdvice, monthCloseCount, auditMarkedShipments } from '../src/model/shipDateAdvice.js'
 import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/syncHealth.js'
+import { ASSUMPTIONS, MECHANICAL, summarize as summarizeAssumptions } from '../src/model/fieldAssumptions.js'
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
@@ -1146,6 +1147,14 @@ export async function getSyncHealth() {
 //
 // ⚠️ Sends BOOLEANS and VARIABLE NAMES only — never a credential value. The
 // presence map is built here and nothing downstream can see more than that.
+// The field-assumption register (src/model/fieldAssumptions.js). Static — it is a
+// code fact, not a query — but served with Health so the app has one place that
+// answers "which numbers here have lied before, and what did they turn out to be
+// keyed on". Deliberately no table: see that file's header.
+export function getFieldAssumptions() {
+  return { summary: summarizeAssumptions(), entries: ASSUMPTIONS, guards: MECHANICAL }
+}
+
 export async function getHealth() {
   const present = {}
   for (const i of INTEGRATIONS) {
@@ -1153,7 +1162,10 @@ export async function getHealth() {
   }
   const integrations = computeIntegrationHealth(present)
   const syncs = await getSyncHealth()
-  return { overall: overallHealth({ integrations, syncs }), integrations, syncs }
+  return {
+    overall: overallHealth({ integrations, syncs }), integrations, syncs,
+    fieldAssumptions: getFieldAssumptions(),
+  }
 }
 
 // ── Naghedi-Warehouse freshness (its Supabase, read-only) ────────────────────

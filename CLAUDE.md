@@ -78,7 +78,11 @@ NetSuite saved searches ──(manual CSV export)──▶ src/ingest ──▶ 
   `trandate + 28` on 1,234 of 1,254 SOs and drove 51 flags). `npm run check:counters`
   mechanically catches the first two and the fifth; shapes 3 and 4 still need a human
   to check a field's provenance — so when a number looks calm, ask what it is keyed
-  on before believing it. `npm run check:fields` is the fifth shape's full report.
+  on before believing it. `npm run check:fields` is the fifth shape's full report,
+  and `src/model/fieldAssumptions.js` is the register of every one found so far —
+  what we assumed, what it actually was, what it cost, and how it was caught. It is
+  on **Health**; read it when a number looks wrong. ⚠️ 9 of 15 entries are shapes no
+  script can catch.
 - **A default is not an answer.** `routing_shipment.ship_direct DEFAULT false` +
   `merge_center DEFAULT 'CA'` made every routing card assert "via the Santa Fe
   Springs merge center" — a claim nobody made, which the BOL then printed. When a
@@ -96,6 +100,7 @@ src/model/stages.js      pipeline stages + next-action per stage
 src/model/pipeline.js    merge sources → order; aging + ATS-aware flags
 src/model/source.js      EDI vs boutique classification
 src/model/upsRates.js    UPS wholesale rates + the never-mislabel-the-account rule
+src/model/fieldAssumptions.js  the REGISTER of fields that didn't mean what we thought
 src/model/arithmeticFields.js  is this column always another column + N? (shape 5)
 src/ingest/arithmeticSweep.js  points that rule at every date/number column in Neon
 src/model/asnCartonCheck.js  every shipped carton vs every SSCC on a delivered 856
