@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
 
 import {
-  setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
+  setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, recordDeadLabel, undoDeadLabel, listDeadLabels, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
@@ -222,6 +222,33 @@ app.post('/api/print-label', async (req, res) => {
 // today's DC-direct ones. A download, so it opens straight into a carrier's import.
 // Push parcel shipments into ShipStation. Creates/updates orders only — buying the
 // label stays a human action in ShipStation.
+// A NetSuite label that is WRONG and cannot be replaced there (Nima, 2026-08-13:
+// "the label in netsuite is wrong and we can not make another one in netsuite").
+// ShipStation has a void button and NetSuite does not; this is that button.
+//
+// ⚠️ It does NOT lift the double-label rule — it records that one specific tracking
+// number will never be used, and labelEvidence.js then stops counting it. A LIVE
+// label still ends the question, and nothing here is automatic or inferred.
+app.post('/api/labels/dead', async (req, res) => {
+  try {
+    res.json(await recordDeadLabel(req.body || {}))
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+app.delete('/api/labels/dead', async (req, res) => {
+  try {
+    res.json(await undoDeadLabel(req.body || {}))
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+app.get('/api/labels/dead', async (_req, res) => {
+  try {
+    res.json(await listDeadLabels())
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
 app.post('/api/shipstation/push', async (req, res) => {
   try {
     res.json(await pushToShipstation(req.body || {}))

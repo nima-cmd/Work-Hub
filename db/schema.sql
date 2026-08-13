@@ -1582,3 +1582,33 @@ WHERE f.if_number IS NULL
 -- treats as the safe direction (money is due, i.e. the OLD flow) — so rows loaded
 -- before this, and every CSV-imported row, keep the behaviour they had.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS terms TEXT;
+
+-- ── A NetSuite label that is DEAD (2026-08-13) ───────────────────────────────
+-- Nima: "the label in netsuite is wrong and we can not make another one in
+-- netsuite and now have to make it outside of netsuite and shipstation would be
+-- the easier safer choice now."
+--
+-- ShipStation has a void button; NetSuite does not. So a NetSuite label that is
+-- wrong and unreplaceable (IF7486, and IF7453 before it, whose tracking reverts on
+-- edit) sat on the fulfilment forever and the push gate read it as "already
+-- labelled — ShipStation's job is done". That hold is deliberately outside
+-- `force`'s reach, because a second LIVE label is a double charge and a wrong
+-- tracking number on the ASN. The premise it rested on — that a label which exists
+-- is a label that will be used — is what was wrong.
+--
+-- This table is the missing void button, operated by hand. One row per killed
+-- TRACKING NUMBER (not per fulfilment: an IF can carry several, and only the bad
+-- one dies). `reason` is NOT NULL on purpose — an unexplained dead label is
+-- indistinguishable from a mistake six weeks later, and this is the kind of record
+-- that gets read exactly once, in an argument about a chargeback.
+--
+-- Reversible: deleting the row brings the label back to life. Nothing writes here
+-- automatically and nothing infers a death — src/model/labelEvidence.js only stops
+-- COUNTING what a human has named.
+CREATE TABLE IF NOT EXISTS dead_label (
+  if_number       TEXT NOT NULL,
+  tracking_number TEXT NOT NULL,
+  reason          TEXT NOT NULL,
+  recorded_at     TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (if_number, tracking_number)
+);

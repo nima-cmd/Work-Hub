@@ -49,7 +49,7 @@ import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
 import { PARCEL_LANE_SQL, isParcelLane, noBolReason } from '../src/model/parcelLane.js'
-import { labelTracking, labelCount, SHIPSTATION_TRACKING_SQL } from '../src/model/labelEvidence.js'
+import { labelTracking, labelCount, SHIPSTATION_TRACKING_SQL, DEAD_LABEL_SQL } from '../src/model/labelEvidence.js'
 import { closeReadiness } from '../src/model/closeReady.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
@@ -57,6 +57,7 @@ import { lastCheckedAt as macysRoutingLastChecked } from '../src/ingest/macysRou
 import {
   fetchEdiPackages, assignBol, fetchRoutingShipments, voidRoutingShipment, markShipmentShipped,
   updateShipmentRefs, upsertRoutingAuth, fetchRoutingAuths, assignAuthToShipments, deleteRoutingAuth,
+  markLabelDead, reviveLabel, fetchDeadLabels,
   fetchRoutingShipmentById,
   fetchRoutingHolds, addRoutingHold, removeRoutingHold, updateShipmentComposition, fetchShipmentsForPoDc,
   ensureMasterBol,
@@ -1592,7 +1593,8 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
       `SELECT f.if_number AS "ifNumber", o.so_number AS "soNumber", o.po_number AS "poNumber",
               o.customer, o.location, f.status,
               f.tracking_numbers AS "nsTracking",
-              ${SHIPSTATION_TRACKING_SQL} AS "ssTracking"
+              ${SHIPSTATION_TRACKING_SQL} AS "ssTracking",
+              ${DEAD_LABEL_SQL} AS "deadTracking"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
        WHERE f.actual_ship_date IS NULL
          AND (o.source = 'boutique' OR ${PARCEL_LANE_SQL})
@@ -1623,7 +1625,11 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
       pushable.map((r) => ({
         order: r, fulfilment: { ifNumber: r.ifNumber, status: r.status },
         address: addrs.get(r.ifNumber),
-        labelCount: labelCount({ nsTracking: r.nsTracking, ssTracking: r.ssTracking }),
+        labelCount: labelCount({ nsTracking: r.nsTracking, ssTracking: r.ssTracking, deadTracking: r.deadTracking }),
+        // How many of this box's labels a human has declared dead. Releases the
+        // PACKED_NO_LABEL hold — see src/model/shipstationEligible.js for why that
+        // is safe rather than a loosening.
+        deadLabelCount: (r.deadTracking || []).length,
         carrier: methods.get(r.ifNumber)?.carrier ?? null,
         shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
         shipMethodName: details.get(r.ifNumber)?.shipMethodName ?? null,
@@ -2230,6 +2236,9 @@ export async function getLabelGaps({ today = new Date() } = {}) {
            -- fulfilment — so asking f.tracking_numbers alone called IF7507's three
            -- real labels "needs a label" (2026-08-11). See labelEvidence.js.
            ${SHIPSTATION_TRACKING_SQL} AS "ssTracking",
+           -- ...and a NetSuite label a human has declared DEAD is not evidence
+           -- either: NetSuite has no void button. See labelEvidence.js.
+           ${DEAD_LABEL_SQL} AS "deadTracking",
            o.customer, o.source, o.po_number AS "poNumber", o.dc, o.location,
            i.status         AS "invoiceStatus",
            i.amount_total   AS "invoiceTotal",
@@ -2289,7 +2298,7 @@ export async function getLabelGaps({ today = new Date() } = {}) {
   const items = rows.map((r) => {
     // Both sources, one answer (src/model/labelEvidence.js). NetSuite first, then
     // whatever ShipStation knows that NetSuite hasn't been told yet.
-    const tracking = labelTracking({ nsTracking: r.trackingNumbers, ssTracking: r.ssTracking })
+    const tracking = labelTracking({ nsTracking: r.trackingNumbers, ssTracking: r.ssTracking, deadTracking: r.deadTracking })
     const labelled = tracking.length > 0
     // Has step 2 happened? A labelled parcel with no invoice has NOT reached the
     // ship decision — see src/model/labelGap.js for the 9-of-9 live miss.
@@ -2619,6 +2628,18 @@ export async function applyTender(tenderShipmentId) {
     carrier: plan.carrier,
     routing: await getRouting(),
   }
+}
+
+// ── Dead NetSuite labels ─────────────────────────────────────────────────────
+// The void button NetSuite lacks, operated by hand. Nothing here infers a death.
+export async function recordDeadLabel(body = {}) {
+  return markLabelDead(body)
+}
+export async function undoDeadLabel(body = {}) {
+  return reviveLabel(body)
+}
+export async function listDeadLabels() {
+  return fetchDeadLabels()
 }
 
 export async function saveRoutingAuth(body = {}) {
