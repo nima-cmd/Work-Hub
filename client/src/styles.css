@@ -2666,6 +2666,9 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-labels { margin-top: 6px; }
 .rt-labelSheet { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .rt-labelHead { display: flex; gap: 10px; align-items: baseline; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+/* Why a card has no label worksheet. Muted by default — a merge-center shipment is
+   not a problem — and .rt-warn on top when it is real outstanding work. */
+.rt-labelWhy { font-size: 11px; color: var(--muted); line-height: 1.4; }
 .rt-labelCarrier { margin-left: auto; color: var(--accent); font-weight: 600; }
 .rt-warn { color: var(--hi); }
 .rt-labelTable { width: 100%; border-collapse: collapse; font-size: 12px; }

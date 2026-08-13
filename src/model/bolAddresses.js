@@ -47,9 +47,11 @@ export const DEFAULT_MERGE = 'CA'
 // ship-to (DC_ABBREV), so a shipment's DC joins straight through with no second
 // naming scheme to keep in sync.
 //
-// Joppa is deliberately ABSENT rather than guessed — no notification has named it
-// yet, and per this file's own rule a missing field must render "(confirm …)" in
-// red instead of a plausible-looking address.
+// ✅ Joppa was deliberately ABSENT here until 2026-08-13 — no notification had named
+// it, and this file's rule is that a missing field renders "(confirm …)" in red
+// rather than a plausible-looking address. It is now present on the SAME evidence as
+// every other row: authorization 00052850381S (pickup 2026-08-18) consigns project
+// 9022557 to "JOPPA DC 3300 FASHION WAY JOPPA , MD 21085". Harvested, not typed.
 export const MACYS_DCS = {
   'Secaucus':       { name: "Macy's Secaucus DC",       street: '500 Meadowlands Parkway', city: 'Secaucus',        state: 'NJ', zip: '07094' },
   'Stone Mountain': { name: "Macy's Stone Mountain DC", street: '4401 Sarr Parkway',       city: 'Stone Mountain',  state: 'GA', zip: '30083' },
@@ -57,6 +59,7 @@ export const MACYS_DCS = {
   'Minooka':        { name: "Macy's Minooka DC",       street: '601 Midpoint Road',       city: 'Minooka',         state: 'IL', zip: '60447' },
   'China Grove DC': { name: "Macy's CFC China Grove DC", street: '1305 Liberty Ridge Rd', city: 'China Grove',     state: 'NC', zip: '28023' },
   'Hayward':        { name: "Macy's Hayward DC",       street: '28701 Hall Road',         city: 'Hayward',         state: 'CA', zip: '94545' },
+  'Joppa':          { name: "Macy's Joppa DC",         street: '3300 Fashion Way',        city: 'Joppa',           state: 'MD', zip: '21085' },
 }
 
 // Where a Bloomingdale's shipment is actually consigned. Two shapes, and the
@@ -197,10 +200,29 @@ function dcCityName(dc) {
 //   kind 'master' → name "Macy's <merge label>", at the merge-center address.
 // Nordstrom ships direct to its DC (kind is ignored).
 // Returns { block, missing[] }; block.name may be a 2-line string (\n).
-export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DEFAULT_MERGE } = {}) {
+export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DEFAULT_MERGE, direct = false } = {}) {
   let block
   if (partner === 'Nordstrom') {
     block = { ...(NORDSTROM_DCS[String(dc)] || { name: `Nordstrom DC #${dc}`, street: null, city: null, state: null, zip: null }) }
+  } else if (direct && kind !== 'master') {
+    // ⚠️ Consigned STRAIGHT to the DC — the case this function used to be unable to
+    // express. It always printed the merge center, so a BOL for a direct shipment
+    // sent cartons to Santa Fe Springs CA when the notification said Secaucus NJ.
+    // The direct-aware resolver (`routingShipTo`) existed and NOTHING CALLED IT;
+    // this is now the one path, so there is no second copy to drift.
+    //
+    // A master BOL is by definition the consolidation into a merge center, so
+    // `kind: 'master'` never takes this branch.
+    //
+    // An unknown DC yields null street/city/state/zip, which renders "(confirm …)"
+    // in red — this file's standing rule. A guessed address on a BOL is worse than
+    // a blank one, because a blank gets filled in and a guess gets trucked.
+    const addr = routingShipTo({ dc, direct: true })
+    block = {
+      name: addr ? addr.name : `Macy's ${dcCityName(dc)} DC (${dc})`,
+      street: addr?.street ?? null, city: addr?.city ?? null,
+      state: addr?.state ?? null, zip: addr?.zip ?? null,
+    }
   } else {
     const mc = MERGE_CENTERS[mergeCenter] || MERGE_CENTERS[DEFAULT_MERGE]
     const name = kind === 'master'

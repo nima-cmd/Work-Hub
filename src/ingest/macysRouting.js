@@ -139,16 +139,25 @@ export async function applyRouting(notification, applies, { dryRun = false } = {
       // value the plan deliberately declined to change.
       const { rowCount } = await client.query(
         `UPDATE routing_shipment
-            SET auth_number = COALESCE($2, auth_number),
-                carrier     = COALESCE($3, carrier),
-                scac        = COALESCE($4, scac),
-                ship_date   = COALESCE($5::date, ship_date),
+            SET auth_number  = COALESCE($2, auth_number),
+                carrier      = COALESCE($3, carrier),
+                scac         = COALESCE($4, scac),
+                ship_date    = COALESCE($5::date, ship_date),
+                ship_direct  = COALESCE($6::boolean, ship_direct),
+                merge_center = COALESCE($7, merge_center),
+                consigned_to = COALESCE($8, consigned_to),
                 status      = CASE WHEN status IN ('needs_routing','submitted','bol_assigned')
                                    THEN 'authorized' ELSE status END,
                 updated_at  = now()
           WHERE id = $1`,
+        // ⚠️ The COALESCE here guards the PARAMETER, not the column: the planner
+        // already decided each field, and only fields it chose are non-null. So a
+        // field the plan declined to change is left alone, while one it chose is
+        // written even when the stored value is a non-null default (`false` / 'CA').
+        // That distinction is the whole fix — see the planner's note.
         [a.shipmentId, a.set.authNumber ?? null, a.set.carrier ?? null,
-          a.set.scac ?? null, a.set.shipDate ?? null],
+          a.set.scac ?? null, a.set.shipDate ?? null,
+          a.set.shipDirect ?? null, a.set.mergeCenter ?? null, a.set.consignedTo ?? null],
       )
       shipments += rowCount
       fields += a.changes

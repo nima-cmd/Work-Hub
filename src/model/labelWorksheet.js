@@ -79,6 +79,15 @@ export function buildLabelWorksheet(ship = {}, rows = []) {
     billToZip: ship.billing?.accountZip || null,
     billingFromRule: !!ship.billing?.fromRule,
     applicable: !!ship.shipDirect,
+    // ⚠️ WHY there is no worksheet, whenever there isn't one. This read
+    // `applicable:false cartons:0 lines:0` with no explanation at all, and the five
+    // authorized 2026-08-18 Bloomingdale's shipments sat silent behind it — the
+    // cartons existed, the shipments were authorized, and nothing on any surface
+    // said what was missing. A count of zero is not a reason.
+    //
+    // Ordered by what a human would do next, most-actionable first, and each names
+    // the specific thing rather than a category.
+    why: whyNotApplicable(ship, rows, lines),
     lines,
     cartons: lines.length,
     // Totals are a cross-check against the BOL, not label input.
@@ -88,6 +97,81 @@ export function buildLabelWorksheet(ship = {}, rows = []) {
 }
 
 const round1 = (n) => Math.round(n * 10) / 10
+
+// Why this shipment has no per-carton label worksheet — null when it has one.
+//
+// The distinction that matters: "this lane never gets parcel labels" (a freight
+// shipment consolidating into a merge center — correct, nothing to do) versus "this
+// one should have them and something upstream is missing" (real work, named).
+// Collapsing those is how five authorized shipments went quiet for a day.
+export function whyNotApplicable(ship = {}, rows = [], lines = []) {
+  // ⚠️ NOT `lines.length`. The builder deliberately emits a placeholder line for a
+  // fulfilment with no carton row, so that the gap is visible rather than dropped —
+  // which means a shipment with nothing packed still has lines. Keying the
+  // explanation on line COUNT would have declared those worksheets fine, reproducing
+  // the exact silence this exists to end, one layer up.
+  if (ship.shipDirect && lines.some((l) => !l.missing)) return null
+
+  // ⚠️ DEPARTED SHIPMENTS ARE HISTORY. The first cut of this told Nima to "pack" six
+  // shipments whose freight had left on 2026-08-05 and whose fulfilments all read
+  // `Shipped` — inventing eight-day-old work on a card he can do nothing about. This
+  // repo has hit that exact shape repeatedly (the inverted departures board, the age
+  // clock that ran forever on shipped orders); a surface explaining an absence must
+  // first ask whether the absence still matters.
+  if (ship.shippedAt) return null
+
+  if (!ship.shipDirect) {
+    // ⚠️ Nordstrom has NO merge centers — it routes through its own Manhattan TMS
+    // straight to its DC, and `shipToFor` ignores mergeCenter for it entirely. The
+    // first cut printed "consigned via the merge center (CA)" on all nine Nordstrom
+    // cards: a Macy's mechanism named on a competitor's shipment, which is precisely
+    // the defect PR #79 fixed on the BOL itself. Keyed on the PARTNER, like that fix.
+    if (ship.partner === 'Nordstrom') {
+      return {
+        kind: 'freight',
+        work: false,
+        text: `No parcel labels — this ships as freight on BOL ${ship.bolNumber || '—'}.`,
+      }
+    }
+    // ⚠️ And the merge center is only NAMED when we have evidence for it. Every card
+    // carries merge_center 'CA' from a column default, so printing it unconditionally
+    // would state as fact the very default this PR exists to stop trusting. The
+    // consignee block off the routing notification is that evidence.
+    const named = ship.consignedTo && ship.mergeCenter
+    return {
+      kind: 'freight',
+      work: false,
+      text: named
+        ? `No parcel labels — consigned via the ${ship.mergeCenter} merge center, so this ships on BOL ${ship.bolNumber || '—'}.`
+        : `No parcel labels — not consigned direct to the DC, so this ships on BOL ${ship.bolNumber || '—'}. ` +
+          `No routing notification has confirmed where it is consigned.`,
+    }
+  }
+  // Direct to the DC, so labels ARE the shipping method — but there is nothing to
+  // build them from. Name the fulfilments, because "pack them" is the actual next
+  // action and it is per-IF.
+  if (!rows.length) {
+    return {
+      kind: 'no_orders',
+      work: true,
+      text: `No parcel labels — no order lines are linked to this shipment yet, so there is nothing to label.`,
+    }
+  }
+  const unpacked = rows.filter((r) => !r.cartons?.length)
+  const ifs = [...new Set(unpacked.map((r) => r.ifNumber).filter(Boolean))]
+  return {
+    kind: 'not_packed',
+    work: true,
+    ifs,
+    // The specific fulfilments, not a count — the whole point is that he can go and
+    // pack exactly these.
+    text: ifs.length
+      ? `No parcel labels yet — ${ifs.length === 1 ? 'fulfilment' : 'fulfilments'} ${ifs.join(', ')} ` +
+        `${ifs.length === 1 ? 'has' : 'have'} no cartons. Pack ${ifs.length === 1 ? 'it' : 'them'} in NetSuite ` +
+        `before a parcel label can be made.`
+      : `No parcel labels yet — ${unpacked.length} order line(s) on this shipment have no fulfilment, so no cartons exist to label.`,
+  }
+}
 
 // The label's own reference fields: PO and store are what the DC cross-docks on.
 export function labelLine(l) {

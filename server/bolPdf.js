@@ -105,6 +105,11 @@ function render(doc, shipment, kind) {
   const label = dcLabel(shipment.dc)
   const { block: shipTo, missing } = shipToFor(shipment.partner, shipment.dc, label, {
     kind, mergeCenter: shipment.mergeCenter || 'CA',
+    // Whether this is consigned straight to the DC. Comes off the routing
+    // notification (src/ingest/macysRouting.js) — until 2026-08-13 it was never
+    // passed here at all, so every Bloomingdale's BOL printed the merge center
+    // regardless of what the partner had actually instructed.
+    direct: !!shipment.shipDirect,
   })
   // Freight terms: Collect, unless the carrier is RXO (XLTL) → 3rd Party.
   const term = /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
