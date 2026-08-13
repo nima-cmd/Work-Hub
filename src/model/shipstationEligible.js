@@ -114,7 +114,7 @@ export const HOLD = {
 // `hasAddress`   — a label to nowhere is worse than a missing one.
 export function shipstationEligibility({
   status, labelCount = 0, carrier, shipMethod, shipMethodName, country, freightTerms, hasAddress = true,
-  thirdPartyAcct = null, thirdPartyZip = null, readFailed = false,
+  thirdPartyAcct = null, thirdPartyZip = null, readFailed = false, deadLabelCount = 0,
 } = {}) {
   const hold = (kind, reason) => ({ push: false, serviceCode: null, billTo: null, hold: kind, reason })
 
@@ -123,9 +123,22 @@ export function shipstationEligibility({
   if (labelCount > 0) return hold(HOLD.ALREADY_LABELLED, `already has ${labelCount} label${labelCount === 1 ? '' : 's'} — ShipStation's job is done`)
   if (!/^picked$/i.test(String(status || ''))) {
     if (/^packed$/i.test(String(status || ''))) {
-      return hold(HOLD.PACKED_NO_LABEL, 'marked Packed but carries no label anywhere — the label was expected to exist by now')
+      // ⚠️ …UNLESS a human has declared this box's label dead. PACKED_NO_LABEL means
+      // "the premise failed and this needs a human" — and a dead_label row IS that
+      // human, having already written down which number is unusable and why. Holding
+      // here would refuse the one case the marker was built for: IF7486, packed, with
+      // a wrong NetSuite label that NetSuite will not replace (Nima, 2026-08-13).
+      //
+      // Safe by construction, not by judgement: reaching this line at all requires
+      // labelCount === 0, so there is no live label to double up on.
+      if (deadLabelCount > 0) {
+        // fall through to the carrier/billing checks — the same ones a Picked row faces
+      } else {
+        return hold(HOLD.PACKED_NO_LABEL, 'marked Packed but carries no label anywhere — the label was expected to exist by now')
+      }
+    } else {
+      return hold(HOLD.NOT_PICKED, `${status || 'no status'} — only Picked fulfilments still need a label`)
     }
-    return hold(HOLD.NOT_PICKED, `${status || 'no status'} — only Picked fulfilments still need a label`)
   }
   if (!hasAddress) return hold(HOLD.NO_ADDRESS, 'no ship-to address in NetSuite')
 

@@ -1142,6 +1142,50 @@ export async function upsertRoutingAuth({ authNumber, partner, carrier, scac, no
   )
 }
 
+// ── Dead NetSuite labels (2026-08-13) ────────────────────────────────────────
+// The void button NetSuite does not have. See db/schema.sql and
+// src/model/labelEvidence.js for why this exists and what it deliberately does
+// NOT do (nothing infers a death; this only records one a human named).
+export async function markLabelDead({ ifNumber, trackingNumber, reason }, db = pool) {
+  const ifn = String(ifNumber || '').trim().toUpperCase()
+  const track = String(trackingNumber || '').trim()
+  const why = String(reason || '').trim()
+  if (!ifn || !track) throw new Error('ifNumber and trackingNumber are required')
+  // ⚠️ Required, not defaulted. An unexplained dead label reads as a mistake later,
+  // and this record is the one that gets produced in a chargeback argument.
+  if (!why) throw new Error('a reason is required — say why this label cannot be used')
+  await db.query(
+    `INSERT INTO dead_label (if_number, tracking_number, reason)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (if_number, tracking_number)
+     DO UPDATE SET reason = EXCLUDED.reason, recorded_at = now()`,
+    [ifn, track, why],
+  )
+  return { ifNumber: ifn, trackingNumber: track, reason: why }
+}
+
+// Reversible on purpose — a label wrongly declared dead must be revivable without
+// a database console.
+export async function reviveLabel({ ifNumber, trackingNumber }, db = pool) {
+  const { rowCount } = await db.query(
+    'DELETE FROM dead_label WHERE if_number = $1 AND tracking_number = $2',
+    [String(ifNumber || '').trim().toUpperCase(), String(trackingNumber || '').trim()],
+  )
+  return { removed: rowCount }
+}
+
+export async function fetchDeadLabels(ifNumbers = null, db = pool) {
+  const { rows } = await db.query(
+    ifNumbers?.length
+      ? `SELECT if_number AS "ifNumber", tracking_number AS "trackingNumber", reason,
+                recorded_at AS "recordedAt" FROM dead_label WHERE if_number = ANY($1::text[])`
+      : `SELECT if_number AS "ifNumber", tracking_number AS "trackingNumber", reason,
+                recorded_at AS "recordedAt" FROM dead_label`,
+    ifNumbers?.length ? [ifNumbers.map((x) => String(x).trim().toUpperCase())] : [],
+  )
+  return rows
+}
+
 export async function fetchRoutingAuths(db = pool) {
   const { rows } = await db.query(
     `SELECT auth_number AS "authNumber", partner, carrier, scac, note,

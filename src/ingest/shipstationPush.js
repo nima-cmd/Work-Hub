@@ -133,6 +133,7 @@ export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) 
   const { push, held } = partitionForShipstation(rows, (r) => ({
     status: r.order?.status ?? r.fulfilment?.status,
     labelCount: r.labelCount ?? 0,
+    deadLabelCount: r.deadLabelCount ?? 0,
     carrier: r.carrier,
     shipMethod: r.shipMethod,
     shipMethodName: r.shipMethodName,

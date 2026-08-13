@@ -21,16 +21,39 @@
 //
 // A VOIDED ShipStation label is not evidence — that is the whole point of
 // voiding — so the caller must exclude voided rows (see SHIPSTATION_TRACKING_SQL).
+//
+// ── ⚠️ A DEAD NETSUITE LABEL IS NOT EVIDENCE EITHER (Nima, 2026-08-13) ────────
+//
+// NetSuite made a WRONG label for IF7486 and will not let him void or replace it —
+// the same wall as IF7453, whose tracking reverts on edit. So the box carried a
+// tracking number that will never be used, and the push gate refused ShipStation
+// with "already has 1 label — ShipStation's job is done". That hold is deliberately
+// outside `force`'s reach, and rightly: a second LIVE label is a double charge and a
+// wrong number on the ASN.
+//
+// But the hold rested on a false premise — that a label which EXISTS is a label that
+// will be USED. ShipStation has a void button and NetSuite does not, so NetSuite's
+// dead labels had no way to be said out loud.
+//
+// `dead_label` is that button, by hand: a human names one tracking number as
+// unusable, with a reason. It then stops counting as evidence here — which is the
+// single place the push gate, labelGap and the ASN all read. The rule itself is
+// untouched: nothing is inferred, nothing is automatic, and a live label still ends
+// the question. See scripts/../server for the endpoint; the marker is reversible.
 
 // Merge the two sources into one de-duplicated list. Order is NetSuite first
 // because it is the system of record; ShipStation adds what NetSuite hasn't been
 // told yet.
-export function labelTracking({ nsTracking = null, ssTracking = null } = {}) {
+export function labelTracking({ nsTracking = null, ssTracking = null, deadTracking = null } = {}) {
+  // Compared on the trimmed string, the same normalisation the merge below uses —
+  // a marker that fails to match its own tracking number would silently do nothing,
+  // which is the failure mode this whole module exists to prevent.
+  const dead = new Set(toList(deadTracking).map((t) => String(t).trim()).filter(Boolean))
   const out = []
   for (const src of [nsTracking, ssTracking]) {
     for (const t of toList(src)) {
       const v = String(t).trim()
-      if (v && !out.includes(v)) out.push(v)
+      if (v && !dead.has(v) && !out.includes(v)) out.push(v)
     }
   }
   return out
@@ -56,6 +79,16 @@ export const SHIPSTATION_TRACKING_SQL =
   '(SELECT ARRAY_AGG(so.tracking_number) FROM shipstation_order so ' +
   "WHERE so.if_number = f.if_number AND so.tracking_number IS NOT NULL " +
   'AND NOT COALESCE(so.voided, false))'
+
+// The tracking numbers a human has marked dead, for the fulfilment in the OUTER
+// query. Same shape and same reason as SHIPSTATION_TRACKING_SQL: written once so
+// every consumer reads the identical rule.
+//
+// ⚠️ No backticks — interpolated into template-literal SQL in server/queries.js,
+// where a backtick closes the string and 500s the whole API.
+export const DEAD_LABEL_SQL =
+  '(SELECT ARRAY_AGG(dl.tracking_number) FROM dead_label dl ' +
+  'WHERE dl.if_number = f.if_number)'
 
 function toList(v) {
   if (v == null) return []
