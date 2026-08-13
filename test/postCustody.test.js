@@ -370,3 +370,80 @@ test('every post-custody state has a label, a work verdict, and a column positio
   assert.equal(PC_ORDER.length, new Set(PC_ORDER).size, 'a state is listed twice')
   for (const key of PC_ORDER) assert.ok(Object.values(PC).includes(key), `${key} is not a state`)
 })
+
+// ── "Did it actually leave?" (Nima, 2026-08-13) ─────────────────────────────
+// "for net 30 since we are marking as shipped before it departs ... i think we may
+// need to manually confirm they shipped out in the system on those ones. Since
+// within netsuite in my searches they are invisible to me"
+
+const inv1 = [{ invNumber: 'INV1', terms: 'Net 30', amountRemaining: 0 }]
+const shipped = (o = {}) => ff({ status: 'Shipped', labelled: true, actualShipDate: '2026-08-13', ...o })
+
+test('net terms: invoiced but nobody has said it left — it is NOT departed', () => {
+  const s = postCustodyState(net({ fulfilments: [shipped()], invoices: inv1 }), TODAY)
+  assert.equal(s.key, PC.SHIPPED_AWAITING_DEPARTURE)
+  assert.equal(s.isWork, true)
+  assert.match(s.waitingOn, /confirm it physically left/i)
+})
+
+test('net terms: once confirmed, it is departed', () => {
+  const s = postCustodyState(net({
+    fulfilments: [shipped({ departureConfirmedAt: '2026-08-13T18:00:00Z' })], invoices: inv1,
+  }), TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('net terms: the confirmation is undoable — a later un-confirm reopens it', () => {
+  const s = postCustodyState(net({
+    fulfilments: [shipped({
+      departureConfirmedAt: '2026-08-13T18:00:00Z',
+      departureUnconfirmedAt: '2026-08-13T19:00:00Z',
+    })],
+    invoices: inv1,
+  }), TODAY)
+  assert.equal(s.key, PC.SHIPPED_AWAITING_DEPARTURE)
+})
+
+test('the epoch keeps the OLD flow out — pre-change orders stay departed', () => {
+  // Marked shipped under the old flow, where the keystroke happened at the dock.
+  // Live 2026-08-13 this is 14 of the 15 shipped Net fulfilments; demanding a
+  // confirmation for them would invent 14 chores for goods long gone.
+  const s = postCustodyState(net({
+    fulfilments: [shipped({ actualShipDate: '2026-08-07' })], invoices: inv1,
+  }), TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('the invoice question comes FIRST — never both at once', () => {
+  // Ordering matters: an uninvoiced order is one step earlier, and asking both
+  // together is the lump this board keeps being fixed for.
+  const s = postCustodyState(net({ fulfilments: [shipped()], invoices: [] }), TODAY)
+  assert.equal(s.key, PC.SHIPPED_AWAITING_INVOICE)
+})
+
+test('due-on-receipt never asks for a departure confirmation', () => {
+  // Only the Net flow marks shipped before departure. On every other order the
+  // keystroke still means what it always meant.
+  const s = postCustodyState({
+    source: 'boutique', terms: 'Due on receipt',
+    fulfilments: [shipped()], invoices: inv1,
+  }, TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('EDI is untouched by the departure confirmation', () => {
+  const s = postCustodyState({
+    source: 'edi', terms: 'Net 60', fulfilments: [shipped()], invoices: inv1,
+  }, TODAY)
+  assert.equal(s.key, PC.DEPARTED)
+})
+
+test('the ship date renders in UTC — a date-only value must not print the day before', () => {
+  // Caught live on IF7480 (shipped 2026-08-13, printed "Aug 12"): actual_ship_date
+  // is date-only, so Date reads it as UTC midnight and a US local zone renders the
+  // previous day. fmtDay already pins UTC; this must too.
+  const s = postCustodyState(net({
+    fulfilments: [shipped({ actualShipDate: '2026-08-13' })], invoices: inv1,
+  }), TODAY)
+  assert.match(s.waitingOn, /Aug 13/)
+})

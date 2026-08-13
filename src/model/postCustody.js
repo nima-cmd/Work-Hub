@@ -25,6 +25,7 @@
 // (SO12344, already paid $13,636). Before flagging age, ask what it is waiting on.
 
 import { paymentBlocked, clearedReason, netTerms } from './paymentGate.js'
+import { isDepartureConfirmed, needsDepartureConfirm, inNetFlow, departureLabel } from './netDeparture.js'
 
 // A card is either WORK (we act now) or a WATCH (correct, someone else's move).
 // Kept as separate states rather than one backlog — the never-lump rule; summing
@@ -47,6 +48,9 @@ export const PC = {
   // Net terms only: NetSuite already says Shipped (that is what making the label
   // does now), but the goods cannot leave until the invoice is raised.
   SHIPPED_AWAITING_INVOICE: 'SHIPPED_AWAITING_INVOICE',
+  // Invoiced too, so nothing is holding it — but nobody has said it actually went,
+  // and under this flow no field can say it for us (src/model/netDeparture.js).
+  SHIPPED_AWAITING_DEPARTURE: 'SHIPPED_AWAITING_DEPARTURE',
   // ── Terminal ─────────────────────────────────────────────────────────────
   DEPARTED: 'DEPARTED',
 }
@@ -68,6 +72,9 @@ export const PC_IS_WORK = {
   // Work, and the whole reason this state exists: without it these cards read
   // Departed and vanish while still physically here.
   [PC.SHIPPED_AWAITING_INVOICE]: true,
+  // Work, and one keystroke of it — but it is the only thing standing between
+  // "goods still on our floor" and a board that says they are gone.
+  [PC.SHIPPED_AWAITING_DEPARTURE]: true,
   [PC.DEPARTED]: false,
 }
 
@@ -84,6 +91,7 @@ export const PC_LABEL = {
   [PC.AWAITING_PAYMENT]: 'Awaiting payment',
   [PC.NEEDS_MARK_SHIPPED]: 'Mark shipped',
   [PC.SHIPPED_AWAITING_INVOICE]: 'Invoice it to release',
+  [PC.SHIPPED_AWAITING_DEPARTURE]: 'Confirm it left',
   [PC.DEPARTED]: 'Departed',
 }
 
@@ -202,10 +210,30 @@ export function postCustodyState(card = {}, today = new Date()) {
   // It requires a fulfilment: an order marked SHIPPED with no fulfilment rows at
   // all (SO12263, SO12234) never took the label path, so there is nothing here
   // to release and the old answer is right.
-  if (netFlow && !hasInvoice && fulfilments.length &&
-      (departed || fulfilments.every((f) => /shipped/i.test(f.status || '')))) {
-    return state(PC.SHIPPED_AWAITING_INVOICE,
-      `Marked shipped on ${String(terms).trim()} — raise the invoice and print it, then it can go out`)
+  const allShipped = fulfilments.length > 0 && fulfilments.every((f) => /shipped/i.test(f.status || ''))
+  if (netFlow && fulfilments.length && (departed || allShipped)) {
+    if (!hasInvoice) {
+      return state(PC.SHIPPED_AWAITING_INVOICE,
+        `Marked shipped on ${String(terms).trim()} — raise the invoice and print it, then it can go out`)
+    }
+    // Invoiced, so nothing is holding it — but has it actually GONE? Under this
+    // flow no field can answer that (netDeparture.js), so it takes a human. The
+    // epoch keeps orders marked shipped under the OLD flow out: back then the
+    // keystroke happened at the dock, so it already meant departed.
+    const newFlowFuls = fulfilments.filter((f) => inNetFlow({
+      terms, source, shipDate: f.actualShipDate, netTerms,
+    }))
+    const unconfirmed = newFlowFuls.filter((f) => needsDepartureConfirm({
+      shipped: true, invoiced: true, confirmed: isDepartureConfirmed(f),
+    }))
+    if (unconfirmed.length) {
+      const f0 = unconfirmed[0]
+      const days = f0.actualShipDate
+        ? Math.floor((today - new Date(f0.actualShipDate)) / 86400000)
+        : null
+      return state(PC.SHIPPED_AWAITING_DEPARTURE,
+        departureLabel({ shipDate: f0.actualShipDate, daysSince: days }))
+    }
   }
   if (departed) return state(PC.DEPARTED, 'Departed')
   if (fulfilments.length && fulfilments.every((f) => /shipped/i.test(f.status || ''))) {
@@ -360,7 +388,7 @@ export function postCustodyState(card = {}, today = new Date()) {
 export const PC_ORDER = [
   PC.EDI_NEEDS_PACK, PC.EDI_NEEDS_ROUTING, PC.EDI_AWAITING_PICKUP, PC.EDI_AWAITING_DEPARTURE,
   PC.NEEDS_LABEL_OR_ROUTING, PC.NEEDS_MARK_PACKED, PC.AWAITING_INVOICE, PC.AWAITING_PAYMENT, PC.NEEDS_MARK_SHIPPED,
-  PC.SHIPPED_AWAITING_INVOICE,
+  PC.SHIPPED_AWAITING_INVOICE, PC.SHIPPED_AWAITING_DEPARTURE,
   PC.AWAITING_SHIP_WINDOW, PC.FOB_PICKUP, PC.DEPARTED,
 ]
 

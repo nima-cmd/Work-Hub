@@ -8,6 +8,7 @@ import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
+import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED } from '../src/model/netDeparture.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
@@ -127,7 +128,13 @@ export async function getOrders() {
                               WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PREP_CLEARED'),
             'prepNote',      (SELECT e.note FROM order_events e
                               WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PREPPED'
-                              ORDER BY e.occurred_at DESC LIMIT 1)
+                              ORDER BY e.occurred_at DESC LIMIT 1),
+            -- "it actually left", for the Net flow where no field can say so
+            -- (src/model/netDeparture.js). Latest-of-the-pair wins.
+            'departureConfirmedAt',   (SELECT MAX(e.occurred_at) FROM order_events e
+                              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'DEPARTURE_CONFIRMED'),
+            'departureUnconfirmedAt', (SELECT MAX(e.occurred_at) FROM order_events e
+                              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'DEPARTURE_UNCONFIRMED')
           ) ORDER BY f.if_number
         )
         FROM fulfillments f WHERE f.so_number = o.so_number
@@ -564,6 +571,31 @@ export async function setFulfillmentPrepped({ ifNumber, prepped = true, note } =
     source: 'manual',
   })
   return { ifNumber: doc, prepped }
+}
+
+// ── "Yes, it actually left" (Nima, 2026-08-13) ──────────────────────────────
+// Under the Net-terms flow he marks an order Shipped when the LABEL is made, so
+// NetSuite says shipped while the goods are still on the floor — and it drops out
+// of his NetSuite searches at that moment, which is the visibility he lost. Every
+// departure signal the app has is derived from that same keystroke, so nothing can
+// answer this but a person. Full reasoning in src/model/netDeparture.js.
+//
+// A plain ledger event, same spine as PREPPED, no schema change, no NetSuite side
+// effect, and undoable — a marker that can only ever be set is a trap.
+export async function setFulfillmentDeparted({ ifNumber, departed = true, note } = {}) {
+  const doc = String(ifNumber || '').trim()
+  if (!doc) throw new Error('ifNumber is required')
+  const { rows: fr } = await pool.query('SELECT so_number FROM fulfillments WHERE if_number = $1', [doc])
+  if (!fr.length) throw new Error(`no fulfilment ${doc}`)
+  await insertOrderEvent({
+    eventType: departed ? DEPARTURE_CONFIRMED : DEPARTURE_UNCONFIRMED,
+    docType: 'IF',
+    docNumber: doc,
+    soNumber: fr[0]?.so_number || null,
+    note: note?.trim() || null,
+    source: 'manual',
+  })
+  return { ifNumber: doc, departed }
 }
 
 export async function clearCustodyItem({ docType, docNumber }) {
