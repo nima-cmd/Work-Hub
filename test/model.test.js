@@ -10,7 +10,7 @@ import {
 } from '../src/ingest/savedSearches.js'
 import { detectSource } from '../src/ingest/detect.js'
 import { buildPipeline, computeFlags, ageClock, ageFlags } from '../src/model/pipeline.js'
-import { shipWindow, shipWindowFlags, isoDay, PACK_LEAD_DAYS } from '../src/model/shipWindow.js'
+import { shipWindow, shipWindowFlags, isoDay, PACK_LEAD_DAYS, isDefaultedShipDate } from '../src/model/shipWindow.js'
 import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
@@ -2838,4 +2838,64 @@ test('a lone EDI PO still becomes a group; a lone boutique PO does not', () => {
   // EDI fan-out arrives over time, so a single-SO PO is still a group card.
   assert.equal(groupOrdersByPo([mk('SO1', 'edi')])[0].isGroup, true)
   assert.equal(groupOrdersByPo([mk('SO1', 'boutique')])[0].isGroup, undefined)
+})
+
+// ── NetSuite's ship date is not a ship date (Nima, 2026-08-13) ──────────────
+// "the only date i see is the date that the order was created ... the ship window
+// manually being set is the only true ship window if im being honest. Everything
+// else is conjecture."
+//
+// Provable: across 1,254 sales orders since January, transaction.shipdate takes
+// exactly three offsets from the order date — +28 (1,234), +30 (18), +29 (2).
+test('a ship date at a NetSuite default offset is not a window', () => {
+  // +28, the overwhelming default. SO12473: created 08-12, "ships" 09-09.
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-09-09' }), true)
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-09-10' }), true)  // +29
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-09-11' }), true)  // +30
+})
+
+test('any other offset IS a window — someone typed it', () => {
+  // This is what keeps the rule self-correcting: the day a real date is set, the
+  // offset stops matching a default and the window comes back on its own.
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-08-16' }), false)
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-11-01' }), false)
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12', shipDate: '2026-08-01' }), false)
+})
+
+test('unprovable is left alone — no creation date means no verdict', () => {
+  assert.equal(isDefaultedShipDate({ shipDate: '2026-09-09' }), false)
+  assert.equal(isDefaultedShipDate({ startDate: '2026-08-12' }), false)
+  assert.equal(isDefaultedShipDate({}), false)
+})
+
+test('a defaulted date raises no deadline, and no flags derived from one', () => {
+  const order = { customer: 'Gracie’s', startDate: '2026-08-12', shipDate: '2026-09-09' }
+  const w = shipWindow(order, new Date('2026-08-13T12:00:00Z'))
+  // Nothing honest to say: no partner window either, so no window at all.
+  assert.equal(w, null)
+  assert.deepEqual(shipWindowFlags(order, new Date('2026-08-13T12:00:00Z')), [])
+})
+
+test('a real sales-order date still sets the deadline', () => {
+  const order = { customer: 'Gracie’s', startDate: '2026-08-12', shipDate: '2026-08-16' }
+  const w = shipWindow(order, new Date('2026-08-13T12:00:00Z'))
+  assert.ok(w)
+  assert.equal(w.source, 'so')
+  assert.equal(w.daysToShip, 3)
+})
+
+test('the partner 850 window is untouched by any of this', () => {
+  // EDI orders carry the same defaulted shipdate, but their deadline comes from
+  // the partner's cancel-after and must not move.
+  const order = {
+    customer: 'Nordstrom - 001', startDate: '2026-08-12', shipDate: '2026-09-09',
+    ediWindow: { shipNotBefore: '2026-08-20', cancelAfter: '2026-08-27' },
+  }
+  const w = shipWindow(order, new Date('2026-08-13T12:00:00Z'))
+  assert.equal(w.source, 'edi')
+  assert.equal(w.daysToShip, 14)
+  // ...and with the SO date gone, it can no longer claim the SO disagrees with
+  // the partner. That flag was firing on 10 orders, every one comparing the
+  // partner's real cancel date against NetSuite's arithmetic.
+  assert.equal(w.soPastCancel, false)
 })
