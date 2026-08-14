@@ -20,6 +20,7 @@ aging-aware pipeline so **nothing sits ignored**. It also serves as the canonica
 ```bash
 npm test               # unit tests for the model (no DB)
 npm run migrate        # apply db/schema.sql to Neon
+npm run db:mirror      # clone Neon -> local Postgres (DEVELOP AGAINST THIS, see below)
 npm run ingest         # load NetSuite saved-search CSV exports into the DB
 npm run server         # API + built UI at http://localhost:3001
 npm run dev            # live-editing (Vite + API)
@@ -37,6 +38,31 @@ npm run check:tenders      # does the accepted pickup date/carrier match our rou
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
 
 ```
+
+## ⚠️ Develop against the local mirror, not Neon
+
+Neon's Free plan allows **5 GB/month of public network transfer and SUSPENDS the
+compute when it runs out** — not throttled, stopped, until the next billing period.
+On 2026-08-14 we hit 84% by the 14th, and the measured cause was **development, not
+the app**: 131 commits in two weeks, and every verification loop reads Neon over the
+public internet (`check:counters` is 5.3 MB a run; a page load touching every surface
+is 3.3 MB; the whole database is 26 MB).
+
+```bash
+npm run db:mirror      # one 29 MB read, clones all 49 tables into local Postgres
+```
+
+Then `WORKHUB_DB=mirror` in `.env.local` points everything — dev server, tests,
+checks, scripts — at the clone. Comment it out to read Neon.
+
+**One way only, on purpose.** Neon → local, replacing the local copy each time. The
+app owns some of its data (BOL numbers that must never be reused, custody scans,
+tasks), so two writable copies would mean conflict resolution on exactly the records
+that must not diverge. The mirror is a disposable read replica for development.
+
+⚠️ **It is stale by definition.** The server prints its target at startup and Health
+shows a red banner with the clone's age. Never report a mirror number as live — that
+is `src/model/fieldAssumptions.js`'s whole bug class applied to the entire app.
 
 ## Data flow
 
@@ -117,6 +143,7 @@ server/queries.js        read orders (+fulfillments), re-apply flags
 server/index.js          Express API + serves built client
 client/src/views/        Dashboard · Kanban · TableView · Calendar
 scripts/                 analyze / migrate / ingest / sync / rate entry points
+scripts/db-mirror.js     clone Neon -> local Postgres (why: the 5 GB transfer cap)
 docs/                    NetSuite saved-search design + document-linking strategy
 ```
 

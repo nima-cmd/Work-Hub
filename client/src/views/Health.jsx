@@ -47,7 +47,7 @@ export default function Health({ onRefresh }) {
   if (err) return <div className="banner error">⚠ Couldn’t load health: {err}</div>
   if (!h) return <div className="banner">Checking…</div>
 
-  const { overall, integrations, syncs, fieldAssumptions } = h
+  const { overall, integrations, syncs, fieldAssumptions, database } = h
 
   return (
     <div className="health">
@@ -71,6 +71,22 @@ export default function Health({ onRefresh }) {
           {overall.detail && <div className="hlVerdictDetail">{overall.detail}</div>}
         </span>
       </div>
+
+      {/* ⚠️ WHICH DATABASE every number on every page came from. A local mirror is
+          stale by definition, and the sync ages below are the ages recorded INSIDE
+          the snapshot — so on a mirror they say how fresh Neon was when it was
+          cloned, not now. A stale snapshot read as live is the field-assumption bug
+          class applied to the entire app, so this is a banner, not a footnote. */}
+      {database?.isMirror && (
+        <div className="banner error hlMirror">
+          ⚠ Reading the <b>LOCAL MIRROR</b>
+          {/* fmtAge already ends in "ago" — no second one. */}
+          {database.ageHours != null && <> · cloned <b>{fmtAge(database.ageHours)}</b></>}
+          {' '}— these numbers are a snapshot, not live NetSuite data. Run{' '}
+          <code>npm run db:mirror</code> to re-clone, or comment out{' '}
+          <code>WORKHUB_DB</code> in <code>.env.local</code> to read Neon.
+        </div>
+      )}
 
       <h3 className="hlSection">Connections</h3>
       <div className="hlRows">

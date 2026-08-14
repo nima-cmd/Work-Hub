@@ -2,7 +2,7 @@
 // each with the SAME pipeline flags the CLI analyzer uses, so UI and analyzer
 // never disagree.
 
-import { pool } from '../src/db.js'
+import { pool, DB_TARGET, IS_MIRROR, mirrorAsOf } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
@@ -1162,9 +1162,20 @@ export async function getHealth() {
   }
   const integrations = computeIntegrationHealth(present)
   const syncs = await getSyncHealth()
+  // ⚠️ WHICH DATABASE fed every number on this page. A local mirror is stale by
+  // definition; the sync ages above are the ages recorded IN the snapshot, so on a
+  // mirror they describe how fresh Neon was when it was cloned, not now. Reporting
+  // those as live would be the field-assumption bug class applied to the whole app.
+  const m = await mirrorAsOf()
   return {
     overall: overallHealth({ integrations, syncs }), integrations, syncs,
     fieldAssumptions: getFieldAssumptions(),
+    database: {
+      target: DB_TARGET,
+      isMirror: IS_MIRROR,
+      clonedAt: m?.at ? m.at.toISOString() : null,
+      ageHours: m?.ageHours ?? null,
+    },
   }
 }
 
