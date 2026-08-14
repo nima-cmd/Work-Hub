@@ -2764,3 +2764,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* "not in ShipStation yet" on a routing card. Muted, not alarming — the push is
    deliberately human-initiated, so this is a signpost, not a fault. */
 .rt-pushHint { font-size: 11px; color: var(--muted); line-height: 1.45; padding: 2px 0; }
+
+/* Retro QR tag sheet (Scan Bay) */
+.tagSheet { padding: 4px 0; }
+.tagRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.tagRow select { padding: 5px 8px; font-size: 12px; }
+.tagList { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; margin-top: 8px; }
+.tagItem { display: flex; gap: 8px; font-size: 11px; align-items: baseline; }
+.tagItem span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

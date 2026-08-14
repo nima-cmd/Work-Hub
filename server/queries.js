@@ -2732,6 +2732,60 @@ export async function fileShipmentToDrive(id) {
   })
 }
 
+// ── Retro QR tags, by ship date ─────────────────────────────────────────────
+//
+// Nima, 2026-08-14: fulfilments printed before the packing-slip QR landed have no
+// code on the paper, so they cannot be scanned in. Rather than reprint the slips, the
+// same cargo tag we already print for EDI carries a QR encoding the IF — so a sticker
+// on the existing page is enough.
+//
+// Batched BY SHIP DATE because that is how the paperwork is filed: printing a day's
+// tags is simultaneously the scan codes AND the finding aid for that day's pile.
+//
+// ⚠️ WE DO NOT KNOW WHICH SLIPS ALREADY HAVE A QR. Nothing records it — no column in
+// the schema mentions it, and the slip is printed by NetSuite, not by us. So this
+// deliberately returns EVERY fulfilment shipped that day rather than pretending to
+// filter. Said out loud in the response (`qrKnown: false`) so no surface claims a
+// completeness it cannot have. A duplicate sticker costs nothing; a missing one costs
+// a hunt through the pile.
+export async function getTagSheet({ shipped = null, from = null, to = null } = {}) {
+  if (!shipped && !from) throw new Error('a ship date is required')
+  const { rows } = await pool.query(
+    `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
+            o.customer, o.po_number AS "poNumber", o.source,
+            to_char(f.actual_ship_date, 'YYYY-MM-DD') AS "shippedOn",
+            (SELECT COUNT(*) FROM edi_carton c WHERE c.if_number = f.if_number)::int AS cartons
+       FROM fulfillments f
+       LEFT JOIN orders o ON o.so_number = f.so_number
+      WHERE f.status = 'Shipped' AND f.actual_ship_date IS NOT NULL
+        AND ($1::date IS NULL OR f.actual_ship_date::date = $1::date)
+        AND ($2::date IS NULL OR f.actual_ship_date::date >= $2::date)
+        AND ($3::date IS NULL OR f.actual_ship_date::date <= $3::date)
+      ORDER BY f.if_number`,
+    [shipped, from, to || from],
+  )
+  return {
+    items: rows.map((r) => ({
+      ...r,
+      // EDI tags reference the customer PO, boutique ones the SO — the same rule the
+      // single-tag path uses, so a retro tag is indistinguishable from a fresh one.
+      refByPo: r.source === 'edi',
+    })),
+    count: rows.length,
+    shipped: shipped || null, from: from || null, to: to || null,
+    qrKnown: false,
+  }
+}
+
+/** Which ship dates have fulfilments, so the UI can offer real days not a blank box. */
+export async function getShipDays({ limit = 60 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT to_char(actual_ship_date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+       FROM fulfillments WHERE status = 'Shipped' AND actual_ship_date IS NOT NULL
+      GROUP BY 1 ORDER BY 1 DESC LIMIT $1`, [limit])
+  return rows
+}
+
 // ── Master BOL (multi-DC via 1:1 Merge Center) ───────────────────────────────
 // Aggregate every underlying shipment on an authorization into one Master BOL:
 // union of POs (each PO's cartons/weight summed across its DCs), summed totals,

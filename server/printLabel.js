@@ -152,13 +152,22 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
   })
 }
 
-function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber, refByPo }) {
+function buildPdf(path, cfg, info) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
     const out = createWriteStream(path)
     out.on('finish', resolve)
     out.on('error', reject)
     doc.pipe(out)
+    drawTag(doc, cfg, info)
+    doc.end()
+  })
+}
+
+// The tag itself, drawn onto a page that already exists — so one label and a
+// fifty-label sheet share ONE implementation and cannot drift apart.
+function drawTag(doc, cfg, { ifNumber, soNumber, customer, poNumber, refByPo, shippedOn, cartons }) {
+  {
     if (cfg.wash) doc.rect(0, 0, cfg.w, cfg.h).fill(cfg.wash)
     doc.fillColor('black')
 
@@ -179,6 +188,14 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber, refByPo }
       doc.font('Helvetica-Bold').fontSize(18).text(IF, tx, MARGIN + 10, { width: tw })
       doc.font('Helvetica').fontSize(8)
         .text(refLines.join('\n'), tx, MARGIN + 32, { width: tw, lineGap: 1 })
+      // ⚠️ The ship date is the whole point of a retro tag: it is how Nima finds the
+      // matching paperwork in the pile. Bottom-right so it never collides with the
+      // reference block, which is variable height.
+      if (shippedOn) {
+        doc.font('Helvetica-Bold').fontSize(7)
+          .text(`SHIPPED ${shippedOn}${cartons ? ` · ${cartons} ctn` : ''}`,
+            tx, cfg.h - MARGIN - 8, { width: tw })
+      }
     } else {
       // 4×6: centred, big QR — the full cargo tag.
       const cx = cfg.w / 2
@@ -193,8 +210,58 @@ function buildPdf(path, cfg, { ifNumber, soNumber, customer, poNumber, refByPo }
       doc.font('Helvetica').fontSize(8)
         .text('SCAN OUT → WAREHOUSE', 24, cfg.h - 26, { width: cfg.w - 48, align: 'left', characterSpacing: 1, continued: false })
       doc.text('SCAN IN → RETURNED', 24, cfg.h - 26, { width: cfg.w - 48, align: 'right', characterSpacing: 1 })
+      if (shippedOn) {
+        doc.font('Helvetica-Bold').fontSize(12)
+          .text(`SHIPPED ${shippedOn}${cartons ? `  ·  ${cartons} carton${cartons === 1 ? '' : 's'}` : ''}`,
+            0, 380, { width: cfg.w, align: 'center' })
+      }
+    }
+  }
+}
+
+// ── A sheet of tags, one per page, for a whole ship date ────────────────────
+//
+// Nima, 2026-08-14: "if i wanted to print a qr code for everything on july 31. This
+// would both give me the code i need for the scan and also help me find the paper
+// work and organize them in the correct method."
+//
+// ⚠️ ONE multi-page PDF and ONE `lp` job, not N jobs. A busy day is 50 fulfilments
+// (2026-07-30 was exactly that), and fifty separate spool jobs is fifty chances for
+// the queue to jam — which has already silently killed printing here for three days
+// once. One job also keeps the tags in a single predictable order to match against
+// the paperwork.
+export async function buildTagSheet(path, cfg, items = []) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0, autoFirstPage: false })
+    const out = createWriteStream(path)
+    out.on('finish', resolve)
+    out.on('error', reject)
+    doc.pipe(out)
+    for (const it of items) {
+      doc.addPage({ size: [cfg.w, cfg.h], margin: 0 })
+      drawTag(doc, cfg, it)
     }
     doc.end()
+  })
+}
+
+export async function makeTagSheet(items = [], size = '2.25x1.25') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size: ${size}`)
+  if (!items.length) throw new Error('no fulfilments to print')
+  const dir = mkdtempSync(join(tmpdir(), 'tag-sheet-'))
+  const path = join(dir, `tags-${size}.pdf`)
+  await buildTagSheet(path, cfg, items)
+  return { path, cfg, count: items.length }
+}
+
+export async function printTagSheet(items = [], size = '2.25x1.25') {
+  const { path, cfg, count } = await makeTagSheet(items, size)
+  return new Promise((resolve, reject) => {
+    execFile('lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {
+      if (error) return reject(new Error(stderr || error.message))
+      resolve({ ok: true, size, count, printer: cfg.queue, detail: stdout.trim() })
+    })
   })
 }
 

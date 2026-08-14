@@ -22,6 +22,7 @@ import {
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth, applyTender,
+  getTagSheet, getShipDays,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive, getLabelGaps, getOverdueInvoices, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
@@ -42,7 +43,7 @@ import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
-import { printCargoTag, availableSizes } from './printLabel.js'
+import { printCargoTag, availableSizes, makeTagSheet, printTagSheet } from './printLabel.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -204,6 +205,37 @@ app.get('/api/ledger/daily', async (req, res) => {
 // availability so the UI can hide/disable the button on the cloud deploy.
 app.get('/api/print-label/available', async (_req, res) => {
   res.json(await availableSizes())
+})
+
+// Which days have shipments, so the UI offers real dates rather than a blank box.
+app.get('/api/print-label/days', async (_req, res) => {
+  try { res.json(await getShipDays({})) }
+  catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// What a day's sheet would contain — checked before anything is printed.
+app.get('/api/print-label/sheet', async (req, res) => {
+  try { res.json(await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null })) }
+  catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
+})
+
+// The sheet as a PDF. ⚠️ Always available, even where no printer queue exists (the
+// cloud deploy, or a laptop) — so a day's tags can still be produced and printed the
+// ordinary way rather than the feature being dead outside the warehouse.
+app.get('/api/print-label/sheet.pdf', async (req, res) => {
+  try {
+    const { items } = await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null })
+    const { path, count } = await makeTagSheet(items, req.query.size || '2.25x1.25')
+    res.setHeader('X-Tag-Count', String(count))
+    res.type('pdf').sendFile(path)
+  } catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
+})
+
+app.post('/api/print-label/sheet', async (req, res) => {
+  try {
+    const { items } = await getTagSheet({ shipped: req.body?.shipped || null, from: req.body?.from || null, to: req.body?.to || null })
+    res.json(await printTagSheet(items, req.body?.size || '2.25x1.25'))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 app.post('/api/print-label', async (req, res) => {

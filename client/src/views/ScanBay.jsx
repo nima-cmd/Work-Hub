@@ -147,8 +147,11 @@ export default function ScanBay() {
         <button className={'bayModeBtn' + (bayMode === 'file' ? ' active' : '')} onClick={() => setBayMode('file')}>
           📄 Scan → Drive
         </button>
+        <button className={'bayModeBtn' + (bayMode === 'tags' ? ' active' : '')} onClick={() => setBayMode('tags')}>
+          🏷 Print QR tags
+        </button>
       </div>
-      {bayMode === 'file' ? (
+      {bayMode === 'tags' ? <TagSheet /> : bayMode === 'file' ? (
         <Suspense fallback={<div className="banner">Loading scanner…</div>}>
           <ScanToDrive />
         </Suspense>
@@ -333,5 +336,95 @@ function BoxCapture({ ifNumber }) {
       {state === 'saved' && <div className="boxNote ok">✓ Recorded — add another box or skip.</div>}
       {state && state !== 'saving' && state !== 'saved' && <div className="boxNote bad">{state}</div>}
     </form>
+  )
+}
+
+// ── Retro QR tags for a ship date ───────────────────────────────────────────
+//
+// Nima, 2026-08-14: fulfilments printed before the packing-slip QR landed carry no
+// code, so they cannot be scanned in. Rather than reprint slips, print the cargo tag
+// — its QR already encodes the IF — and stick it on the existing page.
+//
+// Batched BY SHIP DATE because that is how the paperwork is filed: a day's tags are
+// simultaneously the scan codes and the finding aid for that day's pile.
+function TagSheet() {
+  const [days, setDays] = useState([])
+  const [day, setDay] = useState('')
+  const [sheet, setSheet] = useState(null)
+  const [size, setSize] = useState('2.25x1.25')
+  const [msg, setMsg] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { fetch('/api/print-label/days').then((r) => r.json()).then(setDays).catch(() => {}) }, [])
+  useEffect(() => {
+    if (!day) { setSheet(null); return }
+    fetch(`/api/print-label/sheet?shipped=${day}`).then((r) => r.json()).then(setSheet).catch(() => setSheet(null))
+  }, [day])
+
+  async function print() {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetch('/api/print-label/sheet', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shipped: day, size }),
+      })
+      const j = await r.json()
+      setMsg(r.ok ? `✓ sent ${j.count} tag(s) to ${j.printer}` : `⚠ ${j.error}`)
+    } catch (e) { setMsg('⚠ ' + e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="tagSheet">
+      <h3 className="hlSection">Print QR tags for a ship date</h3>
+      <div className="muted hlSub">
+        For fulfilments whose paperwork predates the packing-slip QR. The tag's QR encodes
+        the IF, so the Scan Bay reads it exactly like a printed slip — stick it on the page.
+      </div>
+      <div className="tagRow">
+        <select value={day} onChange={(e) => setDay(e.target.value)}>
+          <option value="">Pick a ship date…</option>
+          {days.map((d) => <option key={d.day} value={d.day}>{d.day} · {d.n} fulfilment{d.n === 1 ? '' : 's'}</option>)}
+        </select>
+        <select value={size} onChange={(e) => setSize(e.target.value)}>
+          <option value="2.25x1.25">2.25×1.25 (MUNBYN)</option>
+          <option value="4x6">4×6 (Zebra)</option>
+        </select>
+        {day && (
+          <>
+            {/* The PDF works everywhere; direct printing only where the queue exists.
+                Offering both means this is never dead on a laptop or the deploy. */}
+            <a className="btn" href={`/api/print-label/sheet.pdf?shipped=${day}&size=${size}`} target="_blank" rel="noreferrer">
+              ⤓ PDF
+            </a>
+            <button className="btn" disabled={busy || !sheet?.count} onClick={print}>
+              {busy ? '🏷 Printing…' : '🏷 Print all'}
+            </button>
+          </>
+        )}
+      </div>
+      {msg && <div className="banner">{msg}</div>}
+      {sheet && (
+        <>
+          {/* ⚠️ NOTHING RECORDS which slips already carry a QR — the slip is printed by
+              NetSuite, not by us. So this is every fulfilment that shipped that day, not
+              only the ones missing a code, and it says so rather than implying a filter
+              it cannot perform. A duplicate sticker costs nothing; a missing one costs a
+              hunt through the pile. */}
+          <div className="muted hlFoot">
+            {sheet.count} tag{sheet.count === 1 ? '' : 's'} — every fulfilment shipped that day.
+            We do not record which slips already have a QR, so this does not filter them out.
+          </div>
+          <div className="tagList">
+            {sheet.items.map((i) => (
+              <div key={i.ifNumber} className="tagItem">
+                <b>{i.ifNumber}</b>
+                <span className="muted">{i.customer || '—'}</span>
+                <span className="muted">{i.refByPo ? `PO ${i.poNumber}` : i.soNumber}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
