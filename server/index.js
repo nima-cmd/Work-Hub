@@ -2,6 +2,7 @@
 // (in production) serves the built React client. Run: `npm run server`
 // (which loads .env.local for the Neon connection).
 
+import { IS_MIRROR, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -1503,4 +1504,19 @@ if (existsSync(dist)) {
   app.use((_req, res) => res.sendFile(join(dist, 'index.html')))
 }
 
-app.listen(PORT, () => console.log(`▶ Tracker running at http://localhost:${PORT}`))
+// ⚠️ WHICH DATABASE, said out loud, every start. The local mirror is stale by
+// definition, and a stale mirror reporting as live is the worst version of the bug
+// class src/model/fieldAssumptions.js exists to record. If the target is ever
+// ambiguous, no number from this server can be trusted.
+app.listen(PORT, async () => {
+  console.log(`▶ Tracker running at http://localhost:${PORT}`)
+  if (IS_MIRROR) {
+    const m = await mirrorAsOf()
+    const age = m?.ageHours == null ? 'unknown age' : `${m.ageHours.toFixed(1)}h old`
+    console.log(`⚠  DATABASE: LOCAL MIRROR (${age}) — NOT live Neon data.`)
+    console.log('   Numbers here are a snapshot. `npm run db:mirror` re-clones;')
+    console.log('   comment out WORKHUB_DB in .env.local to use Neon.')
+  } else {
+    console.log('   DATABASE: Neon (live)')
+  }
+})

@@ -2756,3 +2756,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .faEntryTop { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 3px; }
 .faLine { display: flex; gap: 6px; }
 .faKey { color: var(--muted); min-width: 62px; flex: 0 0 62px; text-align: right; }
+
+/* The local-mirror banner. Deliberately loud: a stale snapshot read as live data is
+   the most damaging mistake this app can make. */
+.hlMirror { margin: 10px 0 4px; line-height: 1.5; }
