@@ -34,9 +34,14 @@ const s = summarizeTransfer(rows, { today, knownUsed: parseSize(arg('used')) })
 
 console.log(`\n  NEON TRANSFER\n  ${'─'.repeat(72)}`)
 console.log(`  reading: ${DB_TARGET}${DB_TARGET === 'mirror' ? '  ⚠️ the mirror only records LOCAL work, which costs Neon nothing' : ''}`)
+console.log(`  TODAY (${s.today.day}): ${fmtBytes(s.today.bytes)}` +
+  (s.today.bySource.length ? '   ' + s.today.bySource.map((b) => `${b.source} ${fmtBytes(b.bytes)}`).join(' · ') : ''))
 console.log(`  month to date: ${fmtBytes(s.used)} of ${fmtBytes(MONTHLY_LIMIT_BYTES)}` +
   ` (${s.pctUsed.toFixed(1)}%)${s.isEstimate ? '  · estimated' : '  · from Neon'}`)
-if (s.perDay) console.log(`  rate: ${fmtBytes(s.perDay)}/day over ${s.dayOfMonth} day(s)`)
+if (s.perDay) {
+  console.log(`  rate: ${fmtBytes(s.perDay)}/day over ${s.measuredDays} day(s) MEASURED` +
+    (s.partialMonth ? `  (the meter has data for ${s.measuredDays} of ${s.dayOfMonth} days so far)` : ''))
+}
 if (s.projected) console.log(`  projected month end: ${fmtBytes(s.projected)} (${s.pctProjected.toFixed(0)}% of the cap)`)
 if (s.daysLeftAtRate != null && Number.isFinite(s.daysLeftAtRate)) {
   console.log(`  runway at this rate: ${s.daysLeftAtRate.toFixed(1)} day(s) · ${s.daysInMonth - s.dayOfMonth} left in the month`)
@@ -52,6 +57,10 @@ const mark = { ok: '✓', warn: '!', critical: '✗', exceeded: '✗' }[s.verdic
 console.log(`\n  ${'─'.repeat(72)}`)
 console.log(`  ${mark} ${s.verdict.headline}`)
 console.log(`    ${s.caveat}`)
+if (s.partialMonth) {
+  console.log('    ⚠️ Part-month sample: the projection assumes every day looks like the')
+  console.log('       measured ones, and days before the meter existed are not counted at all.')
+}
 if (s.verdict.level === 'critical' || s.verdict.level === 'exceeded') {
   console.log('    The LOCAL app keeps working through a suspension — it reads the mirror.')
   console.log('    `npm run db:mirror` while Neon is still up; the Render deploy is what stops.')
