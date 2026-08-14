@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { matchesQuery, describeMatch } from '../../../src/model/cardSearch.js'
 import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
@@ -27,6 +28,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const [msg, setMsg] = useState(null)
   // Finished work is hidden by default (Nima, 2026-08-14) but never discarded.
   const [showSettled, setShowSettled] = useState(false)
+  const [query, setQuery] = useState('')
   // Real per-PO DC breakdown (routing feed ∪ custody scans) — the DC isn't in
   // the order ship-to, so the DC-tag button gets it from here instead.
   const [poDcs, setPoDcs] = useState({})
@@ -88,7 +90,21 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   // Hidden, not discarded — the toggle below brings them back. A board that silently
   // drops rows is indistinguishable from a board that lost them.
   const settledCount = cards.filter((c) => c.settled).length
-  const visible = showSettled ? cards : cards.filter((c) => !c.settled)
+  const afterSettled = showSettled ? cards : cards.filter((c) => !c.settled)
+  // ⚠️ SEARCH IGNORES THE FINISHED FILTER, and getting this wrong first taught me why.
+  // The first cut searched only what was already visible, so typing IF7511 — a real
+  // fulfilment, on a real card — answered "nothing matches", because its order had
+  // just been invoiced and gone quiet. That is not a filter, it is a lie: an explicit
+  // identifier is an explicit request to find THAT thing, and answering "no such
+  // record" sends someone hunting in NetSuite for something the app is holding.
+  //
+  // So a query searches every card, and the count line names how many hits were
+  // finished rather than hiding them.
+  const searching = !!query.trim()
+  const hits = searching ? cards.filter((c) => matchesQuery(c.o, query)) : null
+  const visible = searching ? hits : afterSettled
+  const finishedHits = searching ? hits.filter((c) => c.settled).length : 0
+  const matchLine = describeMatch({ shown: visible.length, total: cards.length, query })
   const onTab = (t) => visible.filter((c) => c.tab === t)
   const tabCounts = {
     [TAB.ORDERS]: onTab(TAB.ORDERS).length,
@@ -212,7 +228,17 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
         {/* ⚠️ ALWAYS SAYS HOW MANY ARE HIDDEN. A board that silently drops finished
             cards is indistinguishable from one that lost them — and "where did it go"
             is the question this app exists to stop people asking. */}
-        {settledCount > 0 && (
+        <input className="kbSearch" type="search" value={query} placeholder="Search SO · IF · PO · invoice · customer…"
+               onChange={(e) => setQuery(e.target.value)}
+               title="Matches any identifier on the card or its fulfilments and invoices, plus flag wording." />
+        {matchLine && (
+          <span className="hint" style={{ margin: 0, alignSelf: 'center' }}>
+            {matchLine}
+            {finishedHits > 0 && <> · {finishedHits} finished</>}
+            {' '}<button className="linkBtn" onClick={() => setQuery('')}>clear</button>
+          </span>
+        )}
+        {settledCount > 0 && !searching && (
           <label className="hint" style={{ margin: 0, alignSelf: 'center', display: 'inline-flex', gap: 5, alignItems: 'center' }}
                  title="Shipped and invoiced — and departure-confirmed where Net terms require it.">
             <input type="checkbox" checked={showSettled} onChange={(e) => setShowSettled(e.target.checked)} />
