@@ -96,3 +96,41 @@ export function departureLabel({ shipDate, daysSince } = {}) {
     : ''
   return `Marked shipped${when ? ` ${when}` : ''}${age}. Confirm it physically left`
 }
+
+// ── Is this fulfilment finished, for the purposes of the board? ─────────────
+//
+// Nima, 2026-08-14, on Mission Quests: "it clutters the page and we only need to look
+// at what currently needs work in this view ... we only want something with a invoice
+// marked as shipped unless its terms in which case we need to manually confirm it
+// shipped."
+//
+// So a fulfilment is DONE when it is shipped AND invoiced — except under the Net flow,
+// where marking shipped happens when the label is made and proves nothing moved. Those
+// stay until a human confirms departure.
+//
+// ⚠️ THE TRAP THIS AVOIDS, and it is the one that makes the difference between
+// decluttering and hiding work:
+//
+//   · Shipped but NOT invoiced still needs an invoice — it stays. Measured: 19 of them,
+//     including the `shipped, still owed` case that sat 24 days.
+//   · Pre-epoch Net-terms orders can NEVER be departure-confirmed (`inNetFlow` excludes
+//     them by design), so treating them as "awaiting confirmation" would pin 137 cards
+//     to the board permanently — the exact clutter this removes. They are settled.
+//     Nima: "if this predate the app and it isn't on our board at all right now we know
+//     it has departed."
+//   · Terms we never captured are not Net terms. `orders.terms` only began being
+//     recorded on 2026-08-13 (PR #91), so the 16 blank ones are old boutique orders
+//     that predate the column, all invoiced, all shipped 5+ weeks ago. Holding them
+//     would pin them forever too.
+//
+// Returns a REASON when it keeps something, so a card that stays can say why.
+export function boardSettled(f = {}, { netTerms, epoch = NET_FLOW_EPOCH } = {}) {
+  if (f.status !== 'Shipped') return { settled: false, reason: 'not shipped yet' }
+  if (!f.invoiceNumber) return { settled: false, reason: 'shipped, still needs an invoice' }
+  const awaiting = inNetFlow(
+    { terms: f.terms, source: f.source, shipDate: f.shipDate, netTerms }, epoch)
+  if (awaiting && !isDepartureConfirmed(f)) {
+    return { settled: false, reason: 'Net terms — confirm it actually left' }
+  }
+  return { settled: true, reason: null }
+}

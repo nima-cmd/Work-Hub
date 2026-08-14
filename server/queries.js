@@ -8,7 +8,7 @@ import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
-import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED } from '../src/model/netDeparture.js'
+import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
@@ -44,7 +44,7 @@ import {
 } from '../src/ingest/loadToDb.js'
 import { insertOrderEvent, fetchOrderEvents, insertFulfillmentBox } from '../src/ingest/loadToDb.js'
 import { splitUnfiled } from '../src/model/filing.js'
-import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary } from '../src/model/paymentGate.js'
+import { paymentBlocked, clearedReason, overdueInvoices, overdueSummary, netTerms } from '../src/model/paymentGate.js'
 import { labelGapKind, labelGapNeeded } from '../src/model/labelGap.js'
 import { dcTagDeparture } from '../src/model/custody.js'
 import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '../src/model/labelSource.js'
@@ -225,7 +225,23 @@ export async function getOrders() {
       // put every order back on the old flow.
       terms: r.terms,
       amountPaid: num(r.amount_paid),
-      fulfillments: r.fulfillments,
+      // ⚠️ Whether each fulfilment still NEEDS SOMETHING, decided in one place
+      // (src/model/netDeparture.js boardSettled) rather than by each surface. Mission
+      // Quests shows only what needs work; a card that stays carries the reason, so a
+      // shorter board can always explain itself instead of just being shorter.
+      // Live when this landed: 181 of 214 settled, 33 kept (19 awaiting an invoice,
+      // 13 not yet shipped, 1 Net-terms awaiting departure confirmation).
+      fulfillments: (r.fulfillments || []).map((f) => {
+        // ⚠️ The projection calls it `invoice`, not `invoiceNumber` — keying on the
+        // wrong name made 201 of 214 read "still needs an invoice" when the true
+        // figure is 19. Caught by comparing against the same rule run straight
+        // against SQL; a plausible-looking count is exactly how this repo's counter
+        // bugs have always presented.
+        const v = boardSettled(
+          { ...f, invoiceNumber: f.invoice, source: r.source, terms: r.terms, shipDate: f.actualShipDate },
+          { netTerms })
+        return { ...f, settled: v.settled, keepReason: v.reason }
+      }),
       invoices: r.invoices,
       ediWindow: r.edi_window,
     }
