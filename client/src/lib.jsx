@@ -908,3 +908,74 @@ export function fmtAge(hours) {
   if (hours < 48) return `${Math.round(hours)}h old`
   return `${Math.round(hours / 24)}d old`
 }
+
+// ── Commercial invoice for an international shipment ────────────────────────
+//
+// Nima, 2026-08-14: "for IF7450 i need to make a DHL label and i need customs
+// information per item ... Theres a tool in netsuite that creates the UPS commercial
+// invoice for international shipments within UPS i need something like that here."
+//
+// Lines come live from NetSuite and are grouped by his rule — bags at one price
+// together, shoes at one price together, never mixed. The tariff codes are his
+// (4202221000 bags / 6404193760 shoes) and the manufacturer ID is the tax ID.
+export function CustomsButton({ ifNumber }) {
+  const [doc, setDoc] = useState(null)
+  const [open, setOpen] = useState(false)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  if (!ifNumber) return null
+
+  async function load() {
+    if (doc) { setOpen((o) => !o); return }
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch(`/api/customs/${ifNumber}`)
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'could not build it')
+      setDoc(j); setOpen(true)
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <span className="tagBtns">
+      <button className="linkBtn" disabled={busy} onClick={load}
+              title="Commercial-invoice lines for an international shipment — grouped by category and price, with tariff codes.">
+        {busy ? '→ building…' : '📄 Customs'}
+      </button>
+      {err && <span className="muted"> {err}</span>}
+      {open && doc && (
+        <div className="cxDoc">
+          <div className="cxHead">
+            <b>{doc.ifNumber}</b> · {doc.soNumber} · {doc.customer}
+            <span className="muted">
+              {' '}{doc.lines.length} line(s) · {doc.totalQty} units · ${doc.totalValue} · {doc.totalWeightLb} lb
+            </span>
+          </div>
+          {/* ⚠️ A partial shipment declares goods that are not in the box. Loud. */}
+          {doc.shipmentNote && <div className="banner warn">⚠ {doc.shipmentNote}</div>}
+          {/* ⚠️ An unclassified line has NO tariff code. Never let the form look
+              finished while one is outstanding — a wrong code is a held shipment. */}
+          {!doc.ready && (
+            <div className="banner error">
+              ⚠ Not ready to file:
+              <ul>{doc.problems.map((p) => <li key={p}>{p}</li>)}</ul>
+            </div>
+          )}
+          <table className="cxTable">
+            <thead><tr>{doc.dhl.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {doc.dhl.rows.map((row, i) => (
+                <tr key={i}>{row.map((c, j) => <td key={j} className={j === 1 ? 'rt-mono' : ''}>{String(c)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="cxFoot">
+            <a className="btn" href={`/api/customs/${ifNumber}/dhl.csv`}>⤓ DHL CSV</a>
+            <a className="btn" href={`/api/customs/${ifNumber}/ups.csv`}>⤓ UPS CSV</a>
+            <span className="muted">Manufacturer ID (tax ID) {doc.taxId} · UPS wants weight PER ITEM, DHL the line total.</span>
+          </div>
+        </div>
+      )}
+    </span>
+  )
+}
