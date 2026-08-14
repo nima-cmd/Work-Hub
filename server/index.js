@@ -22,7 +22,7 @@ import {
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
   getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth, applyTender,
-  getTagSheet, getShipDays,
+  getTagSheet, getShipDays, getCustomsInvoice, toCsv,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive, getLabelGaps, getOverdueInvoices, getUpsRate, getUpsConnection,
   getEmailLinks, addEmailLinkFor, removeEmailLink, searchLinkableEmails, getPoDcs,
@@ -205,6 +205,27 @@ app.get('/api/ledger/daily', async (req, res) => {
 // availability so the UI can hide/disable the button on the cloud deploy.
 app.get('/api/print-label/available', async (_req, res) => {
   res.json(await availableSizes())
+})
+
+// Commercial-invoice lines for an international shipment (DHL + UPS shapes).
+app.get('/api/customs/:ifNumber', async (req, res) => {
+  try { res.json(await getCustomsInvoice(req.params.ifNumber)) }
+  catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
+})
+
+// The same document as CSV, in whichever carrier's column order.
+// ⚠️ Refuses when a line is unclassified: a customs form with a blank tariff code is
+// worse than no form, because it looks complete.
+app.get('/api/customs/:ifNumber/:carrier.csv', async (req, res) => {
+  try {
+    const doc = await getCustomsInvoice(req.params.ifNumber)
+    if (!doc.ready) return res.status(409).json({ error: 'not ready', problems: doc.problems })
+    const ups = req.params.carrier === 'ups'
+    const csv = toCsv(ups ? doc.ups.columns : doc.dhl.columns, ups ? doc.ups.rows : doc.dhl.rows)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="customs-${doc.ifNumber}-${req.params.carrier}.csv"`)
+    res.send(csv)
+  } catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
 })
 
 // Which days have shipments, so the UI offers real dates rather than a blank box.

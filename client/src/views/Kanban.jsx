@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { matchesQuery, describeMatch } from '../../../src/model/cardSearch.js'
-import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton } from '../lib.jsx'
+import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton, CustomsButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
 import { isParcelLane } from '../../../src/model/parcelLane.js'
@@ -356,7 +356,14 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                       parcel label. Nothing is pushed until it's clicked. */}
                   {!o.isGroup && (o.source !== 'edi' || isParcelLane(o)) &&
                     (o.fulfillments || []).filter((f) => f.ifNumber && !/shipped/i.test(f.status || '')).map((f) => (
-                      <ShipstationPushButton key={'ss' + f.ifNumber} ifNumber={f.ifNumber} onDone={onRefresh} />
+                      // ⚠️ A FRAGMENT, not a comma. `(<A/>, <B/>)` is the comma
+                      // operator — it evaluates to B and silently DROPS A, which here
+                      // would have removed the ShipStation push button that Nima uses
+                      // daily, with no error anywhere.
+                      <span key={'acts' + f.ifNumber}>
+                        <ShipstationPushButton ifNumber={f.ifNumber} onDone={onRefresh} />
+                        <CustomsButton ifNumber={f.ifNumber} />
+                      </span>
                     ))}
                   {o.isGroup && o.source === 'edi' && <><DcBreakdown group={o} dcList={poDcs[o.poNumber]} /><DcTagButtons group={o} dcList={poDcs[o.poNumber]} /></>}
                   {o.isGroup && o.source !== 'edi' && <GroupLabelButtons group={o} />}

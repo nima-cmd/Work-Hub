@@ -73,6 +73,10 @@ import { shipDateAdvice, rankShipDateAdvice, monthCloseCount, auditMarkedShipmen
 import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/syncHealth.js'
 import { ASSUMPTIONS, MECHANICAL, summarize as summarizeAssumptions } from '../src/model/fieldAssumptions.js'
 import { summarizeTransfer } from '../src/model/transferMeter.js'
+import {
+  buildCustomsLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
+} from '../src/model/customsInvoice.js'
+export { toCsv }
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
@@ -2746,6 +2750,73 @@ export async function fileShipmentToDrive(id) {
   return uploadBolPdf({
     partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
   })
+}
+
+// ── Commercial invoice for an international shipment ────────────────────────
+//
+// Nima, 2026-08-14: "Theres a tool in netsuite that creates the UPS commercial invoice
+// for international shipments within UPS i need something like that here."
+//
+// ⚠️ PRICED FROM THE SALES ORDER, not the fulfilment, and that is not a shortcut.
+// Measured on IF7450/IF7508: the fulfilment's own lines come back TRIPLED (the 3-line
+// NetSuite quantity trap already recorded in [[edi-pack-check]]) and their `rate` is
+// the COST (26.63) with some rows carrying none at all. A commercial invoice declares
+// the SALE value, so the sales order is both the correct source and the clean one.
+//
+// The guard that keeps that honest: the fulfilment's own unit total is compared
+// against the order's, and a PARTIAL shipment is reported rather than silently
+// declaring goods that are not in the box.
+export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {}) {
+  const ifNum = String(ifNumber || '').trim()
+  if (!ifNum) throw new Error('an IF number is required')
+  const { runSuiteQL } = run ? { runSuiteQL: run } : await import('../src/ingest/netsuiteApi.js')
+
+  const { rows: link } = await pool.query(
+    `SELECT f.so_number AS "soNumber", f.status, o.customer, o.location, o.source
+       FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+      WHERE f.if_number = $1`, [ifNum])
+  if (!link.length) throw new Error(`${ifNum} is not a fulfilment we know about`)
+  const head = link[0]
+
+  const q = await runSuiteQL(
+    `SELECT BUILTIN.DF(tl.item) AS item, ABS(tl.quantity) AS qty, tl.rate,
+            i.displayname, i.countryofmanufacture AS coo, i.weight
+       FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
+       JOIN item i ON i.id = tl.item
+      WHERE t.tranid = '${String(head.soNumber).replace(/'/g, "''")}' AND tl.itemtype = 'InvtPart'`)
+  const lines = (q.rows || []).map((r) => ({
+    item: r.item, displayName: r.displayname, qty: Number(r.qty || 0),
+    rate: Number(r.rate || 0), coo: r.coo || null, weight: Number(r.weight || 0),
+  }))
+
+  const built = buildCustomsLines(lines)
+
+  // ⚠️ Does the fulfilment actually contain the whole order? The IF lines are tripled,
+  // so they are deduped by item before counting — comparing the raw rows would report
+  // every shipment as three times its size.
+  let shipmentNote = null
+  try {
+    const f = await runSuiteQL(
+      `SELECT BUILTIN.DF(tl.item) AS item, ABS(tl.quantity) AS qty
+         FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
+        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}' AND tl.itemtype = 'InvtPart'`)
+    const seen = new Map()
+    for (const r of f.rows || []) seen.set(`${r.item}|${r.qty}`, Number(r.qty || 0))
+    const ifUnits = [...seen.values()].reduce((n, v) => n + v, 0)
+    if (ifUnits && ifUnits !== built.totalQty) {
+      shipmentNote = `${ifNum} holds ${ifUnits} unit(s) but ${head.soNumber} is priced at `
+        + `${built.totalQty} — this looks like a PARTIAL shipment, so check the quantities before declaring.`
+    }
+  } catch { shipmentNote = null }
+
+  return {
+    ifNumber: ifNum, soNumber: head.soNumber, customer: head.customer,
+    status: head.status, location: head.location,
+    ...built,
+    shipmentNote,
+    dhl: { columns: DHL_COLUMNS, rows: toDhlRows(built) },
+    ups: { columns: UPS_COLUMNS, rows: toUpsRows(built) },
+  }
 }
 
 // ── Retro QR tags, by ship date ─────────────────────────────────────────────
