@@ -161,6 +161,46 @@ pool.query = function meteredQuery(...args) {
 const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\b/i
 const mirrorWritesAllowed = process.env.WORKHUB_MIRROR_WRITES === '1'
 
+// ⚠️ CLIENTS TOO, and this was a real hole. The meter originally wrapped only
+// `pool.query`, while every transaction goes through `pool.connect()` and then
+// `client.query` — so `withTransaction` was completely invisible. Measuring a full
+// NetSuite refresh (271 orders, 194 fulfilments, 1,162 invoices, 113 seconds) through
+// the meter reported TWO queries and 0.00 MB, because the entire sync runs in
+// transactions.
+//
+// A meter that misses the heaviest path is worse than no meter: it would have said
+// "0.06 MB this month" while the real traffic went unrecorded, and we would have
+// trusted it. Found only by pointing it at a real workload — which is the same
+// lesson as every entry in src/model/fieldAssumptions.js.
+const _poolConnect = pool.connect.bind(pool)
+pool.connect = async function meteredConnect(...args) {
+  const client = await _poolConnect(...args)
+  if (client && !client.__metered) {
+    client.__metered = true
+    const _clientQuery = client.query.bind(client)
+    client.query = function meteredClientQuery(...qargs) {
+      if (useMirror && !mirrorWritesAllowed) {
+        const text = typeof qargs[0] === 'string' ? qargs[0] : qargs[0]?.text
+        if (text && WRITE_RE.test(text)) {
+          return Promise.reject(new Error(
+            'Refusing to write to the LOCAL MIRROR — the next `npm run db:mirror` would destroy it. '
+            + 'Unset WORKHUB_DB to work against Neon, or set WORKHUB_MIRROR_WRITES=1 if this write is meant to be thrown away.'))
+        }
+      }
+      const out = _clientQuery(...qargs)
+      if (out && typeof out.then === 'function') {
+        return out.then((res) => {
+          pending.bytes += weigh(res?.rows)
+          pending.queries += 1
+          return res
+        })
+      }
+      return out
+    }
+  }
+  return client
+}
+
 /** Write out whatever is pending — call before a short-lived script exits. */
 export const flushTransferMeter = () => flush().catch(() => {})
 
