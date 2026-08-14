@@ -95,6 +95,29 @@ export const PC_LABEL = {
   [PC.DEPARTED]: 'Departed',
 }
 
+// ── Colour per state (Nima, 2026-08-14) ─────────────────────────────────────
+//
+// His words, mapping 1:1 onto the labels above because he was reading them off the
+// board: "needs label or a routing to have the title in blue, awaiting invoice should
+// be yellow, awaiting payment red, invoice it to release should be purple, confirm it
+// left should be green."
+//
+// ⚠️ Only the five he named. The rest stay uncoloured on purpose — inventing hues for
+// states he did not mention would dilute the ones that mean something, and a board
+// where everything is coloured is a board where nothing stands out.
+//
+// ⚠️ Colour REINFORCES the label, it never replaces it. Every card still shows its
+// state in words and sits in a column named for that state, so nothing here is the
+// only way to know what a card is — which is what keeps it readable for anyone who
+// does not distinguish these hues.
+export const PC_COLOR = {
+  [PC.NEEDS_LABEL_OR_ROUTING]: 'blue',
+  [PC.AWAITING_INVOICE]: 'yellow',
+  [PC.AWAITING_PAYMENT]: 'red',
+  [PC.SHIPPED_AWAITING_INVOICE]: 'purple',
+  [PC.SHIPPED_AWAITING_DEPARTURE]: 'green',
+}
+
 // The three Mission Quests tabs (Nima, 2026-08-07 — he asked for tabs so each
 // gets real screen space instead of ten columns in one scrolling row).
 export const TAB = { ORDERS: 'orders', FULFILMENT: 'fulfilment', ACTION: 'action' }

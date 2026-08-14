@@ -5,7 +5,7 @@ import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
 import { isParcelLane } from '../../../src/model/parcelLane.js'
 import {
-  TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK,
+  TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK, PC_COLOR,
   missionTab, postCustodyState, routingForPo, fulfilledNeverScanned, PC,
 } from '../../../src/model/postCustody.js'
 import { isDepartureConfirmed } from '../../../src/model/netDeparture.js'
@@ -313,7 +313,14 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                     <label className="cardPick" title="Select for a task">
                       <input type="checkbox" checked={sel} onChange={() => toggle(key)} />
                     </label>
-                    <span className="so">{o.isGroup ? `PO ${o.poNumber}` : <NsLink doc={o.soNumber} />}</span>
+                    {/* ⚠️ The colour comes from colKey — the SAME value that decided
+                        which column this card is in — so the tint and the heading can
+                        never disagree. Deriving it from the card again would be a
+                        second copy of the state. Absent on the stage-based tabs, where
+                        colKey is not a post-custody state, which is correct. */}
+                    <span className={'so' + (PC_COLOR[colKey] ? ' so-' + PC_COLOR[colKey] : '')}>
+                      {o.isGroup ? `PO ${o.poNumber}` : <NsLink doc={o.soNumber} />}
+                    </span>
                     <SourceBadge source={o.source} />
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
                   </div>
