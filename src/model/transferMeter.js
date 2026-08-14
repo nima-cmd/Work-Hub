@@ -61,7 +61,22 @@ export function summarizeTransfer(rows = [], opts = {}) {
   const dayNum = today ? Number(today.slice(8, 10)) : null
   const daysInMonth = today ? new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate() : null
   const used = knownUsed != null ? Number(knownUsed) : measured
-  const perDay = dayNum ? used / dayNum : null
+
+  // Today on its own — the question actually asked ("how much have I used today").
+  const todayRows = inMonth.filter((r) => r.day === today)
+  const todayBytes = todayRows.reduce((n, r) => n + Number(r.bytes || 0), 0)
+  const todayBySource = [...todayRows
+    .reduce((m, r) => m.set(r.source, (m.get(r.source) || 0) + Number(r.bytes || 0)), new Map())
+    .entries()].map(([source, bytes]) => ({ source, bytes })).sort((a, b) => b.bytes - a.bytes)
+
+  // ⚠️ THE RATE MUST DIVIDE BY DAYS WE ACTUALLY MEASURED, not by the day of the month.
+  // The meter started mid-month on 2026-08-14. Dividing that day's 191 MB by 14 gave
+  // "13.0 MB/day · runway 378 days" — a reassuring number, and wrong by more than an
+  // order of magnitude: the honest reading of the same data is ~191 MB/day and about
+  // 4 days of runway. A monitor that understates is worse than none, because it is
+  // believed precisely when it should not be.
+  const measuredDays = new Set(inMonth.map((r) => r.day)).size
+  const perDay = measuredDays ? used / measuredDays : null
   // Straight-line from the month so far. Deliberately not clever: a fancier model
   // would imply a confidence this data does not support.
   const projected = perDay != null && daysInMonth ? perDay * daysInMonth : null
@@ -70,6 +85,10 @@ export function summarizeTransfer(rows = [], opts = {}) {
 
   return {
     used, measured, queries, limitBytes, remaining,
+    today: { day: today, bytes: todayBytes, bySource: todayBySource },
+    // How much of the month this figure actually covers, so nothing reads a
+    // part-month sample as a whole-month fact.
+    measuredDays, partialMonth: !!(dayNum && measuredDays < dayNum),
     knownUsed: knownUsed != null ? Number(knownUsed) : null,
     isEstimate: knownUsed == null,
     pctUsed: limitBytes ? (used / limitBytes) * 100 : null,

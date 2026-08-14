@@ -11,10 +11,20 @@ const GB = 1024 ** 3
 // (4.2 GB) of 5 GB — on the FOURTEENTH. Exceeding it SUSPENDS the compute, so the
 // deployed app stops. The first anyone knew was the email.
 
+// ⚠️ Fixtures spread across REAL DAYS, because the rate divides by days MEASURED, not
+// by the day of the month. Collapsing a fortnight into one row would describe a
+// single-day burst, which is a completely different situation.
+const overDays = (fromDay, toDay, totalBytes, source = 'deploy') => {
+  const rows = []
+  const n = toDay - fromDay + 1
+  for (let d = fromDay; d <= toDay; d++) {
+    rows.push({ day: `2026-08-${String(d).padStart(2, '0')}`, source, bytes: totalBytes / n, queries: 100 })
+  }
+  return rows
+}
+
 test('the real 2026-08-14 situation reads as critical, not as "84% is fine"', () => {
-  const s = summarizeTransfer(
-    [{ day: '2026-08-01', source: 'deploy', bytes: 4.2 * GB, queries: 1 }],
-    { today: '2026-08-14' })
+  const s = summarizeTransfer(overDays(1, 14, 4.2 * GB), { today: '2026-08-14' })
   assert.equal(s.verdict.level, 'critical')
   // 4.2 GB over 14 days = 300 MB/day; 0.8 GB left is under 3 days, with 17 to go.
   assert.ok(s.daysLeftAtRate < 3)
@@ -25,7 +35,7 @@ test('the real 2026-08-14 situation reads as critical, not as "84% is fine"', ()
 // on the date — 84% on the 14th suspends the database mid-month, 84% on the 30th
 // lands fine. A checker keyed on percentage would have said "warn" for both.
 test('the same 84% is critical mid-month and merely a warning at month end', () => {
-  const rows = [{ day: '2026-08-01', source: 'deploy', bytes: 4.2 * GB, queries: 1 }]
+  const rows = overDays(1, 14, 4.2 * GB)
   // Day 14: 300 MB/day, 0.8 GB left — runs dry around the 17th, with two weeks of
   // month to go. The database stops.
   const mid = summarizeTransfer(rows, { today: '2026-08-14' })
@@ -33,17 +43,42 @@ test('the same 84% is critical mid-month and merely a warning at month end', () 
   // Day 30: the same 84%, but only 140 MB/day, so it lands at ~4.3 GB and never
   // suspends. Still worth a warning — it is close — but NOT the same emergency, and
   // a checker keyed on percentage alone would have called these identical.
-  const late = summarizeTransfer(rows, { today: '2026-08-30' })
+  const late = summarizeTransfer(overDays(1, 30, 4.2 * GB), { today: '2026-08-30' })
   assert.equal(late.verdict.level, 'warn')
   assert.ok(late.projected < late.limitBytes)
   assert.ok(mid.daysLeftAtRate < 3 && late.daysLeftAtRate > 5)
 })
 
 test('a comfortable month is not nagged about', () => {
-  const s = summarizeTransfer(
-    [{ day: '2026-09-01', source: 'deploy', bytes: 200 * MB, queries: 400 }],
-    { today: '2026-09-15' })
+  const rows = []
+  for (let d = 1; d <= 15; d++) rows.push({ day: `2026-09-${String(d).padStart(2, '0')}`, source: 'deploy', bytes: 13 * MB, queries: 400 })
+  const s = summarizeTransfer(rows, { today: '2026-09-15' })
   assert.equal(s.verdict.level, 'ok')
+})
+
+// ⚠️ THE BUG THIS PREVENTS, live on 2026-08-14. The meter started mid-month, so its
+// only data was that day's 191 MB — and dividing by the day of the month (14) reported
+// "13.0 MB/day, runway 378 days". The honest reading of the same data is ~191 MB/day
+// and about 4 days of runway. A monitor that understates gets believed exactly when it
+// should not be.
+test('a part-month sample rates by days MEASURED, not by the calendar', () => {
+  const s = summarizeTransfer(
+    [{ day: '2026-08-14', source: 'local', bytes: 191 * MB, queries: 3000 }],
+    { today: '2026-08-14' })
+  assert.equal(s.measuredDays, 1)
+  assert.equal(s.partialMonth, true)
+  assert.equal(Math.round(s.perDay / MB), 191)          // not 191/14
+  assert.ok(s.daysLeftAtRate < 30)
+})
+
+test('today is reported on its own, split by source', () => {
+  const s = summarizeTransfer([
+    { day: '2026-08-13', source: 'local', bytes: 40 * MB, queries: 1 },
+    { day: '2026-08-14', source: 'local', bytes: 175 * MB, queries: 2757 },
+    { day: '2026-08-14', source: 'deploy', bytes: 15 * MB, queries: 14498 },
+  ], { today: '2026-08-14' })
+  assert.equal(Math.round(s.today.bytes / MB), 190)
+  assert.deepEqual(s.today.bySource.map((b) => b.source), ['local', 'deploy'])
 })
 
 test('already over reads as exceeded and says what that means', () => {
