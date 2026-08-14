@@ -25,6 +25,8 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const [draft, setDraft] = useState({ needsType: 'none', netsuiteDocType: 'SO', netsuiteDocNumber: '', urgency: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
+  // Finished work is hidden by default (Nima, 2026-08-14) but never discarded.
+  const [showSettled, setShowSettled] = useState(false)
   // Real per-PO DC breakdown (routing feed ∪ custody scans) — the DC isn't in
   // the order ship-to, so the DC-tag button gets it from here instead.
   const [poDcs, setPoDcs] = useState({})
@@ -72,9 +74,22 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
     const pc = t === TAB.ACTION
       ? postCustodyState({ ...o, fulfilments, departed, routing: routingForPo(shipments, o.poNumber) })
       : null
-    return { o, custody, tab: t, pc }
+    // ⚠️ Nima, 2026-08-14: "we only need to look at what currently needs work in this
+    // view." A card whose every fulfilment is SETTLED — shipped and invoiced, and
+    // departure-confirmed where the Net flow demands it — is finished, and 181 of 214
+    // fulfilments were finished when this landed. The rule lives in
+    // src/model/netDeparture.js so this view does not own it.
+    //
+    // A card with NO fulfilments is never settled: nothing has shipped yet, which is
+    // the most unfinished a card can be.
+    const settled = fulfilments.length > 0 && fulfilments.every((f) => f.settled)
+    return { o, custody, tab: t, pc, settled }
   })
-  const onTab = (t) => cards.filter((c) => c.tab === t)
+  // Hidden, not discarded — the toggle below brings them back. A board that silently
+  // drops rows is indistinguishable from a board that lost them.
+  const settledCount = cards.filter((c) => c.settled).length
+  const visible = showSettled ? cards : cards.filter((c) => !c.settled)
+  const onTab = (t) => visible.filter((c) => c.tab === t)
   const tabCounts = {
     [TAB.ORDERS]: onTab(TAB.ORDERS).length,
     [TAB.FULFILMENT]: onTab(TAB.FULFILMENT).length,
@@ -193,6 +208,16 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
           <span className="hint" style={{ margin: 0, alignSelf: 'center' }}>
             {workCount ? `${workCount} to act on` : 'nothing to act on'} · {tabCounts[TAB.ACTION] - workCount} waiting
           </span>
+        )}
+        {/* ⚠️ ALWAYS SAYS HOW MANY ARE HIDDEN. A board that silently drops finished
+            cards is indistinguishable from one that lost them — and "where did it go"
+            is the question this app exists to stop people asking. */}
+        {settledCount > 0 && (
+          <label className="hint" style={{ margin: 0, alignSelf: 'center', display: 'inline-flex', gap: 5, alignItems: 'center' }}
+                 title="Shipped and invoiced — and departure-confirmed where Net terms require it.">
+            <input type="checkbox" checked={showSettled} onChange={(e) => setShowSettled(e.target.checked)} />
+            {showSettled ? `showing ${settledCount} finished` : `${settledCount} finished, hidden`}
+          </label>
         )}
       </div>
 
