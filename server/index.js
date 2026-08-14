@@ -215,7 +215,7 @@ app.get('/api/print-label/days', async (_req, res) => {
 
 // What a day's sheet would contain — checked before anything is printed.
 app.get('/api/print-label/sheet', async (req, res) => {
-  try { res.json(await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null })) }
+  try { res.json(await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null, includeScanned: req.query.includeScanned === '1' })) }
   catch (e) { console.error(e); res.status(400).json({ error: e.message }) }
 })
 
@@ -224,7 +224,7 @@ app.get('/api/print-label/sheet', async (req, res) => {
 // ordinary way rather than the feature being dead outside the warehouse.
 app.get('/api/print-label/sheet.pdf', async (req, res) => {
   try {
-    const { items } = await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null })
+    const { items } = await getTagSheet({ shipped: req.query.shipped || null, from: req.query.from || null, to: req.query.to || null, includeScanned: req.query.includeScanned === '1' })
     const { path, count } = await makeTagSheet(items, req.query.size || '2.25x1.25')
     res.setHeader('X-Tag-Count', String(count))
     res.type('pdf').sendFile(path)
@@ -233,7 +233,7 @@ app.get('/api/print-label/sheet.pdf', async (req, res) => {
 
 app.post('/api/print-label/sheet', async (req, res) => {
   try {
-    const { items } = await getTagSheet({ shipped: req.body?.shipped || null, from: req.body?.from || null, to: req.body?.to || null })
+    const { items } = await getTagSheet({ shipped: req.body?.shipped || null, from: req.body?.from || null, to: req.body?.to || null, includeScanned: !!req.body?.includeScanned })
     res.json(await printTagSheet(items, req.body?.size || '2.25x1.25'))
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
