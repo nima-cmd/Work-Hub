@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  analyzeOffsets, describeFinding, columnPairs, isExpected, isExpectedConstant,
+  analyzeOffsets, analyzeTally, describeFinding, columnPairs, isExpected, isExpectedConstant,
   unrecorded, vanished, EXPECTED_DERIVED, MIN_ROWS,
 } from '../src/model/arithmeticFields.js'
 
@@ -122,4 +122,54 @@ test('every baseline entry carries a reason — an unexplained exemption is a ho
   for (const e of EXPECTED_DERIVED) {
     assert.ok(e.why && e.why.length > 20, `${e.table}.${e.column} needs a real reason`)
   }
+})
+
+// ── the tally entry point, and the trap it introduces ───────────────────────────
+//
+// ⚠️ WHY THIS EXISTS AT ALL: network cost. The sweep's first cut pulled one row per
+// table row and tallied in JavaScript — 964,337 rows out of `ups_shipment_cost` alone
+// (29 column pairs x 33,253 rows) on EVERY check:counters run, to compute a
+// distribution that is three numbers. The whole database is 26 MB. Neon bills public
+// network transfer, and that one script was moving a large multiple of the biggest
+// table across the wire for nothing.
+
+test('a full tally gives the same verdict as the raw offsets it came from', () => {
+  const raw = [...Array(1234).fill(28), ...Array(18).fill(30), ...Array(2).fill(29)]
+  const tallied = analyzeTally([
+    { offset: 28, count: 1234 }, { offset: 30, count: 18 }, { offset: 29, count: 2 },
+  ])
+  const direct = analyzeOffsets(raw)
+  assert.equal(tallied.verdict, direct.verdict)
+  assert.equal(tallied.rows, direct.rows)
+  assert.deepEqual(tallied.top, direct.top)
+})
+
+// ⚠️ THE TRAP. Asking Postgres for only the TOP 3 offsets means the tally no longer
+// sums to the row count. Without explicit totals the rule divides 3 offsets by 3
+// offsets, gets 100%, and calls EVERY high-cardinality pair derived — turning a cost
+// optimisation into a false-positive generator.
+test('a TRUNCATED tally without totals would read as 100% — totals prevent it', () => {
+  const top3 = [{ offset: 1, count: 20 }, { offset: 2, count: 15 }, { offset: 3, count: 10 }]
+  // What the bug would have looked like: 45 of 45 rows, three offsets, "derived".
+  assert.equal(analyzeTally(top3).verdict, 'derived')
+  // The truth: those 45 rows are 45 of 4,000, so the pair is plainly observed.
+  const honest = analyzeTally(top3, { totalRows: 4000, distinctOffsets: 900 })
+  assert.equal(honest.verdict, 'observed')
+  assert.equal(honest.rows, 4000)
+})
+
+// ⚠️ With a truncated tally, `sorted.length` can never exceed the LIMIT, so the
+// copy test ("exactly one distinct offset, and it is zero") needs the real distinct
+// count from the database or every zero-dominant pair reads as an exact copy.
+test('copy vs derived survives truncation, via the real distinct count', () => {
+  const zeroDominant = [{ offset: 0, count: 32502 }, { offset: 1, count: 750 }]
+  const notACopy = analyzeTally(zeroDominant, { totalRows: 33253, distinctOffsets: 3 })
+  assert.equal(notACopy.verdict, 'derived')   // ups_shipment_cost.ship_date, live
+
+  const trueCopy = analyzeTally([{ offset: 0, count: 191 }], { totalRows: 191, distinctOffsets: 1 })
+  assert.equal(trueCopy.verdict, 'copy')      // fulfillments.if_date, live
+})
+
+test('an empty tally is too_few, never a finding', () => {
+  assert.equal(analyzeTally([], { totalRows: 0, distinctOffsets: 0 }).verdict, 'too_few')
 })

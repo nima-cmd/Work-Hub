@@ -48,15 +48,31 @@ export const MAX_OFFSETS = 3
  *                 in days for dates). Rows where either side is null are the
  *                 caller's to drop: a null is not an offset of zero.
  */
-export function analyzeOffsets(offsets = [], opts = {}) {
+/**
+ * The same rule, taking an ALREADY-TALLIED distribution: [{offset, count}].
+ *
+ * ⚠️ This is the entry point the sweep uses, and the reason is network cost, not
+ * elegance. The first cut pulled one row per table row and tallied in JavaScript —
+ * 964,337 rows from `ups_shipment_cost` alone (29 column pairs x 33,253 rows) on
+ * every single `check:counters` run, to compute a distribution that is a handful of
+ * numbers. Postgres can GROUP BY, so it should: the same answer arrives in ~3 rows
+ * instead of 33,253. See src/ingest/arithmeticSweep.js.
+ */
+export function analyzeTally(tally = [], opts = {}) {
   const {
     minRows = MIN_ROWS, dominance = DOMINANCE, maxOffsets = MAX_OFFSETS,
     distinctA = null, distinctB = null,
+    // ⚠️ Supplied when `tally` is only the TOP few offsets rather than all of them.
+    // Without these the rule would compute its denominator from a truncated tally and
+    // conclude that 3 offsets cover 100% of the rows — turning every high-cardinality
+    // pair into a false "derived" finding. A partial tally MUST carry its own totals.
+    totalRows = null, distinctOffsets = null,
   } = opts
-  const rows = offsets.length
-  if (rows < minRows) {
-    return { verdict: 'too_few', rows, top: [], covered: 0, share: 0 }
-  }
+  const rows = totalRows != null
+    ? Number(totalRows)
+    : tally.reduce((n, t) => n + Number(t.count || 0), 0)
+  if (rows < minRows) return { verdict: 'too_few', rows, top: [], covered: 0, share: 0 }
+
   // ⚠️ Subtracting two CONSTANT columns yields a constant, which this rule would
   // otherwise report as a formula. Live example: `ups_shipment_cost.store_id` reads
   // as `insurance_cost + 123781` across all 33,253 rows — and the truth is that
@@ -69,20 +85,34 @@ export function analyzeOffsets(offsets = [], opts = {}) {
   if (deadA || deadB) {
     return { verdict: 'constant', rows, top: [], covered: 0, share: 0, deadA, deadB }
   }
-  const counts = new Map()
-  for (const o of offsets) counts.set(o, (counts.get(o) || 0) + 1)
-  const top = [...counts.entries()]
-    .map(([offset, count]) => ({ offset, count }))
+
+  const sorted = [...tally]
+    .map((t) => ({ offset: Number(t.offset), count: Number(t.count) }))
     .sort((x, y) => y.count - x.count)
-    .slice(0, maxOffsets)
+  const top = sorted.slice(0, maxOffsets)
   const covered = top.reduce((n, t) => n + t.count, 0)
   const share = covered / rows
-  const base = { rows, top, covered, share, distinct: counts.size }
+  const distinct = distinctOffsets != null ? Number(distinctOffsets) : sorted.length
+  const base = { rows, top, covered, share, distinct }
 
   if (share < dominance) return { ...base, verdict: 'observed' }
   // Every row identical AND the offset is zero: one column is a copy of the other.
-  if (counts.size === 1 && top[0].offset === 0) return { ...base, verdict: 'copy' }
+  if (distinct === 1 && top[0].offset === 0) return { ...base, verdict: 'copy' }
   return { ...base, verdict: 'derived' }
+}
+
+/**
+ * Convenience wrapper over `analyzeTally` for a raw list of offsets — one entry per
+ * row. Kept because it is the clearest way to express the rule in a test, and because
+ * a small table is cheap to read whole.
+ */
+export function analyzeOffsets(offsets = [], opts = {}) {
+  // Tally, then hand to the ONE implementation of the rule. Two copies of a
+  // dominance threshold is exactly the "second copy that can disagree" shape this
+  // repo keeps getting bitten by.
+  const counts = new Map()
+  for (const o of offsets) counts.set(o, (counts.get(o) || 0) + 1)
+  return analyzeTally([...counts.entries()].map(([offset, count]) => ({ offset, count })), opts)
 }
 
 /** A human sentence for a verdict — the whole value of this check is the wording. */
