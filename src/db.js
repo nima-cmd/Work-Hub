@@ -95,6 +95,9 @@ async function flush() {
   flushing = true
   const batch = pending
   pending = { bytes: 0, queries: 0 }
+  // ⚠️ On the mirror this write is pointless (local work costs Neon nothing) AND it
+  // would trip the write guard above. Skip it rather than fail noisily every 5 minutes.
+  if (useMirror && !mirrorWritesAllowed) { flushing = false; lastFlush = Date.now(); return }
   try {
     await rawQuery(
       `INSERT INTO transfer_log (day, source, bytes, queries, updated_at)
@@ -122,6 +125,15 @@ const rawQuery = (text, params) => pool.query(text, params)
 
 const _poolQuery = pool.query.bind(pool)
 pool.query = function meteredQuery(...args) {
+  if (useMirror && !mirrorWritesAllowed) {
+    const text = typeof args[0] === 'string' ? args[0] : args[0]?.text
+    if (text && WRITE_RE.test(text)) {
+      return Promise.reject(new Error(
+        'Refusing to write to the LOCAL MIRROR — the next `npm run db:mirror` would destroy it. '
+        + 'Unset WORKHUB_DB to work against Neon, or set WORKHUB_MIRROR_WRITES=1 if this write is meant to be thrown away. '
+        + `Query: ${String(text).replace(/\s+/g, ' ').slice(0, 80)}`))
+    }
+  }
   const out = _poolQuery(...args)
   if (out && typeof out.then === 'function') {
     return out.then((res) => {
@@ -133,6 +145,21 @@ pool.query = function meteredQuery(...args) {
   }
   return out
 }
+
+// ── The mirror must never silently eat real work ────────────────────────────
+//
+// ⚠️ Reading stale data is recoverable — you notice, you re-clone. WRITING to the
+// mirror is not: the next `npm run db:mirror` DROPS the database, so a carton scan or
+// a mark-shipped done against it is destroyed with no trace that it ever happened.
+//
+// Nima uses this app for real from localhost at work and from the Render deploy at
+// home, so the mirror being the default even once is a data-loss bug. The default is
+// Neon (see .env.local) and this is the second line of defence: on the mirror, a
+// write is refused outright unless WORKHUB_MIRROR_WRITES=1 says it is deliberate —
+// which the clone script and the tests set, because for them a throwaway write is the
+// entire point.
+const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\b/i
+const mirrorWritesAllowed = process.env.WORKHUB_MIRROR_WRITES === '1'
 
 /** Write out whatever is pending — call before a short-lived script exits. */
 export const flushTransferMeter = () => flush().catch(() => {})

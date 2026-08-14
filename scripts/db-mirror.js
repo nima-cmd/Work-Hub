@@ -34,6 +34,10 @@
 // it at startup, and Health shows it with an age. Never report a mirror number as
 // live — that is the whole class of bug src/model/fieldAssumptions.js exists for.
 
+// The clone writes to the mirror by definition, so it opts into the write guard in
+// src/db.js before anything imports the pool.
+process.env.WORKHUB_MIRROR_WRITES = '1'
+
 import { execFileSync } from 'node:child_process'
 import pg from 'pg'
 
