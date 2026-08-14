@@ -2774,3 +2774,4 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .tagItem span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tagChk { display: inline-flex; gap: 5px; align-items: center; font-size: 11px; color: var(--muted); }
 .tagScanned { color: var(--ok, #3a8); font-weight: 700; }
+.kbSearch { padding: 5px 9px; font-size: 12px; min-width: 260px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: inherit; }
