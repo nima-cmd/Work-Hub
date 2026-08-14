@@ -8,7 +8,7 @@
 // Read-only. Writes nothing, ever.
 
 import { pool } from '../db.js'
-import { analyzeOffsets, columnPairs, isExpected, MIN_ROWS } from '../model/arithmeticFields.js'
+import { analyzeTally, columnPairs, isExpected, MIN_ROWS, MAX_OFFSETS } from '../model/arithmeticFields.js'
 
 const DATE_TYPES = ['date', 'timestamp with time zone', 'timestamp without time zone']
 const NUM_TYPES = ['integer', 'numeric', 'bigint', 'double precision', 'real', 'smallint']
@@ -66,18 +66,44 @@ async function distinctCount(table, col, cache, db) {
   return cache.get(key)
 }
 
-async function offsetsFor(table, a, b, kind, db) {
+// The DISTRIBUTION of offsets, tallied by Postgres.
+//
+// ⚠️ This used to return one row per table row and tally in JavaScript. That pulled
+// 964,337 rows out of `ups_shipment_cost` alone (29 column pairs x 33,253 rows) on
+// every `check:counters` run — roughly 1,000,000 rows per sweep, to compute a
+// distribution that is three numbers. The whole database is 26 MB; one sweep was
+// moving a large multiple of the biggest table across the network for nothing.
+//
+// GROUP BY gives the identical answer in a handful of rows. Nothing about the rule
+// changed — `analyzeTally` is the same code path `analyzeOffsets` now delegates to.
+async function offsetTally(table, a, b, kind, db) {
   // Dates are compared in DAYS: a formula is "+28 days", and a timestamp difference
   // in seconds would scatter the same offset across thousands of values purely from
   // the time of day, hiding the very pattern this looks for.
   const expr = kind === 'date'
     ? `(${q(a)}::date - ${q(b)}::date)`
     : `(${q(a)} - ${q(b)})`
-  const { rows } = await db.query(
-    `SELECT ${expr} AS off FROM ${q(table)}
-      WHERE ${q(a)} IS NOT NULL AND ${q(b)} IS NOT NULL`,
+  const where = `WHERE ${q(a)} IS NOT NULL AND ${q(b)} IS NOT NULL AND ${expr} IS NOT NULL`
+  // Totals first, so the rule has an honest denominator even though the tally below
+  // is truncated. COUNT(DISTINCT) is what preserves the copy-vs-derived distinction.
+  const { rows: totals } = await db.query(
+    `SELECT COUNT(*)::bigint AS n, COUNT(DISTINCT ${expr})::bigint AS d FROM ${q(table)} ${where}`,
   )
-  return rows.map((r) => Number(r.off)).filter((n) => Number.isFinite(n))
+  const totalRows = Number(totals[0].n)
+  const distinctOffsets = Number(totals[0].d)
+  if (!totalRows) return { tally: [], totalRows, distinctOffsets }
+  // Only the most common offsets matter: the question is whether a FEW values cover
+  // almost every row. LIMIT keeps this at a fixed handful of rows per pair no matter
+  // how large or how varied the table is.
+  const { rows } = await db.query(
+    `SELECT ${expr} AS off, COUNT(*)::bigint AS n FROM ${q(table)} ${where}
+      GROUP BY 1 ORDER BY 2 DESC LIMIT ${MAX_OFFSETS}`,
+  )
+  return {
+    tally: rows.map((r) => ({ offset: Number(r.off), count: Number(r.n) })),
+    totalRows,
+    distinctOffsets,
+  }
 }
 
 /**
@@ -95,9 +121,9 @@ export async function sweepArithmeticFields({ db = pool, minRows = MIN_ROWS } = 
   for (const [table, cols] of byTable) {
     for (const [kind, list] of [['date', cols.dates], ['num', cols.nums]]) {
       for (const [a, b] of columnPairs(list)) {
-        let offsets
+        let tally
         try {
-          offsets = await offsetsFor(table, a, b, kind, db)
+          tally = await offsetTally(table, a, b, kind, db)
         } catch {
           // A column type that will not subtract (an array, an enum) is not a
           // failure of the sweep — it is simply not a candidate.
@@ -107,7 +133,10 @@ export async function sweepArithmeticFields({ db = pool, minRows = MIN_ROWS } = 
         const [distinctA, distinctB] = await Promise.all([
           distinctCount(table, a, distinct, db), distinctCount(table, b, distinct, db),
         ])
-        const result = analyzeOffsets(offsets, { minRows, distinctA, distinctB })
+        const result = analyzeTally(tally.tally, {
+          minRows, distinctA, distinctB,
+          totalRows: tally.totalRows, distinctOffsets: tally.distinctOffsets,
+        })
         if (result.verdict === 'constant') {
           // Deduped by COLUMN, not by pair — a dead column pairs with every sibling
           // and would otherwise be reported once per sibling.
