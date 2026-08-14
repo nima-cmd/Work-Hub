@@ -2783,3 +2783,19 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cxTable th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 6px 3px 0; }
 .cxTable td { padding: 2px 6px 2px 0; vertical-align: top; }
 .cxFoot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+
+/* ── State colours on the card title (Nima, 2026-08-14) ──────────────────────
+   Only the five states he named. Tuned to stay legible on both themes, and always
+   ALONGSIDE the written state — never instead of it. */
+.so-blue,   .so-blue a   { color: #2f7fd1; }
+.so-yellow, .so-yellow a { color: #b8860b; }
+.so-red,    .so-red a    { color: #cc3b3b; }
+.so-purple, .so-purple a { color: #8a5cd1; }
+.so-green,  .so-green a  { color: #2e9464; }
+@media (prefers-color-scheme: dark) {
+  .so-blue,   .so-blue a   { color: #6db3f2; }
+  .so-yellow, .so-yellow a { color: #e0b341; }
+  .so-red,    .so-red a    { color: #f07575; }
+  .so-purple, .so-purple a { color: #b58cf0; }
+  .so-green,  .so-green a  { color: #5cc48d; }
+}
