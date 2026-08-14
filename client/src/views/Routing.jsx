@@ -992,7 +992,29 @@ function RefSummary({ s }) {
 function Parcels({ s }) {
   const [open, setOpen] = useState(false)
   const p = s.parcels
-  if (!p) return null
+  // ⚠️ THE SILENCE THIS ENDS. Nima, 2026-08-14: "i dont see those Bloomingdales that
+  // are UPS in shipstation yet ... i didn't know how would i do this". Nothing was
+  // broken — the push is human-initiated by design and had simply never been pressed.
+  // But this component returned null when nothing had been pushed, so a card with
+  // nine cartons waiting showed NO mention of ShipStation at all, and the only hint
+  // that the lane existed was a toolbar button 1,230px up the page.
+  //
+  // A surface that stays quiet while work is outstanding reads as "nothing to do".
+  // Same shape as the empty label worksheet fixed earlier the same day.
+  const cartons = s.labels?.cartons || 0
+  const pushable = !!s.labels?.applicable && !s.shippedAt && /ups/i.test(s.carrier || '')
+  if (!p) {
+    if (!pushable || !cartons) return null
+    return (
+      <div className="rt-ediTrail">
+        <div className="rt-pushHint">
+          {cartons} carton{cartons === 1 ? '' : 's'} not in ShipStation yet — use{' '}
+          <b>⇪ Push to ShipStation</b> at the top of this page. Nothing is purchased;
+          you still buy the labels there.
+        </div>
+      </div>
+    )
+  }
   const waiting = p.pushed - p.labelled - p.voided
   return (
     <div className="rt-ediTrail">
