@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps } from '../api.js'
 import CsvBackup from './CsvBackup.jsx'
 import { NsLink } from '../lib.jsx'
+import { fmtBytes } from '../../../src/model/transferMeter.js'
 
 // Health — what's connected, what's arriving, and what to do when it isn't.
 //
@@ -47,7 +48,7 @@ export default function Health({ onRefresh }) {
   if (err) return <div className="banner error">⚠ Couldn’t load health: {err}</div>
   if (!h) return <div className="banner">Checking…</div>
 
-  const { overall, integrations, syncs, fieldAssumptions, database } = h
+  const { overall, integrations, syncs, fieldAssumptions, database, transfer } = h
 
   return (
     <div className="health">
@@ -121,6 +122,8 @@ export default function Health({ onRefresh }) {
           </div>
         ))}
       </div>
+
+      <TransferMeter t={transfer} isMirror={database?.isMirror} />
 
       <h3 className="hlSection">Data arriving</h3>
       <div className="hlRows">
@@ -352,6 +355,54 @@ function FieldAssumptions({ data }) {
           ))}
         </div>
       )}
+    </>
+  )
+}
+
+// ── Neon's transfer allowance ───────────────────────────────────────────────
+//
+// The Free plan allows 5 GB of public network transfer a month and SUSPENDS the
+// compute when it runs out — the deployed app stops until the next billing period.
+// On 2026-08-14 the first anyone knew was an email at 84%, on the 14th.
+//
+// ⚠️ The number shown is the PROJECTION, not the percentage. 84% on the 14th and 84%
+// on the 30th are the same percentage and completely different situations: the first
+// suspends the database mid-month, the second lands fine.
+function TransferMeter({ t, isMirror }) {
+  if (!t) return null
+  const cls = { ok: 'ok', warn: 'partial', critical: 'bad', exceeded: 'bad' }[t.verdict.level] || 'ok'
+  return (
+    <>
+      <h3 className="hlSection">Neon transfer</h3>
+      <div className={'hlRow ' + cls}>
+        <span className="hlDot" />
+        <div className="hlRowMain">
+          <div className="hlRowTop">
+            <b>{fmtBytes(t.used)} of {fmtBytes(t.limitBytes)} this month</b>
+            <span className="hlBadge">{t.pctUsed.toFixed(0)}%</span>
+            {t.isEstimate && <span className="hlBadge">estimated</span>}
+          </div>
+          <div className="hlPowers">
+            {t.verdict.headline}
+            {t.perDay > 0 && (
+              <span className="muted">
+                {' · '}{fmtBytes(t.perDay)}/day
+                {t.projected != null && <> · on track for {fmtBytes(t.projected)}</>}
+              </span>
+            )}
+          </div>
+          {/* WHO is burning it — the only thing that makes the number actionable. */}
+          {t.bySource.length > 0 && (
+            <div className="hlPowers muted">
+              {t.bySource.map((b) => `${b.source} ${fmtBytes(b.bytes)}`).join(' · ')}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="muted hlFoot">
+        {t.caveat}
+        {isMirror && ' Reading the mirror, so this shows only local work — which costs Neon nothing.'}
+      </div>
     </>
   )
 }

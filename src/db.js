@@ -47,6 +47,99 @@ export const IS_MIRROR = useMirror
 // One shared pool for the whole app.
 export const pool = new Pool({ connectionString: url })
 
+// ── Transfer metering ───────────────────────────────────────────────────────
+//
+// Every result set is weighed on the way past, so "how much are we reading out of
+// Neon, and which process is doing it" stops being a question we can only answer
+// after an email. See src/model/transferMeter.js for what this can and cannot claim.
+//
+// ⚠️ An ESTIMATE and a LOWER BOUND: it counts row bytes, not TLS or the wire
+// protocol's framing. Neon's console is the authority; this is for attribution.
+//
+// 'deploy' on Render, 'cron' when the recurring check is driving, else 'local'.
+export const TRANSFER_SOURCE = process.env.RENDER || process.env.RENDER_SERVICE_ID
+  ? 'deploy'
+  : (process.env.WORKHUB_ROLE || 'local')
+
+let pending = { bytes: 0, queries: 0 }
+let lastFlush = Date.now()
+let flushing = false
+const FLUSH_MS = 5 * 60 * 1000
+// ⚠️ A TIME-ONLY flush records nothing for the traffic that matters most. Almost all
+// of this repo's Neon reads come from SHORT-LIVED SCRIPTS — check:counters, the syncs,
+// the analyzers — which finish in seconds and call process.exit(), so neither a timer
+// nor `beforeExit` ever fires. The meter would have quietly reported zero for exactly
+// the processes that caused the problem it was built to find. So a heavy run flushes
+// on VOLUME as well, and 2 MB is chosen to be well under one check:counters run (5.3 MB)
+// while ignoring trivial scripts whose usage does not matter anyway.
+const FLUSH_BYTES = 2 * 1024 * 1024
+
+// ⚠️ MEASURED EXACTLY, after two attempts at being clever both failed.
+//
+//   sample row[0] x count   -> 88.6 MB for a run that was really 5.3 MB  (16x)
+//   sample 8 rows, average  ->  8.1 MB for a run that was really 3.1 MB  (2.6x)
+//
+// Result sets here are wildly heterogeneous — a 3,872-row table with a JSON payload
+// column sits next to a COUNT(*) — so no small sample represents the set, and a
+// monitor that is 2.6x out is one nobody will act on. The reason for sampling was
+// hot-path cost, and that reason does not survive contact with the numbers: pg has
+// ALREADY parsed every one of these rows off the wire into JS objects, which is
+// strictly more expensive than walking them again. Correctness wins.
+function weigh(rows) {
+  if (!rows?.length) return 0
+  try { return Buffer.byteLength(JSON.stringify(rows)) } catch { return 0 }
+}
+
+async function flush() {
+  if (flushing || (!pending.bytes && !pending.queries)) return
+  flushing = true
+  const batch = pending
+  pending = { bytes: 0, queries: 0 }
+  try {
+    await rawQuery(
+      `INSERT INTO transfer_log (day, source, bytes, queries, updated_at)
+       VALUES (CURRENT_DATE, $1, $2, $3, now())
+       ON CONFLICT (day, source) DO UPDATE
+         SET bytes = transfer_log.bytes + EXCLUDED.bytes,
+             queries = transfer_log.queries + EXCLUDED.queries,
+             updated_at = now()`,
+      [TRANSFER_SOURCE, batch.bytes, batch.queries],
+    )
+  } catch {
+    // ⚠️ A diagnostic must never break the thing it is diagnosing. If the table does
+    // not exist yet (pre-migration) or the write fails, the counts are put back and
+    // the app carries on as though the meter were not here.
+    pending.bytes += batch.bytes
+    pending.queries += batch.queries
+  } finally {
+    flushing = false
+    lastFlush = Date.now()
+  }
+}
+
+// The unmetered path, so flush() cannot count itself.
+const rawQuery = (text, params) => pool.query(text, params)
+
+const _poolQuery = pool.query.bind(pool)
+pool.query = function meteredQuery(...args) {
+  const out = _poolQuery(...args)
+  if (out && typeof out.then === 'function') {
+    return out.then((res) => {
+      pending.bytes += weigh(res?.rows)
+      pending.queries += 1
+      if (pending.bytes > FLUSH_BYTES || Date.now() - lastFlush > FLUSH_MS) flush().catch(() => {})
+      return res
+    })
+  }
+  return out
+}
+
+/** Write out whatever is pending — call before a short-lived script exits. */
+export const flushTransferMeter = () => flush().catch(() => {})
+
+// Best effort for scripts that let the loop drain rather than calling process.exit().
+process.once('beforeExit', () => { flush().catch(() => {}) })
+
 /**
  * When the mirror was cloned, and how old that makes it. Null on Neon — the live
  * database has no "as of", which is the whole point of the distinction.

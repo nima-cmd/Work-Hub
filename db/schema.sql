@@ -1625,3 +1625,25 @@ CREATE TABLE IF NOT EXISTS dead_label (
   recorded_at     TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (if_number, tracking_number)
 );
+
+-- ── Transfer metering (2026-08-14) ──────────────────────────────────────────
+-- Neon's Free plan allows 5 GB/month of public network transfer and SUSPENDS the
+-- compute when it runs out. We learned we were at 84% from an email, on the 14th.
+--
+-- One row per (day, source) so the SOURCE SPLIT is answerable — the whole question
+-- that day was whether the burn was the deployed app, the unattended cron, or
+-- development, and a single total cannot answer it. `source` is 'deploy' (Render),
+-- 'cron', or 'local'.
+--
+-- ⚠️ Written by whichever database is connected, which is the point: on Neon it
+-- records the deploy and the cron; on the local mirror it records local work that
+-- costs Neon nothing. The write itself is a few hundred bytes at most every 5
+-- minutes, which is negligible against the thing it measures.
+CREATE TABLE IF NOT EXISTS transfer_log (
+  day        DATE NOT NULL,
+  source     TEXT NOT NULL,
+  bytes      BIGINT NOT NULL DEFAULT 0,
+  queries    BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (day, source)
+);

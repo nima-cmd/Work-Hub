@@ -27,6 +27,7 @@
     "check:label-records": "node --env-file=.env.local scripts/check-label-records.js",
     "check:counters": "node --env-file=.env.local scripts/check-counters.js",
     "check:fields": "node --env-file=.env.local scripts/check-fields.js",
+    "check:transfer": "node --env-file=.env.local scripts/check-transfer.js",
     "zpl": "node scripts/zpl-print.js",
     "zpl:watch": "node scripts/zpl-print.js --watch",
     "server": "node --env-file=.env.local server/index.js",
