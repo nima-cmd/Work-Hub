@@ -72,6 +72,7 @@ import { groupDepartures } from '../src/model/departures.js'
 import { shipDateAdvice, rankShipDateAdvice, monthCloseCount, auditMarkedShipments } from '../src/model/shipDateAdvice.js'
 import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/syncHealth.js'
 import { ASSUMPTIONS, MECHANICAL, summarize as summarizeAssumptions } from '../src/model/fieldAssumptions.js'
+import { summarizeTransfer } from '../src/model/transferMeter.js'
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
 import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
@@ -1167,6 +1168,14 @@ export async function getHealth() {
   // mirror they describe how fresh Neon was when it was cloned, not now. Reporting
   // those as live would be the field-assumption bug class applied to the whole app.
   const m = await mirrorAsOf()
+  // Neon's transfer meter. Soft — a diagnostic must never blank the page it is on,
+  // and this table is younger than the rest of the schema.
+  let transfer = null
+  try {
+    const { rows } = await pool.query(
+      `SELECT to_char(day,'YYYY-MM-DD') AS day, source, bytes, queries FROM transfer_log ORDER BY day`)
+    transfer = summarizeTransfer(rows, { today: new Date().toISOString().slice(0, 10) })
+  } catch { transfer = null }
   return {
     overall: overallHealth({ integrations, syncs }), integrations, syncs,
     fieldAssumptions: getFieldAssumptions(),
@@ -1176,6 +1185,7 @@ export async function getHealth() {
       clonedAt: m?.at ? m.at.toISOString() : null,
       ageHours: m?.ageHours ?? null,
     },
+    transfer,
   }
 }
 

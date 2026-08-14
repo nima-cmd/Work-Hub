@@ -33,6 +33,7 @@ npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
 npm run check:fields       # which columns are DERIVED, not observed? (is this column always another + N?)
+npm run check:transfer     # Neon's 5 GB/month cap: used, projected, and BY WHICH process
 npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
@@ -59,6 +60,18 @@ checks, scripts — at the clone. Comment it out to read Neon.
 app owns some of its data (BOL numbers that must never be reused, custody scans,
 tasks), so two writable copies would mean conflict resolution on exactly the records
 that must not diverge. The mirror is a disposable read replica for development.
+
+**Monitoring it.** `npm run check:transfer` reports month-to-date, the daily rate, a
+month-end projection and the split by source (`deploy` / `cron` / `local`) — the
+projection is the signal, not the percentage, because 84% on the 14th suspends the
+database and 84% on the 30th lands fine. Also on Health. ⚠️ It is an ESTIMATE and a
+lower bound (row bytes, no TLS or wire framing); Neon's console is the authority, and
+`--used=4.2GB` anchors the projection to their real figure.
+
+⚠️ **`npm run migrate` follows `WORKHUB_DB` too.** It refuses to run against the mirror
+unless you pass `--mirror`; use `WORKHUB_DB=neon npm run migrate` for the real one.
+This already bit once — `transfer_log` was created on the clone while Neon, the
+database that needed it, silently never got it.
 
 ⚠️ **It is stale by definition.** The server prints its target at startup and Health
 shows a red banner with the clone's age. Never report a mirror number as live — that
