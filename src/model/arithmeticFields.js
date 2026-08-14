@@ -209,6 +209,13 @@ export const EXPECTED_CONSTANT = [
   { table: 'ups_shipment_cost', column: 'insurance_cost', why: 'we never declare value on these labels — always 0' },
   { table: 'asn_carton_run', column: 'message_errors', why: 'no ASN run has errored yet — a counter that has never fired' },
   { table: 'edi_asn_harvest', column: 'packs_without_sscc', why: 'every harvested pack has had an SSCC — never fired' },
+  // ⚠️ Appeared on 2026-08-14, the FIRST time this check caught a live change on its
+  // own. Pushing the nine Bloomingdale's cartons took shipstation_order past the
+  // sweep's 40-row floor, and store_id turned out to be one value across all 48 rows.
+  // Benign: 351819 is the single "Label Api" store every push targets, so one value
+  // is the truth and not a dead field. Recorded rather than silenced — the day a
+  // second store appears, this entry stops matching and says so.
+  { table: 'shipstation_order', column: 'store_id', why: 'one push destination — ShipStation store 351819 ("Label Api")' },
 ]
 
 export function isExpected(table, column, basis) {
