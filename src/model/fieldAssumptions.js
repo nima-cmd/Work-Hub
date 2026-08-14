@@ -124,10 +124,19 @@ export const ASSUMPTIONS = [
     field: 'fulfillments.actual_ship_date', shape: S.ARITHMETIC.key,
     pr: 102, date: '2026-08-13', status: 'accepted',
     assumed: 'it records when the goods actually left',
-    actually: 'byte-identical to if_date on all 190 rows carrying both, and no row has it without if_date — '
-      + 'one keystroke, which on this lane fires ahead of the pickup to generate the ASN',
-    cost: 'none found; recorded so nothing starts reading its VALUE as departure evidence',
-    caught: 'npm run check:fields, on its first run',
+    // ⚠️ CORRECTED 2026-08-14 by Nima: "to get the shipdate we need to simply get the
+    // date on the IF transaction when it was shipped as this should always be the
+    // ship date." So the two agreeing is the DEFINITION, not a defect — the IF
+    // transaction date IS the ship date, and it is authoritative for invoicing and
+    // for the calendar. My first framing ("carries no departure evidence") read as a
+    // caution against using it, which would have been exactly wrong.
+    actually: 'identical to if_date on all 201 shipped fulfilments — because the IF transaction date IS '
+      + 'the ship date. Authoritative, not redundant. The only nuance: on the EDI lane marking shipped '
+      + 'deliberately fires ahead of the physical pickup to generate the ASN, so it dates the TRANSACTION, '
+      + 'not the truck leaving',
+    cost: 'none — and the entry as first written was misleading, which is its own lesson: '
+      + 'two fields agreeing is not evidence that either is empty',
+    caught: 'npm run check:fields on its first run; the MEANING came from asking Nima',
   },
   {
     field: 'shipstationEligibility ALREADY_LABELLED (labelCount > 0)', shape: S.EXISTENCE.key,
