@@ -354,19 +354,23 @@ function TagSheet() {
   const [size, setSize] = useState('2.25x1.25')
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
+  // Already-scanned fulfilments are excluded by default — a tag for something already
+  // scanned is waste. Kept as a toggle because a tag can be lost or a page re-filed.
+  const [includeScanned, setIncludeScanned] = useState(false)
 
   useEffect(() => { fetch('/api/print-label/days').then((r) => r.json()).then(setDays).catch(() => {}) }, [])
   useEffect(() => {
     if (!day) { setSheet(null); return }
-    fetch(`/api/print-label/sheet?shipped=${day}`).then((r) => r.json()).then(setSheet).catch(() => setSheet(null))
-  }, [day])
+    fetch(`/api/print-label/sheet?shipped=${day}${includeScanned ? '&includeScanned=1' : ''}`)
+      .then((r) => r.json()).then(setSheet).catch(() => setSheet(null))
+  }, [day, includeScanned])
 
   async function print() {
     setBusy(true); setMsg(null)
     try {
       const r = await fetch('/api/print-label/sheet', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shipped: day, size }),
+        body: JSON.stringify({ shipped: day, size, includeScanned }),
       })
       const j = await r.json()
       setMsg(r.ok ? `✓ sent ${j.count} tag(s) to ${j.printer}` : `⚠ ${j.error}`)
@@ -391,9 +395,14 @@ function TagSheet() {
         </select>
         {day && (
           <>
+            <label className="tagChk" title="A fulfilment already scanned in the Scan Bay does not need a tag.">
+              <input type="checkbox" checked={includeScanned}
+                     onChange={(e) => setIncludeScanned(e.target.checked)} />
+              include already-scanned
+            </label>
             {/* The PDF works everywhere; direct printing only where the queue exists.
                 Offering both means this is never dead on a laptop or the deploy. */}
-            <a className="btn" href={`/api/print-label/sheet.pdf?shipped=${day}&size=${size}`} target="_blank" rel="noreferrer">
+            <a className="btn" href={`/api/print-label/sheet.pdf?shipped=${day}&size=${size}${includeScanned ? '&includeScanned=1' : ''}`} target="_blank" rel="noreferrer">
               ⤓ PDF
             </a>
             <button className="btn" disabled={busy || !sheet?.count} onClick={print}>
@@ -410,14 +419,22 @@ function TagSheet() {
               only the ones missing a code, and it says so rather than implying a filter
               it cannot perform. A duplicate sticker costs nothing; a missing one costs a
               hunt through the pile. */}
+          {/* Both numbers, always. A shorter list with no explanation is how a filter
+              becomes indistinguishable from missing data. */}
           <div className="muted hlFoot">
-            {sheet.count} tag{sheet.count === 1 ? '' : 's'} — every fulfilment shipped that day.
-            We do not record which slips already have a QR, so this does not filter them out.
+            <b>{sheet.count}</b> tag{sheet.count === 1 ? '' : 's'} of{' '}
+            <b>{sheet.shippedThatDay}</b> shipped that day
+            {sheet.alreadyScanned > 0 && (
+              <> — {sheet.alreadyScanned} already scanned{includeScanned ? ' (included)' : ' and skipped'}</>
+            )}.
+            {' '}⚠️ Filtered on SCANS, not on paper: we do not record which slips were
+            printed with a QR, so an unscanned one may already have a code.
           </div>
           <div className="tagList">
             {sheet.items.map((i) => (
               <div key={i.ifNumber} className="tagItem">
                 <b>{i.ifNumber}</b>
+                {i.scanned && <span className="tagScanned" title="already scanned">✓</span>}
                 <span className="muted">{i.customer || '—'}</span>
                 <span className="muted">{i.refByPo ? `PO ${i.poNumber}` : i.soNumber}</span>
               </div>

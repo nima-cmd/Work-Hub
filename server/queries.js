@@ -2742,19 +2742,29 @@ export async function fileShipmentToDrive(id) {
 // Batched BY SHIP DATE because that is how the paperwork is filed: printing a day's
 // tags is simultaneously the scan codes AND the finding aid for that day's pile.
 //
-// ⚠️ WE DO NOT KNOW WHICH SLIPS ALREADY HAVE A QR. Nothing records it — no column in
-// the schema mentions it, and the slip is printed by NetSuite, not by us. So this
-// deliberately returns EVERY fulfilment shipped that day rather than pretending to
-// filter. Said out loud in the response (`qrKnown: false`) so no surface claims a
-// completeness it cannot have. A duplicate sticker costs nothing; a missing one costs
-// a hunt through the pile.
-export async function getTagSheet({ shipped = null, from = null, to = null } = {}) {
+// ⚠️ TWO DIFFERENT QUESTIONS, and conflating them cost a round trip. We do NOT know
+// which printed slips carry a QR — nothing records it, and the slip is printed by
+// NetSuite, not by us. But that is not what matters. What matters is whether the
+// fulfilment has ALREADY BEEN SCANNED, and that we do record: a Scan Bay scan writes
+// an `order_events` row with source 'scan'. A tag for something already scanned is
+// waste, so those are excluded by default.
+//
+// Nima: "we wont need anything that has been scanned already and my assumption was
+// that it was recorded somewhere when the scan happens" — it is; I had read his
+// earlier question as being about the printed slip.
+//
+// `includeScanned` brings them back, because a tag can be lost or a page re-filed,
+// and BOTH counts are always returned so the panel can say "38 of 50 need one"
+// rather than silently showing a shorter list.
+export async function getTagSheet({ shipped = null, from = null, to = null, includeScanned = false } = {}) {
   if (!shipped && !from) throw new Error('a ship date is required')
   const { rows } = await pool.query(
     `SELECT f.if_number AS "ifNumber", f.so_number AS "soNumber",
             o.customer, o.po_number AS "poNumber", o.source,
             to_char(f.actual_ship_date, 'YYYY-MM-DD') AS "shippedOn",
-            (SELECT COUNT(*) FROM edi_carton c WHERE c.if_number = f.if_number)::int AS cartons
+            (SELECT COUNT(*) FROM edi_carton c WHERE c.if_number = f.if_number)::int AS cartons,
+            EXISTS (SELECT 1 FROM order_events e
+                     WHERE e.source = 'scan' AND e.doc_number = f.if_number) AS scanned
        FROM fulfillments f
        LEFT JOIN orders o ON o.so_number = f.so_number
       WHERE f.status = 'Shipped' AND f.actual_ship_date IS NOT NULL
@@ -2764,15 +2774,23 @@ export async function getTagSheet({ shipped = null, from = null, to = null } = {
       ORDER BY f.if_number`,
     [shipped, from, to || from],
   )
+  const all = rows.map((r) => ({
+    ...r,
+    // EDI tags reference the customer PO, boutique ones the SO — the same rule the
+    // single-tag path uses, so a retro tag is indistinguishable from a fresh one.
+    refByPo: r.source === 'edi',
+  }))
+  const alreadyScanned = all.filter((r) => r.scanned).length
+  const items = includeScanned ? all : all.filter((r) => !r.scanned)
   return {
-    items: rows.map((r) => ({
-      ...r,
-      // EDI tags reference the customer PO, boutique ones the SO — the same rule the
-      // single-tag path uses, so a retro tag is indistinguishable from a fresh one.
-      refByPo: r.source === 'edi',
-    })),
-    count: rows.length,
+    items,
+    count: items.length,
+    shippedThatDay: all.length,
+    alreadyScanned,
+    includeScanned,
     shipped: shipped || null, from: from || null, to: to || null,
+    // Still true and still worth saying: a fulfilment that has never been scanned may
+    // ALREADY have a QR on its slip. This filters on scans, not on paper.
     qrKnown: false,
   }
 }
