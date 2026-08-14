@@ -2760,3 +2760,7 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 /* The local-mirror banner. Deliberately loud: a stale snapshot read as live data is
    the most damaging mistake this app can make. */
 .hlMirror { margin: 10px 0 4px; line-height: 1.5; }
+
+/* "not in ShipStation yet" on a routing card. Muted, not alarming — the push is
+   deliberately human-initiated, so this is a signpost, not a fault. */
+.rt-pushHint { font-size: 11px; color: var(--muted); line-height: 1.45; padding: 2px 0; }
