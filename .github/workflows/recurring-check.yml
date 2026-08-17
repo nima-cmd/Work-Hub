@@ -27,9 +27,26 @@ name: Recurring task check
 #   RENDER_URL   e.g. https://work-hub.onrender.com (no trailing slash)
 #   CRON_SECRET  the exact same value you set on the Render service
 
+# ⚠️ HOURLY, and asking for */10 is what nearly killed the database (2026-08-17).
+#
+# MEASURED, after Neon hit 100% of its 5 GB monthly transfer on a weekend Nima never
+# touched the app:
+#
+#   54 runs in 24h (GitHub delivered ~every 27 min, not the ~90 assumed here)
+#   ~4,450 queries and ~4.6 MB of Neon transfer PER RUN
+#   = 249 MB/day = ~7.7 GB/month, against a 5 GB cap
+#
+# The deploy alone was 240,531 queries on 08-15 and 230,238 on 08-16 — days with no
+# human activity at all. The old note below reasoned that asking for */10 was harmless
+# because GitHub throttles it; that was true about the SCHEDULE and wrong about the
+# COST, because nobody had multiplied a run by its price.
+#
+# ⚠️ Do not "optimise" this back down to */10 without re-measuring what a run costs.
+# One hour is a deliberate budget: 24 runs x 4.6 MB = ~110 MB/day = ~3.4 GB/month, which
+# fits with room for development on top. `npm run check:transfer` is how to check.
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch: {} # lets you manually trigger a run from the Actions tab, for testing
 
 jobs:
