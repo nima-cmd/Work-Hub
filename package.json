@@ -37,6 +37,7 @@
     "client:build": "npm --prefix client install && npm --prefix client run build",
     "dev": "concurrently \"npm --prefix client run dev\" \"PORT=3001 npm run server\"",
     "dev:mirror": "WORKHUB_DB=mirror npm run dev",
+    "dev:offline": "WORKHUB_DB=mirror WORKHUB_OFFLINE=1 npm run dev",
     "print-agent": "node --env-file=.env.local scripts/print-agent.js",
     "backfill:fulfillment-dc": "node --env-file=.env.local scripts/backfill-fulfillment-dc.js",
     "sync:shipstation-tracking": "node --env-file=.env.local scripts/sync-shipstation-tracking.js",

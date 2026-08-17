@@ -2,7 +2,7 @@
 // (in production) serves the built React client. Run: `npm run server`
 // (which loads .env.local for the Neon connection).
 
-import { IS_MIRROR, mirrorAsOf } from '../src/db.js'
+import { IS_MIRROR, IS_OFFLINE, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -1566,9 +1566,20 @@ app.listen(PORT, async () => {
   if (IS_MIRROR) {
     const m = await mirrorAsOf()
     const age = m?.ageHours == null ? 'unknown age' : `${m.ageHours.toFixed(1)}h old`
-    console.log(`⚠  DATABASE: LOCAL MIRROR (${age}) — NOT live Neon data.`)
-    console.log('   Numbers here are a snapshot. `npm run db:mirror` re-clones;')
-    console.log('   comment out WORKHUB_DB in .env.local to use Neon.')
+    if (IS_OFFLINE) {
+      // ⚠️ OFFLINE MODE is a different claim from "reading a stale mirror". Here the
+      // local database is the WORKING one: writes are permitted and they exist nowhere
+      // else, so re-cloning would destroy them (db-mirror.js refuses, but say it here
+      // too — the person who forgets is the person reading this line).
+      console.log(`⚠  DATABASE: LOCAL, OFFLINE MODE (cloned ${age}) — writes stay HERE.`)
+      console.log('   Neon is out of transfer. The API syncs all work: NetSuite, Gmail,')
+      console.log('   Orderful and ShipStation read their own APIs, not Neon.')
+      console.log('   ⚠ Do NOT re-clone until this work has reached Neon.')
+    } else {
+      console.log(`⚠  DATABASE: LOCAL MIRROR (${age}) — NOT live Neon data.`)
+      console.log('   Numbers here are a snapshot. `npm run db:mirror` re-clones;')
+      console.log('   comment out WORKHUB_DB in .env.local to use Neon.')
+    }
   } else {
     console.log('   DATABASE: Neon (live)')
   }

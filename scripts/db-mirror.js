@@ -71,6 +71,62 @@ if (dryRun) { console.log('  --dry: nothing read or written.\n'); process.exit(0
 // mirror is then guaranteed to match what `npm run migrate` produces, and any drift
 // between schema.sql and Neon shows up as a skipped column rather than silently.
 
+// 0. ⚠️ WOULD THIS DESTROY WORK? Added 2026-08-17, when Neon's transfer ran out and
+//    local Postgres became the working database for a fortnight. Everything below
+//    DROPS the local database — which is correct for a disposable read replica and
+//    catastrophic once someone has been scanning cartons into it. App-owned tables
+//    (src/db.js APP_OWNED_TABLES) hold records nothing upstream can regenerate.
+//
+//    So: if local holds app-owned rows stamped AFTER the last clone, refuse. --force
+//    proceeds, because there are legitimate reasons to throw a session away — but it
+//    has to be said out loud rather than discovered afterwards.
+const force = process.argv.includes('--force')
+try {
+  const probe = new pg.Client({ connectionString: LOCAL })
+  await probe.connect()
+  const { rows: stamp } = await probe.query(
+    "SELECT value FROM sync_meta WHERE key = 'mirror_cloned_at'").catch(() => ({ rows: [] }))
+  const clonedAt = stamp?.[0]?.value || null
+  const newer = []
+  if (clonedAt) {
+    const { APP_OWNED_TABLES } = await import('../src/db.js')
+    for (const t of APP_OWNED_TABLES) {
+      // Any timestamp column will do — we only need "was this row touched after the
+      // clone", and different tables name that column differently.
+      const { rows: cols } = await probe.query(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema='public' AND table_name=$1
+            AND column_name IN ('updated_at','created_at','occurred_at','recorded_at')
+          ORDER BY CASE column_name WHEN 'updated_at' THEN 1 WHEN 'occurred_at' THEN 2
+                                    WHEN 'recorded_at' THEN 3 ELSE 4 END LIMIT 1`, [t])
+      if (!cols.length) continue
+      const col = cols[0].column_name
+      try {
+        const { rows: n } = await probe.query(
+          `SELECT COUNT(*)::int AS n FROM ${ident(t)} WHERE ${ident(col)} > $1`, [clonedAt])
+        if (n[0].n > 0) newer.push(`${t} (${n[0].n} row${n[0].n === 1 ? '' : 's'})`)
+      } catch { /* table absent locally — nothing to lose */ }
+    }
+  }
+  await probe.end()
+  if (newer.length && !force) {
+    console.error('\n  ERR REFUSING to re-clone: local holds work created since the last clone.')
+    console.error(`      cloned at ${clonedAt}`)
+    for (const x of newer) console.error(`      ${x}`)
+    console.error('\n      These are APP-OWNED records — custody scans, BOL numbers, filing events,')
+    console.error('      tasks. Nothing upstream can regenerate them, and this script DROPS the')
+    console.error('      database. If Neon is back, push them there before re-cloning.')
+    console.error('      To throw them away deliberately:  npm run db:mirror -- --force\n')
+    process.exit(1)
+  }
+  if (newer.length) console.log(`  ..  --force: DISCARDING ${newer.length} table(s) of local work`)
+} catch (e) {
+  // A probe failure must not block a first-ever clone (no local DB yet).
+  if (!/does not exist|ECONNREFUSED/i.test(String(e.message))) {
+    console.log(`  ..  could not check for local work (${String(e.message).slice(0, 60)})`)
+  }
+}
+
 // 1. Recreate the local database, so a table or column dropped upstream cannot leave
 //    a stale artefact behind. A mirror that is MOSTLY current is worse than one that
 //    is plainly a full copy.

@@ -21,6 +21,7 @@ aging-aware pipeline so **nothing sits ignored**. It also serves as the canonica
 npm test               # unit tests for the model (no DB)
 npm run migrate        # apply db/schema.sql to Neon
 npm run db:mirror      # clone Neon -> local Postgres (DEVELOP AGAINST THIS, see below)
+npm run dev:offline    # run the whole app on local Postgres, writes allowed (Neon down)
 npm run ingest         # load NetSuite saved-search CSV exports into the DB
 npm run server         # API + built UI at http://localhost:3001
 npm run dev            # live-editing (Vite + API)
@@ -72,6 +73,36 @@ lower bound (row bytes, no TLS or wire framing); Neon's console is the authority
 unless you pass `--mirror`; use `WORKHUB_DB=neon npm run migrate` for the real one.
 This already bit once — `transfer_log` was created on the clone while Neon, the
 database that needed it, silently never got it.
+
+## Working with Neon suspended (offline mode)
+
+Neon ran out of transfer on **2026-08-17** — the cron was burning 7.7 GB/month on its
+own (54 runs/day x 4.6 MB; now hourly). The compute suspends until the reset.
+
+**Nothing falls back to CSV.** Every ingest reads its own API over HTTPS and has no
+Neon dependency — only the WRITE lands in Postgres. Point that at local and it all
+works. Verified 2026-08-17 against the mirror:
+
+| sync | source | result |
+|---|---|---|
+| NetSuite | SuiteQL/REST | 270 orders · 192 fulfilments · 1,175 invoices |
+| Gmail | Gmail API | 9 fetched, 9 upserted |
+| Orderful | Orderful API | 4,013 fetched, 4,013 upserted |
+| Macy's routing | Gmail | 100 parsed, 13 live |
+| Manhattan tenders | Gmail | 6 parsed, 5 shipments |
+| ShipStation | ShipStation API | read-only harvest OK |
+
+```bash
+npm run dev:offline    # WORKHUB_DB=mirror WORKHUB_OFFLINE=1 — writes permitted
+```
+
+The CSV path is the fallback for **NetSuite** being down, not for Neon.
+
+⚠️ **App-owned writes made offline exist NOWHERE ELSE.** `npm run db:mirror` DROPS the
+database, so it now refuses when local holds app-owned rows newer than the clone stamp
+(`APP_OWNED_TABLES` in `src/db.js` — custody scans, BOL numbers, filing events, tasks,
+notes). `--force` discards them deliberately. Those records still have to reach Neon
+before re-cloning; there is no automatic reconciliation and deliberately never has been.
 
 ⚠️ **It is stale by definition.** The server prints its target at startup and Health
 shows a red banner with the clone's age. Never report a mirror number as live — that
