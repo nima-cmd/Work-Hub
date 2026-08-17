@@ -37,6 +37,36 @@ export function poVersions(order) {
 // Diff two parsed 850 versions (prev → next). Returns a structured, UI-ready
 // summary plus a `changed` flag. Lines are matched by their stable `sku`
 // (vendor style, else UPC) so a re-order of array positions isn't a false diff.
+// ⚠️ Nordstrom parks unallocated units on store 0299 — a DC, not a shop. Nima:
+// "anytime i see that 299 i know its unallocated." Measured across 30 recent Nordstrom
+// 850s: 4 send every line to 0299, 23 never mention it, and NONE mix it with real
+// stores. So this is a clean discriminator, not a heuristic.
+//
+// ⚠️ Partner-specific by nature. It is Nordstrom's convention and nothing suggests any
+// other partner uses it, so anything reading this must check the partner too rather than
+// assuming 0299 means the same thing everywhere.
+// The per-store breakdown out of an 850's SDQ segment (Nima, 2026-08-17).
+//
+// ⚠️ Qualifier '92' is "assigned by buyer", and it tags BOTH the buying party and each
+// store. Measured on live Nordstrom 850s: the buyer code is 10 digits (0005189002) and
+// every store is 4 (0299, 0004, 0221, 0568…). So four digits IS the store rule — stated
+// here as the assumption it is, with the evidence, rather than left implicit.
+export function extractStoreCodes(message) {
+  const text = JSON.stringify(message || {})
+  const codes = [...text.matchAll(/"identificationCodeQualifier":"92","identificationCode":"([^"]+)"/g)]
+    .map((m) => m[1])
+    .filter((c) => /^\d{4}$/.test(c))
+  return [...new Set(codes)].sort()
+}
+
+export const HOLD_STORE = '0299'
+
+/** Every line parked on the hold store = the partner has not allocated it yet. */
+export function looksUnallocated(storeCodes = []) {
+  const real = (storeCodes || []).filter(Boolean)
+  return real.length === 1 && real[0] === HOLD_STORE
+}
+
 export function diffPoVersions(prev, next) {
   const dates = {}
   for (const f of ['shipNotBefore', 'cancelAfter']) {
@@ -63,14 +93,30 @@ export function diffPoVersions(prev, next) {
     if (!nextBySku.has(sku)) removed.push({ sku, style: l.style, upc: l.upc, qty: l.qty })
   }
 
+  // ⚠️ THE STORE LIST, and it is the reason this diff exists at all for a parked PO.
+  //
+  // Nima, 2026-08-17: Nordstrom sends unallocated POs to store 0299 and re-sends them
+  // once the units allocate. Before this, the diff compared dates, SKUs, quantities and
+  // prices — so a re-send that moved 25 units from store 0299 to store 0221 with the
+  // SAME totals changed NOTHING the diff could see, and the PO would have stayed parked
+  // and silent. The allocation is the whole event, and it lives here.
+  const storesFrom = [...(prev?.storeCodes || [])].sort()
+  const storesTo = [...(next?.storeCodes || [])].sort()
+  const storesAdded = storesTo.filter((c) => !storesFrom.includes(c))
+  const storesRemoved = storesFrom.filter((c) => !storesTo.includes(c))
+
   const unitsFrom = (prev?.lineItems || []).reduce((s, l) => s + (l.qty || 0), 0)
   const unitsTo = (next?.lineItems || []).reduce((s, l) => s + (l.qty || 0), 0)
 
   const changed =
+    storesAdded.length > 0 || storesRemoved.length > 0 ||
     Object.keys(dates).length > 0 || added.length > 0 || removed.length > 0 ||
     qtyChanges.length > 0 || priceChanges.length > 0
 
-  return { changed, dates, added, removed, qtyChanges, priceChanges, unitsFrom, unitsTo }
+  return {
+    changed, dates, added, removed, qtyChanges, priceChanges, unitsFrom, unitsTo,
+    storesFrom, storesTo, storesAdded, storesRemoved,
+  }
 }
 
 // Short badge strings for a diff — what the UI shows on a version step and in
@@ -80,6 +126,19 @@ export function summarizePoDiff(diff) {
   const out = []
   if (diff.dates.shipNotBefore) out.push(`ship-window start ${diff.dates.shipNotBefore.from || '—'}→${diff.dates.shipNotBefore.to || '—'}`)
   if (diff.dates.cancelAfter) out.push(`cancel date ${diff.dates.cancelAfter.from || '—'}→${diff.dates.cancelAfter.to || '—'}`)
+  // ⚠️ Named FIRST in the sentence when 299 is involved, because "it allocated" is the
+  // headline and a list of store numbers is not. Nima reads 299 as "unallocated", so the
+  // summary should read the way he already thinks about it.
+  if (diff.storesRemoved.includes(HOLD_STORE) && diff.storesAdded.length) {
+    out.push(`ALLOCATED — left store ${HOLD_STORE}, now ${diff.storesAdded.join(', ')}`)
+  } else if (diff.storesAdded.includes(HOLD_STORE)) {
+    out.push(`moved TO store ${HOLD_STORE} (unallocated)`)
+  } else if (diff.storesAdded.length || diff.storesRemoved.length) {
+    const bits = []
+    if (diff.storesAdded.length) bits.push(`+${diff.storesAdded.join(',')}`)
+    if (diff.storesRemoved.length) bits.push(`-${diff.storesRemoved.join(',')}`)
+    out.push(`stores ${bits.join(' ')}`)
+  }
   if (diff.unitsFrom !== diff.unitsTo) out.push(`units ${diff.unitsFrom}→${diff.unitsTo}`)
   for (const q of diff.qtyChanges) out.push(`${q.style || q.sku} qty ${q.from}→${q.to}`)
   for (const a of diff.added) out.push(`+${a.style || a.sku} (${a.qty})`)

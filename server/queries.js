@@ -3056,7 +3056,8 @@ export async function recordEdiArrivals(insertedIds = []) {
     // (backfillPo850Details ran earlier this sync, so the new one is parsed).
     const { rows: v } = await pool.query(
       `SELECT id, created_at AS "createdAt", ship_not_before AS "shipNotBefore",
-              cancel_after AS "cancelAfter", line_items AS "lineItems"
+              cancel_after AS "cancelAfter", line_items AS "lineItems",
+              store_codes AS "storeCodes"
        FROM edi_transactions
        WHERE business_number = $1 AND type = '850_PURCHASE_ORDER' AND stream = 'LIVE'
        ORDER BY created_at ASC`,

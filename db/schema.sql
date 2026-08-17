@@ -1659,3 +1659,20 @@ CREATE TABLE IF NOT EXISTS transfer_log (
 -- (-9 to +620) — a person typing dates, not a default.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_start DATE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_end   DATE;
+
+-- ── SDQ store codes on an 850 (2026-08-17) ──────────────────────────────────
+-- Nima: "the unallocated ones all go to a store 299 which is a dc, anytime i see that
+-- 299 i know its unallocated. i wasn't sure if that was visible through the API."
+--
+-- It is. The 850's SDQ segment breaks the order down per store, and Orderful exposes it:
+--   "identificationCodeQualifier":"92","identificationCode":"0299","quantity":"25"
+--
+-- Measured across 30 recent Nordstrom POs: 4 are 299-ONLY, 23 carry no 299 at all, and
+-- ZERO mix 299 with real stores. So "every line goes to 0299" is an objective signal for
+-- unallocated, where before it was a hand-set review state.
+--
+-- Kept as the FULL code list rather than a boolean, because the same field answers the
+-- question Nima actually asked: when Nordstrom re-sends the PO allocated, the store list
+-- changes from {0299} to real stores — a difference the version diff can see even when
+-- quantities are identical.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS store_codes TEXT[];
