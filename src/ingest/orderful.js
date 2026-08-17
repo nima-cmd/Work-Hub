@@ -5,6 +5,7 @@
 // cursor-based, newest first, 100 per page (see List Transactions docs).
 
 import { pool } from '../db.js'
+import { extractStoreCodes } from '../model/ediPoDiff.js'
 import { extractPoDates, extractPoLines, summarizePoLines } from './orderfulDates.js'
 
 export { extractPoDates, extractPoLines } from './orderfulDates.js'
@@ -117,14 +118,16 @@ export async function backfillPo850Details(apiKey, db = pool) {
     const message = await fetchTransactionMessage(apiKey, id)
     const { shipNotBefore, cancelAfter } = extractPoDates(message)
     const lineItems = extractPoLines(message)
+    const storeCodes = extractStoreCodes(message)
     const { totalUnits, lineCount } = summarizePoLines(lineItems)
     // Stamp both checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched forever.
     await db.query(
       `UPDATE edi_transactions
        SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true,
-           line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true
+           line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true,
+           store_codes = $7
        WHERE id = $1`,
-      [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount],
+      [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount, storeCodes],
     )
     if (shipNotBefore || cancelAfter || lineItems.length) n++
   }
@@ -206,7 +209,11 @@ export async function fetchEdiTransactions(db = pool) {
             stream, validation_status AS "validationStatus", delivery_status AS "deliveryStatus",
             acknowledgment_status AS "acknowledgmentStatus", created_at AS "createdAt",
             last_updated_at AS "lastUpdatedAt", ship_not_before AS "shipNotBefore", cancel_after AS "cancelAfter",
-            line_items AS "lineItems", total_units AS "totalUnits", line_count AS "lineCount"
+            line_items AS "lineItems", total_units AS "totalUnits", line_count AS "lineCount",
+            -- ⚠️ Named here or the diff never sees it. This is the FIFTH whitelist this
+            -- repo has been bitten by: SQL, loadToDb, this projection, pipeline CARRY,
+            -- queries.js. A column exists in none of the places it is not written down.
+            store_codes AS "storeCodes"
      FROM edi_transactions
      WHERE stream = 'LIVE'   -- TEST-stream docs stay stored but never enter the
                              -- review: a test 850 must not read as a missed PO
