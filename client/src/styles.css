@@ -2799,3 +2799,9 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .so-purple, .so-purple a { color: #b58cf0; }
   .so-green,  .so-green a  { color: #5cc48d; }
 }
+
+/* "Yes, it left" — the one fact on these cards no system can supply, so it is a real
+   button rather than a link lost among the print controls. Green because the column is
+   green, and because it is the affirmative answer to the card's own question. */
+.confirmLeft { border-color: var(--ok, #3a8); color: var(--ok, #3a8); font-weight: 600; }
+.confirmLeft:hover:not(:disabled) { background: var(--ok, #3a8); color: #fff; }

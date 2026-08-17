@@ -441,11 +441,22 @@ export function ConfirmDepartedButton({ ifNumber, onDone }) {
       setState({ msg: e.message, bad: true })
     }
   }
+  // ⚠️ A BUTTON, not a link, and worded as an ANSWER to the card's own question.
+  //
+  // Nima, 2026-08-17: "where is the box i tried to mark it as shipped expecting it to
+  // leave this que". He clicked the checkbox at the top-left of the card — which is
+  // task SELECTION — because a tickbox is the obvious thing to tick when a card says
+  // "Confirm it physically left". The real control was a faint `linkBtn` at the very
+  // bottom, indistinguishable from the print links beside it.
+  //
+  // The card asks a yes/no question, so the control now reads as the yes. It is the
+  // only action on these cards that no other system can supply, so it should not be
+  // the quietest thing on them.
   return (
     <span className="tagBtns">
-      <button className="linkBtn" disabled={state?.busy} onClick={run}
-              title="Record that this order physically left. NetSuite already reads Shipped — it has since the label was made — so nothing else can tell you this happened.">
-        {state?.busy ? 'recording…' : '✓ it left'}
+      <button className="btn confirmLeft" disabled={state?.busy} onClick={run}
+              title="Record that this order physically left the building. NetSuite has read Shipped since the label was made — it cannot tell you this. Undoable.">
+        {state?.busy ? 'recording…' : '✓ Yes, it left'}
       </button>
       {state?.msg && <span className={state.bad ? 'muted' : 'good'}> {state.msg}</span>}
     </span>
