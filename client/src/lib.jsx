@@ -299,7 +299,7 @@ function OneLabelButton({ info, size }) {
     }
   }
   return (
-    <button className="linkBtn" title={`Print the ${SIZE_LABEL[size]} cargo tag`} disabled={state === 'printing'} onClick={onPrint}>
+    <button className="cardAct actPrint" title={`Print the ${SIZE_LABEL[size]} cargo tag`} disabled={state === 'printing'} onClick={onPrint}>
       🖨 {state === 'printing' ? `${SIZE_LABEL[size]}…` : state === 'ok' ? `✓ ${SIZE_LABEL[size]}` : state === 'err' ? `⚠ ${SIZE_LABEL[size]}` : SIZE_LABEL[size]}
       {state === 'err' && msg && <span style={{ color: 'var(--hi)' }}> — {msg}</span>}
     </button>
@@ -391,7 +391,11 @@ export function ShipstationPushButton({ ifNumber, onDone }) {
     try {
       const r = await pushToShipstation({ scope: 'boutique', ifNumbers: [ifNumber], force })
       if (r.pushed > 0) {
-        setState({ msg: `✓ in ShipStation — buy the label there` })
+        // The order NUMBER, so he can find it in ShipStation's own search. We hold the
+        // numeric orderId too, but ShipStation's deep-link format is not something this
+        // repo has ever verified — a link that 404s is worse than a number to paste.
+        const num = r.results?.[0]?.orderNumber || r.records?.[0]?.orderNumber || null
+        setState({ msg: num ? `✓ pushed as ${num} — buy the label in ShipStation` : '✓ pushed — buy the label in ShipStation' })
         onDone?.(r)
         return
       }
@@ -410,9 +414,12 @@ export function ShipstationPushButton({ ifNumber, onDone }) {
 
   return (
     <span className="tagBtns ssPush">
-      <button className="linkBtn" disabled={state?.busy} onClick={() => run(false)}
-              title="Push this fulfilment to ShipStation so the label can be bought there — for when NetSuite's label creator is playing up">
-        {state?.busy ? '→ pushing…' : '→ ShipStation'}
+      {/* ⚠️ "→ ShipStation" read as a LINK — Nima expected it to take him there (2026-08-17).
+          It does not navigate: it CREATES the order over the API and nothing is purchased.
+          So the arrow is gone and the verb is first, which is what the control actually does. */}
+      <button className="cardAct actPush" disabled={state?.busy} onClick={() => run(false)}
+              title="Creates the order in ShipStation over the API so the label can be bought there. Does not open ShipStation, and never buys a label.">
+        {state?.busy ? 'pushing…' : '⇪ Push to ShipStation'}
       </button>
       {state?.msg && <span className={state.held ? 'muted' : 'good'}> {state.msg}</span>}
       {state?.canForce && (
@@ -971,9 +978,9 @@ export function CustomsButton({ ifNumber }) {
 
   return (
     <span className="tagBtns">
-      <button className="linkBtn" disabled={busy} onClick={load}
-              title="Commercial-invoice lines for an international shipment — grouped by category and price, with tariff codes.">
-        {busy ? '→ building…' : '📄 Customs'}
+      <button className="cardAct actDoc" disabled={busy} onClick={load}
+              title="Commercial-invoice lines for an international shipment — grouped by category and price, with tariff codes. Opens here; nothing is sent anywhere.">
+        {busy ? 'building…' : '📄 Customs invoice'}
       </button>
       {err && <span className="muted"> {err}</span>}
       {open && doc && (
