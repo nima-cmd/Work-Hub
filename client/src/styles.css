@@ -2805,3 +2805,32 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
    green, and because it is the affirmative answer to the card's own question. */
 .confirmLeft { border-color: var(--ok, #3a8); color: var(--ok, #3a8); font-weight: 600; }
 .confirmLeft:hover:not(:disabled) { background: var(--ok, #3a8); color: #fff; }
+
+/* ── Card actions, told apart by what they DO ─────────────────────────────────
+   Nima, 2026-08-17: "it all read as the same". Every control was a `linkBtn` in one
+   colour, so a push to an external system, a document viewer and a printer were
+   visually identical — and "✓ it left", the one irreversible-feeling fact only he can
+   supply, was the quietest of them.
+
+   Three families, each with its own tint and icon, so the KIND is readable before the
+   words are:
+     actPush   sends data to another system   (blue)
+     actDoc    opens something here           (neutral, bordered)
+     actPrint  makes paper                    (muted)
+   plus .confirmLeft (green) for the one that records a fact. */
+.cardAct {
+  font: inherit; font-size: 11px; line-height: 1.6;
+  background: transparent; border: 1px solid transparent; border-radius: 4px;
+  padding: 1px 6px; cursor: pointer; margin-right: 6px;
+}
+.cardAct:disabled { opacity: .55; cursor: default; }
+.actPush  { color: #2f7fd1; border-color: #2f7fd1; font-weight: 600; }
+.actDoc   { color: var(--fg, inherit); border-color: var(--line); }
+.actPrint { color: var(--muted); }
+.actPush:hover:not(:disabled)  { background: #2f7fd1; color: #fff; }
+.actDoc:hover:not(:disabled)   { border-color: var(--fg, currentColor); }
+.actPrint:hover:not(:disabled) { color: var(--fg, inherit); text-decoration: underline; }
+@media (prefers-color-scheme: dark) {
+  .actPush { color: #6db3f2; border-color: #6db3f2; }
+  .actPush:hover:not(:disabled) { background: #6db3f2; color: #0b1117; }
+}
