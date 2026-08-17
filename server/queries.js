@@ -216,6 +216,11 @@ export async function getOrders() {
       shippingStatus: r.shipping_status,
       shipDate: r.ship_date,
       startDate: r.start_date,
+      // ⚠️ The REAL ship window, off NetSuite's own `startdate`/`enddate` (Nima,
+      // 2026-08-14). Not `startDate` above, which holds the transaction date despite
+      // its name. Named here or it reaches no surface — the whitelist trap.
+      windowStart: r.window_start,
+      windowEnd: r.window_end,
       endDate: r.end_date,
       cancelDate: r.cancel_date,
       daysPending: r.days_pending,

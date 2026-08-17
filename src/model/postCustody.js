@@ -334,9 +334,19 @@ export function postCustodyState(card = {}, today = new Date()) {
       // lane bug (the fourth time in this repo).
       const daysToShip = shipWindow?.daysToShip
       if (typeof daysToShip === 'number' && daysToShip > 0) {
-        const when = fmtDay(shipWindow.soShipDate ?? shipWindow.mustShipBy)
-        return state(PC.AWAITING_SHIP_WINDOW, when
-          ? `Not due to ship until ${when} — route it and mark packed that day`
+        // ⚠️ LEAD WITH WHEN IT OPENS, not when it closes. The first cut printed the
+        // window's END — "Not due to ship until Sep 10" for a window that opens Aug 28
+        // — which is thirteen days of runway described as none. The opening date is the
+        // one that tells him when he can act; the closing date is the deadline, and
+        // both belong on the card because they answer different questions.
+        const opensOn = fmtDay(shipWindow.windowStart)
+        const dueBy = fmtDay(shipWindow.windowEnd ?? shipWindow.soShipDate ?? shipWindow.mustShipBy)
+        if (opensOn) {
+          return state(PC.AWAITING_SHIP_WINDOW,
+            `Ships from ${opensOn}${dueBy ? ` (by ${dueBy})` : ''} — route it and mark packed then`)
+        }
+        return state(PC.AWAITING_SHIP_WINDOW, dueBy
+          ? `Not due to ship until ${dueBy} — route it and mark packed that day`
           : 'Waiting for the ship window to open')
       }
       // ⚠️ THE HONEST BUCKET. Nima's two boutique cases — "create a label" vs

@@ -1647,3 +1647,15 @@ CREATE TABLE IF NOT EXISTS transfer_log (
   updated_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (day, source)
 );
+
+-- ── The real ship window (2026-08-14) ───────────────────────────────────────
+-- Nima, asked directly after three failed inferences: "in netsuite Field ID: startdate".
+--
+-- ⚠️ NOT `orders.start_date`, which despite its name holds the TRANSACTION date — the
+-- sync has mapped `row.trandate` into it since the column was created, which is why
+-- `ship_date = start_date + 28` on 100% of rows. These two columns carry NetSuite's
+-- own `startdate`/`enddate`: the window opens and the window closes, both hand-set.
+-- Measured across 399 sales orders, startdate takes 30 distinct offsets from trandate
+-- (-9 to +620) — a person typing dates, not a default.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_start DATE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_end   DATE;
