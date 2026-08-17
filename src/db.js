@@ -159,7 +159,42 @@ pool.query = function meteredQuery(...args) {
 // which the clone script and the tests set, because for them a throwaway write is the
 // entire point.
 const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\b/i
+
+// ── Offline mode (2026-08-17) ───────────────────────────────────────────────
+//
+// Neon hit 100% of its monthly transfer and suspends until the reset. The local mirror
+// keeps the app fully working — and the NetSuite sync does not need Neon AT ALL, since
+// `netsuiteApi.js` is a plain HTTPS client. Proven: a full sync wrote 270 orders, 192
+// fulfilments and 1,175 invoices straight into local Postgres. So NOTHING has to fall
+// back to CSV; the CSV path is the fallback for NETSUITE being down, not for Neon.
+//
+// ⚠️ But working offline means the app's OWN records — custody scans, BOL numbers,
+// filing events, tasks — exist only locally, and `npm run db:mirror` DROPS the database
+// on every clone. Two weeks of scanning could be destroyed by one habitual re-clone.
+// That is the divergence this repo has refused to build all along, now unavoidable for
+// a fortnight, so it is made explicit rather than left as a trap:
+//
+//   WORKHUB_OFFLINE=1   writes are permitted and the server says so at startup
+//   npm run db:mirror   REFUSES when local holds app-owned rows newer than the clone
+//
+// WORKHUB_MIRROR_WRITES stays separate: it is the clone script's own internal flag for
+// writes it is about to throw away, and must not double as "I am working offline".
 const mirrorWritesAllowed = process.env.WORKHUB_MIRROR_WRITES === '1'
+  || process.env.WORKHUB_OFFLINE === '1'
+export const IS_OFFLINE = useMirror && process.env.WORKHUB_OFFLINE === '1'
+
+/**
+ * Tables the APP owns — nothing upstream can regenerate these, so losing them is
+ * losing work. Everything else (orders, fulfillments, invoices, edi_*, catalogue) is a
+ * projection of NetSuite or Orderful and comes back on the next sync.
+ */
+export const APP_OWNED_TABLES = [
+  'order_events', 'routing_shipment', 'routing_auth', 'routing_hold', 'routing_shipment_edi',
+  'bol_registry', 'dead_label', 'fulfillment_boxes', 'quest_tasks', 'quest_task_activity',
+  'recurring_task_templates', 'notes', 'doc_links', 'email_links', 'oc_po_links',
+  'edi_manual_links', 'edi_manual_orders', 'edi_po_resolutions', 'shipstation_order',
+  'day_plan_item', 'email_character_prefs', 'doc_seasons',
+]
 
 // ⚠️ CLIENTS TOO, and this was a real hole. The meter originally wrapped only
 // `pool.query`, while every transaction goes through `pool.connect()` and then
