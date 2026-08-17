@@ -35,6 +35,7 @@ npm run check:warehouse-feed # is the warehouse-app feed live? names the missing
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
 npm run check:fields       # which columns are DERIVED, not observed? (is this column always another + N?)
 npm run check:transfer     # Neon's 5 GB/month cap: used, projected, and BY WHICH process
+npm run check:neon         # is the database answering, which one, and how close to the cap
 npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes

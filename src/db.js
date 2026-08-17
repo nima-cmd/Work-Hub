@@ -120,6 +120,44 @@ async function flush() {
   }
 }
 
+// ── Say what a dead database MEANS ──────────────────────────────────────────
+//
+// Nima, 2026-08-17: "how will i know when its offline". Tested, and the honest answer
+// was that he would NOT know: every endpoint reported `connect ECONNREFUSED
+// 127.0.0.1:1`, which reads as "the app is broken" rather than "your database is
+// suspended". He would have spent the morning debugging the wrong thing.
+//
+// Every query goes through one wrapper, so one place can translate the failure into
+// what it means and what to do about it. Endpoints already surface `e.message`, so
+// they all inherit this without being touched.
+//
+// ⚠️ The exact error Neon returns on a transfer suspension is NOT KNOWN to us — we have
+// never seen one. So this matches the CLASS of failure (cannot reach / cannot
+// authenticate / connection dropped) and says "likely suspended" rather than asserting
+// it. Naming a probable cause and the next step beats a raw socket error either way,
+// and it must not claim more than it can see.
+const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|EAI_AGAIN|Connection terminated|termination|server closed the connection|timeout expired|too many connections/i
+
+export function explainDbError(err) {
+  // ⚠️ IDEMPOTENT. The pool wrapper already explains, and callers explain again defensively
+  // — which nested the advice inside its own brackets twice over. An error message that
+  // repeats itself is one people stop reading.
+  if (err?.dbUnreachable) return err
+  const msg = String(err?.message || err || '')
+  if (!UNREACHABLE.test(msg)) return err
+  const where = useMirror ? 'Local Postgres' : 'Neon'
+  const advice = useMirror
+    ? 'Is the local server running?  pg_ctl -D /usr/local/var/postgresql@17 status'
+    : 'Neon suspends the compute when the monthly transfer allowance runs out — it comes '
+      + 'back at the reset or on upgrade. To keep working now: npm run dev:offline '
+      + '(local mirror, writes permitted).'
+  const e = new Error(`${where} is not answering — likely suspended. ${advice} [${msg}]`)
+  e.dbUnreachable = true
+  e.target = DB_TARGET
+  e.original = msg
+  return e
+}
+
 // The unmetered path, so flush() cannot count itself.
 const rawQuery = (text, params) => pool.query(text, params)
 
@@ -141,7 +179,9 @@ pool.query = function meteredQuery(...args) {
       pending.queries += 1
       if (pending.bytes > FLUSH_BYTES || Date.now() - lastFlush > FLUSH_MS) flush().catch(() => {})
       return res
-    })
+    // ⚠️ Rethrow the EXPLAINED error, with the original text kept in brackets. A
+    // friendlier message that hides the real one would just move the debugging problem.
+    }, (err) => { throw explainDbError(err) })
   }
   return out
 }
