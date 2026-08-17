@@ -95,6 +95,20 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'orders.start_date (holds trandate) / transaction.startdate', shape: S.HAND_SET.key,
+    pr: 118, date: '2026-08-14', status: 'fixed',
+    assumed: 'the boutique ship window was somewhere we had not found — three fields were tested and ruled out',
+    actually: 'it is NetSuite\'s `startdate` (plus `enddate` for the far end), and it had never been '
+      + 'ingested. Worse, the column named `start_date` holds the TRANSACTION date — the sync mapped '
+      + '`row.trandate` into it — which is why the register already showed ship_date = start_date + 28: '
+      + 'both are trandate. A field named for the thing we were hunting held something else entirely',
+    cost: 'the answer sat unread for 8 days across four sessions while three other fields were tested and '
+      + 'rejected. Live effect: PR #94 correctly stopped trusting the +28 date but left '
+      + 'AWAITING_SHIP_WINDOW with nothing to key on, so every order waiting for its window read '
+      + '"needs a label" — Saint Bernard and Gee Beauty Canada both, until Nima said so',
+    caught: 'asking Nima the field ID outright instead of inferring a fourth time',
+  },
+  {
     field: 'routing_shipment.ship_direct / merge_center', shape: S.DEFAULT_AS_ANSWER.key,
     pr: 101, date: '2026-08-13', status: 'fixed',
     assumed: 'a card that does not say otherwise routes through the CA merge center',

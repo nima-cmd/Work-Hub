@@ -154,7 +154,15 @@ export function mapOrderRow(row) {
       ? null
       : String(row.ats_order) === '1' ? true : String(row.ats_order) === '2' ? false : null,
     shipDate: row.shipdate || null,
+    // ⚠️ `startDate` HOLDS THE TRANSACTION DATE, and the name has been lying since the
+    // column was created. That is why `orders.ship_date = orders.start_date + 28` on
+    // 100% of rows in the field-assumption register: both are trandate, one with an
+    // offset. Left as-is because flags and the age clock read it as "when the order was
+    // created", which is what it actually is — but the real window now arrives under
+    // its own name below rather than being inferred from this.
     startDate: row.trandate || null,
+    windowStart: row.window_start || null,
+    windowEnd: row.window_end || null,
     // The order's OWN payment terms, as label text ("Net 30", "Due on receipt").
     //
     // ⚠️ NAMED `orderTerms`, NOT `terms`, and that is not cosmetic. Invoice
@@ -273,6 +281,24 @@ export function orderSql(since) {
   return `SELECT t.tranid, BUILTIN.DF(t.entity) AS customer, t.status,
                  TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate,
                  TO_CHAR(t.shipdate,'YYYY-MM-DD') AS shipdate,
+                 -- ⚠️ THE REAL SHIP WINDOW, and it took four attempts to find because
+                 -- nobody asked Nima the field ID until 2026-08-14: "in netsuite Field
+                 -- ID: startdate". transaction.shipdate is trandate+28 on 98% of
+                 -- orders (PR #94), custbody_promisedate defaults +4, and the line's
+                 -- expectedshipdate has no header feeding it -- all three tested, all
+                 -- three wrong. THIS one is hand-set: measured across 399 sales orders
+                 -- it takes 30 distinct offsets from trandate, from -9 to +620, with
+                 -- only 24 at zero. That is a person typing dates, not a default.
+                 --
+                 -- ⚠️ NO BACKTICKS IN HERE. This block sits inside a JS template
+                 -- literal, so a backtick closes the string and the whole module stops
+                 -- parsing -- which is exactly what happened on the first cut of this
+                 -- comment ("SyntaxError: Unexpected identifier 'transaction'").
+                 --
+                 -- enddate is the window's other end, and it is real too: SO12344
+                 -- reads 2026-08-28 to 2026-09-10.
+                 TO_CHAR(t.startdate,'YYYY-MM-DD') AS window_start,
+                 TO_CHAR(t.enddate,'YYYY-MM-DD') AS window_end,
                  BUILTIN.DF(t.terms) AS terms,
                  -- ⚠️ ATS was DEAD app-wide until 2026-08-13: all 282 orders read
                  -- is_ats = false, so STOCK_SHORT -- the sev-3 "real stock

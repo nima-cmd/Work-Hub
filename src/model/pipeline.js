@@ -132,6 +132,12 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     'endDate', 'cancelDate', 'notes', 'qtyOrdered', 'qtyAllocated',
     'qtyFulfilled', 'isAts', 'invoice', 'approvalStatus', 'actualShipDate',
     'billingStatus', 'isPlaceholder', 'dc', 'storeNumber', 'orderTerms',
+    // ⚠️ THE THIRD WHITELIST. A new column has to be named in the SQL, in
+    // loadToDb's insert, in queries.js's projection AND here, or it silently never
+    // arrives. The live pull returned SO12344's window as 2026-08-28 the whole time
+    // and the database stored null, because this list did not mention it — the same
+    // shape that hid `terms` and defaulted `isAts` to false. Four layers, one field.
+    'windowStart', 'windowEnd',
   ]
 
   for (const rec of allRecords) {

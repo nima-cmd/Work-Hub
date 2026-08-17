@@ -226,13 +226,35 @@ export function shipWindow(order, today = new Date()) {
   // once, rather than four times over.
   const soShip = isDefaultedShipDate(order) ? null : toDay(order?.shipDate)
 
-  // The binding date: the partner's cancel-after when they sent one, else the
-  // sales order's own ship date.
-  const mustShipBy = cancel ?? soShip
-  if (mustShipBy == null && snb == null) return null
+  // ── The order's OWN window, hand-set in NetSuite (Nima, 2026-08-14) ────────
+  //
+  // "in netsuite Field ID: startdate" — the answer to a question open since
+  // 2026-08-06, after `transaction.shipdate` (trandate+28), `custbody_promisedate`
+  // (+4 default) and the line's `expectedshipdate` (no header feeds it) were each
+  // tested and each ruled out. Measured across 399 sales orders, `startdate` takes
+  // 30 distinct offsets from trandate (-9 to +620) with only 24 at zero: a person
+  // typing dates. `enddate` is the far end — SO12344 reads 08-28 → 09-10.
+  //
+  // ⚠️ This is what made AWAITING_SHIP_WINDOW REACHABLE AGAIN. PR #94 correctly
+  // stopped trusting the +28 date, which was right — but it left this state with
+  // nothing to key on, so every boutique order waiting for its window fell through
+  // to "needs a label". Nima spotted it from the other side: "for Saint Bernard
+  // needs a label or a routing. Its been returned but we are waiting for the ship
+  // window on this one."
+  const winStart = toDay(order?.windowStart)
+  const winEnd = toDay(order?.windowEnd)
+
+  // The binding date: the partner's cancel-after when they sent one, else the order's
+  // own window end, else the sales order's ship date (now only when non-defaulted).
+  const mustShipBy = cancel ?? winEnd ?? soShip
+  // A window that has an OPENING but no closing date is still a window — the whole
+  // point for Saint Bernard is that it cannot ship until the 28th.
+  if (mustShipBy == null && snb == null && winStart == null) return null
 
   const headstart = headstartDays(order)
-  const opens = snb == null ? null : addDays(snb, -headstart)
+  // EDI: the partner's shipNotBefore, less our headstart. Boutique: the order's own
+  // window start, which needs no headstart because nobody else set it.
+  const opens = snb != null ? addDays(snb, -headstart) : winStart
 
   // The routing request has to be in before the shipment does. Computed off the
   // partner's own cancel date only — never off the sales order's date, which for
@@ -254,7 +276,12 @@ export function shipWindow(order, today = new Date()) {
 
   return {
     shipped,
-    source: cancel != null ? 'edi' : 'so',   // which document set the deadline
+    // Which document set the deadline. 'window' when it came from the order's own
+    // hand-set dates, so a surface can say WHY a card is waiting rather than implying
+    // an EDI partner asked for it.
+    source: cancel != null ? 'edi' : (winEnd != null || winStart != null) ? 'window' : 'so',
+    windowStart: winStart,
+    windowEnd: winEnd,
     partner: partnerKey(order),
     headstartDays: headstart,
     opens,                                    // earliest we may start work

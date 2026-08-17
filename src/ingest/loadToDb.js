@@ -20,9 +20,9 @@ export async function loadOrders(orders, db = pool) {
          (so_number, customer, location, po_number, is_ats, source, stage, so_status,
           qty_ordered, qty_allocated, qty_fulfilled, amount_paid, shipping_status,
           start_date, ship_date, cancel_date, notes, approval_status, billing_status,
-          dc, store_number, is_placeholder, terms,
+          dc, store_number, is_placeholder, terms, window_start, window_end,
           last_seen, last_movement, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now(), now(), now())
        ON CONFLICT (so_number) DO UPDATE SET
          customer        = COALESCE(EXCLUDED.customer, orders.customer),
          location        = COALESCE(EXCLUDED.location, orders.location),
@@ -42,6 +42,10 @@ export async function loadOrders(orders, db = pool) {
          amount_paid     = COALESCE(EXCLUDED.amount_paid, orders.amount_paid),
          shipping_status = COALESCE(EXCLUDED.shipping_status, orders.shipping_status),
          start_date      = COALESCE(EXCLUDED.start_date, orders.start_date),
+         -- The real ship window. COALESCE like every other column so a pull that
+         -- omits them cannot blank a window someone is relying on.
+         window_start    = COALESCE(EXCLUDED.window_start, orders.window_start),
+         window_end      = COALESCE(EXCLUDED.window_end, orders.window_end),
          ship_date       = COALESCE(EXCLUDED.ship_date, orders.ship_date),
          cancel_date     = COALESCE(EXCLUDED.cancel_date, orders.cancel_date),
          notes           = COALESCE(EXCLUDED.notes, orders.notes),
@@ -68,6 +72,11 @@ export async function loadOrders(orders, db = pool) {
         // null (not false) when the source doesn't know — see the COALESCE above.
         o.isPlaceholder ?? null,
         o.orderTerms || null,
+        // ⚠️ This mapper is a WHITELIST — a column reaches no surface until it is named
+        // here AND in the projection in server/queries.js. `terms` was invisible for
+        // exactly this reason once already.
+        o.windowStart || null,
+        o.windowEnd || null,
       ],
     )
     n++

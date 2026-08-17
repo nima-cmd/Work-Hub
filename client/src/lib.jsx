@@ -529,11 +529,24 @@ export function ShipWindow({ window: w }) {
   // Shipped → the deadline is history. The Ship Departures view owns what
   // actually left and when; a red "53d late" on a card that already went out is
   // just wrong.
-  if (!w || w.shipped || w.mustShipBy == null) return null
+  // ⚠️ A window with only an OPENING date is still a window — Nima's whole point for
+  // Saint Bernard is that it cannot ship until the 28th, whether or not a closing date
+  // was set. Requiring mustShipBy hid exactly those cards.
+  if (!w || w.shipped || (w.mustShipBy == null && w.windowStart == null)) return null
   const d = w.daysToShip
   const sev = d == null ? 0 : d < 0 ? 3 : d <= 2 ? 2 : d <= 7 ? 1 : 0
   const left = w.notOpenYet ? `opens ${md(w.opens)} → ` : ''
   const verb = w.source === 'edi' ? 'cancels' : 'ships'
+  // A start-only window has no deadline to print, so say when it opens and stop
+  // rather than printing "ships " with nothing after it.
+  if (w.mustShipBy == null) {
+    return (
+      <div className={'shipWin ' + sevClass(0)} title={windowTitle(w)}>
+        opens {md(w.windowStart)}
+        {w.daysToOpen != null && <span className="winDelta"> · in {w.daysToOpen}d</span>}
+      </div>
+    )
+  }
   return (
     <div className={'shipWin ' + sevClass(sev)} title={windowTitle(w)}>
       {left}{verb} {md(w.mustShipBy)}
@@ -546,9 +559,18 @@ function windowTitle(w) {
   const bits = []
   if (w.shipNotBefore != null) bits.push(`Partner start date ${md(w.shipNotBefore)}`)
   if (w.headstartDays) bits.push(`${w.headstartDays}d DC headstart → may start ${md(w.opens)}`)
-  bits.push(w.source === 'edi'
-    ? `Partner cancels after ${md(w.mustShipBy)} (from their 850)`
-    : `Sales order ship date ${md(w.mustShipBy)}`)
+  // ⚠️ Say WHICH document set the date. 'window' means Nima's own hand-set
+  // startdate/enddate on the sales order — not the +28 default that used to be read as
+  // a ship date, and not a partner's 850. Naming the source is what stops the next
+  // person trusting a number without knowing where it came from.
+  if (w.source === 'window') {
+    if (w.windowStart != null) bits.push(`Ship window opens ${md(w.windowStart)} (NetSuite startdate)`)
+    if (w.windowEnd != null) bits.push(`Ship window closes ${md(w.windowEnd)} (NetSuite enddate)`)
+  } else {
+    bits.push(w.source === 'edi'
+      ? `Partner cancels after ${md(w.mustShipBy)} (from their 850)`
+      : `Sales order ship date ${md(w.mustShipBy)}`)
+  }
   if (w.startBy != null) bits.push(`Start packing by ${md(w.startBy)}`)
   if (w.soPastCancel) bits.push(`⚠ SO ship date ${md(w.soShipDate)} is AFTER the partner's cancel date`)
   return bits.join('\n')
