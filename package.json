@@ -29,6 +29,7 @@
     "check:counters:mirror": "WORKHUB_DB=mirror npm run check:counters",
     "check:fields": "node --env-file=.env.local scripts/check-fields.js",
     "check:transfer": "node --env-file=.env.local scripts/check-transfer.js",
+    "check:neon": "node --env-file=.env.local scripts/check-neon.js",
     "zpl": "node scripts/zpl-print.js",
     "zpl:watch": "node scripts/zpl-print.js --watch",
     "server": "node --env-file=.env.local server/index.js",
