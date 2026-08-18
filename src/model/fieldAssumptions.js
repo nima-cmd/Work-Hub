@@ -95,6 +95,17 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'explainDbError UNREACHABLE pattern', shape: S.PHANTOM_MECHANISM.key,
+    pr: 125, date: '2026-08-18', status: 'fixed',
+    assumed: 'matching the CLASS of connection failure would cover a Neon suspension',
+    actually: 'Neon says "Your project has exceeded the data transfer quota" — which matched NONE of '
+      + 'ECONNREFUSED / ENOTFOUND / timeout / connection-terminated. The explainer I wrote the day '
+      + 'before specifically for this event did not fire on it',
+    cost: 'none, because Neon\'s own wording happened to be clear. But the advice half — run '
+      + 'dev:offline — never appeared on the one morning it was written for',
+    caught: 'the suspension actually happening, 14 hours after the code shipped',
+  },
+  {
     field: 'orders.start_date (holds trandate) / transaction.startdate', shape: S.HAND_SET.key,
     pr: 118, date: '2026-08-14', status: 'fixed',
     assumed: 'the boutique ship window was somewhere we had not found — three fields were tested and ruled out',
