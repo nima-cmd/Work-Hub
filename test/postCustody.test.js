@@ -447,3 +447,86 @@ test('the ship date renders in UTC — a date-only value must not print the day 
   }), TODAY)
   assert.match(s.waitingOn, /Aug 13/)
 })
+
+// ── The DC lane in "never scanned out" (2026-08-18) ──────────────────────────
+//
+// Nima: "for the nordstrom and bloomingdales in the never scanned out those should be
+// scanned out by dc". ⚠️ THIS IS THE SECOND TIME THIS BUG SHIPPED. scanGap.js was fixed
+// for it in PR #74 after reporting 28 false positives; the Kanban column computed the
+// same question independently and was never fixed. Measured live before the fix:
+// 28 of 28 Nordstrom cards false, 15 of 25 Bloomingdale's.
+//
+// The lesson enforced here is the LANE rule: an EDI shipment's custody evidence is the
+// per-DC cargo tag, never the IF packing slip.
+import { allDcTagsScanned, dcScanCoverage, dcDocsFor } from '../src/model/custody.js'
+
+const unscannedIf = { custodyOut: null, custodyIn: null, status: 'Packed' }
+
+test('an EDI fulfilment whose cargo tags were all scanned is NOT never-scanned', () => {
+  assert.equal(fulfilledNeverScanned(unscannedIf), true, 'no evidence at all -> still a gap')
+  assert.equal(fulfilledNeverScanned(unscannedIf, { dcScanned: true }), false)
+})
+
+test('the IF scan still counts on its own — the cargo tag only stands in', () => {
+  assert.equal(fulfilledNeverScanned({ custodyOut: '2026-08-13', custodyIn: null, status: 'Packed' }), false)
+})
+
+test('a shipped fulfilment is never in the column, either way', () => {
+  assert.equal(fulfilledNeverScanned({ ...unscannedIf, status: 'Shipped' }, { dcScanned: false }), false)
+})
+
+// ⚠️ The tokens must match what recordCustodyScan writes for a `DC:<po>:<abbrev>` QR —
+// `<po>:<abbrev>`, doc_type 'DC'. A near-miss here silently reinstates the bug.
+test('the cargo-tag document tokens are <po>:<dc>', () => {
+  const card = { poNumber: '50073677', source: 'edi' }
+  assert.deepEqual(dcDocsFor(card, [{ dc: '299' }, { dc: '799' }]),
+    [{ type: 'DC', num: '50073677:299' }, { type: 'DC', num: '50073677:799' }])
+})
+
+test('a fully-scanned card is excused; the same scan on one of two DCs is not', () => {
+  const card = { poNumber: '50073677', source: 'edi' }
+  const events = [{ docType: 'DC', docNumber: '50073677:299', eventType: 'CUSTODY_OUT', occurredAt: '2026-08-13' }]
+  assert.equal(allDcTagsScanned(card, events, [{ dc: '299' }]), true)
+  assert.equal(allDcTagsScanned(card, events, [{ dc: '299' }, { dc: '799' }]), false)
+})
+
+// ⚠️⚠️ THE DEFECT I SHIPPED INTO MY OWN FIX AND CAUGHT ON LIVE DATA BEFORE MERGE.
+// The first cut asked "has ANY cargo tag been scanned". PO 7242989 had CI, JP and ST
+// scanned OUT and SC never scanned — and its ten unscanned fulfilments were all SC.
+// `.some()` excused the whole card and hid all ten. An excuse must cover every DC.
+test('a partly-scanned PO does NOT excuse its unscanned DC (PO 7242989, live)', () => {
+  const card = { poNumber: '7242989', source: 'edi' }
+  const dcList = [{ dc: 'CI' }, { dc: 'JP' }, { dc: 'SC' }, { dc: 'ST' }]
+  const events = ['CI', 'JP', 'ST'].map((dc) => ({
+    docType: 'DC', docNumber: `7242989:${dc}`, eventType: 'CUSTODY_OUT', occurredAt: '2026-08-18',
+  }))
+  const cov = dcScanCoverage(card, events, dcList)
+  assert.deepEqual(cov, { total: 4, scanned: 3, complete: false })
+  assert.equal(allDcTagsScanned(card, events, dcList), false)
+  // …so the SC fulfilments stay visible as gaps, which is the whole point.
+  assert.equal(fulfilledNeverScanned(unscannedIf, { dcScanned: allDcTagsScanned(card, events, dcList) }), true)
+})
+
+// ⚠️ A boutique card has no cargo tag, so the DC route must never excuse it — otherwise
+// this fix would hide the genuine gap the column exists to show.
+test('a boutique card is never let off by the DC route', () => {
+  const card = { poNumber: 'PO05658', source: 'boutique' }
+  const events = [{ docType: 'DC', docNumber: 'PO05658:SC', eventType: 'CUSTODY_OUT' }]
+  assert.equal(allDcTagsScanned(card, events, [{ dc: 'SC' }]), false)
+})
+
+test('a card with no known DCs is not excused by an empty tag list', () => {
+  assert.equal(allDcTagsScanned({ poNumber: 'X', source: 'edi' }, [], []), false)
+})
+
+test('a CLEARED event is not evidence of a handover', () => {
+  const card = { poNumber: '50073677', source: 'edi' }
+  const events = [{ docType: 'DC', docNumber: '50073677:299', eventType: 'CUSTODY_CLEARED', occurredAt: '2026-08-14' }]
+  assert.equal(allDcTagsScanned(card, events, [{ dc: '299' }]), false)
+})
+
+test('an IF scan is not a cargo-tag scan — that is the other branch', () => {
+  const card = { poNumber: '50073677', source: 'edi' }
+  const events = [{ docType: 'IF', docNumber: 'IF7480', eventType: 'CUSTODY_OUT' }]
+  assert.equal(allDcTagsScanned(card, events, [{ dc: '299' }]), false)
+})

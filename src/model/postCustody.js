@@ -161,8 +161,26 @@ export function missionTab({ fulfilments = [], custodyState = null, departed = f
 // [[ship-date-retro-audit]] already established are uncheckable forever, and
 // nothing can be done about them now. The gap is only meaningful while the goods
 // have not left.
-export function fulfilledNeverScanned({ custodyOut, custodyIn, status } = {}) {
+// ⚠️ EITHER ROUTE COUNTS — and this function did not know that (fixed 2026-08-18).
+//
+// Nima: *"for the nordstrom and bloomingdales in the never scanned out those should be
+// scanned out by dc"*. He was right. This read `custodyOut`/`custodyIn` — the per-IF
+// packing-slip scan — and nothing else, so the Kanban's "Fulfilled — never scanned out"
+// column accused every EDI shipment whose evidence is the per-DC cargo tag.
+//
+// Measured on live data the day it was found: **28 of 28 Nordstrom** fulfilments in that
+// column had their cargo tag scanned, and **15 of 25** Bloomingdale's. A finding that is
+// 100% one lane is a lane bug, not a discovery — the same signature as the 28 false
+// positives scanGap.js was fixed for in PR #74, and the same rule: the IF scan is the
+// tighter evidence and wins when it exists; the cargo tag stands in when it does not.
+//
+// ⚠️ The reason it recurred is that the rule lived in TWO places. `npm run check:scan-gaps`
+// reported 0 never-handed-over all along while the board showed 43 cards — two surfaces
+// disagreeing about the same cartons. `dcScanned` comes from `hasDcCustodyScan` in
+// src/model/custody.js so there is now one implementation of the tokens.
+export function fulfilledNeverScanned({ custodyOut, custodyIn, status } = {}, { dcScanned = false } = {}) {
   if (/shipped/i.test(status || '')) return false
+  if (dcScanned) return false
   return !custodyOut && !custodyIn
 }
 
