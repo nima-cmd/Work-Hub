@@ -9,6 +9,7 @@ import {
   missionTab, postCustodyState, routingForPo, fulfilledNeverScanned, PC,
 } from '../../../src/model/postCustody.js'
 import { isDepartureConfirmed } from '../../../src/model/netDeparture.js'
+import { allDcTagsScanned } from '../../../src/model/custody.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -132,8 +133,16 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
     // His words: "if something fullfilled with no scan out we need to be aware
     // since it should be happening one after another." That gap gets its own
     // column rather than sitting quietly inside a stage.
+    // ⚠️ The DC lane's evidence is the cargo tag, not the IF slip — so ask about it
+    // before accusing a shipment of never being handed over (Nima, 2026-08-18: 28 of 28
+    // Nordstrom cards here were false). Same rule check:scan-gaps has used since PR #74.
+    // ⚠️ ALL the card's tags, not any one of them: PO 7242989 had CI/JP/ST scanned and SC
+    // not, and excusing on `.some()` hid its ten unscanned SC fulfilments.
     const gap = onTab(TAB.FULFILMENT)
-      .filter((c) => (c.o.fulfillments || []).some(fulfilledNeverScanned))
+      .filter((c) => {
+        const dcScanned = allDcTagsScanned(c.o, events, poDcs[c.o.poNumber])
+        return (c.o.fulfillments || []).some((f) => fulfilledNeverScanned(f, { dcScanned }))
+      })
       .map((c) => c.o).sort(bySev)
     const nestor = onTab(TAB.FULFILMENT)
       .filter((c) => c.custody?.state === 'warehouse')

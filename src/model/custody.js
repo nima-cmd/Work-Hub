@@ -18,9 +18,58 @@ import { dcBreakdown } from './dc.js'
 // dcList (routing feed ∪ custody scans, [{ dc }]) is preferred for EDI groups —
 // the DC isn't in the order ship-to, so parsing members finds none. Falls back
 // to the member parse when no dcList is supplied.
+// The per-DC cargo-tag documents for a card — `<po>:<abbrev>`, the same tokens
+// recordCustodyScan writes for a `DC:<po>:<abbrev>` QR.
+//
+// ⚠️ EXPORTED so no other surface has to rebuild it. `fulfilledNeverScanned` asked the
+// never-scanned question WITHOUT this and reported 28 of 28 Nordstrom fulfilments as
+// never handed over while every one had its cargo tag scanned — the identical defect
+// scanGap.js was fixed for in PR #74, re-committed independently on the Kanban because
+// the rule lived in two places. One source now.
+export function dcDocsFor(card, dcList) {
+  const ediDcs = (dcList && dcList.length
+    ? dcList.map((d) => d.dc)
+    : dcBreakdown(card?.members || []).filter((r) => r.abbrev).map((r) => r.abbrev))
+  return ediDcs.map((dc) => ({ type: 'DC', num: `${card?.poNumber}:${dc}` }))
+}
+
+/**
+ * How many of this card's per-DC cargo tags carry a scan, and are they ALL covered?
+ *
+ * ⚠️ THE LANE RULE: an EDI shipment's custody evidence is the cargo tag stuck on the
+ * front page, NOT the IF packing slip. A surface asking only about IF scans reports a
+ * correctly-handled Nordstrom shipment as never handed over — measured 2026-08-18,
+ * 28 of 28 Nordstrom and 15 of 25 Bloomingdale's fulfilments in the Kanban's
+ * "never scanned out" column were false.
+ *
+ * ⚠️ AND IT MUST BE **ALL**, NOT **ANY** — my own first cut of this used `.some()` and
+ * was caught on live data before merge. PO 7242989 had tags scanned for CI, JP and ST
+ * but NOT SC, and its ten unscanned fulfilments were all SC: `.some()` excused the whole
+ * card and hid ten genuine gaps. Same trap the custody badge already documents ("DC
+ * evidence wins once ANY DC scan exists... scan all the DCs, not one") and the reason
+ * `cardCustody` reports a 3/5 fraction instead of a boolean.
+ *
+ * ⚠️ Card-level ON PURPOSE, because a fulfilment's own DC is not reachable here: neither
+ * `/api/orders`' order nor its fulfilments carry a `dc`, and `poDcs` is per-PO. The
+ * `fulfillment_dc` table exists and would allow the precise per-fulfilment question —
+ * that is a projection change (the four-whitelist rule), deliberately not done here.
+ * Until then this errs toward SHOWING a card, never toward silence.
+ */
+export function dcScanCoverage(card, events = [], dcList) {
+  if (card?.source !== 'edi') return { total: 0, scanned: 0, complete: false }
+  const docs = dcDocsFor(card, dcList)
+  const scanned = docs.filter((d) => events.some((e) => e.docType === d.type && e.docNumber === d.num
+    && (e.eventType === 'CUSTODY_OUT' || e.eventType === 'CUSTODY_IN'))).length
+  return { total: docs.length, scanned, complete: docs.length > 0 && scanned === docs.length }
+}
+
+/** Every cargo tag on this card has been scanned — the only state that excuses an IF. */
+export function allDcTagsScanned(card, events = [], dcList) {
+  return dcScanCoverage(card, events, dcList).complete
+}
+
 export function cardCustody(card, events = [], dcList) {
-  const ediDcs = (dcList && dcList.length ? dcList.map((d) => d.dc) : dcBreakdown(card?.members || []).filter((r) => r.abbrev).map((r) => r.abbrev))
-  const dcDocs = ediDcs.map((dc) => ({ type: 'DC', num: `${card.poNumber}:${dc}` }))
+  const dcDocs = dcDocsFor(card, dcList)
   const ifDocs = (card?.fulfillments || []).filter((f) => f.ifNumber).map((f) => ({ type: 'IF', num: f.ifNumber }))
   const hasEvents = (ds) => ds.some((d) => events.some((e) => e.docType === d.type && e.docNumber === d.num))
 
