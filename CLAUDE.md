@@ -21,6 +21,7 @@ aging-aware pipeline so **nothing sits ignored**. It also serves as the canonica
 npm test               # unit tests for the model (no DB)
 npm run migrate        # apply db/schema.sql to Neon
 npm run db:mirror      # clone Neon -> local Postgres (DEVELOP AGAINST THIS, see below)
+npm run db:copy        # copy ANY Postgres -> any other, and PROVE it row-for-row
 npm run dev:offline    # run the whole app on local Postgres, writes allowed (Neon down)
 npm run ingest         # load NetSuite saved-search CSV exports into the DB
 npm run server         # API + built UI at http://localhost:3001
@@ -74,6 +75,40 @@ lower bound (row bytes, no TLS or wire framing); Neon's console is the authority
 unless you pass `--mirror`; use `WORKHUB_DB=neon npm run migrate` for the real one.
 This already bit once — `transfer_log` was created on the clone while Neon, the
 database that needed it, silently never got it.
+
+## `npm run db:copy` — the migration tool, not the mirror
+
+`db:mirror` is hardcoded Neon → local and **DROPS its target**, which is right for a
+disposable read replica. `db:copy` is for moving to a database we intend to **KEEP**
+(DigitalOcean Managed Postgres does not meter database transfer at all):
+
+```bash
+npm run db:copy -- --from=mirror --to=do          # named endpoints, resolved from .env.local
+npm run db:copy -- --from=mirror --to=do --dry    # size the job, write nothing
+npm run db:copy -- --from=neon --to=do --truncate # discard what the target holds first
+npm run db:copy -- --from=mirror --to=do --verify-only   # re-prove a copy that already ran
+```
+
+Endpoints: `neon` (`DATABASE_URL`) · `local`/`mirror` (`DATABASE_URL_LOCAL`) · `do`
+(`DATABASE_URL_DO`) · or a full `postgres://` url.
+
+- ⚠️ **The TARGET may never be Neon, and there is no override flag.** This script empties
+  its target, and Neon holds the only copy of the app-owned rows written after the
+  mirror was cloned (2026-08-17 16:52). Reconciling those is insert-only, and a
+  different tool.
+- ⚠️ **It never copies onto data.** `ON CONFLICT DO NOTHING` over a populated target
+  merges two databases row by row and the winner is arbitrary. It refuses unless
+  `--truncate`, then empties every table so the **source is the only authority** —
+  including the 4 rows `db/schema.sql` seeds itself.
+- **It verifies, and a count is not a comparison.** Row counts *and* an md5 over every
+  shared column, computed identically both sides (`TimeZone=UTC`, `DateStyle=ISO`, or
+  a timestamptz hashes differently in two zones). A mismatch **names the column**.
+  `--counts-only` skips the content hash and *says so in the summary line*.
+  Non-zero exit + "DO NOT point the app at this target" when unproven.
+- Same three lessons as the mirror: values round-trip through **TEXT** (node-pg
+  re-serialises a parsed jsonb as an array literal), every value is cast back to the
+  **target's** declared type, and **sequences are advanced past the copied ids** or the
+  target is read-only in practice.
 
 ## Working with Neon suspended (offline mode)
 
@@ -189,6 +224,8 @@ server/index.js          Express API + serves built client
 client/src/views/        Dashboard · Kanban · TableView · Calendar
 scripts/                 analyze / migrate / ingest / sync / rate entry points
 scripts/db-mirror.js     clone Neon -> local Postgres (why: the 5 GB transfer cap)
+scripts/db-copy.js       copy any Postgres -> any other + verify (the DigitalOcean move)
+src/model/dbCopyPlan.js  db:copy's guards, column plan and verification, as pure rules
 docs/                    NetSuite saved-search design + document-linking strategy
 ```
 
