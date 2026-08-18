@@ -6,6 +6,7 @@
 
 import pg from 'pg'
 import { poolSettings } from './model/poolLimits.js'
+import { hostKind } from './model/dbCopyPlan.js'
 
 const { Pool } = pg
 
@@ -41,8 +42,21 @@ if (!url) {
   )
 }
 
-/** 'mirror' = local clone (STALE BY DEFINITION) · 'neon' = the real thing. */
-export const DB_TARGET = useMirror ? 'mirror' : 'neon'
+/**
+ * Which database this process is actually talking to.
+ *
+ * ⚠️ THIS USED TO BE `useMirror ? 'mirror' : 'neon'` — it hardcoded "neon" for anything
+ * that was not the mirror. That was true for exactly as long as Neon was the only remote,
+ * and it became a LIE the moment the app was pointed at DigitalOcean (2026-08-18):
+ * `npm run check:neon` cheerfully reported "✓ UP  NEON · 320 orders" while connected to DO,
+ * and projected transfer against a 5 GB cap that no longer applies to anything.
+ *
+ * A green check naming the wrong database is worse than no check — it is the whole bug
+ * class src/model/fieldAssumptions.js exists for, aimed at the one number that says
+ * whether the app is alive. So the label is DERIVED FROM THE CONNECTION, never assumed:
+ * 'mirror' · 'neon' · 'digitalocean' · 'other'.
+ */
+export const DB_TARGET = useMirror ? 'mirror' : hostKind(url)
 export const IS_MIRROR = useMirror
 
 // One shared pool for the whole app.

@@ -41,12 +41,15 @@ process.env.WORKHUB_MIRROR_WRITES = '1'
 import { execFileSync } from 'node:child_process'
 import pg from 'pg'
 
-const NEON = process.env.DATABASE_URL
+// ⚠️ DATABASE_URL_NEON, not DATABASE_URL — since the DigitalOcean cutover (2026-08-18)
+// DATABASE_URL is the app's CURRENT database (DO). Reading it here would have made
+// `db:mirror` clone DO into local while every message on screen said "MIRROR NEON".
+const NEON = process.env.DATABASE_URL_NEON
 const LOCAL = process.env.DATABASE_URL_LOCAL || 'postgres://localhost:5432/workhub'
 const dryRun = process.argv.includes('--dry')
 
 if (!NEON) {
-  console.error('DATABASE_URL is not set - run via `npm run db:mirror` so .env.local loads.')
+  console.error('DATABASE_URL_NEON is not set - run via `npm run db:mirror` so .env.local loads. (Since the DO cutover, Neon lives in DATABASE_URL_NEON.)')
   process.exit(1)
 }
 // ⚠️ Guard against the catastrophic typo. This script DROPS and recreates its target,

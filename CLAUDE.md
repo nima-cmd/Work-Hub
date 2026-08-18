@@ -12,7 +12,8 @@ aging-aware pipeline so **nothing sits ignored**. It also serves as the canonica
 
 - **Client:** React 19 + Vite (`client/`)
 - **API:** Express (`server/`), reads Postgres via `src/db.js`
-- **DB:** Neon (Postgres) — connection string in `.env.local` (git-ignored)
+- **DB:** **DigitalOcean Managed Postgres** (`workhub-db`, SFO3, PG 17) — `DATABASE_URL`.
+  Neon is retired but PRESERVED as `DATABASE_URL_NEON` (see the cutover note below).
 - **Shared model:** plain ES modules in `src/model/` and `src/ingest/`
 
 ## Run
@@ -75,6 +76,39 @@ lower bound (row bytes, no TLS or wire framing); Neon's console is the authority
 unless you pass `--mirror`; use `WORKHUB_DB=neon npm run migrate` for the real one.
 This already bit once — `transfer_log` was created on the clone while Neon, the
 database that needed it, silently never got it.
+
+## ✅ The DigitalOcean cutover (2026-08-18)
+
+The app runs on **DigitalOcean Managed Postgres** — `workhub-db`, SFO3, PostgreSQL 17,
+1 GiB Basic ($13.00 node + $2.15 storage). Both localhost and the Render deploy point at
+it. **DO does not meter managed-database transfer at all**, so the 5 GB cap that suspended
+Neon simply does not exist here.
+
+- **SFO3 because Render is in `gcp-us-west1`** (found with `dig` on the deploy's origin
+  CNAME). Transfer is free but LATENCY IS NOT, and the deploy makes ~157k queries/day.
+- **TLS:** DO signs each cluster with a private per-project CA. Locally that means
+  `sslmode=verify-full&sslrootcert=~/.config/workhub/do-ca-certificate.crt` (works for
+  node-pg AND psql). ⚠️ **Render has no such file**, so its `DATABASE_URL` uses
+  `?uselibpqcompat=true&sslmode=require` — encrypted, NOT verified. Committing the CA and
+  verifying properly on the deploy is still to do.
+- **Rollback:** uncomment `WORKHUB_DB=mirror` in `.env.local`. The mirror is untouched.
+
+⚠️ **`DATABASE_URL_NEON` MUST BE KEPT.** Neon holds the only copy of the app-owned rows
+written to the deploy after the mirror was cloned 2026-08-17 09:52 PDT — five orders'
+`DEPARTURE_CONFIRMED` among them. Reconciling is insert-only and a separate job once
+Neon's transfer resets 2026-09-01. Nothing in the migration touched Neon.
+
+⚠️ **An endpoint name must resolve to a NAMED database, never to "whichever one is in use."**
+`db:copy`'s `neon` endpoint and `db-mirror.js` both read `DATABASE_URL`; once that meant DO,
+`--from=neon` would have read DO while saying Neon, and the never-target-Neon guard would
+have stopped recognising Neon at all. They read `DATABASE_URL_NEON` now.
+
+⚠️ **`DB_TARGET` is DERIVED FROM THE CONNECTION** (`hostKind(url)`), not assumed. It used to
+be `useMirror ? 'mirror' : 'neon'`, so on the cutover `check:neon` reported **"✓ UP NEON ·
+320 orders"** while talking to DigitalOcean, `check:transfer` headlined **"NEON TRANSFER …
+158% of the cap"** against a target with no cap, and `migrate` announced it was altering
+NEON. Three green-looking checks naming the wrong database — the `fieldAssumptions` bug
+class aimed at the one number that says whether the app is alive.
 
 ## `npm run db:copy` — the migration tool, not the mirror
 

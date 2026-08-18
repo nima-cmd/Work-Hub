@@ -32,18 +32,34 @@ try {
 
 const s = summarizeTransfer(rows, { today, knownUsed: parseSize(arg('used')) })
 
-console.log(`\n  NEON TRANSFER\n  ${'─'.repeat(72)}`)
+// ⚠️ THERE IS ONLY A CAP ON NEON. DigitalOcean does not meter managed-database transfer
+// at all — that is the entire reason the app moved there. Before this check, the script
+// printed "NEON TRANSFER … projected month end: 7.88 GB (158% of the cap)" while reading
+// DigitalOcean: a red alarm about a limit that does not exist. The meter is still worth
+// keeping on DO for ATTRIBUTION (which process is doing the reading), but it must not
+// invent a ceiling to measure against.
+const CAPPED = DB_TARGET === 'neon'
+const TITLE = { neon: 'NEON TRANSFER', digitalocean: 'TRANSFER (DigitalOcean — NOT metered)', mirror: 'TRANSFER (local mirror)' }[DB_TARGET]
+  || `TRANSFER (${DB_TARGET})`
+console.log(`\n  ${TITLE}\n  ${'─'.repeat(72)}`)
 console.log(`  reading: ${DB_TARGET}${DB_TARGET === 'mirror' ? '  ⚠️ the mirror only records LOCAL work, which costs Neon nothing' : ''}`)
+if (!CAPPED && DB_TARGET !== 'mirror') {
+  console.log('  ⚠️ This target has NO transfer cap — DigitalOcean does not meter managed-database')
+  console.log('     traffic. The figures below are ATTRIBUTION ONLY: who is reading how much.')
+}
 console.log(`  TODAY (${s.today.day}): ${fmtBytes(s.today.bytes)}` +
   (s.today.bySource.length ? '   ' + s.today.bySource.map((b) => `${b.source} ${fmtBytes(b.bytes)}`).join(' · ') : ''))
-console.log(`  month to date: ${fmtBytes(s.used)} of ${fmtBytes(MONTHLY_LIMIT_BYTES)}` +
-  ` (${s.pctUsed.toFixed(1)}%)${s.isEstimate ? '  · estimated' : '  · from Neon'}`)
+console.log(CAPPED
+  ? `  month to date: ${fmtBytes(s.used)} of ${fmtBytes(MONTHLY_LIMIT_BYTES)} (${s.pctUsed.toFixed(1)}%)${s.isEstimate ? '  · estimated' : '  · from Neon'}`
+  : `  month to date: ${fmtBytes(s.used)}${s.isEstimate ? '  · estimated' : ''}  (no cap on this target)`)
 if (s.perDay) {
   console.log(`  rate: ${fmtBytes(s.perDay)}/day over ${s.measuredDays} day(s) MEASURED` +
     (s.partialMonth ? `  (the meter has data for ${s.measuredDays} of ${s.dayOfMonth} days so far)` : ''))
 }
-if (s.projected) console.log(`  projected month end: ${fmtBytes(s.projected)} (${s.pctProjected.toFixed(0)}% of the cap)`)
-if (s.daysLeftAtRate != null && Number.isFinite(s.daysLeftAtRate)) {
+if (s.projected) console.log(CAPPED
+  ? `  projected month end: ${fmtBytes(s.projected)} (${s.pctProjected.toFixed(0)}% of the cap)`
+  : `  projected month end: ${fmtBytes(s.projected)}  (informational — no cap)`)
+if (CAPPED && s.daysLeftAtRate != null && Number.isFinite(s.daysLeftAtRate)) {
   console.log(`  runway at this rate: ${s.daysLeftAtRate.toFixed(1)} day(s) · ${s.daysInMonth - s.dayOfMonth} left in the month`)
 }
 
@@ -53,10 +69,17 @@ for (const b of s.bySource) {
   console.log(`      ${b.source.padEnd(8)} ${fmtBytes(b.bytes).padStart(9)} · ${b.queries.toLocaleString()} queries · ${b.days} day(s)`)
 }
 
-const mark = { ok: '✓', warn: '!', critical: '✗', exceeded: '✗' }[s.verdict.level]
+// ⚠️ The verdict is a judgement about a CAP. Off Neon there is nothing to judge, and a
+// red "158% of the cap" would be pure fiction.
+const mark = CAPPED ? { ok: '✓', warn: '!', critical: '✗', exceeded: '✗' }[s.verdict.level] : '·'
 console.log(`\n  ${'─'.repeat(72)}`)
-console.log(`  ${mark} ${s.verdict.headline}`)
-console.log(`    ${s.caveat}`)
+console.log(CAPPED
+  ? `  ${mark} ${s.verdict.headline}`
+  : `  · No cap on ${DB_TARGET}. Kept for attribution — and because a rising number still`)
+if (!CAPPED) console.log('    means the app got chattier, which is worth knowing on a 1 vCPU box.')
+// ⚠️ The caveat ends "Neon's console is the authority" — true on Neon, meaningless
+// anywhere else. Same lie as the cap, one sentence smaller.
+console.log(`    ${CAPPED ? s.caveat : s.caveat.replace(/\s*Neon's console is the authority\.?/i, '')}`)
 if (s.partialMonth) {
   console.log('    ⚠️ Part-month sample: the projection assumes every day looks like the')
   console.log('       measured ones, and days before the meter existed are not counted at all.')

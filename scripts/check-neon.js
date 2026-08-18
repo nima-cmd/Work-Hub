@@ -1,4 +1,9 @@
-// scripts/check-neon.js — is the database answering, and which one?
+// scripts/check-neon.js — is the database answering, and WHICH ONE?
+//
+// ⚠️ The "which one" is the load-bearing half, and this script got it wrong the day the
+// app moved to DigitalOcean (2026-08-18): it printed "✓ UP  NEON · 320 orders" while
+// connected to DO, and projected transfer against Neon's 5 GB cap. Both halves false.
+// The label now comes from DB_TARGET, which src/db.js derives from the connection itself.
 // Run: npm run check:neon
 //
 // Nima, 2026-08-17: "how will i know when its offline". This is the direct answer, so
@@ -18,7 +23,13 @@ try {
   detail = explainDbError(e).message
 }
 
-console.log(`\n  ${up ? '✓ UP  ' : '✗ DOWN'}  ${IS_MIRROR ? 'LOCAL MIRROR' : 'NEON'}${IS_OFFLINE ? ' (offline mode — writes stay local)' : ''}`)
+const LABEL = {
+  mirror: 'LOCAL MIRROR',
+  neon: 'NEON',
+  digitalocean: 'DIGITALOCEAN (managed)',
+  other: 'REMOTE POSTGRES',
+}
+console.log(`\n  ${up ? '✓ UP  ' : '✗ DOWN'}  ${LABEL[DB_TARGET] || DB_TARGET.toUpperCase()}${IS_OFFLINE ? ' (offline mode — writes stay local)' : ''}`)
 console.log(`         ${detail}`)
 
 if (up && IS_MIRROR) {
@@ -31,9 +42,11 @@ if (up && IS_MIRROR) {
   }
 }
 
-// On Neon, show the allowance too: "is it up" and "how close is it" are the same
-// worry, and answering half of it invites a second command nobody runs.
-if (up && !IS_MIRROR) {
+// ⚠️ ONLY ON NEON. "How close to the cap" is a question that exists only where there IS
+// a cap: DigitalOcean does not meter managed-database transfer at all, so printing a
+// projection against 5 GB there would be inventing a limit. Was `!IS_MIRROR`, which meant
+// every non-mirror target inherited Neon's allowance.
+if (up && DB_TARGET === 'neon') {
   try {
     const { rows } = await pool.query(
       `SELECT to_char(day,'YYYY-MM-DD') AS day, source, bytes, queries FROM transfer_log`)
@@ -43,7 +56,7 @@ if (up && !IS_MIRROR) {
   } catch { /* pre-migration, or the table is gone — not this script's problem */ }
 }
 
-if (!up && !IS_MIRROR) {
+if (!up && DB_TARGET === 'neon') {
   console.log('\n  To keep working:')
   console.log('      npm run dev:offline      # the whole app on local Postgres, writes allowed')
   console.log('      npm run check:neon       # run this again to see when it is back')
