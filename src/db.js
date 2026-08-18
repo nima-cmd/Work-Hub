@@ -131,11 +131,16 @@ async function flush() {
 // what it means and what to do about it. Endpoints already surface `e.message`, so
 // they all inherit this without being touched.
 //
-// ⚠️ The exact error Neon returns on a transfer suspension is NOT KNOWN to us — we have
-// never seen one. So this matches the CLASS of failure (cannot reach / cannot
-// authenticate / connection dropped) and says "likely suspended" rather than asserting
-// it. Naming a probable cause and the next step beats a raw socket error either way,
-// and it must not claim more than it can see.
+// ⚠️ NOW WE HAVE SEEN IT. 2026-08-18, the morning Neon actually suspended:
+//
+//     Your project has exceeded the data transfer quota. Upgrade your plan to
+//     increase limits.
+//
+// The earlier version of this comment said the real error was unknown and matched only
+// the CLASS of failure — and that pattern did NOT match this text, so the advice never
+// fired on the one event it was written for. Neon's own wording is clear about the
+// cause; what it does not say is what to do about it here, which is the half we add.
+const QUOTA = /exceeded the data transfer quota|data transfer quota|exceeded .*quota/i
 const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|EAI_AGAIN|Connection terminated|termination|server closed the connection|timeout expired|too many connections/i
 
 export function explainDbError(err) {
@@ -144,15 +149,31 @@ export function explainDbError(err) {
   // repeats itself is one people stop reading.
   if (err?.dbUnreachable) return err
   const msg = String(err?.message || err || '')
-  if (!UNREACHABLE.test(msg)) return err
-  const where = useMirror ? 'Local Postgres' : 'Neon'
-  const advice = useMirror
+  const quota = QUOTA.test(msg)
+  if (!quota && !UNREACHABLE.test(msg)) return err
+  // ⚠️ A QUOTA error can only come from Neon — local Postgres has no allowance to
+  // exceed. So it names Neon regardless of which target this process is pointed at,
+  // instead of reporting "Local Postgres is SUSPENDED", which is impossible and which
+  // the first cut of this did say.
+  const local = useMirror && !quota
+  const where = local ? 'Local Postgres' : 'Neon'
+  const advice = local
     ? 'Is the local server running?  pg_ctl -D /usr/local/var/postgresql@17 status'
-    : 'Neon suspends the compute when the monthly transfer allowance runs out — it comes '
-      + 'back at the reset or on upgrade. To keep working now: npm run dev:offline '
-      + '(local mirror, writes permitted).'
-  const e = new Error(`${where} is not answering — likely suspended. ${advice} [${msg}]`)
+    : 'It comes back at the billing reset or on upgrade. To keep working now: '
+      + 'npm run dev:offline (local Postgres, writes permitted). Check with npm run check:neon.'
+  // A quota suspension is a FACT Neon stated, so say it as one. Everything else is
+  // still a guess, and keeps the hedge.
+  // ⚠️ Three different situations, three different sentences. Saying "likely suspended"
+  // about LOCAL Postgres is nonsense — it has no allowance to exceed, it is just not
+  // running — and a diagnostic that suggests the wrong cause sends someone the wrong way.
+  const lead = quota
+    ? `${where} is SUSPENDED — the monthly data-transfer quota is used up.`
+    : local
+      ? 'Local Postgres is not answering.'
+      : 'Neon is not answering — it may be suspended, or the network is down.'
+  const e = new Error(`${lead} ${advice} [${msg}]`)
   e.dbUnreachable = true
+  e.quotaExceeded = quota
   e.target = DB_TARGET
   e.original = msg
   return e
