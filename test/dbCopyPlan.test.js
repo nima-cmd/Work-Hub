@@ -38,13 +38,19 @@ test('a described endpoint never contains the password', () => {
   assert.equal(describeEndpoint(LOCAL), 'localhost/workhub')
 })
 
+// ⚠️ `neon` resolves DATABASE_URL_NEON, NOT DATABASE_URL. Since the 2026-08-18 cutover
+// DATABASE_URL is whatever the app uses TODAY (DigitalOcean). Had the mapping stayed,
+// `--from=neon` would have read DO while saying Neon, and the never-target-Neon guard
+// would have stopped recognising Neon entirely.
 test('named endpoints resolve out of the environment', () => {
-  const env = { DATABASE_URL: NEON, DATABASE_URL_LOCAL: LOCAL, DATABASE_URL_DO: DO }
+  const env = { DATABASE_URL_NEON: NEON, DATABASE_URL_LOCAL: LOCAL, DATABASE_URL_DO: DO }
   assert.equal(resolveEndpoint('neon', env).url, NEON)
   assert.equal(resolveEndpoint('mirror', env).url, LOCAL)
   assert.equal(resolveEndpoint('local', env).url, LOCAL)
   assert.equal(resolveEndpoint('DO', env).kind, 'digitalocean')
   assert.match(resolveEndpoint('staging', env).error, /unknown endpoint/)
+  // The app's live database must NOT be reachable under the name of another endpoint.
+  assert.match(resolveEndpoint('neon', { DATABASE_URL: DO }).error, /DATABASE_URL_NEON is not set/)
   assert.match(resolveEndpoint('do', {}).error, /DATABASE_URL_DO is not set/)
   assert.match(resolveEndpoint(null, env).error, /no endpoint/)
 })
@@ -71,7 +77,7 @@ test('a legitimate copy is allowed', () => {
 // after the mirror was cloned (2026-08-17 16:52) — five orders' departure confirmations
 // among them. This script empties its target.
 test('Neon can never be the TARGET, and there is no flag for it', () => {
-  const env = { DATABASE_URL: NEON, DATABASE_URL_LOCAL: LOCAL }
+  const env = { DATABASE_URL_NEON: NEON, DATABASE_URL_LOCAL: LOCAL }
   const r = guardCopy({ from: resolveEndpoint('mirror', env), to: resolveEndpoint('neon', env) })
   assert.equal(r.length, 1)
   assert.match(r[0], /TARGET is Neon/)
@@ -83,7 +89,7 @@ test('Neon can never be the TARGET, and there is no flag for it', () => {
 })
 
 test('Neon is fine as the SOURCE', () => {
-  const env = { DATABASE_URL: NEON, DATABASE_URL_DO: DO }
+  const env = { DATABASE_URL_NEON: NEON, DATABASE_URL_DO: DO }
   assert.deepEqual(guardCopy({ from: resolveEndpoint('neon', env), to: resolveEndpoint('do', env) }), [])
 })
 

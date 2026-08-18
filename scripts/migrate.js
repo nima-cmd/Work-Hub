@@ -18,13 +18,17 @@ import { pool, DB_TARGET, IS_MIRROR } from '../src/db.js'
 
 if (IS_MIRROR && !process.argv.includes('--mirror')) {
   console.error('\n  ✗ WORKHUB_DB=mirror, so this would migrate the LOCAL CLONE, not Neon.')
-  console.error('    Neon is almost certainly what you meant — the deploy reads it.\n')
-  console.error('      WORKHUB_DB=neon npm run migrate     # migrate Neon')
+  console.error('    The live database is almost certainly what you meant — the deploy reads it.\n')
+  console.error('      npm run migrate                     # migrate the live database (DATABASE_URL)')
   console.error('      npm run migrate -- --mirror         # really migrate the clone\n')
   process.exit(1)
 }
 
-console.log(`\n  Migrating: ${DB_TARGET === 'mirror' ? 'LOCAL MIRROR' : 'NEON (live)'}`)
+// ⚠️ Was `'mirror' ? … : 'NEON (live)'` — which announced "NEON" while migrating
+// DigitalOcean after the 2026-08-18 cutover. Migrations are the last place to be vague
+// about which database you are altering, so the name comes from the connection.
+const TARGET_NAME = { mirror: 'the LOCAL MIRROR', neon: 'NEON (live)', digitalocean: 'DIGITALOCEAN (live)' }[DB_TARGET] || `${DB_TARGET} (live)`
+console.log(`\n  Migrating: ${TARGET_NAME}`)
 
 const sql = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8')
 
@@ -34,7 +38,7 @@ const { rows } = await pool.query(
   "select table_name from information_schema.tables where table_schema = 'public' order by table_name",
 )
 
-console.log(`✅ Migration applied to ${DB_TARGET === 'mirror' ? 'the LOCAL MIRROR' : 'NEON'}. Tables:`)
+console.log(`✅ Migration applied to ${TARGET_NAME}. Tables:`)
 for (const r of rows) console.log('   -', r.table_name)
 
 await pool.end()

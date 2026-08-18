@@ -11,9 +11,22 @@
 // Everything here is a pure function over strings and column lists. The script owns
 // the sockets; this owns the answers.
 
-/** Named endpoints, so a command line never has to carry a credential. */
+/**
+ * Named endpoints, so a command line never has to carry a credential.
+ *
+ * ⚠️ `neon` READS `DATABASE_URL_NEON`, NOT `DATABASE_URL` (changed 2026-08-18 at the
+ * DigitalOcean cutover). `DATABASE_URL` is whatever the app is pointed at TODAY, and
+ * from the cutover that is DO. Leaving `neon` mapped to it would have been quietly
+ * dangerous in two ways: `--from=neon` would have read DO while claiming to read Neon,
+ * and guardCopy's "the target may never be Neon" rule — which has no override precisely
+ * because Neon holds the only copy of the post-clone app-owned rows — would have stopped
+ * recognising Neon at all.
+ *
+ * The lesson generalises: an endpoint name must resolve to a NAMED database, never to
+ * "whichever one is currently in use".
+ */
 export const ENDPOINTS = {
-  neon: 'DATABASE_URL',
+  neon: 'DATABASE_URL_NEON',
   local: 'DATABASE_URL_LOCAL',
   mirror: 'DATABASE_URL_LOCAL',
   do: 'DATABASE_URL_DO',
