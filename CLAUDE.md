@@ -105,6 +105,20 @@ Endpoints: `neon` (`DATABASE_URL`) · `local`/`mirror` (`DATABASE_URL_LOCAL`) ·
   a timestamptz hashes differently in two zones). A mismatch **names the column**.
   `--counts-only` skips the content hash and *says so in the summary line*.
   Non-zero exit + "DO NOT point the app at this target" when unproven.
+### ⚠️ The connection ceiling replaces the transfer ceiling
+
+DO meters **no** transfer for managed databases (verified in their docs) — but the 1 GiB
+plan allows **22 backend connections**, and `new Pool()` with no `max` is node-pg's
+default of **10 per process**. Deploy + dev server + one script = 30 against 22. Neon
+never surfaced this because its limit was transfer.
+
+`src/model/poolLimits.js` sets the budget explicitly: **deploy 8 · everything else 4**
+(worst case 16, leaving 6 for DO's own maintenance). Override with `WORKHUB_POOL_MAX`
+on a bigger plan — a junk value is ignored, because `max: NaN` is an UNBOUNDED pool.
+`explainDbError` now names exhaustion (`53300` / "too many clients" / a connect timeout),
+which otherwise reads as a broken app rather than a capacity limit. Use DO's **PgBouncer**
+pool for the deploy and this stops mattering.
+
 - Same three lessons as the mirror: values round-trip through **TEXT** (node-pg
   re-serialises a parsed jsonb as an array literal), every value is cast back to the
   **target's** declared type, and **sequences are advanced past the copied ids** or the

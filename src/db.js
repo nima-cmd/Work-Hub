@@ -5,6 +5,7 @@
 // so the Neon connection string is loaded without hardcoding any secret.
 
 import pg from 'pg'
+import { poolSettings } from './model/poolLimits.js'
 
 const { Pool } = pg
 
@@ -45,7 +46,14 @@ export const DB_TARGET = useMirror ? 'mirror' : 'neon'
 export const IS_MIRROR = useMirror
 
 // One shared pool for the whole app.
-export const pool = new Pool({ connectionString: url })
+//
+// ⚠️ `max` IS SET DELIBERATELY — see src/model/poolLimits.js. node-pg's default of 10
+// per process meant a deploy + a dev server + one script could want 30 connections, and
+// DigitalOcean's 1 GiB plan allows 22. Neon never surfaced this because its limit was
+// transfer, not connections; moving to a database that meters no transfer swaps one
+// ceiling for another, and this is the other one.
+export const POOL = poolSettings(process.env)
+export const pool = new Pool({ connectionString: url, ...POOL })
 
 // ── Transfer metering ───────────────────────────────────────────────────────
 //
@@ -149,6 +157,20 @@ export function explainDbError(err) {
   // repeats itself is one people stop reading.
   if (err?.dbUnreachable) return err
   const msg = String(err?.message || err || '')
+  // ⚠️ CONNECTION EXHAUSTION READS LIKE NOTHING AT ALL. Postgres says "too many clients
+  // already" (SQLSTATE 53300) and node-pg says "timeout exceeded when trying to connect"
+  // — neither of which suggests a capacity ceiling to anyone reading a stack trace. On a
+  // 22-connection plan this is a real, reachable state, so it gets named.
+  if (EXHAUSTED.test(msg) || err?.code === '53300') {
+    const e = new Error(
+      'Out of database connections — every client in this pool is checked out, or the '
+      + `server refused a new one. This pool allows ${POOL.max} (role: ${POOL.role}); `
+      + 'DigitalOcean\'s 1 GiB plan allows 22 across ALL processes. Close other servers '
+      + 'and scripts, use a PgBouncer connection pool for the deploy, or raise '
+      + `WORKHUB_POOL_MAX. [${msg}]`)
+    e.connectionsExhausted = true
+    return e
+  }
   const quota = QUOTA.test(msg)
   if (!quota && !UNREACHABLE.test(msg)) return err
   // ⚠️ A QUOTA error can only come from Neon — local Postgres has no allowance to
@@ -220,6 +242,8 @@ pool.query = function meteredQuery(...args) {
 // which the clone script and the tests set, because for them a throwaway write is the
 // entire point.
 const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\b/i
+// "too many clients already" (Postgres) · "timeout exceeded when trying to connect" (node-pg)
+const EXHAUSTED = /too many clients|timeout exceeded when trying to connect|remaining connection slots/i
 
 // ── Offline mode (2026-08-17) ───────────────────────────────────────────────
 //
