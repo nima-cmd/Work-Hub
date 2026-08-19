@@ -970,3 +970,11 @@ export async function pushToShipstation(body = {}) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'push failed')
   return res.json()
 }
+
+// The pulse — "has anything changed?", a few hundred bytes. See src/model/pulse.js for
+// why the client polls this instead of the board itself.
+export async function fetchPulse() {
+  const res = await fetch('/api/pulse')
+  if (!res.ok) throw new Error('pulse ' + res.status)
+  return res.json()
+}

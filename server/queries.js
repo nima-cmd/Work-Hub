@@ -9,6 +9,7 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
+import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
@@ -600,6 +601,26 @@ export async function setFulfillmentPrepped({ ifNumber, prepped = true, note } =
     source: 'manual',
   })
   return { ifNumber: doc, prepped }
+}
+
+// ── The pulse: "has anything changed?" (Nima, 2026-08-19) ───────────────────
+//
+// See src/model/pulse.js for why this exists instead of polling the board. Four MAX()
+// lookups, a few hundred bytes, so the client can hold a live view without re-running
+// a 1.5 MB / ~400-query refresh every 15 seconds against one vCPU.
+export async function getPulse() {
+  const parts = {}
+  await Promise.all(PULSE_SOURCES.map(async ([key, sql]) => {
+    try {
+      const { rows } = await pool.query(sql)
+      parts[key] = rows[0]?.v ?? null
+    } catch {
+      // ⚠️ A pulse that throws would stop the client refreshing at all — strictly worse
+      // than the stale board it exists to fix. A missing part just changes the version.
+      parts[key] = null
+    }
+  }))
+  return { version: pulseVersion(parts) }
 }
 
 // ── "Yes, it actually left" (Nima, 2026-08-13) ──────────────────────────────

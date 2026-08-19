@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
+import { useEffect, useRef, useState } from 'react'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
+import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
 import CommandCenter from './views/CommandCenter.jsx'
 import FlightDeck from './views/FlightDeck.jsx'
 import FlightPlan from './views/FlightPlan.jsx'
@@ -237,6 +238,45 @@ export default function App() {
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
   useEffect(refresh, [])
+
+  // ── Keep the board live (Nima, 2026-08-19) ────────────────────────────────
+  //
+  // "the information doesn't refresh unless we manual refresh the page … Whitworth
+  // getting scanned needed me to refresh to show it as in our possession."
+  //
+  // ⚠️ THIS DOES NOT POLL THE BOARD. refresh() is 16 requests, ~1.5 MB and ~400
+  // database queries; at 15s that would be ~96k queries an hour from one tab against a
+  // single vCPU. It polls /api/pulse — four MAX() lookups — and only calls refresh()
+  // when the answer actually changes. See src/model/pulse.js.
+  //
+  // Also refreshes on tab focus, which is the case Nima actually hits: scan something,
+  // come back to the board, expect it to be current.
+  const pulseRef = useRef(null)
+  useEffect(() => {
+    let stopped = false
+    const check = async () => {
+      if (stopped || document.visibilityState !== 'visible') return
+      try {
+        const { version } = await fetchPulse()
+        if (version == null) return                 // a failed pulse means "no change"
+        if (pulseChanged(pulseRef.current, version)) refresh()
+        pulseRef.current = version
+      } catch { /* never let the poller break the app */ }
+    }
+    check()
+    const id = setInterval(check, PULSE_INTERVAL_MS)
+    // Coming back to the tab is the strongest signal that something happened while away.
+    const onVisible = () => { if (document.visibilityState === 'visible') check() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      stopped = true
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Pull straight from NetSuite on demand. Sequential and never retried — see
   // refreshFromNetsuite in server/queries.js for why retrying would be the one
