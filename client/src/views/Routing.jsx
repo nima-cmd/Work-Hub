@@ -221,7 +221,7 @@ export default function Routing() {
         <div className="rt-headActions">
           {/* Two genuinely different refreshes, and conflating them is why packed
               cartons appeared to be "missing from the feed": Reload re-reads
-              what Neon already has, Pull goes back to NetSuite for cartons
+              what the database already has, Pull goes back to NetSuite for cartons
               packed since the last sync. Packing runs for hours, so Pull is the
               one that matters mid-pack — hence it's the primary button. */}
           <button className="btn rt-pull" disabled={busy === 'pull'} onClick={onPull}

@@ -44,38 +44,46 @@ npm run check:slack        # is the Slack lane live? names the exact missing tok
 
 ```
 
-## ⚠️ Develop against the local mirror, not Neon
+## Where to develop — against the live database (since 2026-08-18)
 
-Neon's Free plan allows **5 GB/month of public network transfer and SUSPENDS the
-compute when it runs out** — not throttled, stopped, until the next billing period.
-On 2026-08-14 we hit 84% by the 14th, and the measured cause was **development, not
-the app**: 131 commits in two weeks, and every verification loop reads Neon over the
-public internet (`check:counters` is 5.3 MB a run; a page load touching every surface
-is 3.3 MB; the whole database is 26 MB).
+**Just run the app.** `DATABASE_URL` is DigitalOcean and both localhost and the deploy
+read it, so local work is immediately visible on the deploy and vice versa. There is no
+transfer meter to dodge any more.
 
 ```bash
-npm run db:mirror      # one 29 MB read, clones all 49 tables into local Postgres
+npm run dev            # Vite + API, against DigitalOcean
 ```
 
-Then `WORKHUB_DB=mirror` in `.env.local` points everything — dev server, tests,
-checks, scripts — at the clone. Comment it out to read Neon.
+### The mirror: kept as an OFFLINE FALLBACK, no longer the default
 
-**One way only, on purpose.** Neon → local, replacing the local copy each time. The
-app owns some of its data (BOL numbers that must never be reused, custody scans,
-tasks), so two writable copies would mean conflict resolution on exactly the records
-that must not diverge. The mirror is a disposable read replica for development.
+`npm run db:mirror` existed for one reason — Neon's Free plan allowed **5 GB/month of
+public network transfer and SUSPENDED the compute** when it ran out, and the measured
+cause was *development*: 131 commits in two weeks, every verification loop reading Neon
+over the public internet (`check:counters` alone was 5.3 MB a run against a 26 MB
+database). **That reason is gone.** DigitalOcean does not meter managed-database transfer.
 
-**Monitoring it.** `npm run check:transfer` reports month-to-date, the daily rate, a
-month-end projection and the split by source (`deploy` / `cron` / `local`) — the
-projection is the signal, not the percentage, because 84% on the 14th suspends the
-database and 84% on the 30th lands fine. Also on Health. ⚠️ It is an ESTIMATE and a
-lower bound (row bytes, no TLS or wire framing); Neon's console is the authority, and
-`--used=4.2GB` anchors the projection to their real figure.
+The mirror is still there and still useful for one thing: working when the network or the
+database is not. `WORKHUB_DB=mirror` in `.env.local` (currently commented out) points
+everything at the local clone; add `WORKHUB_OFFLINE=1` to permit writes.
+
+⚠️ **`db:mirror` now reads `DATABASE_URL_NEON`** and Neon is suspended until 2026-09-01,
+so it cannot re-clone before then. The clone on disk is frozen at 2026-08-17 09:52 PDT.
+⚠️ **One way only, on purpose** — the app owns data (BOL numbers that must never be
+reused, custody scans, tasks), so two writable copies would mean conflict resolution on
+exactly the records that must not diverge.
+⚠️ **App-owned writes made against the mirror exist NOWHERE ELSE**, and `db:mirror` DROPS
+its target. It refuses when local holds app-owned rows newer than the clone stamp.
+
+### The transfer meter is now attribution, not a budget
+
+`npm run check:transfer` still reports month-to-date, daily rate and the split by source
+(`deploy` / `cron` / `local`) — worth keeping, because a rising number means the app got
+chattier and DO is **one vCPU**. But it no longer measures against a cap, and it says so.
+⚠️ The cap language, the percentage, the verdict and the projection-vs-cap are all gated
+on the target actually being Neon — see the cutover note below for why that gate exists.
 
 ⚠️ **`npm run migrate` follows `WORKHUB_DB` too.** It refuses to run against the mirror
-unless you pass `--mirror`; use `WORKHUB_DB=neon npm run migrate` for the real one.
-This already bit once — `transfer_log` was created on the clone while Neon, the
-database that needed it, silently never got it.
+unless you pass `--mirror`. It announces which database it is altering, by name.
 
 ## ✅ The DigitalOcean cutover (2026-08-18)
 
@@ -89,8 +97,10 @@ Neon simply does not exist here.
 - **TLS:** DO signs each cluster with a private per-project CA. Locally that means
   `sslmode=verify-full&sslrootcert=~/.config/workhub/do-ca-certificate.crt` (works for
   node-pg AND psql). ⚠️ **Render has no such file**, so its `DATABASE_URL` uses
-  `?uselibpqcompat=true&sslmode=require` — encrypted, NOT verified. Committing the CA and
-  verifying properly on the deploy is still to do.
+  `?uselibpqcompat=true&sslmode=require`. ✅ **That no longer costs verification:** the CA is
+  committed (`db/do-ca-certificate.crt`) and `src/db.js` applies it to any DigitalOcean host
+  in code, so the deploy verifies without an env change. Proven by tampering — a bogus CA and
+  an absent CA are both refused.
 - **Rollback:** uncomment `WORKHUB_DB=mirror` in `.env.local`. The mirror is untouched.
 
 ⚠️ **`DATABASE_URL_NEON` MUST BE KEPT.** Neon holds the only copy of the app-owned rows

@@ -75,8 +75,8 @@ export default function Health({ onRefresh }) {
 
       {/* ⚠️ WHICH DATABASE every number on every page came from. A local mirror is
           stale by definition, and the sync ages below are the ages recorded INSIDE
-          the snapshot — so on a mirror they say how fresh Neon was when it was
-          cloned, not now. A stale snapshot read as live is the field-assumption bug
+          the snapshot — so on a mirror they say how fresh the live database was when
+          it was cloned, not now. A stale snapshot read as live is the field-assumption bug
           class applied to the entire app, so this is a banner, not a footnote. */}
       {database?.isMirror && (
         <div className="banner error hlMirror">
@@ -85,7 +85,7 @@ export default function Health({ onRefresh }) {
           {database.ageHours != null && <> · cloned <b>{fmtAge(database.ageHours)}</b></>}
           {' '}— these numbers are a snapshot, not live NetSuite data. Run{' '}
           <code>npm run db:mirror</code> to re-clone, or comment out{' '}
-          <code>WORKHUB_DB</code> in <code>.env.local</code> to read Neon.
+          <code>WORKHUB_DB</code> in <code>.env.local</code> to read the live database.
         </div>
       )}
 
@@ -123,7 +123,7 @@ export default function Health({ onRefresh }) {
         ))}
       </div>
 
-      <TransferMeter t={transfer} isMirror={database?.isMirror} />
+      <TransferMeter t={transfer} isMirror={database?.isMirror} target={database?.target} />
 
       <h3 className="hlSection">Data arriving</h3>
       <div className="hlRows">
@@ -359,31 +359,52 @@ function FieldAssumptions({ data }) {
   )
 }
 
-// ── Neon's transfer allowance ───────────────────────────────────────────────
+// ── Transfer: an allowance on Neon, attribution everywhere else ─────────────
 //
-// The Free plan allows 5 GB of public network transfer a month and SUSPENDS the
-// compute when it runs out — the deployed app stops until the next billing period.
-// On 2026-08-14 the first anyone knew was an email at 84%, on the 14th.
+// Neon's Free plan allowed 5 GB/month and SUSPENDED the compute when it ran out. On
+// 2026-08-14 the first anyone knew was an email at 84%, on the 14th.
 //
-// ⚠️ The number shown is the PROJECTION, not the percentage. 84% on the 14th and 84%
-// on the 30th are the same percentage and completely different situations: the first
-// suspends the database mid-month, the second lands fine.
-function TransferMeter({ t, isMirror }) {
+// ⚠️ On Neon the number shown is the PROJECTION, not the percentage. 84% on the 14th and
+// 84% on the 30th are the same percentage and completely different situations.
+//
+// ⚠️⚠️ THERE IS NO CAP ON DIGITALOCEAN, and this panel claimed there was. After the
+// 2026-08-18 cutover it still rendered "Neon transfer · 1.27 GB of 5.00 GB · 25%" with a
+// red verdict projecting "158% of the cap" — against a database that does not meter
+// transfer at all. PR #129 fixed the same lie in check:transfer, check:neon and migrate,
+// and #130 in the startup banner; this was the fifth and the only one on screen. A panel
+// that invents a ceiling is worse than no panel: it is a red alarm nobody can act on.
+//
+// So: on Neon it is a BUDGET (limit, percentage, verdict, projection-vs-cap). Anywhere
+// else it is ATTRIBUTION — who is reading how much — which is still worth showing,
+// because a rising number means the app got chattier and DO is one vCPU.
+function TransferMeter({ t, isMirror, target }) {
   if (!t) return null
-  const cls = { ok: 'ok', warn: 'partial', critical: 'bad', exceeded: 'bad' }[t.verdict.level] || 'ok'
+  const capped = target === 'neon'
+  // ⚠️ Off Neon the verdict is a judgement about a cap that does not exist, so the row
+  // must never be coloured by it — a red row IS the false alarm.
+  const cls = capped ? ({ ok: 'ok', warn: 'partial', critical: 'bad', exceeded: 'bad' }[t.verdict.level] || 'ok') : 'ok'
+  const TITLE = { neon: 'Neon transfer', digitalocean: 'Database transfer (DigitalOcean — not metered)' }[target]
+    || 'Database transfer'
   return (
     <>
-      <h3 className="hlSection">Neon transfer</h3>
+      <h3 className="hlSection">{TITLE}</h3>
       <div className={'hlRow ' + cls}>
         <span className="hlDot" />
         <div className="hlRowMain">
           <div className="hlRowTop">
-            <b>{fmtBytes(t.used)} of {fmtBytes(t.limitBytes)} this month</b>
-            <span className="hlBadge">{t.pctUsed.toFixed(0)}%</span>
+            <b>
+              {capped
+                ? <>{fmtBytes(t.used)} of {fmtBytes(t.limitBytes)} this month</>
+                : <>{fmtBytes(t.used)} this month</>}
+            </b>
+            {capped && <span className="hlBadge">{t.pctUsed.toFixed(0)}%</span>}
+            {!capped && <span className="hlBadge">no cap</span>}
             {t.isEstimate && <span className="hlBadge">estimated</span>}
           </div>
           <div className="hlPowers">
-            {t.verdict.headline}
+            {capped
+              ? t.verdict.headline
+              : 'DigitalOcean does not meter managed-database transfer. Kept for attribution — a rising number means the app got chattier, which matters on one vCPU.'}
             {t.perDay > 0 && (
               <span className="muted">
                 {' · '}{fmtBytes(t.perDay)}/day
@@ -400,8 +421,8 @@ function TransferMeter({ t, isMirror }) {
         </div>
       </div>
       <div className="muted hlFoot">
-        {t.caveat}
-        {isMirror && ' Reading the mirror, so this shows only local work — which costs Neon nothing.'}
+        {capped ? t.caveat : t.caveat.replace(/\s*Neon's console is the authority\.?/i, '')}
+        {isMirror && ' Reading the mirror, so this shows only local work — which costs the live database nothing.'}
       </div>
     </>
   )
