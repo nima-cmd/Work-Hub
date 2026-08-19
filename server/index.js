@@ -2,7 +2,7 @@
 // (in production) serves the built React client. Run: `npm run server`
 // (which loads .env.local for the Neon connection).
 
-import { IS_MIRROR, IS_OFFLINE, mirrorAsOf } from '../src/db.js'
+import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -1576,11 +1576,18 @@ app.listen(PORT, async () => {
       console.log('   Orderful and ShipStation read their own APIs, not Neon.')
       console.log('   ⚠ Do NOT re-clone until this work has reached Neon.')
     } else {
-      console.log(`⚠  DATABASE: LOCAL MIRROR (${age}) — NOT live Neon data.`)
+      console.log(`⚠  DATABASE: LOCAL MIRROR (${age}) — NOT live data.`)
       console.log('   Numbers here are a snapshot. `npm run db:mirror` re-clones;')
-      console.log('   comment out WORKHUB_DB in .env.local to use Neon.')
+      console.log('   comment out WORKHUB_DB in .env.local to use the live database.')
     }
   } else {
-    console.log('   DATABASE: Neon (live)')
+    // ⚠️ NAME THE DATABASE, DO NOT ASSUME IT. This line said "Neon (live)" for anything
+    // that was not the mirror — so on the DigitalOcean cutover (2026-08-18) it announced
+    // NEON at every startup while connected to DO. PR #129 fixed the same lie in
+    // check:neon, check:transfer and migrate and MISSED THIS ONE, which is the copy Nima
+    // actually reads every time he starts the app. DB_TARGET is derived from the
+    // connection (src/db.js), so this now follows it.
+    const LIVE = { neon: 'Neon', digitalocean: 'DigitalOcean' }[DB_TARGET] || DB_TARGET
+    console.log(`   DATABASE: ${LIVE} (live)`)
   }
 })
