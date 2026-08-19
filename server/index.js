@@ -34,7 +34,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
-  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth,
+  ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
@@ -337,6 +337,18 @@ app.post('/api/fulfillment/prepped', async (req, res) => {
 
 // "Yes, it actually left" — the Net-terms flow marks shipped at label time, so
 // this is the only record that the goods physically went (src/model/netDeparture.js).
+// The pulse — a few hundred bytes so the client can tell whether a 1.5 MB refresh is
+// worth doing. See src/model/pulse.js.
+app.get('/api/pulse', async (_req, res) => {
+  try {
+    res.json(await getPulse())
+  } catch (e) {
+    // Never 500 here: the client treats a failed pulse as "no change" and keeps its
+    // interval, so a blip must not knock it into a permanent stale state.
+    res.json({ version: null, error: e.message })
+  }
+})
+
 app.post('/api/fulfillment/departed', async (req, res) => {
   try {
     res.json(await setFulfillmentDeparted(req.body || {}))
