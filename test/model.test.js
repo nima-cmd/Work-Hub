@@ -1498,6 +1498,27 @@ test('splitPoDc rejects the junk identifiers the live data contains', () => {
   assert.equal(splitPoDc(null), null)
 })
 
+// ⚠️ THE "8 SKIPPED CARTONS" WERE NOT A BUG (2026-08-19). The carton feed reported
+// "8 carton(s) skipped — fulfilment has no usable PO-DC identifier" and Health showed the
+// feed as STOPPED ARRIVING, which looked like packed freight going missing. It was not.
+// The only unshipped fulfilments carrying cartons were IF7405 (156 Saint Bernard, 6) and
+// IF7508 (66 Gee Beauty Canada, 2) — both BOUTIQUE, so neither has a PO-DC and the EDI
+// feed is right to ignore them. Nima called it: not Nordstrom, Bloomingdale's or ShopBop.
+//
+// The real defect was the freshness STAMP, which only advanced when the pull found EDI
+// rows — so a correct, successful, empty run looked identical to a sync that had stopped.
+test('a boutique fulfilment has no PO-DC, so the EDI carton feed skips it correctly', () => {
+  // The real identifiers, verbatim from NetSuite.
+  assert.equal(splitPoDc('-'), null, 'IF7405 Saint Bernard / IF7508 Gee Beauty')
+  assert.equal(splitPoDc('PO15131-'), null, 'Four Seasons Hualalai — a PO, but no DC')
+  assert.equal(splitPoDc('EQUS100026915-'), null, 'Equinox')
+  assert.equal(splitPoDc('TBRSN826-'), null, 'The Boca Raton')
+  // …while every genuine EDI shipment carries both halves.
+  assert.deepEqual(splitPoDc('POJ00391387-SBX2'), { poNumber: 'POJ00391387', dc: 'SBX2' })
+  assert.deepEqual(splitPoDc('50073677-799'), { poNumber: '50073677', dc: '799' })
+  assert.deepEqual(splitPoDc('8298615-CI'), { poNumber: '8298615', dc: 'CI' })
+})
+
 test('mapEdiPackageRows groups cartons per PO-DC and matches the saved search', () => {
   // IF7402 / PO 7817926-CG: the real 9 cartons, whose search row is
   // 9 cartons · 292 lb · 215 units · 33.5 cu ft · 36 rounded.

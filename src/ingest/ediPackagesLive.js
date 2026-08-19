@@ -214,7 +214,26 @@ export async function syncEdiPackagesLive({ dryRun = false } = {}) {
   if (!pulled.rows.length) {
     // Never blank the feed off an empty pull — that reads identically to "every
     // carton shipped" and would wipe live routing work on a transient failure.
-    return { ...pulled, skipped: 'empty pull — feed left untouched', loaded: 0, removed: [] }
+    //
+    // ⚠️ BUT STILL STAMP THAT WE RAN (2026-08-19). Returning here skipped
+    // recordSnapshot, so a successful run that legitimately found nothing was
+    // INDISTINGUISHABLE FROM A SYNC THAT NEVER RAN. Health read
+    // "EDI cartons · STOPPED ARRIVING · 4d 23h" for five days while the hourly cron
+    // was working perfectly — the stamp simply could not advance.
+    //
+    // Nima called it: *"the staleness may be a false flag because nothing packed."* He
+    // was right about the symptom. The cause was narrower — the only unshipped
+    // fulfilments carrying cartons were IF7405 (Saint Bernard, 6) and IF7508 (Gee
+    // Beauty Canada, 2), both BOUTIQUE, both `po_dc = '-'`, both correctly skipped
+    // because they are not EDI-routed. Nothing was wrong except the reporting.
+    //
+    // The freshness question is "did this sync run", not "did it find anything". Same
+    // shape as CLAUDE.md's counter bugs: measuring something adjacent to the question.
+    try {
+      const { recordSnapshot } = await import('./loadToDb.js')
+      await recordSnapshot('ediPackagesLive', 0, new Date())
+    } catch { /* a stamp failing must not turn a good run into a reported failure */ }
+    return { ...pulled, skipped: 'empty pull — feed left untouched (run recorded)', loaded: 0, removed: [] }
   }
 
   const { withTransaction, pool } = await import('../db.js')
