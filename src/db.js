@@ -4,6 +4,7 @@
 // `node --env-file=.env.local ...` (or the npm scripts, which do that for you)
 // so the Neon connection string is loaded without hardcoding any secret.
 
+import { readFileSync } from 'node:fs'
 import pg from 'pg'
 import { poolSettings } from './model/poolLimits.js'
 import { hostKind } from './model/dbCopyPlan.js'
@@ -59,6 +60,39 @@ if (!url) {
 export const DB_TARGET = useMirror ? 'mirror' : hostKind(url)
 export const IS_MIRROR = useMirror
 
+// ── TLS to DigitalOcean, verified, everywhere ───────────────────────────────
+//
+// DO signs each cluster with a PRIVATE per-project CA (`CN=<uuid> Project CA`), which is
+// in no public trust store — so node-pg's default verification correctly refuses it.
+//
+// ⚠️ The workaround the deploy shipped with was `uselibpqcompat=true&sslmode=require`:
+// encrypted, but NOT verifying who is on the other end. That mattered more than usual
+// here, because the database's trusted-source list has to admit Render's outbound ranges
+// — and Render states those `/24`s are SHARED with other Render customers. The network
+// boundary is weak by construction, which makes the certificate the real control.
+//
+// So the CA is committed (db/do-ca-certificate.crt — a public certificate, not a secret)
+// and applied HERE rather than through a connection-string parameter. Two reasons: the
+// deploy needs no env change to gain verification, and a URL is easy to paste without it.
+//
+// The leaf's SAN does list the public hostname, so `rejectUnauthorized` is genuine
+// verify-full behaviour, not just chain-of-trust.
+//
+// ⚠️ Falls back silently to whatever the URL specifies if the file is unreadable. A
+// missing cert must not take the app down — it should cost verification, not uptime.
+function sslFor(u) {
+  if (hostKind(u) !== 'digitalocean') return undefined
+  try {
+    const ca = readFileSync(new URL('../db/do-ca-certificate.crt', import.meta.url), 'utf8')
+    return { ca, rejectUnauthorized: true, servername: new URL(u).hostname }
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether this process is verifying DigitalOcean's certificate (shown on Health). */
+export const TLS_VERIFIED = !!sslFor(url)
+
 // One shared pool for the whole app.
 //
 // ⚠️ `max` IS SET DELIBERATELY — see src/model/poolLimits.js. node-pg's default of 10
@@ -67,7 +101,7 @@ export const IS_MIRROR = useMirror
 // transfer, not connections; moving to a database that meters no transfer swaps one
 // ceiling for another, and this is the other one.
 export const POOL = poolSettings(process.env)
-export const pool = new Pool({ connectionString: url, ...POOL })
+export const pool = new Pool({ connectionString: url, ...POOL, ...(sslFor(url) ? { ssl: sslFor(url) } : {}) })
 
 // ── Transfer metering ───────────────────────────────────────────────────────
 //
