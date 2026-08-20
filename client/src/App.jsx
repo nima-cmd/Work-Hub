@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -181,6 +181,36 @@ export default function App() {
   const [handoffTrace, setHandoffTrace] = useState(null)
   // onNavigate everywhere: setView, plus an optional subject to hand over with it.
   const navigate = (key, subject = null) => { setView(key); if (subject) setHandoffTrace(subject) }
+
+  // ── How much is each view actually used? (Nima, 2026-08-20) ───────────────
+  //
+  // Twenty views exist and he named five. Rather than consolidate on a guess about
+  // the other fifteen, record it: one POST when you LEAVE a view, carrying how long
+  // it was on screen. See src/model/viewUsage.js for why dwell is the honest signal
+  // and why the landing view's opens are not a choice.
+  //
+  // ⚠️ Fires on the way OUT, not on arrival, because the dwell is only known then.
+  // The effect's cleanup is the whole mechanism: it runs on every view change and on
+  // unmount, so switching tabs and closing the tab both record.
+  const enteredAt = useRef(Date.now())
+  useEffect(() => {
+    enteredAt.current = Date.now()
+    const leaving = view
+    const flush = () => {
+      const ms = Date.now() - enteredAt.current
+      // Reset first: without this a beforeunload firing after the cleanup would
+      // record the same span twice.
+      enteredAt.current = Date.now()
+      recordViewVisit(leaving, ms)
+    }
+    // A closed tab never runs a React cleanup, so the last view of a session would
+    // otherwise never be counted — and the last view is often the one being used most.
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      flush()
+    }
+  }, [view])
   const [credits, setCredits] = useState(null)
   const [arrivals, setArrivals] = useState([])
   // Ship desk + the two other "whose court" feeds. These live here rather than

@@ -612,6 +612,25 @@ export async function fetchOrderEvents(opts = {}) {
   return res.json()
 }
 
+// ── View usage (Nima, 2026-08-20) ───────────────────────────────────────────
+// Fire-and-forget on purpose: this is telemetry about ourselves and a lost count must
+// never surface to the person using the app. keepalive so the last visit still lands
+// when the tab is closing.
+export function recordViewVisit(view, dwellMs) {
+  try {
+    return fetch('/api/view-usage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ view, dwellMs }), keepalive: true,
+    }).catch(() => {})
+  } catch { return Promise.resolve() }
+}
+
+export async function fetchViewUsage() {
+  const res = await fetch('/api/view-usage')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // ── The trace (Nima, 2026-08-20) ────────────────────────────────────────────
 // One subject's whole story: history · related · linked · notes.
 export async function fetchTrace(docType, docNumber) {

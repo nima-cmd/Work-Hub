@@ -3129,3 +3129,19 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
   color: var(--muted); margin: 0 0 5px;
 }
+
+/* ── View usage table (Health) ─────────────────────────────────────────────── */
+.vuTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 6px; }
+.vuTable th {
+  text-align: left; font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--muted); font-weight: 500; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line);
+}
+.vuTable td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.vuTable tr:last-child td { border-bottom: none; }
+/* Dimmed, not coloured as an alarm: an unopened view is a fact about the recording,
+   not a fault. */
+.vuUnused td { opacity: 0.55; }
+.vu-used    { color: #7ee787; border-color: #7ee787; }
+.vu-glanced { color: var(--mid); border-color: var(--mid); }
+.vu-unused  { color: var(--muted); border-color: var(--line); }
+.vu-default { color: #4fd1ff; border-color: #4fd1ff; }

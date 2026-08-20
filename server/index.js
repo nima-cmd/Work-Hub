@@ -34,6 +34,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
+  recordViewVisit, getViewUsage,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
@@ -1117,6 +1118,30 @@ app.get('/api/ledger-notes', async (_req, res) => {
 })
 
 // Universal notes (Nima, 2026-07-20) — the generic Datapad-on-anything API.
+
+
+// ── View usage (Nima, 2026-08-20) ───────────────────────────────────────────
+// "can we track how much we use certain view … to give you a better idea of what is
+//  and what isn't being used". Telemetry about OURSELVES, so it must never be able to
+//  break a page: a failed record is logged and answered 200, because losing one visit
+//  count matters less than a view refusing to open.
+app.post('/api/view-usage', async (req, res) => {
+  try {
+    res.json(await recordViewVisit(req.body || {}))
+  } catch (e) {
+    console.error('view-usage:', e.message)
+    res.json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/view-usage', async (_req, res) => {
+  try {
+    res.json(await getViewUsage())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
 
 // ── THE TRACE (Nima, 2026-08-20) ────────────────────────────────────────────
 //

@@ -78,9 +78,9 @@ export default function Datapad({ onNavigate, handoffTrace, onHandoffTaken }) {
     <div className="datapad">
       <h2>Datapad</h2>
       <p className="hint">
-        Pick anything — an order, a fulfilment, an invoice, an email, a task — and see its whole
-        history, what the data relates it to, what someone attached by hand, and your notes. Every
-        reference is a hop.
+        Pick anything — an order, a confirmation, a fulfilment, an invoice, an email, a task — and
+        get its <b>data packet</b>: its whole history, what the data relates it to, what someone
+        attached by hand, and your notes. Every reference is a hop.
       </p>
 
       <div className="traceSearch">

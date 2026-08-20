@@ -95,6 +95,22 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: "health.js INTEGRATIONS 'Database (Neon)' label", shape: S.MISLABELLED.key,
+    pr: 141, date: '2026-08-20', status: 'fixed',
+    assumed: 'the name of the database could be written into the string that names it',
+    actually: 'it is a LITERAL, so it cannot follow a migration. The app moved to '
+      + 'DigitalOcean on 2026-08-18 and this row went on saying "Database (Neon)" — while '
+      + 'the transfer panel three inches below it correctly read "DigitalOcean — not '
+      + 'metered", because THAT title is derived from hostKind(). Now filled in from the '
+      + 'same derived DB_TARGET',
+    cost: 'none measured — but it is the FOURTH site of a bug the cutover already produced '
+      + 'three of (check:neon said "UP NEON" against DO, check:transfer headlined a cap '
+      + 'that does not exist, migrate announced it was altering NEON). Three were found by '
+      + 'deriving the target; this one survived because nobody re-read the connections list',
+    caught: 'reading a screenshot taken for something else entirely, and noticing the two '
+      + 'halves of one page disagreed about which database they were describing',
+  },
+  {
     field: "order_events IF_CREATED (\"Fulfilment created\", derived from fulfillments.if_date)",
     shape: S.MISLABELLED.key,
     pr: 138, date: '2026-08-20', status: 'open',
