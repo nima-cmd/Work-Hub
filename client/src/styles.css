@@ -1459,8 +1459,17 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .crewPage { max-width: 1200px; }
 
 /* Datapad — standalone note ledger */
-.datapad { max-width: 900px; }
-.datapadEntry { display: flex; gap: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+/* ⚠️ Third view with the same cap (Nima, 2026-08-20: "can we do something similar for
+   the datapad"). 900px of notes with the rest of a wide monitor empty. Same fix as the
+   Ledger and Tasks: drop the cap, let a section's entries fan out. */
+.datapad { max-width: none; }
+.datapadEntries {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 10px; align-items: start;
+}
+/* margin-bottom removed — the grid's gap owns the spacing now, and keeping both
+   double-spaced every row. */
+.datapadEntry { display: flex; gap: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
 .datapadBody { flex: 1; min-width: 0; }
 .datapadSection { margin-bottom: 22px; }
 .datapadSectionTitle { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
@@ -2886,3 +2895,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   .actPush { color: #6db3f2; border-color: #6db3f2; }
   .actPush:hover:not(:disabled) { background: #6db3f2; color: #0b1117; }
 }
+
+/* Attaching an external link (a Google Doc) to anything — see src/model/docLinkUrl.js. */
+.docLinkUrl { display: flex; gap: 6px; margin-top: 6px; }
+.docLinkUrl .qtyInput { flex: 1 1 auto; min-width: 0; }
+.docLinkErr { color: var(--warn, #e0912f); font-size: 11.5px; margin-top: 4px; }
+.docLinkOut { display: inline-flex; gap: 6px; align-items: baseline; text-decoration: none; color: inherit; min-width: 0; }
+.docLinkOut:hover .noteLink { text-decoration: underline; }
+.docLinkOut .noteLink { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

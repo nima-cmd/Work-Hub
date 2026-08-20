@@ -1,6 +1,7 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
 import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation, confirmDeparted } from './api.js'
+import { parseDocUrl, linkKey, KIND_LABEL } from '../../src/model/docLinkUrl.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { isDocNumber } from '../../src/model/netsuiteLinks.js'
 import { channelMeta } from '../../src/model/channels.js'
@@ -117,17 +118,49 @@ const LINK_TYPE_LABEL = Object.fromEntries(LINK_DOC_TYPES.map((t) => [t.value, t
 // doc/transaction to any other. Bidirectional, so a link added from an email
 // shows on the sales order and vice versa. `selfLabel` (e.g. an email's
 // subject) rides along as the link's label so the counterpart reads nicely.
+// A URL is unreadable at full length in a 340px card. Show host + the tail of the path.
+function prettyUrl(url) {
+  try {
+    const u = new URL(url)
+    const tail = u.pathname.replace(/\/(edit|view)$/, '').split('/').filter(Boolean).pop() || ''
+    return u.hostname.replace(/^www\./, '') + (tail ? ` · ${tail.slice(0, 12)}` : '')
+  } catch { return String(url).slice(0, 40) }
+}
+
 export function DocLinks({ docType, docNumber, selfLabel, compact = false }) {
   const [links, setLinks] = useState([])
   const [open, setOpen] = useState(compact)
   const [q, setQ] = useState('')
   const [results, setResults] = useState([])
   const [busy, setBusy] = useState(false)
+  const [urlDraft, setUrlDraft] = useState('')
+  const [urlErr, setUrlErr] = useState(null)
 
   useEffect(() => {
     if (!open || !docType || !docNumber) return
     fetchLinksFor(docType, docNumber).then(setLinks).catch(() => {})
   }, [open, docType, docNumber])
+
+  // Attach a Google Doc / Drive file by pasting its link (Nima, 2026-08-20: "link to any
+  // google docs if possible"). The far end is not a document in this system, so it is
+  // stored with a `url` and keyed on the Drive FILE ID — see src/model/docLinkUrl.js for
+  // why the raw URL is the wrong identity.
+  async function linkUrl(e) {
+    e.preventDefault(); e.stopPropagation()
+    const parsed = parseDocUrl(urlDraft)
+    if (!parsed.ok) { setUrlErr(parsed.error); return }
+    setUrlErr(null); setBusy(true)
+    try {
+      await addDocLink({
+        aType: docType, aNumber: docNumber,
+        bType: 'LINK', bNumber: linkKey(parsed),
+        label: KIND_LABEL[parsed.kind] || 'Link',
+        url: parsed.url,
+      })
+      setLinks(await fetchLinksFor(docType, docNumber))
+      setUrlDraft('')
+    } catch (err) { setUrlErr(err.message) } finally { setBusy(false) }
+  }
 
   // Search real document numbers as you type (debounced) — pick, don't type.
   useEffect(() => {
@@ -161,10 +194,20 @@ export function DocLinks({ docType, docNumber, selfLabel, compact = false }) {
     <div className="noteWidgetBody">
       {links.map((l) => (
         <div key={l.id} className="noteWidgetEntry">
-          <span>
-            <span className="linkChip">{LINK_TYPE_LABEL[l.otherType] || l.otherType}</span> {l.otherNumber}
-            {l.label && <span className="noteLink"> · {l.label}</span>}
-          </span>
+          {/* ⚠️ An external link must be CLICKABLE — a Google Doc you cannot open is a
+              string, not a link. Internal doc links stay plain text, since there is no
+              URL to go to. */}
+          {l.url ? (
+            <a href={l.url} target="_blank" rel="noreferrer" className="docLinkOut">
+              <span className="linkChip">{l.label || 'Link'}</span>
+              <span className="noteLink">{prettyUrl(l.url)}</span>
+            </a>
+          ) : (
+            <span>
+              <span className="linkChip">{LINK_TYPE_LABEL[l.otherType] || l.otherType}</span> {l.otherNumber}
+              {l.label && <span className="noteLink"> · {l.label}</span>}
+            </span>
+          )}
           <button type="button" className="linkBtn" onClick={() => remove(l.id)}>✕</button>
         </div>
       ))}
@@ -184,6 +227,13 @@ export function DocLinks({ docType, docNumber, selfLabel, compact = false }) {
           </div>
         )}
       </div>
+      <form className="docLinkUrl" onSubmit={linkUrl}>
+        <input className="qtyInput" value={urlDraft} disabled={busy}
+               placeholder="…or paste a Google Doc / Drive link"
+               onChange={(e) => { setUrlDraft(e.target.value); setUrlErr(null) }} />
+        <button type="submit" className="btnGhost" disabled={busy || !urlDraft.trim()}>Attach</button>
+      </form>
+      {urlErr && <div className="docLinkErr">{urlErr}</div>}
     </div>
   )
   if (compact) return <div className="noteWidget">{body}</div>
@@ -792,6 +842,11 @@ export function TaskItem({ t, expanded, onToggle, onRefresh, onNavigate, showOpe
               )}
               {showOpen && onNavigate && <button className="btnGhost" onClick={() => onNavigate('tasks')}>↗ open in Tasks</button>}
             </div>
+            {/* Notes on a task (Nima, 2026-08-20: "within task the ability to take
+                notes"). NoteWidget's own comment always said it was "meant to drop onto
+                any card that has a doc type and number … task" — it had simply never
+                been dropped on one. Everything written here lands in the Datapad. */}
+            <NoteWidget docType="TASK" docNumber={String(t.id)} />
             <DocLinks docType="TASK" docNumber={String(t.id)} selfLabel={t.subject} />
           </div>
         )}

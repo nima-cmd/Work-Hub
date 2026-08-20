@@ -54,6 +54,9 @@ export default function Datapad({ onNavigate }) {
       {!!emails.length && (
         <div className="datapadSection">
           <div className="datapadSectionTitle">Transmissions</div>
+          {/* A grid, so notes fan out across the width instead of queueing down a
+              900px column (Nima, 2026-08-20). Same treatment as the Ledger and Tasks. */}
+          <div className="datapadEntries">
           {emails.map((n) => {
             const img = imagesFor(n.characterId)[0]
             return (
@@ -80,12 +83,14 @@ export default function Datapad({ onNavigate }) {
               </div>
             )
           })}
+          </div>
         </div>
       )}
 
       {Object.entries(grouped).map(([docType, notes]) => (
         <div key={docType} className="datapadSection">
           <div className="datapadSectionTitle">{SECTION_LABEL[docType] || docType}</div>
+          <div className="datapadEntries">
           {notes.map((n) => (
             <div key={n.id} className="datapadEntry">
               <div className="datapadBody">
@@ -104,6 +109,7 @@ export default function Datapad({ onNavigate }) {
               </div>
             </div>
           ))}
+          </div>
         </div>
       ))}
     </div>

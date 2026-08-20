@@ -257,10 +257,10 @@ export async function fetchLinksFor(docType, docNumber) {
   return res.json()
 }
 
-export async function addDocLink({ aType, aNumber, bType, bNumber, label }) {
+export async function addDocLink({ aType, aNumber, bType, bNumber, label, url }) {
   const res = await fetch('/api/links', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ aType, aNumber, bType, bNumber, label }),
+    body: JSON.stringify({ aType, aNumber, bType, bNumber, label, url }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()

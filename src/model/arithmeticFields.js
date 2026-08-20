@@ -167,6 +167,21 @@ export function columnPairs(columns = []) {
 // preceded `transaction.shipdate` driving 51 flags.
 export const EXPECTED_DERIVED = [
   {
+    table: 'edi_fulfillment_pack', column: 'packed_units', basis: 'cartons', kind: 'derived',
+    // ⚠️ AN ARTEFACT OF THIN DATA, NOT A DERIVATION — measured 2026-08-20 the moment it
+    // first appeared. 53 of the 54 rows are cartons=0 AND packed_units=0, so
+    // "packed_units = cartons + 0" holds on 98% of rows only because BOTH SIDES ARE
+    // ZERO. The single row with real data is cartons=3, packed_units=40 — no
+    // relationship at all. Those 53 are unshipped fulfilments with nothing packed yet
+    // (mostly boutique, which never get EDI cartons), so the zeros are correct.
+    //
+    // Recorded rather than suppressed, because the shape it will take when it becomes
+    // interesting is the OPPOSITE: if this stops being reported, real cartons have been
+    // packed and the table finally has data. Same family as ups_shipment_cost.store_id,
+    // where the truth was that insurance_cost is 0 on every row.
+    why: '53 of 54 rows are (0,0) — unpacked fulfilments, so both sides are zero, not related',
+  },
+  {
     table: 'orders', column: 'ship_date', basis: 'start_date', kind: 'derived',
     // The reason this whole module exists. Already gated at the one place the SO date
     // enters shipWindow (PR #94), so it is a recorded fact rather than a discovery —
