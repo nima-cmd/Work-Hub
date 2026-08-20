@@ -612,6 +612,31 @@ export async function fetchOrderEvents(opts = {}) {
   return res.json()
 }
 
+// ── The trace (Nima, 2026-08-20) ────────────────────────────────────────────
+// One subject's whole story: history · related · linked · notes.
+export async function fetchTrace(docType, docNumber) {
+  const res = await fetch(`/api/trace?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`)
+  // A 400 here means the subject itself is wrong (an untraceable type, a blank
+  // number). Surfacing the server's sentence beats "API 400" — it names which.
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `API ${res.status}`)
+  return res.json()
+}
+
+// The Datapad's front door: recent activity, or notes as a filter over it.
+export async function fetchTraceRecent({ limit = 40, notesOnly = false } = {}) {
+  const qs = new URLSearchParams({ limit: String(limit) })
+  if (notesOnly) qs.set('notes', '1')
+  const res = await fetch(`/api/trace/recent?${qs}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function searchTraceSubjects(q) {
+  const res = await fetch(`/api/trace/search?q=${encodeURIComponent(q)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // Universal notes — the note-on-anything system (Nima, 2026-07-20).
 export async function fetchNotesFor(docType, docNumber) {
   const res = await fetch(`/api/notes?docType=${encodeURIComponent(docType)}&docNumber=${encodeURIComponent(docNumber)}`)

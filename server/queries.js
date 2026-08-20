@@ -34,6 +34,11 @@ import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { computeAffection } from '../src/model/affection.js'
 import { SPINE_LABEL, timeline, isOurInvoiceNumber, invNumberFrom810 } from '../src/model/orderEvents.js'
+import {
+  TRACE_TYPES, normalizeRef, buildTrace, orderCard, fulfillmentCards, invoiceCards,
+  taskCards, emailCards,
+} from '../src/model/trace.js'
+import { isoDate } from '../src/model/upsRates.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -931,6 +936,463 @@ export async function getPoLedger(poNumber) {
 
 // A window of the ledger, newest first — the Calendar's feed and the general
 // search. `q` matches a document number so "IF7413" finds its whole trail.
+
+// ── THE TRACE (Nima, 2026-08-20) ────────────────────────────────────────────
+//
+// "we want in every case if possible when looking at an item to get its full
+//  history. whether it be an email we want to see the link, a fulfilment the
+//  related invoice, SO. we were imagining something interconnected so we can hop
+//  from one spot to another."
+//
+// One endpoint, five subjects (SO · IF · INV · EMAIL · TASK), one shape. The
+// rules about what may appear where live in src/model/trace.js, which is pure and
+// tested; this function's whole job is fetching the rows it shapes.
+//
+// ⚠️ RELATED is derived and LINKED is human, and they are gathered from different
+// tables into different arrays on purpose — see trace.js rule 1.
+//
+// ⚠️ HISTORY for an IF or an invoice is the WHOLE order's spine, not just the
+// events keyed to that document, because an IF's own events ("marked shipped")
+// are meaningless without the order's ("imported", "invoiced"). Every row names
+// its own document and carries `own`, so the view can emphasize the subject's
+// events without pretending the others belong to it. An IF whose SO we do not
+// have gets only its own events rather than an empty timeline.
+
+const traceEvents = async (docType, docNumber) => {
+  const { rows } = await pool.query(
+    `SELECT ${LEDGER_FIELDS} FROM order_events WHERE doc_type = $1 AND doc_number = $2`,
+    [docType, docNumber],
+  )
+  return timeline(decorate(rows))
+}
+
+// Tasks that name a NetSuite document — derived, so they belong in RELATED.
+const tasksNaming = async (docNumber) => {
+  const { rows } = await pool.query(
+    `SELECT id, subject, status, created_at AS "createdAt", completed_at AS "completedAt"
+       FROM quest_tasks WHERE netsuite_doc_number = $1 ORDER BY created_at DESC`,
+    [docNumber],
+  )
+  return rows
+}
+
+// Notes on a subject. For an EMAIL this also carries the LEGACY quest_emails.note
+// column, which is where all 10 existing notes actually live — the `notes` table
+// has none. Read, never migrated: two copies of one note is a bug this repo has
+// already paid for (see the datapad-trace-plan assumption).
+async function traceNotes(docType, docNumber) {
+  const rows = await getNotesFor(docType, docNumber)
+  if (docType !== 'EMAIL') return rows
+  const { rows: legacy } = await pool.query(
+    `SELECT ('email-' || id) AS id, 'EMAIL' AS "docType", id AS "docNumber", note,
+            NULL AS "linkedDocType", NULL AS "linkedDocNumber", received_at AS "createdAt"
+       FROM quest_emails WHERE id = $1 AND note IS NOT NULL AND note <> ''`,
+    [docNumber],
+  )
+  // Legacy notes are not deletable through /api/notes (no row there to delete),
+  // so they are marked and the view withholds the remove button rather than
+  // offering an action that silently does nothing.
+  return [...rows, ...legacy.map((r) => ({ ...r, legacy: true }))]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+}
+
+export async function getTrace(docType, docNumber) {
+  const ref = normalizeRef(docType, docNumber)
+  const [linkRows, mailRows, notes] = await Promise.all([
+    fetchLinksFor(ref.docType, ref.docNumber),
+    fetchEmailLinks(ref.docType, ref.docNumber),
+    traceNotes(ref.docType, ref.docNumber),
+  ])
+  const common = { linked: { docLinks: linkRows, emailLinks: mailRows }, notes }
+
+  if (ref.docType === 'EMAIL') return buildTrace({ ...common, ...(await emailTrace(ref)) })
+  if (ref.docType === 'TASK') return buildTrace({ ...common, ...(await taskTrace(ref)) })
+  return buildTrace({ ...common, ...(await orderSideTrace(ref)) })
+}
+
+// SO · IF · INV — all three hang off one sales order, so they share one fetch and
+// differ only in which row is the subject.
+async function orderSideTrace(ref) {
+  const so = await soNumberFor(ref)
+  if (!so) {
+    // No order to anchor to. Say what the subject is from its own row and give it
+    // its own events; a missing parent is a fact, not a reason to render nothing.
+    return { subject: await subjectHeader(ref, null), history: await traceEvents(ref.docType, ref.docNumber), related: [] }
+  }
+
+  const [{ rows: orders }, { rows: ifs }, { rows: invs }, ledger, tasks] = await Promise.all([
+    pool.query(
+      `SELECT so_number AS "soNumber", customer, stage, source, location, po_number AS "poNumber",
+              is_ats AS "isAts", so_status AS "soStatus", shipping_status AS "shippingStatus",
+              approval_status AS "approvalStatus", billing_status AS "billingStatus",
+              start_date AS "startDate", ship_date AS "shipDate", cancel_date AS "cancelDate"
+         FROM orders WHERE so_number = $1`, [so]),
+    pool.query(
+      `SELECT if_number AS "ifNumber", so_number AS "soNumber", status, packed_status AS "packedStatus",
+              invoice_number AS "invoiceNumber", tracking_numbers AS "trackingNumbers",
+              if_date AS "ifDate", actual_ship_date AS "actualShipDate"
+         FROM fulfillments WHERE so_number = $1 ORDER BY if_number`, [so]),
+    pool.query(
+      `SELECT inv_number AS "invNumber", so_number AS "soNumber", status,
+              shipping_status AS "shippingStatus", amount_remaining AS "amountRemaining", ship_date AS "shipDate"
+         FROM invoices WHERE so_number = $1 ORDER BY inv_number`, [so]),
+    getOrderLedger(so),
+    tasksNaming(ref.docNumber),
+  ])
+
+  const order = orders[0] || null
+  const related = [
+    ...(ref.docType === 'SO' ? [] : [orderCard(order)]),
+    ...fulfillmentCards(ifs, invs),
+    ...invoiceCards(invs),
+    ...taskCards(tasks),
+  ]
+
+  // The PO the customer sent, when there is one — a reference, so it is a mention
+  // unless it is a type we can trace (it is not, yet).
+  const history = ledger.events.map((e) => ({
+    ...e,
+    own: e.docType === ref.docType && String(e.docNumber) === ref.docNumber,
+  }))
+
+  return { subject: await subjectHeader(ref, { order, fulfillments: ifs, invoices: invs }), history, related }
+}
+
+// Which sales order does this subject belong to? The SO IS one; an IF and an
+// invoice each carry theirs. An invoice's so_number is ON DELETE SET NULL, so it
+// can legitimately be absent.
+async function soNumberFor(ref) {
+  if (ref.docType === 'SO') return ref.docNumber
+  const table = ref.docType === 'IF' ? 'fulfillments' : 'invoices'
+  const key = ref.docType === 'IF' ? 'if_number' : 'inv_number'
+  const { rows } = await pool.query(`SELECT so_number FROM ${table} WHERE ${key} = $1`, [ref.docNumber])
+  return rows[0]?.so_number || null
+}
+
+// The header line: what this thing IS, in the words of its own row. Every field
+// here is read from the record — nothing is computed from another field, which is
+// the fieldAssumptions.js rule applied to a header that reads as authoritative.
+async function subjectHeader(ref, ctx) {
+  const base = { docType: ref.docType, docNumber: ref.docNumber }
+  const order = ctx?.order || null
+  if (ref.docType === 'SO') {
+    if (!order) return { ...base, title: null, missing: true, facts: [] }
+    return {
+      ...base,
+      title: order.customer,
+      facts: [
+        order.source && { k: 'channel', v: order.source },
+        order.stage && { k: 'stage', v: STAGE_LABEL[order.stage] || order.stage },
+        order.location && { k: 'location', v: order.location },
+        order.poNumber && { k: 'their PO', v: order.poNumber },
+        order.isAts === false && { k: 'presold', v: 'non-ATS' },
+        order.cancelDate && { k: 'cancel after', v: isoDate(order.cancelDate) },
+      ].filter(Boolean),
+    }
+  }
+  if (ref.docType === 'IF') {
+    const f = (ctx?.fulfillments || []).find((x) => x.ifNumber === ref.docNumber)
+    if (!f) return { ...base, title: order?.customer || null, missing: !order, facts: [] }
+    return {
+      ...base,
+      title: order?.customer || f.soNumber,
+      facts: [
+        f.status && { k: 'status', v: f.status },
+        f.packedStatus && { k: 'packed', v: f.packedStatus },
+        // ⚠️ `if_date` IS NOT A CREATION DATE once the IF ships, so this header does
+        // not call it one. NetSuite rewrites the IF's transaction date to the ship
+        // date — measured 204 of 204 shipped fulfilments, 0 of 76 unshipped — and
+        // Nima has confirmed that IS the intended meaning (the IF transaction date
+        // is the ship date, authoritative). The column is right; a header calling it
+        // "created" would be the thing that is wrong. Suppressed entirely when it
+        // duplicates the ship date, so the header never shows one fact twice.
+        // See fieldAssumptions.js — the same rewrite leaves 83 IF_CREATED events
+        // carrying a ship date under a "Fulfilment created" label.
+        f.ifDate && isoDate(f.ifDate) !== isoDate(f.actualShipDate) && { k: 'IF date', v: isoDate(f.ifDate) },
+        f.actualShipDate && { k: 'shipped', v: isoDate(f.actualShipDate) },
+      ].filter(Boolean),
+    }
+  }
+  const i = (ctx?.invoices || []).find((x) => x.invNumber === ref.docNumber)
+  if (!i) return { ...base, title: order?.customer || null, missing: !order, facts: [] }
+  return {
+    ...base,
+    title: order?.customer || i.soNumber,
+    facts: [
+      i.status && { k: 'status', v: i.status },
+      i.shippingStatus && { k: 'shipping', v: i.shippingStatus },
+      Number(i.amountRemaining) > 0 && { k: 'open', v: `$${Number(i.amountRemaining).toLocaleString('en-US', { maximumFractionDigits: 0 })}` },
+      i.shipDate && { k: 'ship date', v: isoDate(i.shipDate) },
+    ].filter(Boolean),
+  }
+}
+
+// An email's trace: the message, the task it became, and whatever that task names.
+async function emailTrace(ref) {
+  const { rows } = await pool.query(
+    `SELECT e.id, e.thread_id AS "threadId", e.subject, e.snippet, e.from_name AS "fromName",
+            e.from_address AS "fromAddress", e.received_at AS "receivedAt", e.character_id AS "characterId",
+            t.id AS "taskId", t.subject AS "taskSubject", t.status AS "taskStatus",
+            t.created_at AS "taskCreatedAt", t.completed_at AS "taskCompletedAt",
+            t.netsuite_doc_type AS "nsType", t.netsuite_doc_number AS "nsNumber"
+       FROM quest_emails e LEFT JOIN quest_tasks t ON t.email_id = e.id
+      WHERE e.id = $1`,
+    [ref.docNumber],
+  )
+  const e = rows[0]
+  if (!e) return { subject: { ...ref, title: null, missing: true, facts: [] }, history: [], related: [] }
+
+  const history = [{
+    id: `mail-${e.id}`, eventType: 'MAIL_RECEIVED', docType: 'EMAIL', docNumber: e.id, soNumber: null,
+    note: e.snippet || null, source: 'gmail', occurredAt: e.receivedAt, label: 'Received', observed: true, own: true,
+  }]
+  if (e.taskId) {
+    history.push({
+      id: `task-${e.taskId}-created`, eventType: 'TASK_CREATED', docType: 'TASK', docNumber: String(e.taskId),
+      soNumber: null, note: e.taskSubject, source: 'task', occurredAt: e.taskCreatedAt, label: 'Became a task', observed: true, own: false,
+    })
+    if (e.taskCompletedAt) {
+      history.push({
+        id: `task-${e.taskId}-done`, eventType: TASK_DONE, docType: 'TASK', docNumber: String(e.taskId),
+        soNumber: null, note: e.taskSubject, source: 'task', occurredAt: e.taskCompletedAt, label: 'Task done', observed: true, own: false,
+      })
+    }
+  }
+
+  const related = []
+  if (e.taskId) {
+    related.push(...taskCards([{ id: e.taskId, subject: e.taskSubject, status: e.taskStatus, createdAt: e.taskCreatedAt, completedAt: e.taskCompletedAt }]))
+  }
+  // The NetSuite document the task names — a real hop only when we hold it.
+  if (e.nsNumber) related.push(...(await docCardFor(e.nsType, e.nsNumber, `task ${e.taskId}`)))
+
+  return {
+    subject: {
+      docType: 'EMAIL', docNumber: e.id, title: e.subject,
+      facts: [
+        (e.fromName || e.fromAddress) && { k: 'from', v: e.fromName || e.fromAddress },
+        e.receivedAt && { k: 'received', v: isoDate(e.receivedAt) },
+      ].filter(Boolean),
+      gmailUrl: `${GMAIL_BASE}${e.threadId || e.id}`,
+      characterId: e.characterId || null,
+    },
+    history: history.sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt)),
+    related,
+  }
+}
+
+// A task's trace: its own activity log, its source email, and the document it names.
+async function taskTrace(ref) {
+  const id = Number(ref.docNumber)
+  if (!Number.isFinite(id)) return { subject: { ...ref, title: null, missing: true, facts: [] }, history: [], related: [] }
+
+  const [{ rows: tasks }, { rows: acts }] = await Promise.all([
+    pool.query(
+      `SELECT t.id, t.subject, t.snippet, t.status, t.urgency, t.needs_type AS "needsType", t.needs_note AS "needsNote",
+              t.from_name AS "fromName", t.from_address AS "fromAddress", t.character_id AS "characterId",
+              t.created_at AS "createdAt", t.completed_at AS "completedAt",
+              t.netsuite_doc_type AS "nsType", t.netsuite_doc_number AS "nsNumber",
+              t.email_id AS "emailId", e.subject AS "emailSubject", e.received_at AS "emailReceivedAt",
+              e.from_name AS "emailFromName", e.thread_id AS "threadId"
+         FROM quest_tasks t LEFT JOIN quest_emails e ON e.id = t.email_id
+        WHERE t.id = $1`, [id]),
+    pool.query(
+      `SELECT id, kind, note, created_at AS "createdAt" FROM quest_task_activity
+        WHERE task_id = $1 ORDER BY created_at DESC`, [id]),
+  ])
+  const t = tasks[0]
+  if (!t) return { subject: { ...ref, title: null, missing: true, facts: [] }, history: [], related: [] }
+
+  // ⚠️ The activity log records when a ROW WAS WRITTEN; completed_at is when the
+  // task was actually finished (the same distinction the Ledger makes). Both are
+  // shown, each labelled as what it is, and neither is used to date the other.
+  const ACT_LABEL = {
+    created: 'Task created', needs_set: 'What it needs, set', urgency_set: 'Urgency set',
+    done: 'Marked done', reopened: 'Reopened', reply_detected: 'A reply arrived',
+  }
+  const history = acts
+    // ⚠️ The activity log's own kind='done' row is DROPPED when completed_at
+    // exists: they are the same fact, and the Ledger already ruled which
+    // timestamp is honest (completed_at is when the task was finished; the
+    // activity row is when the row was written). Rendering both put "Marked
+    // done" and "Completed" on the timeline minutes apart, which reads as two
+    // events where there was one — the never-lump rule in reverse.
+    .filter((a) => !(a.kind === 'done' && t.completedAt))
+    .map((a) => ({
+      id: `act-${a.id}`, eventType: `TASK_${String(a.kind || '').toUpperCase()}`, docType: 'TASK', docNumber: String(id),
+      soNumber: null, note: a.note || null, source: 'task', occurredAt: a.createdAt,
+      label: ACT_LABEL[a.kind] || a.kind || 'Activity', observed: true, own: true,
+    }))
+  if (t.completedAt) {
+    history.push({
+      id: `task-${id}-done`, eventType: TASK_DONE, docType: 'TASK', docNumber: String(id), soNumber: null,
+      note: t.subject, source: 'task', occurredAt: t.completedAt, label: 'Completed', observed: true, own: true,
+    })
+  }
+  if (t.emailReceivedAt) {
+    history.push({
+      id: `mail-${t.emailId}`, eventType: 'MAIL_RECEIVED', docType: 'EMAIL', docNumber: t.emailId, soNumber: null,
+      note: t.emailSubject, source: 'gmail', occurredAt: t.emailReceivedAt, label: 'Mail arrived', observed: true, own: false,
+    })
+  }
+
+  const related = []
+  if (t.emailId) {
+    related.push(...emailCards([{ id: t.emailId, subject: t.emailSubject, fromName: t.emailFromName, receivedAt: t.emailReceivedAt }]))
+  }
+  if (t.nsNumber) related.push(...(await docCardFor(t.nsType, t.nsNumber, `task ${id}`)))
+
+  return {
+    subject: {
+      docType: 'TASK', docNumber: String(id), title: t.subject,
+      facts: [
+        { k: 'status', v: t.status === 'done' ? 'done' : 'open' },
+        (t.fromName || t.fromAddress) && { k: 'from', v: t.fromName || t.fromAddress },
+        t.urgency && { k: 'urgency', v: t.urgency },
+        t.needsType && t.needsType !== 'none' && { k: 'needs', v: t.needsType },
+        t.createdAt && { k: 'created', v: isoDate(t.createdAt) },
+        t.completedAt && { k: 'completed', v: isoDate(t.completedAt) },
+      ].filter(Boolean),
+      characterId: t.characterId || null,
+      snippet: t.snippet || null,
+    },
+    history: history.sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt)),
+    related,
+  }
+}
+
+// A card for a NetSuite document NAMED somewhere else. Checks the document
+// actually exists here before offering a hop — trace.js rule 2: a reference is
+// not a record, and a hop that dead-ends is worse than a mention that explains.
+async function docCardFor(nsType, nsNumber, namedOn) {
+  const type = String(nsType || '').trim().toUpperCase()
+  const number = String(nsNumber).trim()
+  const table = { SO: ['orders', 'so_number'], IF: ['fulfillments', 'if_number'], INV: ['invoices', 'inv_number'] }[type]
+  if (!table) {
+    // A type this trace cannot render (PO, IR, IT, TO). Named honestly, not linked.
+    return [{ docType: type || 'DOC', docNumber: number, detail: `named on ${namedOn}`, tone: 'muted', hoppable: false, missing: true }]
+  }
+  const { rows } = await pool.query(`SELECT 1 FROM ${table[0]} WHERE ${table[1]} = $1`, [number])
+  if (!rows.length) {
+    return [{ docType: type, docNumber: number, detail: `named on ${namedOn} — not in the system`, tone: 'muted', hoppable: false, missing: true }]
+  }
+  if (type === 'SO') {
+    const { rows: o } = await pool.query('SELECT so_number AS "soNumber", customer, stage FROM orders WHERE so_number = $1', [number])
+    return [orderCard(o[0])]
+  }
+  if (type === 'IF') {
+    const { rows: f } = await pool.query(
+      `SELECT if_number AS "ifNumber", status, packed_status AS "packedStatus", invoice_number AS "invoiceNumber",
+              tracking_numbers AS "trackingNumbers" FROM fulfillments WHERE if_number = $1`, [number])
+    // knownInvoices deliberately empty: we have not looked the invoice up here, so
+    // its number stays a mention rather than being asserted as a record.
+    return fulfillmentCards(f, [])
+  }
+  const { rows: i } = await pool.query(
+    'SELECT inv_number AS "invNumber", status, amount_remaining AS "amountRemaining" FROM invoices WHERE inv_number = $1', [number])
+  return invoiceCards(i)
+}
+
+// ── The landing state ───────────────────────────────────────────────────────
+//
+// A trace surface needs a subject, and NOTES cannot be the index: there are 10 in
+// the whole database and all of them are on emails. So the front door is RECENT
+// ACTIVITY — the ledger already knows it — with notes as one filter over it.
+// Raised with Nima 2026-08-20; he did not object.
+export async function getTraceRecent({ limit = 40, withNotesOnly = false } = {}) {
+  const cap = Math.min(Number(limit) || 40, 200)
+  if (withNotesOnly) {
+    const rows = await getAllNotes()
+    // One entry per SUBJECT, newest note first — the Datapad's old flat list showed
+    // one row per note, which is a list of notes, not a way into a trace.
+    const seen = new Set()
+    const out = []
+    for (const n of rows) {
+      const key = `${n.docType}:${n.docNumber}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ docType: n.docType, docNumber: String(n.docNumber), at: n.createdAt, why: n.note, kind: 'note' })
+      if (out.length >= cap) break
+    }
+    return out
+  }
+
+  const events = await getLedger({ limit: cap * 6 })
+  const seen = new Set()
+  const out = []
+  for (const e of events) {
+    // Only types the trace can actually be about — a recent-activity list whose
+    // rows do not open is a list of dead ends.
+    const type = e.docType === 'TASK' ? 'TASK' : e.docType
+    if (!TRACE_TYPES.includes(type)) continue
+    // A completed task's ledger row carries the NetSuite doc it names in
+    // docNumber, not the task id, so it cannot address a TASK trace. Send those
+    // to the document they name instead of minting a subject that does not exist.
+    const number = e.docType === 'TASK' ? (e.docNumber || null) : e.docNumber
+    if (!number) continue
+    const subjType = e.docType === 'TASK' ? guessType(number) : type
+    if (!subjType) continue
+    const key = `${subjType}:${number}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ docType: subjType, docNumber: String(number), at: e.occurredAt, why: e.label || e.eventType, kind: 'event' })
+    if (out.length >= cap) break
+  }
+  return out
+}
+
+// The app's document numbers are self-describing by prefix (SO/IF/INV) — the same
+// convention netsuiteLinks.js relies on. Anything else gets no guess.
+const guessType = (n) => {
+  const s = String(n || '').toUpperCase()
+  if (/^SO\d/.test(s)) return 'SO'
+  if (/^IF\d/.test(s)) return 'IF'
+  if (/^INV/.test(s)) return 'INV'
+  return null
+}
+
+// Pick a subject. searchDocNumbers already searches every document number the app
+// knows, but it does not reach emails or tasks and it returns types the trace
+// cannot render — so this narrows to traceable types and adds the other two.
+export async function searchTraceSubjects(q) {
+  const term = String(q || '').trim()
+  if (term.length < 2) return []
+  const like = `%${term}%`
+  const [docs, { rows: named }, { rows: tasks }, { rows: mails }] = await Promise.all([
+    term.length >= 3 ? searchDocNumbers(term) : Promise.resolve([]),
+    // ⚠️ searchDocNumbers matches the NUMBER only — "maui" found nothing, and on a
+    // trace surface you type the customer, not SO12296. Added here rather than
+    // widening searchDocNumbers, whose other caller is doc-linking, where matching
+    // a customer name would offer the wrong document to attach.
+    pool.query(
+      `SELECT so_number AS "soNumber", customer, stage FROM orders
+        WHERE customer ILIKE $1 ORDER BY last_seen DESC NULLS LAST LIMIT 10`, [like]),
+    pool.query(
+      `SELECT id, subject, status, from_name AS "fromName", created_at AS "createdAt"
+         FROM quest_tasks WHERE subject ILIKE $1 OR netsuite_doc_number ILIKE $1
+         ORDER BY created_at DESC LIMIT 8`, [like]),
+    pool.query(
+      `SELECT id, subject, from_name AS "fromName", received_at AS "receivedAt"
+         FROM quest_emails WHERE subject ILIKE $1 OR from_name ILIKE $1 OR from_address ILIKE $1
+         ORDER BY received_at DESC LIMIT 8`, [like]),
+  ])
+  const out = [
+    ...docs.filter((d) => TRACE_TYPES.includes(d.type))
+      .map((d) => ({ docType: d.type, docNumber: d.number, title: d.label || null })),
+    ...named.map((o) => ({ docType: 'SO', docNumber: o.soNumber, title: o.customer, detail: STAGE_LABEL[o.stage] || o.stage })),
+    ...tasks.map((t) => ({ docType: 'TASK', docNumber: String(t.id), title: t.subject, detail: t.status })),
+    ...mails.map((m) => ({ docType: 'EMAIL', docNumber: m.id, title: m.subject, detail: m.fromName })),
+  ]
+  // A number search and a customer search can both surface the same SO.
+  const seen = new Set()
+  return out.filter((r) => {
+    const key = `${r.docType}:${r.docNumber}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 export async function getLedger({ from = null, to = null, type = null, docType = null, q = null, limit = 500 } = {}) {
   const params = []
   const where = []

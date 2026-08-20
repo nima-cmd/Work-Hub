@@ -2909,3 +2909,145 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .docLinkOut { display: inline-flex; gap: 6px; align-items: baseline; text-decoration: none; color: inherit; min-width: 0; }
 .docLinkOut:hover .noteLink { text-decoration: underline; }
 .docLinkOut .noteLink { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── The trace surface (Nima, 2026-08-20) ──────────────────────────────────
+   Rendered full-page in the Datapad and — next — in a right-hand drawer over
+   any other view. One component, so these rules serve both; .traceCompact is
+   the drawer's only difference and it changes spacing, never facts. */
+
+/* Tones per document type, from src/model/trace.js. Named, not hard-coded at
+   the call site, so one document type reads the same colour everywhere. */
+.tone-arrive { --tone: #58c7e0; }   /* sales order */
+.tone-hands  { --tone: #d9822b; }   /* fulfilment — in our hands */
+.tone-money  { --tone: #7ee787; }   /* invoice */
+.tone-go     { --tone: #a371f7; }   /* task */
+.tone-edi    { --tone: #e3b341; }   /* transmission */
+.tone-holo   { --tone: #4fd1ff; }   /* tracking */
+.tone-muted  { --tone: #8b949e; }
+
+.traceSearch { position: relative; display: flex; align-items: center; gap: 8px; margin: 4px 0 18px; }
+.traceSearchInput {
+  flex: 1; max-width: 560px; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px; font-size: 13px;
+}
+.traceSearchInput:focus { outline: none; border-color: var(--accent); }
+.traceHits {
+  position: absolute; top: 100%; left: 0; z-index: 20; width: min(560px, 100%);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  margin-top: 4px; max-height: 340px; overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.traceHit {
+  display: flex; align-items: baseline; gap: 9px; width: 100%; text-align: left;
+  background: transparent; border: none; border-bottom: 1px solid var(--line);
+  color: var(--text); padding: 8px 11px; cursor: pointer; font-size: 13px;
+}
+.traceHit:last-child { border-bottom: none; }
+.traceHit:hover { background: var(--panel2); }
+.traceHitEmpty { color: var(--muted); cursor: default; }
+.traceHitType { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; min-width: 40px; }
+.traceHitNumber { font-weight: 600; }
+.traceHitTitle { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.traceHitDetail { margin-left: auto; font-size: 11px; color: var(--muted); flex: none; }
+
+.traceLandingHead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.traceFilters { display: flex; gap: 0; }
+.btnOn { color: var(--text); border-color: var(--accent); background: #d9a4411f; }
+
+.traceTrail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; font-size: 12px; }
+.traceTrailSep { color: var(--muted); margin: 0 4px; }
+.traceTrailHop { background: transparent; border: none; color: #4fd1ff; cursor: pointer; padding: 0; font-size: 12px; }
+.traceTrailHop:hover { color: #8fe3ff; text-decoration: underline; }
+.traceTrailHere { color: var(--muted); }
+
+.traceHead {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone, var(--line)); border-radius: 0 8px 8px 0;
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.traceHeadBody { flex: 1; min-width: 0; }
+.traceHeadTop { display: flex; align-items: baseline; gap: 9px; }
+.traceHeadType { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--tone, var(--muted)); }
+.traceHeadNumber { font-size: 18px; font-weight: 700; }
+.traceHeadTitle { font-size: 15px; margin-top: 2px; }
+.traceHeadMissing { color: var(--mid); font-size: 12px; margin-top: 4px; }
+.traceFacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.traceFact {
+  font-size: 11px; padding: 3px 8px; border-radius: 6px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+}
+.traceFactK { color: var(--muted); margin-right: 4px; }
+.traceSnippet { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.traceHeadActions { display: flex; align-items: center; gap: 0; flex: none; }
+
+/* The four sections fan out across the width instead of queueing down a column
+   — the same treatment the Ledger, Tasks and the old Datapad list got. */
+.traceBody { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; align-items: start; }
+.traceCompact .traceBody { grid-template-columns: 1fr; gap: 14px; }
+.traceSection { min-width: 0; }
+.traceSectionTitle {
+  font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: 12px; color: var(--muted); margin: 0 0 8px;
+}
+.traceSectionHint { text-transform: none; letter-spacing: 0; color: var(--line); margin-left: 6px; }
+.traceSection .empty { padding: 8px 0; font-size: 12px; }
+
+.traceTimeline { list-style: none; margin: 0; padding: 0; }
+.traceEvent {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.traceEvent:last-child { border-bottom: none; }
+.traceEventDate { color: var(--muted); font-size: 11px; min-width: 52px; flex: none; }
+/* The subject's OWN events are emphasized; a sibling document's are shown dimmer
+   and labelled with the document they belong to, so nothing is attributed to the
+   subject that isn't its. */
+.traceEvent { color: var(--muted); }
+.traceEventOwn { color: var(--text); }
+.traceEventOwn .traceEventLabel { font-weight: 600; }
+.traceEventOn { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; }
+.traceEventNote { font-size: 11px; color: var(--muted); flex-basis: 100%; padding-left: 61px; }
+
+.traceCards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; align-items: start; }
+.traceCard {
+  display: block; width: 100%; text-align: left;
+  background: var(--panel2); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone, var(--line)); border-radius: 0 7px 7px 0;
+  padding: 8px 10px; color: var(--text); font: inherit;
+}
+.traceCardHop { cursor: pointer; }
+.traceCardHop:hover { background: var(--panel); border-color: var(--tone, var(--accent)); }
+/* A named-but-absent document. Dashed, because it is a mention, not a link —
+   the border says "this is a claim someone else's record makes". */
+.traceCardMissing { border-style: dashed; border-left-style: solid; opacity: 0.75; }
+.traceCardTop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.traceCardTop b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.traceCardType { font-size: 10px; color: var(--muted); letter-spacing: 0.05em; flex: none; }
+.traceCardTitle { font-size: 12px; margin-top: 3px; }
+.traceCardDetail { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.traceCardWhen { font-size: 10px; color: var(--line); margin-top: 4px; }
+
+.traceLinks { display: flex; flex-direction: column; gap: 7px; }
+.traceLink {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 7px;
+  padding: 8px 10px; color: var(--text); font: inherit; cursor: pointer; text-decoration: none;
+}
+.traceLink:hover { background: var(--panel); border-color: var(--accent); }
+.traceLinkGlyph { color: #4fd1ff; flex: none; }
+.traceLinkBody { display: flex; flex-direction: column; min-width: 0; }
+.traceLinkLabel { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.traceLinkHost { font-size: 10px; color: var(--muted); }
+
+.traceNoteList { display: flex; flex-direction: column; gap: 7px; margin-bottom: 9px; }
+.traceNote { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; }
+.traceNoteText { margin: 0; font-size: 13px; }
+.traceNoteFoot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.traceNoteLegacy { font-size: 10px; color: var(--muted); border: 1px dashed var(--line); border-radius: 6px; padding: 1px 5px; }
+.traceNoteCompose { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.traceNoteInput {
+  width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 8px 10px; font: inherit; font-size: 13px; resize: vertical;
+}
+.traceNoteInput:focus { outline: none; border-color: var(--accent); }
