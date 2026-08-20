@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchLedger, fetchOrderLedger } from '../api.js'
-import { SPINE, SPINE_ORDER } from '../../../src/model/orderEvents.js'
+import { SPINE, SPINE_ORDER, TASK_DONE } from '../../../src/model/orderEvents.js'
 import { NsLink } from '../lib.jsx'
 
 // Ledger — the order history (rebuilt 2026-07-31).
@@ -53,6 +53,9 @@ const TONE = {
   INVOICED: 'money', PAID: 'money', SHIPPED_VALUE: 'money',
   REACHED_APPROVED: 'go', ROUTED: 'go', DEPARTED: 'go',
   ASN_SENT: 'edi', INVOICE_SENT: 'edi',
+  // Completed tasks share the feed but not the pipeline — their own tone so a day's
+  // work reads apart from a document's movement at a glance.
+  [TASK_DONE]: 'task',
 }
 
 export default function Ledger() {
@@ -153,17 +156,30 @@ export default function Ledger() {
             <div className="empty">Nothing in this window. Widen the range, or clear the filters.</div>
           )}
 
-          {grouped.map((g) => (
-            <section key={g.key || 'undated'} className="ledgerDay">
-              <div className="ledgerDayHead">
-                <span className="ledgerDayLabel">{dayLabel(g.key)}</span>
-                <span className="sectorCount">{g.items.length}</span>
-              </div>
-              <div className="lgRows">
-                {g.items.map((e) => <EventRow key={e.id} e={e} onOpenOrder={openOrder} />)}
-              </div>
-            </section>
-          ))}
+          {/* A dated timeline (Nima, 2026-08-19): "break it up as a timeline by dates
+              … the task to be spread out and not stacked atop one another". The date is
+              a milestone on a rail down the left; the day's entries fan out to the right
+              in as many columns as the window allows, rather than one long column of
+              800 rows in a 980px gutter. */}
+          <div className="lgTimeline">
+            {grouped.map((g) => (
+              <section key={g.key || 'undated'} className="ledgerDay">
+                <div className="ledgerDayHead">
+                  <span className="lgRailDot" aria-hidden="true" />
+                  <span className="ledgerDayLabel">{dayLabel(g.key)}</span>
+                  <span className="sectorCount">{g.items.length}</span>
+                  {g.items.some((e) => e.eventType === TASK_DONE) && (
+                    <span className="lgDayTasks">
+                      {g.items.filter((e) => e.eventType === TASK_DONE).length} task{g.items.filter((e) => e.eventType === TASK_DONE).length === 1 ? '' : 's'} done
+                    </span>
+                  )}
+                </div>
+                <div className="lgRows">
+                  {g.items.map((e) => <EventRow key={e.id} e={e} onOpenOrder={openOrder} />)}
+                </div>
+              </section>
+            ))}
+          </div>
         </>
       )}
 
@@ -177,6 +193,21 @@ export default function Ledger() {
 // never be read as the day the thing actually happened.
 function EventRow({ e, onOpenOrder }) {
   const tone = TONE[e.eventType] || 'arrive'
+  // ⚠️ A task's SUBJECT is its content, not a note. Rendering it in the `note` slot
+  // (quoted, italic, muted) buried the only part that says what was actually done.
+  const isTask = e.eventType === TASK_DONE
+  if (isTask) {
+    return (
+      <div className="lgRow t-task lgTask">
+        <span className="lgWhen" title={new Date(e.occurredAt).toLocaleString()}>{fmtTime(e.occurredAt)}</span>
+        <span className="lgDot d-task" />
+        <span className="lgTaskSubject" title={e.note || ''}>{e.note || 'Task'}</span>
+        {e.docNumber && <span className="lgDoc">{e.docNumber}</span>}
+        {e.taskFrom && <span className="lgTaskFrom">{e.taskFrom}</span>}
+        <span className="lgTaskTag">done</span>
+      </div>
+    )
+  }
   return (
     <div className={'lgRow t-' + tone + (e.observed ? ' observed' : '')}>
       <span className="lgWhen" title={e.observed

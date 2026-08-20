@@ -538,3 +538,18 @@ export function timeline(events = []) {
     return (SPINE_ORDER.get(a.eventType) ?? 99) - (SPINE_ORDER.get(b.eventType) ?? 99)
   })
 }
+
+// ── Completed tasks in the ledger (Nima, 2026-08-19) ────────────────────────
+//
+// "we also need completed task to live in the ledger."
+//
+// ⚠️ NOT an order_events type, deliberately. Nothing writes TASK_DONE into the
+// ledger table — a completed task already has an honest timestamp of its own in
+// `quest_tasks.completed_at`, and copying it into order_events would create a second
+// copy that can disagree with the first (the same rule that kept the Macy's routing
+// ingest and the field-assumption register out of tables).
+//
+// It exists as a shared constant so the server, the view and the filter list all
+// spell it the same way. It is a PRESENTATION kind: real in the feed, absent from
+// the spine, and never counted as a document milestone.
+export const TASK_DONE = 'TASK_DONE'

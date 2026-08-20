@@ -997,8 +997,27 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .commSubj { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Ledger — chronological archive of completed work, grouped by day */
-.ledgerView { max-width: 980px; }
-.ledgerDay { margin: 14px 0; }
+/* ⚠️ NO WIDTH CAP (Nima, 2026-08-19): "we also need to utilize the full space of this
+   ledger". It was capped at 980px, so on a wide monitor 800 entries queued down a
+   narrow gutter with the rest of the screen empty. The day's entries now fan out
+   across whatever width there is (see .lgRows). */
+.ledgerView { max-width: none; }
+/* A dated timeline: each day is a milestone on a rail, its entries to the right. */
+.lgTimeline { position: relative; margin-top: 6px; }
+.lgTimeline::before {
+  content: ''; position: absolute; left: 7px; top: 4px; bottom: 4px;
+  width: 2px; background: var(--line);
+}
+.ledgerDay { margin: 0 0 22px; padding-left: 26px; position: relative; }
+.lgRailDot {
+  position: absolute; left: -26px; top: 4px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent); box-sizing: border-box;
+}
+.lgDayTasks {
+  font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #7ee787; border: 1px solid rgba(126,231,135,0.35);
+  border-radius: 999px; padding: 1px 8px;
+}
 .ledgerDayHead {
   display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 1;
   padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -2498,10 +2517,18 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 /* One event. Tone says what KIND of moment it is; the dot carries the colour so
    the row text stays readable. */
-.lgRows { display: flex; flex-direction: column; }
+/* ⚠️ A GRID, NOT A STACK (Nima, 2026-08-19): "we also need the task to be spread out
+   and not stacked atop one another". 800 entries over 15 days is ~53 a day; as a single
+   column with 5px padding that is a wall. auto-fill gives as many columns as the window
+   allows, so a wide screen shows a day at a glance instead of scrolling it. */
+.lgRows {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 7px 10px; align-items: start;
+}
 .lgRow {
   display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-  padding: 5px 8px; border-left: 2px solid var(--line); font-size: 12.5px;
+  padding: 7px 10px; border-left: 3px solid var(--line); font-size: 12.5px;
+  background: rgba(255,255,255,0.02); border-radius: 0 5px 5px 0;
 }
 .lgRow:hover { background: rgba(255,255,255,0.03); }
 .lgWhen { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 5.5ch; font-size: 11.5px; }
@@ -2511,6 +2538,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .d-money  { background: #7ee787; }
 .d-go     { background: #a371f7; }
 .d-edi    { background: #e3b341; }
+.d-task   { background: #7ee787; }
+.lgRow.t-task { border-left-color: rgba(126,231,135,0.5); }
+.lgTaskSubject { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lgTaskFrom { color: var(--muted); font-size: 11.5px; }
+.lgTaskTag {
+  font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #7ee787;
+  border: 1px solid rgba(126,231,135,0.35); border-radius: 999px; padding: 0 6px;
+}
 .lgLabel { font-weight: 600; }
 .lgDoc { font-variant-numeric: tabular-nums; color: var(--mid); }
 .lgSo {
