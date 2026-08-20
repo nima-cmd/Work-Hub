@@ -71,17 +71,17 @@ export function TraceDrawerProvider({ children, onNavigate }) {
         // from, so the drawer reads as a panel over your work rather than a new page.
         <>
           <div className="traceDrawerBack" onClick={close} />
-          <aside className="traceDrawer" role="dialog" aria-label={`Trace of ${subject.docNumber}`}>
+          <aside className="traceDrawer" role="dialog" aria-label={`Data packet for ${subject.docNumber}`}>
             <div className="traceDrawerBar">
               <span className="traceDrawerTitle">
-                Trace <span className="traceDrawerSubject mono">{subject.docNumber}</span>
+                Data packet <span className="traceDrawerSubject mono">{subject.docNumber}</span>
                 <span className="traceDrawerType">{labelFor(subject.docType)}</span>
               </span>
               <div className="traceDrawerBarBtns">
                 {/* Hands the current subject to the full page, so a trace worth
                     sitting with is one click from the room it belongs in. */}
                 {onNavigate && (
-                  <button className="btnGhost" title="Open this trace full-page in the Datapad"
+                  <button className="btnGhost" title="Open this data packet full-page in the Datapad"
                           onClick={() => { onNavigate('datapad', subject); close() }}>
                     ⤢ Datapad
                   </button>

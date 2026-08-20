@@ -40,6 +40,7 @@ import {
 } from '../src/model/trace.js'
 import { isoDate } from '../src/model/upsRates.js'
 import { laneFor, anchorFor } from '../src/model/orderLane.js'
+import { USAGE_KEY } from '../src/model/viewUsage.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -945,6 +946,68 @@ export async function getPoLedger(poNumber) {
 // A window of the ledger, newest first — the Calendar's feed and the general
 // search. `q` matches a document number so "IF7413" finds its whole trail.
 
+// ── WHICH VIEWS ARE ACTUALLY USED (Nima, 2026-08-20) ────────────────────────
+//
+// "We are noticing there too many view many of which aren't even used … can we track
+//  how much we use certain view and record it somewhere for our own knowledge"
+//
+// Twenty views, five he named. This measures the rest instead of consolidating on a
+// guess. The rules (what counts as used, why the landing view's opens are not a
+// choice) live in src/model/viewUsage.js and are tested there.
+//
+// ⚠️ ONE JSON ROW IN sync_meta, NOT ITS OWN TABLE — a deliberate compromise, because
+// db/schema.sql was being edited by another session's uncommitted Weaver work and
+// staging that file would have committed their work-in-progress. Move it to a real
+// table (one row per view per day, so trends show) once schema.sql is uncontested.
+//
+// ⚠️ INCREMENTED IN ONE STATEMENT, not read-modify-write. Two visits landing together
+// through a read-then-write would each read the same starting value and one would
+// overwrite the other — the classic lost update, and it would silently undercount the
+// exact views being used hardest.
+export async function recordViewVisit({ view, dwellMs = 0 } = {}) {
+  const key = String(view || '').trim()
+  if (!key || !/^[a-z0-9_-]{1,40}$/i.test(key)) throw new Error('recordViewVisit needs a view key')
+  // Clamped like applyVisit: a negative delta means the clock moved, and adding it
+  // would subtract time that was really spent.
+  const ms = Math.max(0, Math.min(Number(dwellMs) || 0, 6 * 3600 * 1000))
+  await pool.query(
+    `INSERT INTO sync_meta (key, value, updated_at)
+     VALUES ($1, jsonb_build_object($2::text, jsonb_build_object(
+               'opens', 1, 'dwellMs', $3::bigint, 'firstAt', to_jsonb(now()), 'lastAt', to_jsonb(now())
+             ))::text, now())
+     ON CONFLICT (key) DO UPDATE SET
+       value = jsonb_set(
+         COALESCE(sync_meta.value::jsonb, '{}'::jsonb),
+         ARRAY[$2::text],
+         jsonb_build_object(
+           'opens',   COALESCE((sync_meta.value::jsonb -> $2::text ->> 'opens')::bigint, 0) + 1,
+           'dwellMs', COALESCE((sync_meta.value::jsonb -> $2::text ->> 'dwellMs')::bigint, 0) + $3::bigint,
+           -- COALESCE keeps the ORIGINAL firstAt: overwriting it would make every view
+           -- look like it was discovered today and destroy the only evidence that an
+           -- "unused" view has been on offer for weeks.
+           'firstAt', COALESCE(sync_meta.value::jsonb -> $2::text -> 'firstAt', to_jsonb(now())),
+           'lastAt',  to_jsonb(now())
+         )
+       )::text,
+       updated_at = now()`,
+    [USAGE_KEY, key, ms],
+  )
+  return { ok: true }
+}
+
+export async function getViewUsage() {
+  const { rows } = await pool.query('SELECT value FROM sync_meta WHERE key = $1', [USAGE_KEY])
+  if (!rows.length) return {}
+  try {
+    return JSON.parse(rows[0].value) || {}
+  } catch {
+    // A blob we cannot parse is reported as no data rather than crashing Health. This
+    // is telemetry about ourselves — it must never be able to take down the page that
+    // exists to tell us whether the app is lying.
+    return {}
+  }
+}
+
 // ── THE TRACE (Nima, 2026-08-20) ────────────────────────────────────────────
 //
 // "we want in every case if possible when looking at an item to get its full
@@ -1839,7 +1902,9 @@ export async function getHealth() {
   for (const i of INTEGRATIONS) {
     for (const v of [...i.vars, ...(i.optional || [])]) present[v] = Boolean(process.env[v])
   }
-  const integrations = computeIntegrationHealth(present)
+  // DB_TARGET is derived from the connection (hostKind), never assumed — so the
+  // database row on Health names the database actually being read.
+  const integrations = computeIntegrationHealth(present, { dbTarget: DB_TARGET })
   const syncs = await getSyncHealth()
   // ⚠️ WHICH DATABASE fed every number on this page. A local mirror is stale by
   // definition; the sync ages above are the ages recorded IN the snapshot, so on a

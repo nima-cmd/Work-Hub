@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps } from '../api.js'
+import { fetchHealth, fetchOverdueInvoices, fetchLabelGaps, fetchViewUsage } from '../api.js'
+import { usageReport, humanMs, VERDICT_LABEL } from '../../../src/model/viewUsage.js'
 import CsvBackup from './CsvBackup.jsx'
 import { NsLink } from '../lib.jsx'
 import { fmtBytes } from '../../../src/model/transferMeter.js'
@@ -34,7 +35,7 @@ const SYNC_HINT = {
   never: 'has never run here',
 }
 
-export default function Health({ onRefresh }) {
+export default function Health({ onRefresh, views }) {
   const [h, setH] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -149,6 +150,8 @@ export default function Health({ onRefresh }) {
       </div>
 
       <FieldAssumptions data={fieldAssumptions} />
+
+      <ViewUsage views={views} />
 
       {/* The retired CSV path lives here and nowhere else (Nima, 2026-08-11) —
           it is a backup for a NetSuite outage, not a daily status readout. */}
@@ -303,6 +306,63 @@ function OverdueInvoices() {
 // It lives on Health because Health is where you go when a number looks wrong, and
 // the useful question at that moment is "has this field lied before, and what is it
 // actually keyed on?"
+
+// ── Which views are actually used (Nima, 2026-08-20) ────────────────────────
+//
+// "We are noticing there too many view many of which aren't even used … can we track
+//  how much we use certain view and record it somewhere for our own knowledge"
+//
+// It lives on Health because this is the page about the app's own honesty, and this is
+// the app measuring itself. Ranked by DWELL, not opens — see src/model/viewUsage.js.
+function ViewUsage({ views = [] }) {
+  const [usage, setUsage] = useState(null)
+  useEffect(() => { fetchViewUsage().then(setUsage).catch(() => setUsage({})) }, [])
+  if (!usage || !views.length) return null
+
+  const { rows, totals } = usageReport(usage, views, { defaultView: views[0]?.key })
+  const since = totals.trackedSince ? new Date(totals.trackedSince).toLocaleDateString() : null
+
+  return (
+    <>
+      <h3 className="hlSection">Which views are actually used</h3>
+      <div className="muted hlSub">
+        {since
+          ? <>Recorded since {since}. Ranked by time on screen, not times opened — a view you land on
+              is not a view you read.</>
+          : <>Nothing recorded yet. Numbers appear as views are used.</>}
+        {' '}{totals.neverOpened} never opened, {totals.glanceOnly} opened but not read.
+      </div>
+      <table className="vuTable">
+        <thead>
+          <tr><th>View</th><th>Time on screen</th><th>Opens</th><th>Per visit</th><th>Last</th><th /></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className={r.verdict === 'unused' ? 'vuUnused' : undefined}>
+              <td>{r.label}</td>
+              <td className="mono">{r.dwellMs ? humanMs(r.dwellMs) : '—'}</td>
+              {/* ⚠️ The landing view is opened by every page load, refresh and restart,
+                  by nobody's decision. Its opens are shown but marked, never ranked
+                  against a number that means "he chose this". */}
+              <td className="mono">
+                {r.opens || '—'}
+                {!r.opensComparable && r.opens ? <span className="muted" title="Every page load lands here, so this is not a count of choosing it"> ·&nbsp;incl. loads</span> : null}
+              </td>
+              <td className="mono">{r.avgMs ? humanMs(r.avgMs) : '—'}</td>
+              <td className="muted">{r.daysSince === null ? 'never' : r.daysSince === 0 ? 'today' : `${r.daysSince}d ago`}</td>
+              <td><span className={'flag vu-' + r.verdict}>{VERDICT_LABEL[r.verdict]}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="muted hlSub">
+        ⚠️ &ldquo;Never opened&rdquo; is a fact about this recording, not a verdict on the view — a view
+        added after {since || 'recording started'} has had no chance to be opened. Check the date before retiring anything.
+      </div>
+    </>
+  )
+}
+
 function FieldAssumptions({ data }) {
   const [open, setOpen] = useState(false)
   if (!data) return null

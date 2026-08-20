@@ -1,5 +1,11 @@
 // TraceView — one subject's whole story: history · related · linked · notes.
 //
+// ⚠️ CALLED A "DATA PACKET" ON SCREEN (Nima, 2026-08-20: "can we call it data
+// packet"). The code keeps `trace` throughout — the endpoint, the model, the component
+// names — because renaming ~40 identifiers and an API path to match a label is churn
+// with a real chance of breaking something, and the two words mean the same thing.
+// If you are reading `trace` in the code and "data packet" on screen, that is why.
+//
 // ONE COMPONENT, TWO PRESENTATIONS (Nima, 2026-08-20): the full page in the
 // Datapad, and — next — a right-hand drawer over any other view, so clicking a
 // reference never loses your place. Both render this. The `compact` prop is the
@@ -154,7 +160,7 @@ export default function TraceView({ subject, trail = [], onHop, onNavigate, comp
   useEffect(() => { setTrace(null); load() }, [subject.docType, subject.docNumber])
 
   if (err) return <div className="banner error">{err}</div>
-  if (!trace) return <div className="banner">Reading the trace for {subject.docNumber}…</div>
+  if (!trace) return <div className="banner">Reading the data packet for {subject.docNumber}…</div>
 
   const s = trace.subject
   const img = s.characterId ? imagesFor(s.characterId)[0] : null

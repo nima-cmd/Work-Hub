@@ -58,7 +58,13 @@ export const INTEGRATIONS = [
   },
   {
     key: 'database',
-    label: 'Database (Neon)',
+    // ⚠️ NO NAME HARD-CODED HERE. This said "Database (Neon)" for a day and a half
+    // AFTER the app moved to DigitalOcean — a FOURTH instance of the cutover bug the
+    // register already holds three of (check:neon, check:transfer and migrate all
+    // announced NEON while reading DO). The label is filled in from the connection
+    // by computeIntegrationHealth, the same way DB_TARGET is derived by hostKind(),
+    // because a database name typed into a string cannot follow a migration.
+    label: 'Database',
     vars: ['DATABASE_URL'],
     powers: 'Everything — this is the app\'s only store',
     ifMissing: 'The app cannot start.',
@@ -66,9 +72,22 @@ export const INTEGRATIONS = [
   },
 ]
 
+/** How the database entry names itself, from the DERIVED target — never a literal. */
+export const DB_LABEL = {
+  digitalocean: 'Database (DigitalOcean)',
+  neon: 'Database (Neon)',
+  mirror: 'Database (local mirror — STALE)',
+}
+
 // present: { VAR_NAME: boolean } — booleans only, never values. See the rule above.
-export function computeIntegrationHealth(present = {}) {
-  return INTEGRATIONS.map((i) => {
+//
+// dbTarget comes from hostKind(DATABASE_URL), so the database row names the database
+// actually connected. Unknown or absent leaves it as plain "Database": an unnamed
+// store is honest, a wrongly-named one is the bug this parameter exists to prevent.
+export function computeIntegrationHealth(present = {}, { dbTarget = null } = {}) {
+  return INTEGRATIONS.map((i) => (i.key === 'database' && DB_LABEL[dbTarget]
+    ? { ...i, label: DB_LABEL[dbTarget] }
+    : i)).map((i) => {
     const missing = i.vars.filter((v) => !present[v])
     const missingOptional = (i.optional || []).filter((v) => !present[v])
     return {

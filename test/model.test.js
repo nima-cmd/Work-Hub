@@ -2969,3 +2969,30 @@ test('direct never affects Nordstrom, which has no merge centers at all', () => 
   assert.deepEqual(a, b)
   assert.equal(a.street, '5703 North Marine Drive')
 })
+
+// ── The database row must NAME the database it is actually reading ───────────
+// It said "Database (Neon)" for a day and a half after the app moved to DigitalOcean,
+// while the transfer panel on the same page correctly said DigitalOcean — because that
+// title was derived and this label was a literal.
+test('the database integration is named from the DERIVED target', () => {
+  const p = { DATABASE_URL: true }
+  const label = (t) => computeIntegrationHealth(p, { dbTarget: t }).find((i) => i.key === 'database').label
+  assert.equal(label('digitalocean'), 'Database (DigitalOcean)')
+  assert.equal(label('neon'), 'Database (Neon)')
+  assert.match(label('mirror'), /mirror/i)
+  assert.match(label('mirror'), /STALE/)
+})
+
+test('an unknown target leaves the database UNNAMED rather than wrongly named', () => {
+  const p = { DATABASE_URL: true }
+  for (const t of [null, undefined, 'wat']) {
+    assert.equal(computeIntegrationHealth(p, { dbTarget: t }).find((i) => i.key === 'database').label, 'Database')
+  }
+})
+
+test('no INTEGRATIONS entry hard-codes a database vendor name', () => {
+  // The whole point: a vendor typed into a literal cannot follow a migration.
+  for (const i of INTEGRATIONS) {
+    assert.doesNotMatch(i.label, /neon|digitalocean/i, `${i.key} must not name a database vendor`)
+  }
+})
