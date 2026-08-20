@@ -10,6 +10,7 @@ import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
+import { TASK_DONE } from '../src/model/orderEvents.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
 import { buildLabelWorksheet, worksheetCsv } from '../src/model/labelWorksheet.js'
 import { pushOrders, ediOrdersFor, boutiqueOrdersFor, fetchBoutiqueAddresses, fetchBoutiqueShipMethods, fetchBoutiqueShipDetails } from '../src/ingest/shipstationPush.js'
@@ -943,7 +944,8 @@ export async function getLedger({ from = null, to = null, type = null, docType =
   if (docType) add('doc_type = $?', docType)
   if (q) add('(doc_number ILIKE $? OR so_number ILIKE $?)', `%${q}%`)
 
-  params.push(Math.min(Number(limit) || 500, 2000))
+  const cap = Math.min(Number(limit) || 500, 2000)
+  params.push(cap)
   const { rows } = await pool.query(
     `SELECT ${LEDGER_FIELDS} FROM order_events
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -951,7 +953,76 @@ export async function getLedger({ from = null, to = null, type = null, docType =
      LIMIT $${params.length}`,
     params,
   )
+
+  // ── Completed TASKS belong here too (Nima, 2026-08-19) ────────────────────
+  //
+  // "we also need completed task to live in the ledger."
+  //
+  // This view once rendered ONLY completed tasks and was rebuilt on 2026-07-31 to
+  // show order_events instead, because a "Ledger" that could not answer "what
+  // happened to SO12293" was misnamed. That was the right half to add and the wrong
+  // half to remove: finishing a task IS something that happened on a day, and it was
+  // exiled to a toggle on another page.
+  //
+  // ⚠️ Read from `quest_tasks.completed_at`, NOT from quest_task_activity's
+  // kind='done'. The activity log records when the row was WRITTEN; completed_at is
+  // when the task was finished. Same honest-timestamp rule the rest of the ledger
+  // follows — and there are 714 of them, so the difference is not academic.
+  //
+  // Merged in JS rather than UNIONed: the two sources have different columns and a
+  // UNION would need every one cast to match, which is how a merge quietly starts
+  // lying about which table a row came from.
+  const tasks = await ledgerTasks({ from, to, type, docType, q, cap })
+  if (!tasks.length) return decorate(rows)
   return decorate(rows)
+    .concat(tasks)
+    .sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt))
+    .slice(0, cap)
+}
+
+// Completed tasks, shaped as ledger entries. Kept separate so the event query above
+// stays exactly what it was.
+async function ledgerTasks({ from, to, type, docType, q, cap }) {
+  // ⚠️ A docType filter of anything but TASK excludes these entirely — asking for
+  // "IF events only" and getting tasks back would make the filter a lie.
+  if (docType && docType !== 'TASK') return []
+  const types = type ? (Array.isArray(type) ? type : [type]) : null
+  if (types && !types.includes(TASK_DONE)) return []
+
+  const params = []
+  const where = ['completed_at IS NOT NULL']
+  const add = (sql, val) => { params.push(val); where.push(sql.replaceAll('$?', `$${params.length}`)) }
+  if (from) add('completed_at >= $?', from)
+  if (to) add('completed_at < $?', to)
+  // The searchable text of a task is its subject and whatever NetSuite doc it names.
+  if (q) add('(subject ILIKE $? OR netsuite_doc_number ILIKE $?)', `%${q}%`)
+  params.push(cap)
+
+  const { rows } = await pool.query(
+    `SELECT id, subject, netsuite_doc_number AS "docNumber", completed_at AS "occurredAt",
+            from_name AS "fromName", needs_type AS "needsType"
+       FROM quest_tasks
+      WHERE ${where.join(' AND ')}
+      ORDER BY completed_at DESC
+      LIMIT $${params.length}`,
+    params,
+  )
+  return rows.map((t) => ({
+    // ⚠️ Prefixed so a task id can never collide with an order_events id — the client
+    // keys React rows on this, and two rows sharing a key drop one silently.
+    id: `task-${t.id}`,
+    eventType: TASK_DONE,
+    docType: 'TASK',
+    docNumber: t.docNumber || null,
+    soNumber: null,
+    note: t.subject || null,
+    source: 'task',
+    occurredAt: t.occurredAt,
+    label: 'Task done',
+    observed: false,
+    taskFrom: t.fromName || null,
+    needsType: t.needsType || null,
+  }))
 }
 
 // Per-day counts for the Calendar's dots — cheap enough to load a whole month.
