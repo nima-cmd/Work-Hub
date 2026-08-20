@@ -1348,7 +1348,7 @@ export async function fetchLinksFor(docType, docNumber, db = pool) {
     `SELECT id,
        CASE WHEN a_type=$1 AND a_number=$2 THEN b_type   ELSE a_type   END AS "otherType",
        CASE WHEN a_type=$1 AND a_number=$2 THEN b_number ELSE a_number END AS "otherNumber",
-       label, created_at AS "createdAt"
+       label, url, created_at AS "createdAt"
      FROM doc_links
      WHERE (a_type=$1 AND a_number=$2) OR (b_type=$1 AND b_number=$2)
      ORDER BY created_at DESC`,
@@ -1360,7 +1360,9 @@ export async function fetchLinksFor(docType, docNumber, db = pool) {
 // Add a link. Self-links are rejected; direction doesn't matter (the UNIQUE
 // constraint + bidirectional read make (A,B) and querying from B symmetric),
 // but we also guard the reverse duplicate so linking A→B then B→A is a no-op.
-export async function addDocLink({ aType, aNumber, bType, bNumber, label }, db = pool) {
+// `url` carries an EXTERNAL destination (a Google Doc, a Drive folder) for links whose
+// far end is not a document in this system. See src/model/docLinkUrl.js.
+export async function addDocLink({ aType, aNumber, bType, bNumber, label, url = null }, db = pool) {
   if (!aType || !aNumber || !bType || !bNumber) throw new Error('Both ends of a link are required')
   if (aType === bType && aNumber === bNumber) throw new Error('Cannot link a document to itself')
   const { rows: existing } = await db.query(
@@ -1369,12 +1371,17 @@ export async function addDocLink({ aType, aNumber, bType, bNumber, label }, db =
     [aType, aNumber, bType, bNumber],
   )
   if (existing.length) {
-    if (label) await db.query('UPDATE doc_links SET label=$2 WHERE id=$1', [existing[0].id, label])
+    // ⚠️ COALESCE, not overwrite: re-adding the same doc without a label must not blank
+    // the label someone already typed, and re-adding without a url must not lose it.
+    if (label || url) {
+      await db.query('UPDATE doc_links SET label = COALESCE($2, label), url = COALESCE($3, url) WHERE id = $1',
+        [existing[0].id, label || null, url || null])
+    }
     return existing[0].id
   }
   const { rows } = await db.query(
-    `INSERT INTO doc_links (a_type, a_number, b_type, b_number, label) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [aType, aNumber, bType, bNumber, label || null],
+    `INSERT INTO doc_links (a_type, a_number, b_type, b_number, label, url) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [aType, aNumber, bType, bNumber, label || null, url || null],
   )
   return rows[0].id
 }

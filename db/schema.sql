@@ -405,11 +405,21 @@ CREATE TABLE IF NOT EXISTS doc_links (
   b_type     TEXT NOT NULL,
   b_number   TEXT NOT NULL,
   label      TEXT,
+  -- An EXTERNAL link (a Google Doc, a Drive folder, anything with a URL) rather than
+  -- another document in this system (Nima, 2026-08-20). NULL for doc↔doc links.
+  -- ⚠️ b_number still carries the identity — the Drive FILE ID when there is one — so
+  -- the UNIQUE constraint below still fires when the same doc is attached twice from
+  -- two different share URLs. See src/model/docLinkUrl.js for why that matters.
+  url        TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   UNIQUE (a_type, a_number, b_type, b_number)
 );
 CREATE INDEX IF NOT EXISTS idx_doc_links_a ON doc_links(a_type, a_number);
 CREATE INDEX IF NOT EXISTS idx_doc_links_b ON doc_links(b_type, b_number);
+-- ⚠️ REQUIRED SEPARATELY. `CREATE TABLE IF NOT EXISTS` above is a no-op once the table
+-- exists, so a column added to that definition never reaches a live database. Caught by
+-- checking information_schema after running migrate, not by assuming it worked.
+ALTER TABLE doc_links ADD COLUMN IF NOT EXISTS url TEXT;
 
 -- ── EDI supply link (Nima, 2026-07-20) ──────────────────────────────────────
 -- Which INBOUND production PO an EDI order's goods come from — the vendor/
