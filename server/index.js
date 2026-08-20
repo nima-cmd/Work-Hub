@@ -33,6 +33,7 @@ import {
   getGmailLabels, spamQuestEmail, getCalendarEvents,
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
+  getTrace, getTraceRecent, searchTraceSubjects,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
@@ -1116,6 +1117,51 @@ app.get('/api/ledger-notes', async (_req, res) => {
 })
 
 // Universal notes (Nima, 2026-07-20) — the generic Datapad-on-anything API.
+
+// ── THE TRACE (Nima, 2026-08-20) ────────────────────────────────────────────
+//
+// One subject in, its whole story out: history · related · linked · notes.
+// /api/trace?docType=SO&docNumber=SO12296
+//
+// A bad docType is a 400, not an empty 200 — an unknown type returning a blank
+// trace is indistinguishable from a document with no history, which is exactly
+// the confusion this surface exists to remove.
+app.get('/api/trace', async (req, res) => {
+  try {
+    const { docType, docNumber } = req.query
+    res.json(await getTrace(docType, docNumber))
+  } catch (e) {
+    const bad = /not a traceable type|needs a document number/.test(e.message)
+    if (!bad) console.error(e)
+    res.status(bad ? 400 : 500).json({ error: e.message })
+  }
+})
+
+// The Datapad's front door. Recent activity, because notes cannot be the index:
+// there are 10 in the whole database. ?notes=1 makes notes one filter over it.
+app.get('/api/trace/recent', async (req, res) => {
+  try {
+    res.json(await getTraceRecent({
+      limit: req.query.limit,
+      withNotesOnly: req.query.notes === '1' || req.query.notes === 'true',
+    }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Pick a subject — traceable types only, plus emails and tasks, which
+// searchDocNumbers does not reach.
+app.get('/api/trace/search', async (req, res) => {
+  try {
+    res.json(await searchTraceSubjects(req.query.q || ''))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // GET with no query = every note (Datapad); GET ?docType&docNumber = the
 // inline widget on a specific card.
 app.get('/api/notes', async (req, res) => {

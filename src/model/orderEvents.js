@@ -84,6 +84,22 @@ const EXTRA_LABEL = {
   // them distinct is the never-lump rule — one event says the truck left, the
   // other says the document went away.
   IF_REMOVED: 'Fulfilment removed in NetSuite',
+  // ── Three types that were rendering as their raw enum key ─────────────────
+  //
+  // Found 2026-08-20 building the trace: SPINE_LABEL falls back to the event_type
+  // when it has no entry, so the Ledger has been printing "DEPARTURE_CONFIRMED"
+  // (5 rows), "PREPPED" and "PREP_CLEARED" at the reader. Not wrong, but shouting
+  // an enum at a human is the label doing none of its job.
+  //
+  // Worded as what each one actually MEANS, from the modules that write them:
+  // DEPARTURE_CONFIRMED is a person attesting the goods left, because under the
+  // Net flow nothing else can (netDeparture.js) — so it says "confirmed", never
+  // "departed", which is the derived event it exists to distinguish itself from.
+  // PREPPED is our own work finished with no claim about NetSuite or invoicing
+  // (prepped.js), so it must not read as "packed".
+  DEPARTURE_CONFIRMED: 'Departure confirmed by hand',
+  PREPPED: 'Our work finished (not packed)',
+  PREP_CLEARED: 'Prep marker cleared',
 }
 
 // The IF_REMOVED event for a fulfilment row that has vanished from NetSuite.
