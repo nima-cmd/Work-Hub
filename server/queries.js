@@ -36,7 +36,7 @@ import { computeAffection } from '../src/model/affection.js'
 import { SPINE_LABEL, timeline, isOurInvoiceNumber, invNumberFrom810 } from '../src/model/orderEvents.js'
 import {
   TRACE_TYPES, normalizeRef, buildTrace, orderCard, fulfillmentCards, invoiceCards,
-  taskCards, emailCards,
+  taskCards, emailCards, traceTypeFor,
 } from '../src/model/trace.js'
 import { isoDate } from '../src/model/upsRates.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
@@ -1330,7 +1330,7 @@ export async function getTraceRecent({ limit = 40, withNotesOnly = false } = {})
     // to the document they name instead of minting a subject that does not exist.
     const number = e.docType === 'TASK' ? (e.docNumber || null) : e.docNumber
     if (!number) continue
-    const subjType = e.docType === 'TASK' ? guessType(number) : type
+    const subjType = e.docType === 'TASK' ? traceTypeFor(number) : type
     if (!subjType) continue
     const key = `${subjType}:${number}`
     if (seen.has(key)) continue
@@ -1339,16 +1339,6 @@ export async function getTraceRecent({ limit = 40, withNotesOnly = false } = {})
     if (out.length >= cap) break
   }
   return out
-}
-
-// The app's document numbers are self-describing by prefix (SO/IF/INV) — the same
-// convention netsuiteLinks.js relies on. Anything else gets no guess.
-const guessType = (n) => {
-  const s = String(n || '').toUpperCase()
-  if (/^SO\d/.test(s)) return 'SO'
-  if (/^IF\d/.test(s)) return 'IF'
-  if (/^INV/.test(s)) return 'INV'
-  return null
 }
 
 // Pick a subject. searchDocNumbers already searches every document number the app

@@ -3051,3 +3051,56 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   border-radius: 7px; padding: 8px 10px; font: inherit; font-size: 13px; resize: vertical;
 }
 .traceNoteInput:focus { outline: none; border-color: var(--accent); }
+
+/* ── The trace drawer ───────────────────────────────────────────────────────
+   The same TraceView, over the page you are already on (Nima, 2026-08-20). */
+
+/* Click-anywhere-else to close, WITHOUT a dark scrim: the whole point is that you
+   can still see the board you came from, so this reads as a panel over your work
+   rather than a new page. */
+.traceDrawerBack { position: fixed; inset: 0; z-index: 40; background: transparent; }
+.traceDrawer {
+  position: fixed; top: 0; right: 0; z-index: 41;
+  width: min(520px, 92vw); height: 100vh;
+  display: flex; flex-direction: column;
+  background: #12171e; border-left: 1px solid var(--line);
+  box-shadow: -24px 0 48px rgba(0, 0, 0, 0.55);
+  animation: traceDrawerIn 160ms ease-out;
+}
+@keyframes traceDrawerIn { from { transform: translateX(24px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+/* Someone who has asked for less motion gets the panel without the slide. */
+@media (prefers-reduced-motion: reduce) { .traceDrawer { animation: none; } }
+
+.traceDrawerBar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 11px 14px; border-bottom: 1px solid var(--line); flex: none;
+}
+.traceDrawerTitle {
+  font-family: var(--display); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+}
+.traceDrawerSubject { font-family: ui-monospace, Menlo, monospace; font-size: 14px; letter-spacing: 0; color: var(--text); }
+.traceDrawerType { letter-spacing: 0.06em; color: var(--line); }
+.traceDrawerBarBtns { display: flex; align-items: center; flex: none; }
+/* The drawer scrolls its own content — the page underneath keeps its scroll
+   position, which is the entire reason the drawer exists. */
+.traceDrawerBody { flex: 1; overflow-y: auto; padding: 14px; }
+
+/* ── The split click (Nima's choice, 2026-08-20) ────────────────────────────
+   The NUMBER opens the drawer; the ↗ still goes to NetSuite. They must read as
+   one label with two targets, not as two separate controls. */
+.nsLinkSplit { display: inline-flex; align-items: baseline; gap: 2px; }
+/* A span, not a button — see the note in NsLink. So it needs the focus ring a real
+   button would have given it for free. */
+.nsLinkDoc {
+  background: none; border: none; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer;
+  border-bottom: 1px dotted var(--line);
+}
+.nsLinkDoc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.nsLinkDoc:hover { color: #4fd1ff; border-bottom-color: #4fd1ff; }
+/* Slightly less faint than the inline ↗ it replaces: here it is its own click
+   target, and a target at .45 opacity reads as decoration. */
+.nsLinkSplit .nsLinkMark { text-decoration: none; cursor: pointer; opacity: .62; }
+.nsLinkSplit .nsLinkMark:hover { color: var(--accent); opacity: 1; }

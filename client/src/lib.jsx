@@ -4,6 +4,8 @@ import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fet
 import { parseDocUrl, linkKey, KIND_LABEL } from '../../src/model/docLinkUrl.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { isDocNumber } from '../../src/model/netsuiteLinks.js'
+import { traceTypeFor } from '../../src/model/trace.js'
+import { useTraceDrawer } from './traceDrawerContext.js'
 import { channelMeta } from '../../src/model/channels.js'
 import { speakLine, taskContext } from '../../src/model/dialogue.js'
 import { imagesFor } from './data/characterImages.js'
@@ -364,22 +366,66 @@ function OneLabelButton({ info, size }) {
 // ⚠️ A real <a href>, deliberately, not an onClick+fetch. It gets middle-click, ⌘-click,
 // "copy link address" and the browser's own loading state for free, and a NetSuite page
 // is somewhere you want in a NEW tab with your place on the board kept.
-export function NsLink({ doc, children, title }) {
+//
+// ── THE CLICK IS SPLIT (Nima, 2026-08-20) ───────────────────────────────────────
+//
+// Asked which should win when the trace drawer wanted this same click, Nima chose:
+// the NUMBER opens the drawer, the ↗ keeps going to NetSuite. So nothing anyone
+// relies on moved — the arrow does exactly what the whole link used to do — and
+// "tell me about this" became the obvious click on all 46 of these across 13 views.
+//
+// ⚠️ Only for documents we can actually TRACE (SO · IF · INV, via traceTypeFor).
+// A PO, an item receipt or a transfer order keeps the old undivided behaviour,
+// because splitting a click to reveal a drawer that would 400 is worse than not
+// splitting it. Same rule outside the provider (no drawer mounted at all).
+export function NsLink({ doc, children, title, linkOnly = false }) {
+  const drawer = useTraceDrawer()
   if (!doc) return null
   // ⚠️ Degrades to plain text rather than rendering a link that 400s. A task card's
   // reference is free text and need not be a document number at all, and a link that
   // reliably fails is worse than no link — it teaches you to stop trusting the ones
   // that work.
   if (!isDocNumber(doc)) return <>{children || doc}</>
+
+  const nsHref = `/api/netsuite/open?doc=${encodeURIComponent(doc)}`
+  // The card is clickable in places; opening a document should never also toggle a
+  // selection or expand a row underneath it.
+  const stop = (e) => e.stopPropagation()
+  const netsuite = (
+    <a className="nsLinkMark" href={nsHref} target="_blank" rel="noreferrer"
+       title={`Open ${doc} in NetSuite`} onClick={stop} aria-label={`Open ${doc} in NetSuite`}>↗</a>
+  )
+
+  // `linkOnly` is for surfaces that ARE the trace already (the drawer's own header):
+  // offering to open the drawer from inside it would stack a panel on itself.
+  // Custom children mean the caller is rendering its own affordance, not a number.
+  const traceable = !linkOnly && !children && !!drawer && !!traceTypeFor(doc)
+  if (!traceable) {
+    return (
+      <a className="nsLink" href={nsHref} target="_blank" rel="noreferrer"
+         title={title || `Open ${doc} in NetSuite`} onClick={stop}>
+        {children || doc}<span className="nsLinkMark" aria-hidden="true">↗</span>
+      </a>
+    )
+  }
+
+  // ⚠️ A <span role="button">, NOT a <button>. Some cards ARE buttons themselves —
+  // TacticalCore's custody rows are a clickable <button> that prints IF numbers
+  // inside it — and a button nested in a button is invalid HTML that React refuses
+  // and browsers resolve unpredictably (the inner one may never receive the click).
+  // Found by the console the moment this shipped to the Command Center. A span with
+  // an explicit role, tabIndex and Enter/Space handler is reachable by keyboard and
+  // legal in every one of the 46 places this renders.
+  const openTrace = (e) => { stop(e); drawer.openDoc(doc) }
   return (
-    <a className="nsLink" href={`/api/netsuite/open?doc=${encodeURIComponent(doc)}`}
-      target="_blank" rel="noreferrer"
-      title={title || `Open ${doc} in NetSuite`}
-      // The card is clickable in places; opening a document should never also toggle
-      // a selection or expand a row underneath it.
-      onClick={(e) => e.stopPropagation()}>
-      {children || doc}<span className="nsLinkMark" aria-hidden="true">↗</span>
-    </a>
+    <span className="nsLink nsLinkSplit">
+      <span role="button" tabIndex={0} className="nsLinkDoc" title={title || `Trace ${doc}`}
+            onClick={openTrace}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrace(e) } }}>
+        {doc}
+      </span>
+      {netsuite}
+    </span>
   )
 }
 

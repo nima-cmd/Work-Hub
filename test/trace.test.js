@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   TRACE_TYPES, normalizeRef, trackingCard, fulfillmentCards, invoiceCards, taskCards,
   emailCards, orderCard, dedupeCards, linkedEntries, pushTrail, buildTrace, TRAIL_MAX,
+  traceTypeFor,
 } from '../src/model/trace.js'
 
 test('normalizeRef accepts the five traceable types and uppercases', () => {
@@ -228,4 +229,35 @@ test('the trail is capped so it cannot grow without bound', () => {
   for (let i = 0; i < TRAIL_MAX + 4; i++) trail = pushTrail(trail, { docType: 'SO', docNumber: `SO${i}` })
   assert.equal(trail.length, TRAIL_MAX)
   assert.equal(trail.at(-1).docNumber, `SO${TRAIL_MAX + 3}`, 'the cap drops the oldest, never the current subject')
+})
+
+// ── Which trace does a document number address? ──────────────────────────────
+
+test('traceTypeFor reads our own prefix for our own tables', () => {
+  assert.equal(traceTypeFor('SO12296'), 'SO')
+  assert.equal(traceTypeFor('IF7486'), 'IF')
+  assert.equal(traceTypeFor('INV11524'), 'INV')
+  assert.equal(traceTypeFor('  if7486 '), 'IF')
+})
+
+test('traceTypeFor returns null for anything it cannot place — never a default', () => {
+  // A default here would open a trace of the wrong subject, or a blank one that
+  // reads as "this document has no history".
+  for (const n of ['PO50203208', 'IR1234', 'IT99', 'TO5', 'S000190212', '', null, 'SOMETHING']) {
+    assert.equal(traceTypeFor(n), null, `${n} must not be placed`)
+  }
+})
+
+test('traceTypeFor does not mistake INV for IF or SO', () => {
+  // The three prefixes are distinct, but a sloppier /^IN?F?/ style test would
+  // catch INV as IF and every invoice would open a fulfilment trace.
+  assert.notEqual(traceTypeFor('INV11524'), 'IF')
+  assert.notEqual(traceTypeFor('INV11524'), 'SO')
+})
+
+test('a traceTypeFor result is always a traceable type or null', () => {
+  for (const n of ['SO1', 'IF1', 'INV1', 'PO1', 'junk']) {
+    const t = traceTypeFor(n)
+    assert.ok(t === null || TRACE_TYPES.includes(t))
+  }
 })

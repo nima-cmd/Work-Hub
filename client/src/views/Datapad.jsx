@@ -23,7 +23,7 @@ import { pushTrail, labelFor } from '../../../src/model/trace.js'
 
 const shortWhen = (d) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '')
 
-export default function Datapad({ onNavigate }) {
+export default function Datapad({ onNavigate, handoffTrace, onHandoffTaken }) {
   // The trail IS the state — its last entry is the subject. Keeping one list
   // rather than a subject plus a history means the two can never disagree.
   const [trail, setTrail] = useState([])
@@ -40,6 +40,15 @@ export default function Datapad({ onNavigate }) {
     setRecent(null)
     fetchTraceRecent({ limit: 60, notesOnly }).then(setRecent).catch(() => setRecent([]))
   }, [notesOnly])
+
+  // A subject handed over from the drawer's ⤢ button. Taken ONCE and then cleared in
+  // App, so "← back to recent" actually goes back instead of being re-seeded on the
+  // next render — a handoff is an event, not a standing prop.
+  useEffect(() => {
+    if (!handoffTrace) return
+    setTrail([{ docType: handoffTrace.docType, docNumber: handoffTrace.docNumber }])
+    onHandoffTaken?.()
+  }, [handoffTrace, onHandoffTaken])
 
   // Debounced search. The sequence guard drops a slow response that lands after a
   // newer one — otherwise typing fast leaves the results of a shorter prefix on

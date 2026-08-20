@@ -65,6 +65,28 @@ export function normalizeRef(docType, docNumber) {
   return { docType: type, docNumber: number }
 }
 
+// Which kind of trace does this document number address?
+//
+// ⚠️ This reads OUR prefix, and that is legitimate here in a way it is NOT for a
+// NetSuite URL. netsuiteLinks.js refuses to derive a NetSuite page name from the
+// prefix because the page name is NetSuite's fact, not ours — but `orders.so_number`
+// literally IS 'SO12296' and `fulfillments.if_number` IS 'IF7486', so the prefix is
+// the primary key's own shape. It answers "which of MY tables", never "what does
+// NetSuite think this is".
+//
+// Anything we cannot place returns null, and every caller must treat that as "no
+// trace", never as a default type. A PO, an item receipt or a transfer order lands
+// here and must keep whatever behaviour it had.
+export function traceTypeFor(docNumber) {
+  const s = String(docNumber || '').trim().toUpperCase()
+  // INV before SO/IF only matters if a prefix were a prefix of another; they are not,
+  // but the order is kept explicit so adding one later cannot silently shadow.
+  if (/^INV\d/.test(s)) return 'INV'
+  if (/^SO\d/.test(s)) return 'SO'
+  if (/^IF\d/.test(s)) return 'IF'
+  return null
+}
+
 // ── Related cards ───────────────────────────────────────────────────────────
 
 const card = (docType, docNumber, detail, extra = {}) => ({

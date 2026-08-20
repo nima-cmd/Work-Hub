@@ -17,6 +17,7 @@ import Tasks from './views/Tasks.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
 import Datapad from './views/Datapad.jsx'
+import { TraceDrawerProvider } from './TraceDrawer.jsx'
 import Ledger from './views/Ledger.jsx'
 import Health from './views/Health.jsx'
 import ShipDepartures from './views/ShipDepartures.jsx'
@@ -174,6 +175,12 @@ export default function App() {
   const [syncHealth, setSyncHealth] = useState(null)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('command')
+  // A trace handed over from the drawer to the full Datapad page (its ⤢ button).
+  // Held here rather than inside Datapad because a view is REMOUNTED on every tab
+  // switch, so state that has to survive the switch cannot live in the view.
+  const [handoffTrace, setHandoffTrace] = useState(null)
+  // onNavigate everywhere: setView, plus an optional subject to hand over with it.
+  const navigate = (key, subject = null) => { setView(key); if (subject) setHandoffTrace(subject) }
   const [credits, setCredits] = useState(null)
   const [arrivals, setArrivals] = useState([])
   // Ship desk + the two other "whose court" feeds. These live here rather than
@@ -341,6 +348,9 @@ export default function App() {
   const attention = (orders ? orders.filter((o) => o.severity > 0).length : 0) + openTaskCount
 
   return (
+    // Every view sits inside the drawer's provider, because NsLink prints document
+    // numbers on nearly all of them and the drawer has to be openable from any.
+    <TraceDrawerProvider onNavigate={navigate}>
     <div className="app">
       <header className="topbar">
         <div className="brand">
@@ -404,13 +414,15 @@ export default function App() {
             label gaps were invisible precisely because you had to go looking
             for them. It renders on every view and hides itself when clear. */}
         <SyncAlarm health={syncHealth} />
-        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} inbound={inbound} onNavigate={setView} />
+        <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} inbound={inbound} onNavigate={navigate} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
         {orders && <Active orders={orders} tasks={tasks} emails={emails} activity={activity} events={events} views={VIEWS}
                            labelGaps={labelGaps} custody={custody} bay={bay}
-                           onNavigate={setView} onRefresh={refresh} />}
+                           handoffTrace={handoffTrace} onHandoffTaken={() => setHandoffTrace(null)}
+                           onNavigate={navigate} onRefresh={refresh} />}
       </main>
     </div>
+    </TraceDrawerProvider>
   )
 }
