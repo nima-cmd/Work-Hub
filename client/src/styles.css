@@ -1861,6 +1861,12 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
    another … perhaps based by the relay" — the relay grouping already existed
    (transmission / edi / protocol / manual); only the layout was missing. */
 .taskGroupList {
+  /* ⚠️ MUST SPAN THE PARENT. `.taskGroup` is ITSELF a grid of minmax(340px, 1fr)
+     columns (line ~861), and this list is one of its children — so without this it is
+     placed in a single 340px column and its own auto-fill grid has 340px to divide.
+     The inner grid was correct and starved; the cards stayed in one column on a 1800px
+     monitor. `.taskGroupHead` has always had this line; the list needed it too. */
+  grid-column: 1 / -1;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 8px 10px; align-items: start;
 }
