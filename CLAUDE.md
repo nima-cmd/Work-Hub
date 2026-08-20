@@ -287,9 +287,31 @@ src/model/dbCopyPlan.js  db:copy's guards, column plan and verification, as pure
 docs/                    NetSuite saved-search design + document-linking strategy
 ```
 
+## The Weaver mirror (started 2026-08-20)
+
+Tables prefixed `weaver_*` mirror NAGHEDI's **Weaver** Airtable base and reconcile it
+against NetSuite. `npm run weaver:sync` records a run; `npm run check:weaver` is the
+read-only sibling and must stay that way. **Neither ever writes to NetSuite or Airtable** —
+Weaver is the source of truth and nothing here modifies it.
+
+**→ Read [`docs/weaver-mirror.md`](docs/weaver-mirror.md) before touching any `weaver_*`
+table.** Three things bite immediately: `weaver_sync_run.ok` tracks *in-sync*, not run
+health (a cron must read `error`); exit code 1 means "divergence needs a human", not
+failure; and the snapshot tables key on stable ids rather than SKU, because SKUs move and
+that movement is the whole problem being solved.
+
+It also holds the **first working Weaver↔Shopify comparison** (`src/ingest/shopifyStorefront.js`),
+read from the public storefront with no credentials. Weaver's own Shopify diff formulas
+compare a field to itself and are permanently empty, so this had never been checked before.
+
+The reasoning behind all of it lives in a **separate repo**, `~/src/weaver` — this repo has
+the code but not the context.
+
 ## Open threads (need Nima's input)
 
 - The two OC↔PO custom-field names in NetSuite (to ingest existing links).
 - A PO-receiving saved-search export (spec in `docs/`) → unlocks the inbound↔
   outbound allocation link and the real-stall detector.
 - Which UI view to keep as default (all four work today).
+- A Shopify Admin API token (custom app) — needed for the metafield half of Weaver↔Shopify
+  parity. The storefront half needs no credentials and can be built first.

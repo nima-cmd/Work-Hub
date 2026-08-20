@@ -3145,3 +3145,78 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .vu-glanced { color: var(--mid); border-color: var(--mid); }
 .vu-unused  { color: var(--muted); border-color: var(--line); }
 .vu-default { color: #4fd1ff; border-color: #4fd1ff; }
+
+/* ── Weaver (views/Weaver.jsx) ─────────────────────────────────────────────────
+   Reuses .hlHead / .hlVerdict / .banner from Health so the two reconciliation
+   pages read as siblings — they answer the same kind of question. Only the
+   Weaver-specific bits live here. */
+
+.weaver { padding-bottom: 2rem; }
+.wvSub { margin-top: .25rem; font-size: .82rem; }
+
+.wvTiles {
+  display: grid; gap: .6rem; margin: 1rem 0 1.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+}
+.wvTile {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: .7rem .8rem;
+}
+.wvTileVal { font-family: var(--display); font-size: 1.5rem; line-height: 1.1; }
+.wvTileLabel { color: var(--muted); font-size: .78rem; margin-top: .3rem; }
+.wvTileHint { color: var(--mid); font-size: .7rem; margin-top: .2rem; }
+
+.wvDelta { font-family: var(--display); font-size: .78rem; margin-left: .4rem; vertical-align: super; }
+.wvDelta.up   { color: var(--mid); }
+.wvDelta.down { color: #7ee787; }
+
+.wvSection {
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); margin-bottom: .7rem; overflow: hidden;
+}
+.wvSection.bad  { border-color: color-mix(in srgb, var(--hi) 55%, var(--line)); }
+.wvSection.warn { border-color: color-mix(in srgb, var(--mid) 40%, var(--line)); }
+
+.wvSectionHead {
+  display: flex; align-items: center; gap: .55rem; width: 100%;
+  background: none; border: 0; color: var(--text);
+  padding: .7rem .9rem; font-size: .95rem; text-align: left; cursor: pointer;
+}
+.wvSectionHead:hover { background: rgba(255,255,255,.03); }
+.wvSectionHead.static { cursor: default; }
+.wvSectionHead.static:hover { background: none; }
+.wvCaret { color: var(--muted); font-size: .8rem; width: .8rem; }
+
+.wvCount {
+  font-family: var(--display); font-size: .78rem;
+  padding: .1rem .45rem; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.wvCount.bad  { color: var(--hi);  border-color: var(--hi); }
+.wvCount.warn { color: var(--mid); border-color: var(--mid); }
+.wvCount.info { color: var(--lo);  border-color: var(--lo); }
+.wvCount.ok   { color: #7ee787; border-color: #7ee787; }
+.wvBenign { font-size: .76rem; }
+
+.wvSectionBody { padding: 0 .9rem .9rem; }
+.wvBlurb { font-size: .8rem; line-height: 1.5; margin: .1rem 0 .7rem; max-width: 78ch; }
+
+.wvTable { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.wvTable th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: .74rem;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: .3rem .5rem; border-bottom: 1px solid var(--line);
+}
+.wvTable td { padding: .34rem .5rem; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: top; }
+.wvTable tr:last-child td { border-bottom: 0; }
+.wvTable tr.wvHard { background: color-mix(in srgb, var(--hi) 9%, transparent); }
+.wvWrap { white-space: normal; word-break: break-word; }
+.wvAge { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+
+.wvPill {
+  display: inline-block; font-size: .72rem; padding: .08rem .4rem;
+  border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+}
+.wvPill.bad { color: var(--hi); border-color: var(--hi); }
+
+.wvFoot { font-size: .78rem; margin-top: 1.2rem; line-height: 1.6; }

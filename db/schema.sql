@@ -1796,3 +1796,136 @@ CREATE TABLE IF NOT EXISTS weaver_divergence (
 );
 CREATE INDEX IF NOT EXISTS weaver_divergence_run_idx  ON weaver_divergence (run_id);
 CREATE INDEX IF NOT EXISTS weaver_divergence_kind_idx ON weaver_divergence (kind, internal_id);
+
+-- ── Weaver Products — the authoring side (2026-08-20) ────────────────────────
+--
+-- weaver_netsuite_item records what NetSuite calls each item. That is only half
+-- the picture: in every one of Weaver's 17 MISMATCH rows NetSuite holds the OLD
+-- sku (NS47300FK) while the new one (NS47300EF) exists only here, as a COMPUTED
+-- field on the Airtable product. Without this table weaver_sku_history can only
+-- see renames NetSuite performs itself — which is none of them.
+--
+-- Keyed on the Airtable record id, which is stable while the computed sku moves
+-- underneath it. Same discipline as internal-id-not-sku on the NetSuite side.
+CREATE TABLE IF NOT EXISTS weaver_product (
+  airtable_record_id       TEXT PRIMARY KEY,
+  sku                      TEXT,
+  style_number             TEXT,
+  product_name             TEXT,
+  product_status           TEXT,
+  product_type             TEXT,
+  has_errors               BOOLEAN,
+  upc_status               TEXT,
+  shopify_product_id       TEXT,
+  duplicate_count          INTEGER,   -- -1 means "never checked", not "no duplicates"
+  should_generate_variants BOOLEAN,
+  for_shopify              BOOLEAN,
+  raw                      JSONB NOT NULL,
+  first_seen_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  observed_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS weaver_product_sku_idx ON weaver_product (sku);
+CREATE INDEX IF NOT EXISTS weaver_product_style_idx ON weaver_product (style_number);
+
+-- Every sku a Weaver product has ever computed. THE drift record: more than one
+-- row for a record id means that product was renumbered, and the earlier sku is
+-- what NetSuite is still holding.
+CREATE TABLE IF NOT EXISTS weaver_product_sku_history (
+  airtable_record_id TEXT NOT NULL,
+  sku                TEXT NOT NULL,
+  first_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (airtable_record_id, sku)
+);
+CREATE INDEX IF NOT EXISTS weaver_product_sku_history_sku_idx ON weaver_product_sku_history (sku);
+
+-- New finding kind: a NetSuite sku that matches no Weaver product sku at all.
+-- Unlike the history tables this is answerable on the FIRST run, which is the
+-- point — it explains the existing MISMATCH rows without waiting for a rename.
+-- CHECK constraints cannot be extended in place, so drop and re-add; both are
+-- idempotent and the table is append-only, so nothing is at risk.
+-- ⚠ ONE constraint definition only, at the end of the file. This started as three
+-- layered DROP/ADD pairs — one per new finding kind — and `npm run migrate` then
+-- failed with "check constraint is violated by some row": schema.sql runs top to
+-- bottom, so the EARLIEST, narrowest list was applied first and existing
+-- upc_collision rows broke it. A superseded CHECK must be edited in place, never
+-- appended alongside. See the single definition further down.
+
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS weaver_products INTEGER;
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS stranded_skus   INTEGER;
+
+-- ── UPC collisions (2026-08-20) ──────────────────────────────────────────────
+--
+-- A UPC on more than one ACTIVE NetSuite item. Weaver cannot see this: its own
+-- duplicate detector (`UPC Codes.Count Assigned SKUs`) counts WEAVER VARIANTS,
+-- and when a product is re-coded there is still legitimately one variant — so the
+-- UPC reads "In Use", count 1, perfectly healthy, while sitting on two live
+-- NetSuite items. Measured 2026-08-20: 4 such UPCs, all reported clean by Weaver.
+--
+-- Three are re-code twins (same product, two weave codes) where sharing the UPC
+-- is arguably correct until the obsolete item is inactivated. The fourth,
+-- 840470801635, is on TWO DIFFERENT PRODUCTS — Portofino Large Cosmetic Pouch and
+-- SN16044LD-SLATE-BLUE — which is a GS1 violation and can reach a retailer.
+
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS upc_collisions INTEGER;
+
+-- ── Shopify, read from the public storefront (2026-08-20) ────────────────────
+--
+-- Weaver's Shopify-side diff formulas compare a field TO ITSELF and are therefore
+-- permanently empty; there is no field in Weaver holding Shopify's real state, so
+-- the comparison cannot be repaired in Airtable. It lives here instead.
+--
+-- No credentials: /products.json on the public storefront carries 8 of the 11
+-- keys Weaver's own comparison key lists. Status, category, theme_template and
+-- every metafield need the Admin API and a token nobody has requested yet.
+-- The storefront shows PUBLISHED products only, which is exactly right for
+-- "is it live?" and useless for distinguishing draft from archived.
+CREATE TABLE IF NOT EXISTS weaver_shopify_product (
+  product_id    TEXT PRIMARY KEY,
+  handle        TEXT,
+  title         TEXT,
+  vendor        TEXT,
+  product_type  TEXT,
+  option1_name  TEXT,
+  tags          TEXT[],
+  image_count   INTEGER,
+  variant_count INTEGER,
+  published_at  TIMESTAMPTZ,
+  updated_at    TIMESTAMPTZ,
+  raw           JSONB NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  observed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- SKU lives on the variant, and sku is the only key shared across all three
+-- systems, so the variant is the row that matters for reconciliation.
+CREATE TABLE IF NOT EXISTS weaver_shopify_variant (
+  variant_id  TEXT PRIMARY KEY,
+  product_id  TEXT,
+  sku         TEXT,
+  price       NUMERIC,
+  available   BOOLEAN,
+  option1     TEXT,
+  position    INTEGER,
+  raw         JSONB NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS weaver_shopify_variant_sku_idx ON weaver_shopify_variant (sku);
+CREATE INDEX IF NOT EXISTS weaver_shopify_variant_product_idx ON weaver_shopify_variant (product_id);
+
+-- Weaver product fields needed to compare against Shopify.
+ALTER TABLE weaver_product ADD COLUMN IF NOT EXISTS handle       TEXT;
+ALTER TABLE weaver_product ADD COLUMN IF NOT EXISTS vendor       TEXT;
+ALTER TABLE weaver_product ADD COLUMN IF NOT EXISTS option1_name TEXT;
+ALTER TABLE weaver_product ADD COLUMN IF NOT EXISTS tags         TEXT;
+ALTER TABLE weaver_product ADD COLUMN IF NOT EXISTS body_html    TEXT;
+
+ALTER TABLE weaver_divergence DROP CONSTRAINT IF EXISTS weaver_divergence_kind_check;
+ALTER TABLE weaver_divergence ADD CONSTRAINT weaver_divergence_kind_check CHECK (kind IN
+  ('missing_in_weaver','stale_in_weaver','field_drift','mismatch_flagged','stranded_sku',
+   'upc_collision','shopify_drift','shopify_orphan','shopify_missing'));
+
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS shopify_products INTEGER;
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS shopify_drift    INTEGER;
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS shopify_orphan   INTEGER;
+ALTER TABLE weaver_sync_run ADD COLUMN IF NOT EXISTS shopify_missing  INTEGER;

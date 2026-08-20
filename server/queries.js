@@ -4831,3 +4831,83 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
     return busyFrom(e?.message) ? { busy: true, reason: 'celigo' } : { error: e?.message || String(e) }
   }
 }
+
+// ── Weaver reconciliation ────────────────────────────────────────────────────
+// Powers views/Weaver.jsx. Same principle as Health: every "run `npm run
+// weaver:sync`" instruction should be answerable without a terminal, because the
+// person who has to fix a UPC collision is not the person with a shell.
+//
+// The one thing this shows that Weaver itself cannot is AGE. Airtable stores a
+// present; `weaver_divergence` stores one row per finding per run, so "how long
+// has this been wrong?" becomes a query. Everything else here is available in
+// Weaver somewhere; the age column is not.
+export async function getWeaver({ runLimit = 30 } = {}) {
+  const { rows: runs } = await pool.query(
+    `SELECT id, started_at, finished_at, ok, error,
+            netsuite_rows, weaver_rows, weaver_products,
+            missing_in_weaver, stale_in_weaver, field_drift,
+            mismatch_flagged, stranded_skus, upc_collisions,
+            shopify_products, shopify_drift, shopify_orphan, shopify_missing
+       FROM weaver_sync_run ORDER BY id DESC LIMIT $1`, [runLimit])
+
+  if (!runs.length) return { runs: [], latest: null, findings: {}, totals: null }
+
+  const latest = runs[0]
+
+  const { rows: totalsRows } = await pool.query(
+    `SELECT (SELECT count(*) FROM weaver_netsuite_item)       AS ns_items,
+            (SELECT count(*) FROM weaver_product)             AS products,
+            (SELECT count(*) FROM weaver_back_office)         AS back_office,
+            (SELECT count(*) FROM weaver_sku_history)         AS sku_history,
+            (SELECT count(*) FROM weaver_product_sku_history) AS product_sku_history,
+            (SELECT count(*) FROM weaver_shopify_product)      AS shopify_products,
+            (SELECT count(*) FROM weaver_shopify_variant)      AS shopify_variants`)
+
+  // Findings on the latest run, each carrying how long it has been present.
+  // Age is computed across ALL runs, not just the ones in `runLimit` — a finding
+  // older than the window would otherwise look new, which is the one number on
+  // this page nobody can get anywhere else.
+  const { rows: findingRows } = await pool.query(
+    `WITH age AS (
+       SELECT d.kind, d.internal_id,
+              min(r.started_at) AS since, count(DISTINCT r.id) AS run_count
+         FROM weaver_divergence d JOIN weaver_sync_run r ON r.id = d.run_id
+        WHERE NOT d.benign
+        GROUP BY d.kind, d.internal_id
+     )
+     SELECT d.kind, d.internal_id, d.sku, d.detail, d.benign,
+            a.since, a.run_count
+       FROM weaver_divergence d
+       LEFT JOIN age a
+              ON a.kind = d.kind
+             AND a.internal_id IS NOT DISTINCT FROM d.internal_id
+      WHERE d.run_id = $1
+      ORDER BY d.kind, d.sku`, [latest.id])
+
+  const findings = {}
+  const benignCounts = {}
+  for (const f of findingRows) {
+    if (f.benign) { benignCounts[f.kind] = (benignCounts[f.kind] || 0) + 1; continue }
+    ;(findings[f.kind] ||= []).push({
+      internalId: f.internal_id, sku: f.sku, detail: f.detail,
+      since: f.since, runCount: Number(f.run_count) || 1,
+    })
+  }
+
+  // Products that have carried more than one computed sku. Empty until a rename
+  // happens under observation — existing drift shows up as stranded_sku instead.
+  const { rows: recoded } = await pool.query(
+    `SELECT h.airtable_record_id, p.product_name, p.product_status,
+            array_agg(h.sku ORDER BY h.first_seen_at) AS skus,
+            min(h.first_seen_at) AS first_seen
+       FROM weaver_product_sku_history h
+       LEFT JOIN weaver_product p ON p.airtable_record_id = h.airtable_record_id
+      GROUP BY h.airtable_record_id, p.product_name, p.product_status
+     HAVING count(*) > 1
+      ORDER BY min(h.first_seen_at) DESC LIMIT 50`)
+
+  return {
+    runs, latest, previous: runs[1] ?? null,
+    totals: totalsRows[0], findings, benignCounts, recoded,
+  }
+}

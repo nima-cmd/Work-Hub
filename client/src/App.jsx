@@ -13,6 +13,7 @@ import Allocations from './views/Allocations.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Routing from './views/Routing.jsx'
 import Catalogue from './views/Catalogue.jsx'
+import Weaver from './views/Weaver.jsx'
 import Tasks from './views/Tasks.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
@@ -146,6 +147,7 @@ const VIEWS = [
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'routing', label: 'Routing', C: Routing },
   { key: 'catalogue', label: 'Catalogue', C: Catalogue },
+  { key: 'weaver', label: 'Weaver', C: Weaver },
   // Dedicated task list (Nima, 2026-07-21) — a peer to Transmissions/EDI; the
   // single home task clicks jump to and where SO/EDI "task exists" links land.
   { key: 'tasks', label: 'Tasks', C: Tasks },

@@ -21,6 +21,8 @@
     "backfill:events": "node --env-file=.env.local scripts/backfill-events.js",
     "ups:rate": "node --env-file=.env.local scripts/ups-rate.js",
     "check:netsuite": "node --env-file=.env.local scripts/check-netsuite.js",
+    "check:weaver": "node --env-file=.env.local scripts/check-weaver.js",
+    "weaver:sync": "node --env-file=.env.local scripts/weaver-sync.js",
     "check:shipstation": "node --env-file=.env.local scripts/check-shipstation.js",
     "check:asn-cartons": "node --env-file=.env.local scripts/check-asn-cartons.js",
     "check:warehouse-feed": "node --env-file=.env.local scripts/check-warehouse-feed.js",

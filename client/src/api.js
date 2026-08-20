@@ -1022,3 +1022,10 @@ export async function fetchPulse() {
   if (!res.ok) throw new Error('pulse ' + res.status)
   return res.json()
 }
+
+// Weaver ↔ NetSuite reconciliation (views/Weaver.jsx). Read-only.
+export async function fetchWeaver() {
+  const res = await fetch('/api/weaver')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

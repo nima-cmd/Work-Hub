@@ -17,6 +17,7 @@ import {
   getInboundContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
+  getWeaver,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
@@ -172,6 +173,14 @@ app.get('/api/health', async (_req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Weaver ↔ NetSuite reconciliation. Read-only: the page reports, it never syncs.
+// Running a sync is `npm run weaver:sync` and stays deliberately out of the UI —
+// it writes, and a write should not be one stray click away.
+app.get('/api/weaver', async (_req, res) => {
+  try { res.json(await getWeaver()) }
+  catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 app.get('/api/sync-health', async (_req, res) => {
