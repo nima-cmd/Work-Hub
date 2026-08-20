@@ -20,13 +20,16 @@ export async function loadOrders(orders, db = pool) {
          (so_number, customer, location, po_number, is_ats, source, stage, so_status,
           qty_ordered, qty_allocated, qty_fulfilled, amount_paid, shipping_status,
           start_date, ship_date, cancel_date, notes, approval_status, billing_status,
-          dc, store_number, is_placeholder, terms, window_start, window_end,
+          dc, store_number, is_placeholder, terms, window_start, window_end, oc_number,
           last_seen, last_movement, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now(), now(), now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now(), now(), now())
        ON CONFLICT (so_number) DO UPDATE SET
          customer        = COALESCE(EXCLUDED.customer, orders.customer),
          location        = COALESCE(EXCLUDED.location, orders.location),
          po_number       = COALESCE(EXCLUDED.po_number, orders.po_number),
+         -- ⚠️ COALESCE, like every column here: the OC-link pull SOFT-FAILS, so a run
+         -- that could not reach it sends null and would otherwise wipe every known OC.
+         oc_number       = COALESCE(EXCLUDED.oc_number, orders.oc_number),
          dc              = COALESCE(EXCLUDED.dc, orders.dc),
          store_number    = COALESCE(EXCLUDED.store_number, orders.store_number),
          -- COALESCE (2026-07-30): the CSV mapper always sends a real boolean, so
@@ -77,6 +80,9 @@ export async function loadOrders(orders, db = pool) {
         // exactly this reason once already.
         o.windowStart || null,
         o.windowEnd || null,
+        // The OC this order was created from (Nima's grouping model). `undefined ||
+        // null` is deliberate — see the COALESCE on this column.
+        o.ocNumber || null,
       ],
     )
     n++

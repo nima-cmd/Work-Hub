@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchTrace, addNote, deleteNote } from './api.js'
 import { NsLink } from './lib.jsx'
 import { labelFor } from '../../src/model/trace.js'
+import { groupByRole } from '../../src/model/orderLane.js'
 import { imagesFor } from './data/characterImages.js'
 
 const shortDate = (d) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '')
@@ -184,6 +185,22 @@ export default function TraceView({ subject, trail = [], onHop, onNavigate, comp
           </div>
           {s.title && <div className="traceHeadTitle">{s.title}</div>}
           {s.missing && <div className="traceHeadMissing">Not in the database — nothing here but what other records say about it.</div>}
+          {/* WHICH SHAPE this order is (Nima's grouping model). Absent when we cannot
+              place it, rather than showing a lane that sounds like a finding. */}
+          {s.lane && (
+            <div className="traceLane" title={s.lane.blurb}>
+              <span className={'traceLaneName lane-' + s.lane.key}>{s.lane.label}</span>
+              <span className="traceLaneShape mono">{s.lane.shape}</span>
+            </div>
+          )}
+          {/* An OC is open or converted, and the two are disjoint — so an empty
+              converted OC explains itself instead of looking broken. */}
+          {s.state && (
+            <div className="traceLane">
+              <span className={'traceLaneName ocstate-' + s.state.key}>{s.state.label}</span>
+              <span className="traceLaneShape">{s.state.note}</span>
+            </div>
+          )}
           <div className="traceFacts">
             {(s.facts || []).map((f) => (
               <span key={f.k} className="traceFact"><span className="traceFactK">{f.k}</span> {f.v}</span>
@@ -223,9 +240,19 @@ export default function TraceView({ subject, trail = [], onHop, onNavigate, comp
               from — a link someone made must not read as one the data implies. */}
           <div className="traceSectionTitle">Related <span className="traceSectionHint">from the data</span></div>
           {!trace.related.length && <div className="empty">Nothing else in the data points at this.</div>}
-          <div className="traceCards">
-            {trace.related.map((c) => <RelatedCard key={`${c.docType}:${c.docNumber}`} card={c} onHop={onHop} />)}
-          </div>
+          {/* GROUPED by the role each document plays in this order's shape — where it
+              came from, the order, what came out of it — rather than one flat list.
+              Nima asked for organization and specifically that the same thing not
+              appear in two places; groupByRole is tested to place every card exactly
+              once. */}
+          {groupByRole(trace.related).map((g) => (
+            <div key={g.key} className="traceRoleGroup">
+              <div className="traceRoleLabel">{g.label}</div>
+              <div className="traceCards">
+                {g.cards.map((c) => <RelatedCard key={`${c.docType}:${c.docNumber}`} card={c} onHop={onHop} />)}
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="traceSection">

@@ -36,9 +36,10 @@ import { computeAffection } from '../src/model/affection.js'
 import { SPINE_LABEL, timeline, isOurInvoiceNumber, invNumberFrom810 } from '../src/model/orderEvents.js'
 import {
   TRACE_TYPES, normalizeRef, buildTrace, orderCard, fulfillmentCards, invoiceCards,
-  taskCards, emailCards, traceTypeFor,
+  taskCards, emailCards, traceTypeFor, labelFor, toneFor,
 } from '../src/model/trace.js'
 import { isoDate } from '../src/model/upsRates.js'
+import { laneFor, anchorFor } from '../src/model/orderLane.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -215,7 +216,14 @@ export async function getOrders() {
       stageLabel: STAGE_LABEL[r.stage] || r.stage,
       stageRank: STAGE_RANK[r.stage] || 0,
       nextAction: NEXT_ACTION[r.stage] || '',
+      // ⚠️ TWO DIFFERENT THINGS, both called "PO". `poNumber` is the CUSTOMER's PO to
+      // us (measured 2026-08-20: zero of its values appear in purchase_orders); the
+      // factory PO reached through the OC is ours. Any surface printing one must say
+      // which — see [[order-lane-hierarchy]].
       poNumber: r.po_number,
+      // The OC this order was created from — the edge Nima's grouping model needs.
+      // Named here or it reaches no surface: the whitelist trap.
+      ocNumber: r.oc_number,
       soStatus: r.so_status,
       qtyOrdered: num(r.qty_ordered),
       qtyAllocated: num(r.qty_allocated),
@@ -1007,6 +1015,7 @@ export async function getTrace(docType, docNumber) {
 
   if (ref.docType === 'EMAIL') return buildTrace({ ...common, ...(await emailTrace(ref)) })
   if (ref.docType === 'TASK') return buildTrace({ ...common, ...(await taskTrace(ref)) })
+  if (ref.docType === 'OC') return buildTrace({ ...common, ...(await ocTrace(ref)) })
   return buildTrace({ ...common, ...(await orderSideTrace(ref)) })
 }
 
@@ -1022,7 +1031,12 @@ async function orderSideTrace(ref) {
 
   const [{ rows: orders }, { rows: ifs }, { rows: invs }, ledger, tasks] = await Promise.all([
     pool.query(
+      // ⚠️ oc_number IS IN THIS LIST, and it has to be. This projection is its own
+      // whitelist — the fifth layer — and leaving it out made every OC-anchored order
+      // report the "presold, no confirmation" lane while the column held its OC. Found
+      // on SO12344, whose row said OC1539 the whole time.
       `SELECT so_number AS "soNumber", customer, stage, source, location, po_number AS "poNumber",
+              oc_number AS "ocNumber",
               is_ats AS "isAts", so_status AS "soStatus", shipping_status AS "shippingStatus",
               approval_status AS "approvalStatus", billing_status AS "billingStatus",
               start_date AS "startDate", ship_date AS "shipDate", cancel_date AS "cancelDate"
@@ -1041,7 +1055,24 @@ async function orderSideTrace(ref) {
   ])
 
   const order = orders[0] || null
+  // The anchor — the thing this order's whole chain hangs off. An OC is a document we
+  // hold, so it is a real hop; the CUSTOMER's PO is a reference printed on the order,
+  // so it is a mention. Never conflated: they share no values at all.
+  const anchor = anchorFor(order || {})
+  const anchorCards = []
+  if (anchor?.docType === 'OC') {
+    anchorCards.push({
+      docType: 'OC', docNumber: anchor.docNumber, detail: 'the confirmation this was sold against',
+      tone: toneFor('OC'), hoppable: true,
+    })
+  } else if (anchor?.docType === 'THEIR_PO') {
+    anchorCards.push({
+      docType: 'THEIR_PO', docNumber: anchor.docNumber, detail: 'the PO the partner sent us',
+      tone: toneFor('THEIR_PO'), hoppable: false, missing: false, reference: true,
+    })
+  }
   const related = [
+    ...anchorCards,
     ...(ref.docType === 'SO' ? [] : [orderCard(order)]),
     ...fulfillmentCards(ifs, invs),
     ...invoiceCards(invs),
@@ -1055,7 +1086,17 @@ async function orderSideTrace(ref) {
     own: e.docType === ref.docType && String(e.docNumber) === ref.docNumber,
   }))
 
-  return { subject: await subjectHeader(ref, { order, fulfillments: ifs, invoices: invs }), history, related }
+  const header = await subjectHeader(ref, { order, fulfillments: ifs, invoices: invs })
+  return { subject: { ...header, lane: laneSummary(order) }, history, related }
+}
+
+// The order's SHAPE, for the header — which of the four lanes it is in and what that
+// lane looks like. Null when we cannot place it, so the header shows nothing rather
+// than a lane that sounds like a finding (see orderLane.js on the null ATS flag).
+function laneSummary(order) {
+  if (!order) return null
+  const lane = laneFor(order)
+  return lane ? { key: lane.key, label: lane.label, shape: lane.shape, blurb: lane.blurb } : null
 }
 
 // Which sales order does this subject belong to? The SO IS one; an IF and an
@@ -1124,6 +1165,74 @@ async function subjectHeader(ref, ctx) {
       Number(i.amountRemaining) > 0 && { k: 'open', v: `$${Number(i.amountRemaining).toLocaleString('en-US', { maximumFractionDigits: 0 })}` },
       i.shipDate && { k: 'ship date', v: isoDate(i.shipDate) },
     ].filter(Boolean),
+  }
+}
+
+// An OC's trace: what was confirmed, and every sales order written against it.
+//
+// This is the top of two of the four lanes, so it is where a group is entered from
+// above. An OC can feed more than one SO (about 10 do), and each of those carries its
+// own IFs and invoices — but this trace deliberately shows only the SOs, not their
+// whole downstream. Nima asked specifically that the same thing not be tracked in two
+// places; fanning every child in here would reprint each order's chain under its OC
+// and again under itself. One hop away is not hidden.
+async function ocTrace(ref) {
+  const [{ rows: lines }, { rows: sos }] = await Promise.all([
+    pool.query(
+      `SELECT oc_number AS "ocNumber", item, customer, ship_to AS "shipTo", location, status,
+              qty, po_check_number AS "poCheckNumber", order_start_date AS "orderStartDate"
+         FROM order_confirmations WHERE oc_number = $1 ORDER BY item`, [ref.docNumber]),
+    pool.query(
+      `SELECT so_number AS "soNumber", customer, stage, source, is_ats AS "isAts",
+              oc_number AS "ocNumber", po_number AS "poNumber"
+         FROM orders WHERE oc_number = $1 ORDER BY so_number`, [ref.docNumber]),
+  ])
+
+  if (!lines.length && !sos.length) {
+    return { subject: { ...ref, title: null, missing: true, facts: [] }, history: [], related: [] }
+  }
+
+  const head = lines[0] || null
+  const units = lines.reduce((n, l) => n + (Number(l.qty) || 0), 0)
+  // The order confirmation itself has ONE date we hold, and it is the only honest
+  // point on this timeline. No IF or invoice events are pulled up here — those belong
+  // to the sales order, and copying them would be the duplication Nima warned about.
+  const history = head?.orderStartDate ? [{
+    id: `oc-${ref.docNumber}`, eventType: 'OC_STARTED', docType: 'OC', docNumber: ref.docNumber,
+    soNumber: null, note: `${lines.length} line${lines.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'}`,
+    source: 'derived', occurredAt: head.orderStartDate, label: 'Order confirmed', observed: true, own: true,
+  }] : []
+
+  return {
+    subject: {
+      docType: 'OC', docNumber: ref.docNumber,
+      title: head?.customer || sos[0]?.customer || null,
+      facts: [
+        head?.status && { k: 'status', v: head.status },
+        lines.length && { k: 'lines', v: String(lines.length) },
+        units && { k: 'units', v: String(units) },
+        head?.location && { k: 'location', v: head.location },
+        // ⚠️ NOT a PO number. The column is named po_check_number and holds free text
+        // like 'Bloom Fall Shoe 2025' — a production-run label. Presenting it as a PO
+        // is exactly the mistake the schema comment warns about.
+        head?.poCheckNumber && { k: 'run', v: head.poCheckNumber },
+        head?.orderStartDate && { k: 'confirmed', v: isoDate(head.orderStartDate) },
+      ].filter(Boolean),
+      // The lane is a property of an ORDER, not of a confirmation — an OC can sit
+      // above orders in more than one lane, so claiming one here would be a guess.
+      lane: null,
+      lineCount: lines.length,
+      // ⚠️ AN OC IS IN EXACTLY ONE OF TWO STATES, and they are disjoint by
+      // construction: measured 2026-08-20, 114 OCs sit in the open feed, 60 are named
+      // by an order, and ZERO are in both — a confirmation leaves the open-OC feed the
+      // moment it converts to a sales order. So an OC with orders legitimately has no
+      // lines here, and saying so beats rendering a page that looks broken.
+      state: lines.length
+        ? { key: 'open', label: 'Still open', note: `${sos.length ? 'Has orders against it, and still has open lines.' : 'No sales order written against it yet.'}` }
+        : { key: 'converted', label: 'Converted', note: 'Its lines have left the open-OC feed — that is what converting to a sales order does. What it became is below.' },
+    },
+    history,
+    related: sos.map((o) => orderCard(o)).filter(Boolean),
   }
 }
 
