@@ -194,7 +194,7 @@ export default function TraceView({ subject, trail = [], onHop, onNavigate, comp
         <div className="traceHeadActions">
           {s.view && onNavigate && <button className="btn" onClick={() => onNavigate(s.view)}>Open in {s.viewLabel || s.view}</button>}
           {s.gmailUrl && <a className="btnGhost" href={s.gmailUrl} target="_blank" rel="noreferrer">↗ Gmail</a>}
-          {['SO', 'IF', 'INV'].includes(s.docType) && <NsLink doc={s.docNumber}>↗ NetSuite</NsLink>}
+          {['SO', 'IF', 'INV'].includes(s.docType) && <NsLink doc={s.docNumber} linkOnly>↗ NetSuite</NsLink>}
         </div>
       </div>
 
