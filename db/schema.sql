@@ -1686,3 +1686,113 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_end   DATE;
 -- changes from {0299} to real stores — a difference the version diff can see even when
 -- quantities are identical.
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS store_codes TEXT[];
+
+-- ── The OC an order came from (Nima, 2026-08-20) ─────────────────────────────
+--
+-- He gave the grouping model: an order is one of four shapes, and two of them start
+-- at an Order Confirmation (OC → PO → SO → IF → INV when the PO was ordered
+-- directly; OC → SO → IF → INV for boutiques, where several OCs sit under one PO).
+-- Neither shape could be drawn, because nothing joined an OC to its sales order.
+--
+-- ⚠️ An OC is a NetSuite **Estimate** (`t.type='Estimate'`, see orderConfirmationSql),
+-- and `createdfrom` is NOT queryable in SuiteQL — the join is
+-- `PreviousTransactionLineLink`, which is LINE-level, so it needs DISTINCT. The
+-- netsuiteSync header already said this for the IF/invoice links.
+--
+-- A single column, not a link table: measured live 2026-08-20, ALL 1,389 linked
+-- sales orders have EXACTLY ONE Estimate parent. (The reverse is one-to-many — about
+-- 10 OCs feed two SOs each — which a column on this side represents correctly.)
+-- If a second parent ever appears, this becomes a link table; a column would then
+-- silently keep whichever arrived last.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS oc_number TEXT;
+CREATE INDEX IF NOT EXISTS idx_orders_oc ON orders(oc_number);
+
+-- ── Weaver domain (2026-08-20) ───────────────────────────────────────────────
+--
+-- Folded in from a standalone db/schema-weaver.sql, which `npm run migrate` never
+-- read — it applies THIS file only, so the weaver tables silently never existed.
+-- One schema file, one migrate path.
+--
+-- Prefixed weaver_ so it never entangles with the EDI/order/label domains.
+-- Deliberately does NOT touch catalogue_skus: that is EDI-derived, keyed
+-- '<PRODUCTID>|<COLORNORM>', and coupling product-master work to EDI correctness
+-- on day one buys nothing.
+
+-- Every reconciliation run, so drift has a history rather than just a "now".
+CREATE TABLE IF NOT EXISTS weaver_sync_run (
+  id                BIGSERIAL PRIMARY KEY,
+  started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at       TIMESTAMPTZ,
+  ok                BOOLEAN,
+  netsuite_rows     INTEGER,
+  weaver_rows       INTEGER,
+  missing_in_weaver INTEGER,
+  stale_in_weaver   INTEGER,
+  field_drift       INTEGER,
+  mismatch_flagged  INTEGER,
+  error             TEXT
+);
+
+-- NetSuite item state as observed. Keyed on internal id, which is stable;
+-- sku is NOT a key here because it moves when a weave code changes. That
+-- movement is exactly what Weaver cannot remember: the 17 MISMATCH rows are all
+-- style-number drift (NS47300FK -> EF, SN030xx -> SN130xx), and Airtable has no
+-- record that the old number ever existed. This table is that record.
+CREATE TABLE IF NOT EXISTS weaver_netsuite_item (
+  internal_id        TEXT PRIMARY KEY,
+  sku                TEXT,
+  upc                TEXT,
+  hts                TEXT,
+  parent_internal_id TEXT,
+  inactive           BOOLEAN,
+  ignore_in_airtable BOOLEAN,
+  product_type       TEXT,
+  provenance         TEXT,
+  image_file_id      TEXT,
+  shopify_gid        TEXT,
+  raw                JSONB NOT NULL,     -- keep the payload: re-derive without re-fetching
+  first_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  observed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS weaver_netsuite_item_sku_idx ON weaver_netsuite_item (sku);
+
+-- Every SKU an internal id has ever carried. One row per (internal_id, sku).
+-- This is the pre-Weaver gap and the MISMATCH root cause in one table: 2,186
+-- items predate Weaver entirely, and renumbered items strand their mirror rows.
+CREATE TABLE IF NOT EXISTS weaver_sku_history (
+  internal_id   TEXT NOT NULL,
+  sku           TEXT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (internal_id, sku)
+);
+CREATE INDEX IF NOT EXISTS weaver_sku_history_sku_idx ON weaver_sku_history (sku);
+
+-- Weaver's Back Office mirror as observed.
+CREATE TABLE IF NOT EXISTS weaver_back_office (
+  airtable_record_id TEXT PRIMARY KEY,
+  internal_id        TEXT,
+  sku                TEXT,
+  upc                TEXT,
+  hts                TEXT,
+  mismatch_flag      TEXT,
+  raw                JSONB NOT NULL,
+  observed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS weaver_back_office_internal_id_idx ON weaver_back_office (internal_id);
+
+-- One row per finding per run. Lets you ask "how long has this been diverging?"
+-- which a snapshot cannot answer -- and that question is the whole point of
+-- automating a check that a human was already doing correctly.
+CREATE TABLE IF NOT EXISTS weaver_divergence (
+  id           BIGSERIAL PRIMARY KEY,
+  run_id       BIGINT NOT NULL REFERENCES weaver_sync_run(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN
+                 ('missing_in_weaver','stale_in_weaver','field_drift','mismatch_flagged')),
+  internal_id  TEXT,
+  sku          TEXT,
+  detail       JSONB,
+  benign       BOOLEAN NOT NULL DEFAULT false   -- inactive / Ignore in Airtable
+);
+CREATE INDEX IF NOT EXISTS weaver_divergence_run_idx  ON weaver_divergence (run_id);
+CREATE INDEX IF NOT EXISTS weaver_divergence_kind_idx ON weaver_divergence (kind, internal_id);

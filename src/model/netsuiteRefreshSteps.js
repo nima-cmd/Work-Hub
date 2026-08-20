@@ -42,6 +42,7 @@ export const REFRESH_STEPS = [
   { key: 'fulfillments', phase: 'Pulling', label: 'fulfilments' },
   { key: 'invoices', phase: 'Pulling', label: 'invoices' },
   { key: 'tracking', phase: 'Pulling', label: 'tracking' },
+  { key: 'ocLinks', phase: 'Pulling', label: 'OC links' },
   { key: 'purchaseOrders', phase: 'Pulling', label: 'purchase orders' },
   { key: 'orderConfirmations', phase: 'Pulling', label: 'order confs' },
   // Then one transaction, in its real order.

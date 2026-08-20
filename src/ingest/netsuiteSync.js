@@ -412,6 +412,29 @@ export function fulfillmentSql(since) {
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
+// SO → the OC it was created from (Nima's grouping model, 2026-08-20). An OC is a
+// NetSuite **Estimate**, and this is the edge that makes two of his four order shapes
+// drawable: OC → PO → SO → IF → INV when the PO was ordered directly, and
+// OC → SO → IF → INV for boutiques.
+//
+// ⚠️ Reversed relative to every other link query here — the Estimate is the PREVIOUS
+// doc and the sales order is the NEXT one, so this joins `l.nextdoc = t.id` where
+// fulfillmentSql joins `l.previousdoc`. Getting that backwards returns the SO's
+// CHILDREN typed as Estimates, which is silently empty rather than wrong.
+//
+// ⚠️ `createdfrom` is not a queryable field (see the queries header). DISTINCT because
+// the link table is line-level: a 3-line order produced 3 identical pairs.
+//
+// Measured live 2026-08-20: 1,389 sales orders carry exactly one Estimate parent —
+// none carry two — which is why this lands in a column rather than a link table.
+export function ocLinkSql(since) {
+  return `SELECT DISTINCT t.tranid AS so_number, e.tranid AS oc_number
+          FROM transaction t
+          JOIN PreviousTransactionLineLink l ON l.nextdoc = t.id
+          JOIN transaction e ON e.id = l.previousdoc AND e.type='Estimate'
+          WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
+}
+
 // Tracking numbers per IF. NetSuite exposes these ONLY via the TrackingNumberMap
 // join (transaction.trackingnumbers / linkedtrackingnumbers are not queryable
 // fields — both fail as unknown identifiers). One IF can have several rows when the
@@ -707,6 +730,12 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithin
   if (invs.fail) return { ok: false, error: invs.fail, records: [] }
   const track = await run('tracking', trackingSql(since), 'tracking')
   if (track.fail) return { ok: false, error: track.fail, records: [] }
+  // ⚠️ SOFT-FAILS, unlike every pull above it. The OC link is an ENRICHMENT — it
+  // groups an order under the confirmation it came from — and losing it costs a
+  // grouping, not a stage, a gate or a document. Killing the whole outbound sync
+  // over it would be the PO pull's mistake in reverse (see fetchPurchaseOrderLines).
+  const ocs = await run('OC links', ocLinkSql(since), 'ocLinks')
+  if (ocs.fail) warnings.push(`${ocs.fail} — orders will keep the OC they already have`)
 
   // first non-null location per SO
   const locBySo = new Map()
@@ -764,11 +793,31 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithin
   // gets no quantity keys — undefined, not zero, so the loader's COALESCE keeps
   // the last known value instead of blanking the order to 0 units.
   const qtyBySo = foldOrderLines(lines.rows)
+  // SO → its one OC. First wins, and a second DISTINCT parent for the same SO would
+  // be news (measured: none exist) — so it is counted and warned rather than
+  // silently overwritten, which is how a column quietly starts holding "whichever
+  // row arrived last".
+  const ocBySo = new Map()
+  let ocConflicts = 0
+  for (const r of (ocs.rows || [])) {
+    const so = String(r.so_number || '').toUpperCase()
+    const oc = String(r.oc_number || '').trim().toUpperCase()
+    if (!so || !oc) continue
+    if (ocBySo.has(so)) { if (ocBySo.get(so) !== oc) ocConflicts++; continue }
+    ocBySo.set(so, oc)
+  }
+  if (ocConflicts) {
+    warnings.push(`${ocConflicts} sales order(s) have MORE THAN ONE order confirmation — `
+      + 'only the first is stored; oc_number should become a link table')
+  }
   const orderRecords = orders.rows.map((r) => {
     const so = String(r.tranid || '').toUpperCase()
     return {
       ...mapOrderRow({ ...r, location: locBySo.get(so) || '' }),
       ...(qtyBySo.get(so) || {}),
+      // undefined, never null, when this SO had no OC row — the loader COALESCEs, so
+      // null would WIPE a known OC on any run where the link pull soft-failed.
+      ...(ocBySo.has(so) ? { ocNumber: ocBySo.get(so) } : {}),
     }
   })
   const ifRecords = ifs.rows.map(mapFulfillmentRow).map((f) => ({
@@ -786,6 +835,7 @@ export async function fetchOrderLifecycle({ closedWithinDays = 30, invoiceWithin
     counts: {
       orders: orderRecords.length,
       orderLines: lines.rows.length,
+      ocLinked: orderRecords.filter((o) => o.ocNumber).length,
       quantified: orderRecords.filter((o) => o.qtyOrdered != null).length,
       terminal: orderRecords.filter((o) => o.terminal).length,
       fulfillments: ifRecords.length,

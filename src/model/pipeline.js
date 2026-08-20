@@ -138,6 +138,8 @@ export function buildPipeline(allRecords, { today = new Date() } = {}) {
     // and the database stored null, because this list did not mention it — the same
     // shape that hid `terms` and defaulted `isAts` to false. Four layers, one field.
     'windowStart', 'windowEnd',
+    // The OC an order came from (Nima's grouping model, 2026-08-20) — fourth layer.
+    'ocNumber',
   ]
 
   for (const rec of allRecords) {

@@ -27,10 +27,15 @@
 
 import { accountFromTracking, isWholesaleAccount, isoDate } from './upsRates.js'
 
-// The subjects a trace can be about (step 1 of the build order). PO and the
-// inbound side have their own spine (getPoLedger) and are deliberately not here
-// yet — adding them is a scope decision, not a fall-through.
-export const TRACE_TYPES = ['SO', 'IF', 'INV', 'EMAIL', 'TASK']
+// The subjects a trace can be about. OC joined them once the Estimate→SalesOrd
+// edge was ingested (2026-08-20), because two of the four order lanes START at an
+// OC and a lane whose anchor you cannot open is not a group, just a label.
+//
+// ⚠️ Our FACTORY PO is still not here: it has its own spine (getPoLedger), and the
+// OC↔PO edge that would connect it to an order is unpopulated (0 of 1,436 rows).
+// ⚠️ THEIR_PO — the customer's PO — is deliberately NOT a trace type either. It is a
+// reference on the order, not a document we hold, so it renders as a mention.
+export const TRACE_TYPES = ['SO', 'IF', 'INV', 'OC', 'EMAIL', 'TASK']
 
 // What each subject type is called, and the accent it carries. Tone NAMES, not
 // hex — the palette belongs in the stylesheet, so a colour change is one file.
@@ -41,13 +46,18 @@ export const TRACE_TYPES = ['SO', 'IF', 'INV', 'EMAIL', 'TASK']
 // does not have.
 export const TRACE_META = {
   SO: { label: 'Sales Order', tone: 'arrive', view: 'table', viewLabel: 'Table' },
+  OC: { label: 'Order Confirmation', tone: 'edi', view: 'allocations', viewLabel: 'Inbound' },
   IF: { label: 'Fulfilment', tone: 'hands', view: 'kanban', viewLabel: 'Mission Quests' },
   INV: { label: 'Invoice', tone: 'money', view: 'table', viewLabel: 'Table' },
   EMAIL: { label: 'Transmission', tone: 'edi', view: 'transmissions', viewLabel: 'Transmissions' },
   TASK: { label: 'Task', tone: 'go', view: 'tasks', viewLabel: 'Tasks' },
   // Not subjects you can hop TO, but things that appear as related cards.
   TRACK: { label: 'Tracking', tone: 'holo', view: null },
-  PO: { label: 'Customer PO', tone: 'edi', view: 'edi', viewLabel: 'EDI' },
+  // ⚠️ TWO DIFFERENT THINGS, and the labels must never blur. THEIR_PO is the
+  // customer's purchase order to us; PO is ours to the factory. Zero overlapping
+  // values across all 322 orders — see src/model/orderLane.js.
+  THEIR_PO: { label: "Customer's PO", tone: 'edi', view: 'edi', viewLabel: 'EDI' },
+  PO: { label: 'Our factory PO', tone: 'hands', view: 'allocations', viewLabel: 'Inbound' },
 }
 
 export const toneFor = (docType) => TRACE_META[docType]?.tone || 'muted'
@@ -84,6 +94,7 @@ export function traceTypeFor(docNumber) {
   if (/^INV\d/.test(s)) return 'INV'
   if (/^SO\d/.test(s)) return 'SO'
   if (/^IF\d/.test(s)) return 'IF'
+  if (/^OC\d/.test(s)) return 'OC'
   return null
 }
 

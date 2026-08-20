@@ -3104,3 +3104,28 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
    target, and a target at .45 opacity reads as decoration. */
 .nsLinkSplit .nsLinkMark { text-decoration: none; cursor: pointer; opacity: .62; }
 .nsLinkSplit .nsLinkMark:hover { color: var(--accent); opacity: 1; }
+
+/* ── Order lanes and role groups (Nima's grouping model, 2026-08-20) ───────── */
+.traceLane { display: flex; align-items: baseline; gap: 8px; margin-top: 7px; flex-wrap: wrap; }
+.traceLaneName {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 6px; border: 1px solid currentColor; flex: none;
+}
+/* One hue per lane, so a shape is recognisable before you read it. */
+.lane-edi        { color: #e3b341; }
+.lane-oc_anchored{ color: #58c7e0; }
+.lane-stock      { color: #7ee787; }
+/* Not an alarm colour: "presold, no confirmation" is a description, not a fault —
+   29 of them, including the FOB-China flow and in-house orders. */
+.lane-unconfirmed{ color: #8b949e; }
+.ocstate-open      { color: #7ee787; }
+.ocstate-converted { color: #8b949e; }
+.traceLaneShape { font-size: 11px; color: var(--muted); }
+
+.traceRoleGroup { margin-bottom: 12px; }
+/* --muted, not --line: at #2a323d these headings were effectively invisible against
+   the panel, which makes the grouping pointless. */
+.traceRoleLabel {
+  font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 5px;
+}
