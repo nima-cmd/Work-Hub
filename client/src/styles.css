@@ -674,7 +674,10 @@ body {
 }
 /* slow-drifting far-star layer for parallax depth — fixed, behind content */
 body::before {
-  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden;
+  content: '';
+  /* ⚠️ OVERSIZED ON PURPOSE. This layer is translated, so it must extend a full tile
+     beyond the viewport on every side or the drift would expose its own edge. */
+  position: fixed; inset: -480px; z-index: -1; pointer-events: none; overflow: hidden;
   background-repeat: repeat;
   background-image:
     radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.5) 50%, transparent 51%),
@@ -684,9 +687,21 @@ body::before {
   background-size: 480px 480px;
   animation: spaceFieldDrift 140s linear infinite;
   opacity: 0.5;
+  will-change: transform;
 }
-/* drift via background-position so the fixed layer never widens the page */
-@keyframes spaceFieldDrift { from { background-position: 0 0; } to { background-position: -480px -240px; } }
+/* ⚠️ TRANSFORM, NOT background-position (2026-08-21). This is a fixed, full-viewport
+   layer carrying four repeating gradients, and it animates on EVERY view. Animating
+   background-position repaints the whole layer on the main thread each frame — the same
+   thread that has to answer a click, so it competes with the thing the user is waiting
+   for. A transform is composited off the main thread instead.
+   ⚠️ The shift is ONE WHOLE TILE in both axes. The old keyframes moved -480px/-240px
+   against a 480x480 tile, so the vertical half-tile did not land on a repeat and the
+   loop visibly jumped every 140s. */
+@keyframes spaceFieldDrift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-480px, -480px, 0); }
+}
+@media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
 
 /* ── Star Wars display type (Nima, 2026-07-20 "fuller re-skin") ──────────────
    Orbitron on headers/nav/brand/big readouts + sector titles; body copy stays
