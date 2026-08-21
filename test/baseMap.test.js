@@ -82,14 +82,14 @@ test('receiving counts presold orders with nothing fulfilled — never EDI, neve
   assert.equal(s.receiving.items[0].soNumber, 'A')
 })
 
-test('the pack house counts the CUSTODY GAP — out and not back', () => {
+test('the pack house counts the CUSTODY GAP — out, not back, AND NOT SHIPPED', () => {
   // Both halves are observed scans. This is the question the pack house answers.
   const s = buildingStates({
     orders: [so({
       fulfillments: [
-        { ifNumber: 'IF1', custodyOut: '2026-08-20T10:00:00Z' },                          // out
+        { ifNumber: 'IF1', custodyOut: '2026-08-20T10:00:00Z', status: 'Picked' },          // really out
         { ifNumber: 'IF2', custodyOut: '2026-08-19T10:00:00Z', custodyIn: '2026-08-20T10:00:00Z' }, // back
-        { ifNumber: 'IF3' },                                                               // never left
+        { ifNumber: 'IF3' },                                                                // never left
       ],
     })],
   })
@@ -97,18 +97,73 @@ test('the pack house counts the CUSTODY GAP — out and not back', () => {
   assert.equal(s.pack.items[0].ifNumber, 'IF1')
 })
 
-test('the launch pad counts LABELLED but not confirmed gone — a label is not a departure', () => {
+test('a SHIPPED fulfilment with an open tag is a stale tag, NOT goods on the floor', () => {
+  // Measured on live data before shipping: 14 open tags, ALL 14 already shipped, zero
+  // genuinely out. "Out on the floor, not back" was describing departed freight.
   const s = buildingStates({
     orders: [so({
       fulfillments: [
-        { ifNumber: 'IF1', labelled: true },                                        // waiting
-        { ifNumber: 'IF2', labelled: true, departureConfirmedAt: '2026-08-20' },    // gone
-        { ifNumber: 'IF3', labelled: false },                                       // no label yet
+        { ifNumber: 'IF1', custodyOut: '2026-07-31T10:00:00Z', status: 'Shipped' },
+        { ifNumber: 'IF2', custodyOut: '2026-08-02T10:00:00Z', status: 'Shipped' },
+        { ifNumber: 'IF3', custodyOut: '2026-08-20T10:00:00Z', status: 'Packed' },
+      ],
+    })],
+  })
+  assert.equal(s.pack.count, 1, 'only the unshipped one is on the floor')
+  const stale = s.pack.alerts.find((a) => a.key === 'staleTags')
+  assert.equal(stale.count, 2, 'the shipped ones are named as paperwork, not lumped in')
+  assert.match(stale.label, /never closed/)
+})
+
+test('an alert with a count of zero is dropped, never rendered as a clean chip', () => {
+  const s = buildingStates({
+    orders: [so({ fulfillments: [{ ifNumber: 'IF1', custodyOut: '2026-08-20', status: 'Picked' }] })],
+  })
+  assert.deepEqual(s.pack.alerts, [])
+})
+
+test('every building carries an alerts array, so none renders undefined', () => {
+  const s = buildingStates({ orders: [so()] })
+  for (const b of BUILDINGS) assert.ok(Array.isArray(s[b.key].alerts), `${b.key} has no alerts array`)
+})
+
+test('the launch pad counts LABELLED, unconfirmed AND NOT SHIPPED', () => {
+  // A label is not a departure — but neither is a shipment from June something a
+  // truck is still waiting for. Measured live: 44 labelled-unconfirmed, only 8 not
+  // shipped; the other 36 left weeks ago and simply predate the confirm button.
+  const s = buildingStates({
+    orders: [so({
+      fulfillments: [
+        { ifNumber: 'IF1', labelled: true, status: 'Packed' },                      // really waiting
+        { ifNumber: 'IF2', labelled: true, departureConfirmedAt: '2026-08-20' },    // confirmed gone
+        { ifNumber: 'IF3', labelled: false },                                      // no label yet
+        { ifNumber: 'IF4', labelled: true, status: 'Shipped' },                    // left, never attested
       ],
     })],
   })
   assert.equal(s.launch.count, 1)
   assert.equal(s.launch.items[0].ifNumber, 'IF1')
+  const never = s.launch.alerts.find((a) => a.key === 'neverConfirmed')
+  assert.equal(never.count, 1)
+  assert.match(never.label, /never confirmed/)
+})
+
+test('NO building headlines a count that includes shipped freight', () => {
+  // The same mistake twice in one file (pack house, launch pad) earns a test that
+  // catches the third. A building describing work in progress must not count a
+  // fulfilment that has already gone.
+  const s = buildingStates({
+    orders: [so({
+      stage: 'SHIPPED',
+      fulfillments: [{
+        ifNumber: 'IF1', status: 'Shipped', labelled: true,
+        custodyOut: '2026-06-01', actualShipDate: '2026-06-10',
+      }],
+    })],
+  })
+  assert.equal(s.pack.count, 0, 'pack house counted a shipped fulfilment')
+  assert.equal(s.launch.count, 0, 'launch pad counted a shipped fulfilment')
+  assert.equal(s.routing.count, 0, 'routing yard counted a shipped fulfilment')
 })
 
 test('the routing yard counts EDI fulfilments not yet shipped', () => {
@@ -223,4 +278,19 @@ test('movers carry an id unique enough for React to key on', () => {
 test('no events means no movers, not a crash', () => {
   assert.deepEqual(moversFrom(), [])
   assert.deepEqual(moversFrom([]), [])
+})
+
+test('a mover labels itself even when the feed did not', () => {
+  // /api/events returns undecorated rows while /api/ledger decorates. The Base view
+  // reads the undecorated one, so the ticker showed raw enums until the model did
+  // the lookup itself.
+  const [m] = moversFrom([{ id: 1, eventType: 'PO_RECEIVED' }])
+  assert.notEqual(m.label, 'PO_RECEIVED', 'the ticker must not shout an enum')
+  assert.ok(m.label.length > 3)
+})
+
+test('an event type with no known label falls back to the type, not to blank', () => {
+  // Better a raw key than an empty chip that looks like a rendering bug.
+  const [m] = moversFrom([{ id: 1, eventType: 'PACKED', label: 'Packed by hand' }])
+  assert.equal(m.label, 'Packed by hand', 'an explicit label from the feed still wins')
 })

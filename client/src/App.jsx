@@ -17,6 +17,7 @@ import Tasks from './views/Tasks.jsx'
 import Transmissions from './views/Transmissions.jsx'
 import Crew from './views/Crew.jsx'
 import Datapad from './views/Datapad.jsx'
+import Base from './views/Base.jsx'
 import { TraceDrawerProvider } from './TraceDrawer.jsx'
 import Ledger from './views/Ledger.jsx'
 import Health from './views/Health.jsx'
@@ -131,6 +132,13 @@ function CreditsCounter({ credits }) {
 }
 
 const VIEWS = [
+  // ── The Base is the landing view (Nima, 2026-08-21) ────────────────────────
+  // The command base from above: one building per lane, roads between them, and a
+  // building opens into the work it holds rather than sending you elsewhere. It is
+  // FIRST because it is the screen meant to be open all day — and because the view
+  // usage panel treats whatever is first as the default, its opens are reported as
+  // "incl. loads" rather than ranked against views someone chose (viewUsage.js).
+  { key: 'base', label: 'Base', C: Base },
   { key: 'command', label: 'Command', C: CommandCenter },
   // The daily "flight route" (Nima, 2026-07-28) — the top need: everything to
   // do today laid across the day with times, ordered by deadline, so nothing
@@ -174,7 +182,7 @@ export default function App() {
   const [events, setEvents] = useState([])
   const [syncHealth, setSyncHealth] = useState(null)
   const [err, setErr] = useState(null)
-  const [view, setView] = useState('command')
+  const [view, setView] = useState('base')
   // A trace handed over from the drawer to the full Datapad page (its ⤢ button).
   // Held here rather than inside Datapad because a view is REMOUNTED on every tab
   // switch, so state that has to survive the switch cannot live in the view.

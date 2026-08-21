@@ -21,6 +21,7 @@
 // from "what connects to what" is how a dot ends up crossing a building.
 
 import { laneFor } from './orderLane.js'
+import { SPINE_LABEL } from './orderEvents.js'
 
 // ── The buildings ───────────────────────────────────────────────────────────
 //
@@ -31,53 +32,57 @@ export const BUILDINGS = [
   {
     key: 'receiving', label: 'Receiving', sprite: 'bldg-02', tone: 'arrive',
     // A shed on legs with an annex, at the west gate: where goods enter the base.
-    x: 6, y: 40, w: 15,
+    x: 6, y: 40, w: 15, h: 20,
     of: 'presold, waiting on stock',
     view: 'allocations',
   },
   {
     key: 'stock', label: 'Stock depot', sprite: 'bldg-03', tone: 'money',
     // Twin silos beside a long hall — the pool ATS orders pull from.
-    x: 25, y: 62, w: 14,
+    x: 25, y: 62, w: 14, h: 18,
     of: 'orders pulling from stock',
     view: 'table',
   },
   {
     key: 'pack', label: 'Pack house', sprite: 'bldg-04', tone: 'hands',
     // Dock doors right around the perimeter. The busiest building on the base.
-    x: 43, y: 34, w: 15,
+    x: 43, y: 34, w: 15, h: 20,
     of: 'out on the floor, not back',
     view: 'kanban',
   },
   {
     key: 'routing', label: 'Routing yard', sprite: 'bldg-05', tone: 'edi',
-    x: 62, y: 62, w: 12,
+    x: 62, y: 62, w: 12, h: 16,
     of: 'freight waiting to be routed',
     view: 'routing',
   },
   {
     key: 'launch', label: 'Launch pad', sprite: 'bldg-00', tone: 'holo',
     // The docking ring, twelve bays. East end: where it leaves.
-    x: 79, y: 32, w: 18,
+    x: 79, y: 32, w: 18, h: 24,
     of: 'cleared, waiting on the truck',
     view: 'ship',
   },
   {
     key: 'comms', label: 'Comms tower', sprite: 'bldg-06', tone: 'edi',
-    x: 28, y: 8, w: 10,
+    x: 28, y: 8, w: 10, h: 14,
     of: 'transmissions to answer',
     view: 'transmissions',
   },
   {
     key: 'ops', label: 'Ops centre', sprite: 'bldg-01', tone: 'go',
     // The stepped terrace block, tallest on the sheet. The desk.
-    x: 62, y: 6, w: 13,
+    x: 62, y: 6, w: 13, h: 17,
     of: 'open on the day plan',
     view: 'plan',
   },
 ]
 
 export const BUILDING = Object.fromEntries(BUILDINGS.map((b) => [b.key, b]))
+
+/** A building's centre, in the same 0–100 space as its position. Roads run between
+ *  centres, so this is the single definition both the map and the movers use. */
+export const centreOf = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
 
 // ── The roads ───────────────────────────────────────────────────────────────
 //
@@ -131,7 +136,20 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
 
   // Out of our hands and not back: the custody gap, which is the real question the
   // pack house answers. custodyOut with no custodyIn — observed scans, both of them.
-  const onTheFloor = orders.flatMap((o) => ifsOf(o).filter((f) => f.custodyOut && !f.custodyIn))
+  //
+  // ⚠️ AND NOT SHIPPED, which was missing and made this counter 100% WRONG. Measured
+  // on live data before shipping: 14 fulfilments had an open custody tag and ALL 14
+  // had already shipped — IF7447 scanned out 31 Jul, shipped 5 Aug, tag never closed.
+  // Zero were genuinely on the floor. So "out on the floor, not back" was describing
+  // departed freight: the counts-something-other-than-its-label shape, and the same
+  // never-closed-tag finding as PR #67's DC lane.
+  //
+  // A finding that is 100% one thing is the tell that the rule is wrong, not the data.
+  const openTag = orders.flatMap((o) => ifsOf(o).filter((f) => f.custodyOut && !f.custodyIn))
+  const onTheFloor = openTag.filter((f) => !shipped(f.status))
+  // The rest are STALE TAGS — paperwork, not goods. Surfaced under their own name
+  // rather than folded into a number about the floor. Never lump.
+  const staleTags = openTag.filter((f) => shipped(f.status))
 
   // EDI freight that exists as a fulfilment but has not shipped.
   const toRoute = orders
@@ -141,21 +159,61 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
   // Labelled and not yet confirmed gone. `labelled` is a boolean the API derives from
   // tracking numbers; departureConfirmedAt is a human attesting it left. A label is
   // NOT a departure — that distinction is why both are read here.
-  const cleared = orders.flatMap((o) =>
+  //
+  // ⚠️ AND NOT SHIPPED, for the SAME reason the pack house needed it — this is the
+  // second instance of one mistake. Measured live: 44 were labelled-and-unconfirmed,
+  // of which only 8 had not shipped. The other 36 shipped weeks ago (oldest 71 days)
+  // and were never manually confirmed, because the manual confirmation only exists
+  // since 2026-08-13. "Cleared, waiting on the truck" was describing history: no
+  // truck is still waiting on a shipment that left in June.
+  const labelledUnconfirmed = orders.flatMap((o) =>
     ifsOf(o).filter((f) => f.labelled && !f.departureConfirmedAt))
+  const cleared = labelledUnconfirmed.filter((f) => !shipped(f.status))
+  // A real backlog, but a different one: departures nobody ever attested. Mostly
+  // pre-dating the feature. Named for what it is.
+  const neverConfirmed = labelledUnconfirmed.filter((f) => shipped(f.status))
 
   const unread = emails.filter((e) => e.isUnread ?? e.is_unread ?? false)
   const openTasks = tasks.filter((t) => t.status !== 'done')
 
+  // `kind` tells the work panel WHAT it is listing, so it can render a fulfilment
+  // differently from an email without guessing from the shape of the object.
+  // `oldest` is the age of the thing that has sat here longest — the one secondary
+  // fact that is honestly derivable for every building, and the one that answers
+  // "is this pile stale or just busy".
+  const state = (count, items, kind, stamp, alerts = []) => ({
+    count, items, kind, oldest: oldestOf(items, stamp),
+    // A second, DIFFERENTLY-NAMED fact about this building. Alerts exist so a real
+    // finding never has to be smuggled into the headline count to be seen.
+    alerts: alerts.filter((a) => a.count > 0),
+  })
   return {
-    receiving: { count: waitingOnStock.length, items: waitingOnStock },
-    stock: { count: fromStock.length, items: fromStock },
-    pack: { count: onTheFloor.length, items: onTheFloor },
-    routing: { count: toRoute.length, items: toRoute },
-    launch: { count: cleared.length, items: cleared },
-    comms: { count: unread.length, items: unread },
-    ops: { count: openTasks.length, items: openTasks },
+    receiving: state(waitingOnStock.length, waitingOnStock, 'order', (o) => o.startDate),
+    stock: state(fromStock.length, fromStock, 'order', (o) => o.startDate),
+    pack: state(onTheFloor.length, onTheFloor, 'fulfillment', (f) => f.custodyOut, [
+      { key: 'staleTags', label: 'custody tags never closed', count: staleTags.length, items: staleTags },
+    ]),
+    routing: state(toRoute.length, toRoute, 'fulfillment', (f) => f.ifDate),
+    launch: state(cleared.length, cleared, 'fulfillment', (f) => f.ifDate, [
+      { key: 'neverConfirmed', label: 'shipped, departure never confirmed', count: neverConfirmed.length, items: neverConfirmed },
+    ]),
+    comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
+    ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }
+}
+
+/** The earliest timestamp across items, or null. Null when nothing carries one —
+ *  never `now`, which would report a stale pile as fresh. */
+function oldestOf(items, stamp) {
+  let out = null
+  for (const it of items) {
+    const v = stamp(it)
+    if (!v) continue
+    const t = new Date(v).getTime()
+    if (Number.isNaN(t)) continue
+    if (out === null || t < out) out = t
+  }
+  return out === null ? null : new Date(out).toISOString()
 }
 
 // ── Movers: work in transit, on the road it actually travelled ──────────────
@@ -212,7 +270,12 @@ export function moversFrom(events = [], { limit = 8, perRoad = 2 } = {}) {
       to: leg[1],
       docType: e.docType || null,
       docNumber: e.docNumber || null,
-      label: e.label || e.eventType,
+      // ⚠️ LABEL IT HERE, do not trust the caller to have done it. /api/events
+      // returns undecorated rows (no `label`) while /api/ledger returns decorated
+      // ones — so the ticker read "PO_RECEIVED · Receiving → Stock depot", shouting
+      // an enum at the reader on the one feed the Base view actually uses. Falling
+      // back through SPINE_LABEL makes it read the same whichever feed it is given.
+      label: e.label || SPINE_LABEL.get(e.eventType) || e.eventType,
       at: e.occurredAt || null,
       tone: BUILDING[leg[0]]?.tone || 'muted',
     })
