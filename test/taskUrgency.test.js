@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveTaskUrgency, AGE_STALE_DAYS } from '../src/model/taskUrgency.js'
+import { deriveTaskUrgency, isTaskDone, AGE_STALE_DAYS } from '../src/model/taskUrgency.js'
 
 // Nima, 2026-08-05: "if the app can learn and set urgency with a manual overrid it
 // be best." These lock down what "learn" means and what the override may not do.
@@ -80,4 +80,59 @@ test('every result explains itself', () => {
     assert.ok(u.basis && u.basis.length > 3, `no basis for ${JSON.stringify(t)}`)
     assert.ok(['hi', 'mid', 'lo'].includes(u.level))
   }
+})
+
+// ── A COMPLETED TASK HAS NO URGENCY (2026-08-21) ────────────────────────────
+//
+// Measured on the live board: 739 completed tasks each carried a derived urgency,
+// 697 of them reading "someone is waiting on a reply". Nobody was — they were done.
+// Transmissions renders that value as "Priority: MID" on completed cards, so the app
+// was stating something it could not mean on a surface Nima reads.
+
+test('a done task has no derived urgency — every signal below asks about pending work', () => {
+  const u = deriveTaskUrgency({
+    status: 'done',
+    needsType: 'acknowledgment',                 // "someone is waiting on a reply"
+    createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString(),  // "40d old"
+    recurringKey: 'daily-inbox',                 // "recurring, due today"
+  }, { now: Date.now(), linkedSeverity: 3 })     // "its order needs action now"
+  assert.equal(u.level, null, 'a finished task is not urgent')
+  assert.equal(u.basis, null, 'and there is no basis to state')
+  assert.equal(u.derived, null)
+})
+
+test('the 697-task case specifically: done + acknowledgment claims nobody is waiting', () => {
+  const open = deriveTaskUrgency({ status: 'open', needsType: 'acknowledgment' })
+  const done = deriveTaskUrgency({ status: 'done', needsType: 'acknowledgment' })
+  assert.match(open.basis, /waiting on a reply/, 'still true while it is open')
+  assert.equal(done.basis, null, 'and false the moment it is done')
+})
+
+test('completed_at alone marks a task done — status and the stamp never disagreed on live data', () => {
+  const u = deriveTaskUrgency({ completedAt: '2026-08-01T10:00:00Z', needsType: 'reply' })
+  assert.equal(u.level, null)
+  assert.equal(isTaskDone({ completed_at: '2026-08-01' }), true, 'snake_case too — the row shape')
+  assert.equal(isTaskDone({ status: 'open' }), false)
+})
+
+test('⚠️ a HUMAN-SET override survives completion — what he typed is a fact', () => {
+  // Drop what we inferred, keep what he said. 0 of the 739 have one today, so this
+  // branch is theoretical — and that is exactly why it needs a test.
+  const u = deriveTaskUrgency({ status: 'done', urgencyOverride: 'hi', needsType: 'reply' })
+  assert.equal(u.level, 'hi')
+  assert.equal(u.basis, 'you set this')
+  assert.equal(u.override, 'hi')
+  assert.equal(u.derived, null, 'but nothing was derived, so it must not claim one')
+})
+
+test('a garbage override on a done task is ignored, not trusted', () => {
+  const u = deriveTaskUrgency({ status: 'done', urgencyOverride: 'URGENT!!' })
+  assert.equal(u.level, null)
+  assert.equal(u.override, null)
+})
+
+test('an OPEN task is completely unaffected by this rule', () => {
+  const u = deriveTaskUrgency({ status: 'open', needsType: 'reply' }, { linkedSeverity: 3 })
+  assert.equal(u.level, 'hi')
+  assert.match(u.basis, /needs action now/)
 })

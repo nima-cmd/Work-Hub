@@ -6,7 +6,7 @@ import { pool, DB_TARGET, IS_MIRROR, mirrorAsOf } from '../src/db.js'
 import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
-import { deriveTaskUrgency } from '../src/model/taskUrgency.js'
+import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -4188,11 +4188,16 @@ export async function searchQuestArchive(q) {
 // unreachable-branch shape this repo keeps producing, so the caller that already
 // holds order severities passes them in and getQuestTasks resolves them here.
 export async function getQuestTasks({ now = Date.now(), severityByDoc = null } = {}) {
-  await ensureRecurringTasks()
+  await ensureRecurringTasksIfStale()
   const tasks = await fetchQuestTasks()
   // Default: derive severities for linked sales orders ourselves, so the API path
   // gets a working hi tier without every caller having to remember.
-  const sev = severityByDoc || (await linkedDocSeverities(tasks, now))
+  //
+  // ⚠️ OPEN TASKS ONLY. A linked order's severity exists to make 'hi' reachable on
+  // work still to be done; a completed task ignores it (taskUrgency.js returns early
+  // for done). Measured: 13 of 739 done tasks carry a doc, against 1 of 11 open —
+  // so this was querying orders almost entirely on behalf of finished work.
+  const sev = severityByDoc || (await linkedDocSeverities(tasks.filter((t) => !isTaskDone(t)), now))
   return tasks.map((t) => {
     const u = deriveTaskUrgency(t, { now, linkedSeverity: sev.get(t.netsuiteDocNumber) })
     return {
@@ -4469,6 +4474,48 @@ function overdueNag(template, characterId, agoLabel, prevCharacterId) {
   const prevName = prevCharacterId && prevCharacterId !== characterId ? getCharacterById(prevCharacterId)?.name : null
   const handoff = prevName ? `${prevName} asked me to make sure this actually gets to you — ` : ''
   return `⚠ ${handoff}Still not done — ${agoLabel} overdue. Bumping this up; it needs handling now. ${template.description || ''}`.trim()
+}
+
+const RECURRING_TTL_MS = 5 * 60 * 1000
+const RECURRING_KEY = 'recurring_tasks_reconciled_at'
+
+/**
+ * ensureRecurringTasks, but at most once per RECURRING_TTL_MS.
+ *
+ * ⚠️ Same defect and same remedy as ensureEdiTasksIfStale (#150): this is a WRITE —
+ * it materialises due instances, deletes duplicate spawns and escalates stale ones —
+ * and it ran on EVERY read of the task list. Measured warm: 232ms of getQuestTasks's
+ * 400ms, paid again on every acknowledge, every page load, every refetch.
+ *
+ * ⚠️ The write paths pass `force` and must keep doing so. The cron
+ * (scripts/recurring-check.js) and the manual refresh endpoint exist precisely to
+ * reconcile; only a READ may accept a stale-but-recent answer. Worst case a task
+ * materialises up to five minutes after it comes due, which is the same bargain #150
+ * struck and well inside "catch up whenever the app is opened".
+ */
+export async function ensureRecurringTasksIfStale({ force = false, ttlMs = RECURRING_TTL_MS } = {}) {
+  if (!force) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT updated_at FROM sync_meta WHERE key = $1', [RECURRING_KEY])
+      const last = rows[0]?.updated_at ? new Date(rows[0].updated_at).getTime() : 0
+      if (last && Date.now() - last < ttlMs) return { created: 0, skipped: true }
+    } catch {
+      // A gate that cannot be read must not block the work it guards.
+    }
+  }
+  // ⚠️ ensureRecurringTasks returns a NUMBER (the count created), not an object.
+  // Spreading it — `{ ...out }` — yields {} and silently loses the count, which is
+  // how a wrapper starts reporting 0 forever while the work still happens.
+  const created = await ensureRecurringTasks()
+  try {
+    await pool.query(
+      `INSERT INTO sync_meta (key, value, updated_at) VALUES ($1, '1', now())
+       ON CONFLICT (key) DO UPDATE SET updated_at = now()`, [RECURRING_KEY])
+  } catch {
+    // Failing to record the stamp only costs a redundant reconcile next time.
+  }
+  return { created, skipped: false }
 }
 
 export async function ensureRecurringTasks() {

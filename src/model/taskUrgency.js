@@ -56,8 +56,45 @@ function strongest(candidates) {
  *               NetSuite doc this task hangs off, when the caller knows it (0–3).
  * @returns { level, basis, derived, override }
  */
+/** Done is done. `status` and `completed_at` were checked against each other on the
+ *  live board — 739 done, and ZERO rows where one says done and the other does not —
+ *  so either is a safe key and both are honoured. */
+export const isTaskDone = (task = {}) =>
+  task.status === 'done' || !!(task.completedAt || task.completed_at)
+
 export function deriveTaskUrgency(task = {}, opts = {}) {
   const now = opts.now ?? Date.now()
+
+  // ── ⚠️ A COMPLETED TASK HAS NO URGENCY ────────────────────────────────────
+  //
+  // This is a correctness rule, not an optimisation. Every signal below asks a
+  // question about work still to be done — is it due, is anyone waiting, how long
+  // has it sat — and none of them mean anything once the work is finished. Deriving
+  // anyway does not merely waste time, it makes the app STATE SOMETHING FALSE.
+  //
+  // Measured on the live board, 2026-08-21, across 739 completed tasks:
+  //
+  //     697  mid · "someone is waiting on a reply"      <- nobody is. it is done.
+  //      31  mid · "NNd old — decide or drop it"        <- already decided and done
+  //       3  mid · "recurring, due today"              <- today's was completed
+  //       1  mid · "its order needs watching"
+  //
+  // 697 finished tasks each asserting a person was still waiting on them. That is
+  // this repo's recurring shape — a field saying something it cannot mean — and it
+  // was on a surface Nima reads (Transmissions renders "Priority: MID" on completed
+  // cards from exactly this value).
+  //
+  // ⚠️ AN OVERRIDE STILL SURVIVES. What a human typed is a fact and outlives the
+  // task; what we computed about pending work does not. Measured: 0 of the 739 have
+  // one today, so this branch is currently theoretical — kept because the rule is
+  // "drop what we inferred, keep what he said", not "blank the field".
+  if (isTaskDone(task)) {
+    const ov = task.urgencyOverride || null
+    return ov && LEVELS[ov]
+      ? { level: ov, basis: 'you set this', derived: null, override: ov }
+      : { level: null, basis: null, derived: null, override: null }
+  }
+
   const cands = []
 
   // A real due date is the strongest thing available. Today or past → act.
