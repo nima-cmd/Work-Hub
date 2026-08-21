@@ -11,7 +11,7 @@ import { TaskItem, taskOrigin, ORIGIN_LABEL } from '../lib.jsx'
 
 const ORIGIN_ORDER = ['transmission', 'edi', 'protocol', 'manual']
 
-export default function Tasks({ tasks = [], onNavigate = () => {}, onRefresh }) {
+export default function Tasks({ tasks = [], taskMeta = null, onLoadAllTasks, onNavigate = () => {}, onRefresh }) {
   const [filter, setFilter] = useState('open')   // 'open' | 'all'
   const [q, setQ] = useState('')
   const [openId, setOpenId] = useState(null)
@@ -25,7 +25,10 @@ export default function Tasks({ tasks = [], onNavigate = () => {}, onRefresh }) 
   })
 
   const openCount = tasks.filter((t) => t.status === 'open').length
-  const doneCount = tasks.length - openCount
+  // ⚠️ NOT `tasks.length - openCount`. The list is windowed to recent completed
+  // work, so that subtraction would report 116 while still saying "done" — a
+  // counter counting something other than its label. meta counts the whole table.
+  const doneCount = taskMeta ? taskMeta.doneTotal : tasks.length - openCount
 
   const groups = ORIGIN_ORDER
     .map((key) => ({ key, label: ORIGIN_LABEL[key], items: shown.filter((t) => taskOrigin(t) === key) }))
@@ -43,6 +46,11 @@ export default function Tasks({ tasks = [], onNavigate = () => {}, onRefresh }) 
         <div className="tasksFilters">
           <button className={filter === 'open' ? 'btn' : 'btnGhost'} onClick={() => setFilter('open')}>Open</button>
           <button className={filter === 'all' ? 'btn' : 'btnGhost'} onClick={() => setFilter('all')}>All</button>
+          {/* Says exactly what it will load. A "show more" that does not name the
+              number is a mystery box, and one offering 0 more rows is a lie. */}
+          {taskMeta?.moreLabel && (
+            <button className="btnGhost" onClick={() => onLoadAllTasks?.()}>{taskMeta.moreLabel}</button>
+          )}
         </div>
         <input className="tasksSearch" placeholder="Search tasks…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
