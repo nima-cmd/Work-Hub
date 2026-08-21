@@ -10,3 +10,9 @@ dist/
 
 # scanner spike sample (large, do not commit)
 client/public/_sample.pdf
+
+# design mockup working files (4.3 MB of generated HTML)
+# Kept on disk so a published canvas can be re-seeded rather than rebuilt, but the
+# deliverable is the Artifact URL, not these. The design skill can also recover them
+# from a published canvas with --extract, so nothing is lost by not tracking them.
+/.design/
