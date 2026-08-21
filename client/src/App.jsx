@@ -174,6 +174,14 @@ const VIEWS = [
 export default function App() {
   const [orders, setOrders] = useState(null)
   const [tasks, setTasks] = useState([])
+  // ⚠️ The totals live BESIDE the array because the array is windowed. Counting
+  // `tasks.length` for a "done" figure is the counter-label bug this guards.
+  const [taskMeta, setTaskMeta] = useState(null)
+  // "All" in the Tasks tab loads the full history on demand — nothing is lost by
+  // the default window, it simply is not fetched until asked for.
+  const loadAllTasks = () => fetchQuestTasks({ all: true })
+    .then(({ tasks: t, meta }) => { setTasks(t); setTaskMeta(meta) })
+    .catch(() => {})
   // Unread transmissions. Lifted to App (2026-08-05) because the "catch up
   // first" band on the day plan needs the same list Transmissions renders —
   // one fetch, so the two can't disagree about how many are unread.
@@ -244,7 +252,7 @@ export default function App() {
     // Open quest_tasks merge into Dashboard/Kanban's attention view, and the
     // activity journal folds into Calendar (Nima, 2026-07-15) — both
     // best-effort: the app still works if either fails to load.
-    fetchQuestTasks().then(setTasks).catch(() => {})
+    fetchQuestTasks().then(({ tasks: t, meta }) => { setTasks(t); setTaskMeta(meta) }).catch(() => {})
     fetchQuestActivity().then(setActivity).catch(() => {})
     // /api/quest-emails answers { emails, characters } — the list is the half
     // the band needs.
@@ -392,7 +400,7 @@ export default function App() {
   // identical props from one place. Two prop lists would drift, and the embedded
   // copy would quietly lose a feature the tab kept.
   const viewProps = {
-    orders, tasks, emails, activity, events, views: VIEWS,
+    orders, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
     labelGaps, custody, bay,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     onNavigate: navigate, onRefresh: refresh,

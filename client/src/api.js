@@ -361,8 +361,11 @@ export async function dismissQuestEmail(id, dismissed = true) {
 // Quest tasks — a transmission promoted to something durable. Creating one
 // dismisses the source transmission (see createTaskFromQuestEmail), so its
 // response includes the refreshed emails list alongside the new tasks list.
-export async function fetchQuestTasks() {
-  const res = await fetch('/api/quest-tasks')
+// ⚠️ Answers { tasks, meta } — NOT a bare array. `tasks` is windowed to recent
+// completed work; `meta` carries totals over the whole table, so a count can never
+// be taken from the length of a partial array. Pass all:true for everything.
+export async function fetchQuestTasks({ all = false } = {}) {
+  const res = await fetch('/api/quest-tasks' + (all ? '?all=1' : ''))
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }

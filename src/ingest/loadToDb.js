@@ -1765,11 +1765,36 @@ const TASK_FIELDS = `id, email_id AS "emailId", thread_id AS "threadId", charact
   verify_key AS "verifyKey", checklist, due_at AS "dueAt", duration_min AS "durationMin",
   created_at AS "createdAt", completed_at AS "completedAt"`
 
-export async function fetchQuestTasks(db = pool) {
+/**
+ * @param doneWithinDays  only completed tasks finished within N days; null = all.
+ *
+ * ⚠️ The window is applied HERE, in SQL, not after the fact in JS. Fetching 739
+ * rows over the wire from SFO3 and discarding 623 of them would pay the whole cost
+ * and keep none of the benefit.
+ *
+ * ⚠️ OPEN TASKS ARE NEVER WINDOWED. The window is about how much finished work
+ * arrives eagerly; an open task is live work and always ships, however old.
+ */
+export async function fetchQuestTasks(db = pool, { doneWithinDays = null } = {}) {
+  const windowed = Number.isFinite(doneWithinDays) && doneWithinDays > 0
   const { rows } = await db.query(
-    `SELECT ${TASK_FIELDS} FROM quest_tasks ORDER BY (status = 'open') DESC, created_at DESC`,
+    `SELECT ${TASK_FIELDS} FROM quest_tasks
+      ${windowed ? "WHERE status <> 'done' OR completed_at > now() - ($1 || ' days')::interval" : ''}
+      ORDER BY (status = 'open') DESC, created_at DESC`,
+    windowed ? [String(doneWithinDays)] : [],
   )
   return rows
+}
+
+/** Totals over the WHOLE table. ⚠️ The windowed array above may never be counted
+ *  for a total — that is how a counter starts counting something other than its
+ *  label (see src/model/taskListWindow.js). */
+export async function countQuestTasks(db = pool) {
+  const { rows } = await db.query(
+    `SELECT count(*) FILTER (WHERE status = 'done')  AS done_total,
+            count(*) FILTER (WHERE status <> 'done') AS open_total
+       FROM quest_tasks`)
+  return { doneTotal: Number(rows[0].done_total), openTotal: Number(rows[0].open_total) }
 }
 
 export async function fetchQuestTaskById(id, db = pool) {

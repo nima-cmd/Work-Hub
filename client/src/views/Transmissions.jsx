@@ -128,7 +128,7 @@ export default function Transmissions({ onNavigate } = {}) {
 
   function load() {
     fetchQuestEmails().then(setReview).catch((e) => setErr(e.message))
-    fetchQuestTasks().then(setTasks).catch((e) => setErr(e.message))
+    fetchQuestTasks().then(({ tasks: t }) => setTasks(t)).catch((e) => setErr(e.message))
     fetchQuestActivity(todayStr()).then(setActivity).catch(() => {})
     fetchFreshness().then(setFresh).catch(() => {})
     fetchNwFreshness().then(setNwFresh).catch(() => {})
@@ -197,7 +197,7 @@ export default function Transmissions({ onNavigate } = {}) {
       )
       setReview({ emails: r.emails, characters: r.characters })
       if (r.autoClosed) {
-        fetchQuestTasks().then(setTasks).catch(() => {})
+        fetchQuestTasks().then(({ tasks: t }) => setTasks(t)).catch(() => {})
         fetchQuestActivity(todayStr()).then(setActivity).catch(() => {})
       }
     } catch (e) {

@@ -31,7 +31,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
-  getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
+  getQuestTasks, getQuestTaskPayload, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
   recordViewVisit, getViewUsage, getAgenda,
@@ -1089,9 +1089,14 @@ app.post('/api/quest-emails/:id/dismiss', async (req, res) => {
 
 // Quest tasks — a transmission promoted to something durable (keeps its
 // character/subject/snippet even after the source transmission cycles out).
-app.get('/api/quest-tasks', async (_req, res) => {
+// ⚠️ Returns { tasks, meta } — NOT a bare array. The array is windowed to recent
+// completed work; meta carries totals counted over the whole table, because a
+// windowed array must never be the source of a "739 done" figure. ?all=1 loads
+// everything (the Tasks tab's "All" toggle).
+app.get('/api/quest-tasks', async (req, res) => {
   try {
-    res.json(await getQuestTasks())
+    const all = req.query.all === '1' || req.query.all === 'true'
+    res.json(await getQuestTaskPayload({ all }))
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

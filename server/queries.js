@@ -7,6 +7,7 @@ import { computeFlags } from '../src/model/pipeline.js'
 import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
+import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -96,7 +97,7 @@ import { buildBolPdf, renderBolTo } from './bolPdf.js'
 import { uploadBolPdf } from '../src/ingest/googleDrive.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, setQuestEmailLabelsLocal, dismissQuestEmail, setQuestEmailNote,
-  fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
+  fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, countQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
   updateTaskNeeds, updateTaskUrgency, updateTaskCharacter, updateTaskSchedule, searchQuestEmails, searchQuestTasks, logTaskActivity, fetchTaskActivity,
   fetchDayPlan, setDayPlanOrder, resetDayPlanOrder, setDayPlanItemDone,
   fetchActiveRecurringTemplates, createRecurringTaskInstance, updateTaskChecklistItem,
@@ -4187,9 +4188,9 @@ export async function searchQuestArchive(q) {
 // impossible and the scale would silently collapse to mid/lo. That is the
 // unreachable-branch shape this repo keeps producing, so the caller that already
 // holds order severities passes them in and getQuestTasks resolves them here.
-export async function getQuestTasks({ now = Date.now(), severityByDoc = null } = {}) {
+export async function getQuestTasks({ now = Date.now(), severityByDoc = null, doneWithinDays = null } = {}) {
   await ensureRecurringTasksIfStale()
-  const tasks = await fetchQuestTasks()
+  const tasks = await fetchQuestTasks(pool, { doneWithinDays })
   // Default: derive severities for linked sales orders ourselves, so the API path
   // gets a working hi tier without every caller having to remember.
   //
@@ -4209,6 +4210,23 @@ export async function getQuestTasks({ now = Date.now(), severityByDoc = null } =
       urgencyOverride: u.override,
     }
   })
+}
+
+/**
+ * The task list AS THE API SERVES IT: a windowed array plus totals that are true of
+ * the whole table.
+ *
+ * ⚠️ getQuestTasks still returns a bare array and every internal caller keeps using
+ * it unchanged — the shape only gains meta at the HTTP boundary, so nothing
+ * downstream can be silently handed a partial list where it expected all of them.
+ */
+export async function getQuestTaskPayload({ all = false, windowDays = DEFAULT_DONE_WINDOW_DAYS } = {}) {
+  const doneWithinDays = all ? null : windowDays
+  const [tasks, totals] = await Promise.all([
+    getQuestTasks({ doneWithinDays }),
+    countQuestTasks(),
+  ])
+  return { tasks, meta: taskListMeta({ ...totals, returned: tasks.length, windowDays: doneWithinDays }) }
 }
 
 // The severity of each NetSuite doc a task hangs off, so an urgent order makes its
