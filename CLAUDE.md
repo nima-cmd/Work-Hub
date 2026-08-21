@@ -35,6 +35,7 @@ npm run sync:warehouse-inventory # push item-location qtys to the same Supabase
 npm run check:asn-cartons  # did every shipped carton get announced on an 856?
 npm run check:warehouse-feed # is the warehouse-app feed live? names the missing go-live step
 npm run check:counters     # does every counter still MEAN what it says? (partition + floor checks)
+npm run fix:bol-sequence   # is bol_number_seq still ahead of every BOL ever minted?
 npm run check:fields       # which columns are DERIVED, not observed? (is this column always another + N?)
 npm run check:transfer     # Neon's 5 GB/month cap: used, projected, and BY WHICH process
 npm run check:neon         # is the database answering, which one, and how close to the cap
@@ -167,6 +168,19 @@ pool for the deploy and this stops mattering.
   re-serialises a parsed jsonb as an array literal), every value is cast back to the
   **target's** declared type, and **sequences are advanced past the copied ids** or the
   target is read-only in practice.
+
+⚠️ **"Sequences advanced" MEANT COLUMN-OWNED SEQUENCES ONLY, and that cost a real
+outage.** Both copy tools discover sequences with `pg_get_serial_sequence()`, which
+never returns a sequence made by a bare `CREATE SEQUENCE` — it only knows the ones a
+SERIAL/IDENTITY column owns. `bol_number_seq` is the **only standalone sequence in
+this database (1 of 16)** and it governs the one number in the whole app that MUST
+NEVER BE REUSED. The cutover left it at 1731240 while `bol_registry` already held
+NB1731267, so BOL generation died on `bol_registry_pkey` — 27 collisions deep — and
+stayed broken from 08-12 to **08-21**, when Nima tried to make a BOL. Both scripts now
+**carry standalone sequences from the source** (there is no `MAX(column)` to chase,
+because nothing declares which column consumes one), and `check:counters` fails loudly
+if the sequence ever falls behind the registry again. ⚠️ The duplicate-key error was
+the never-reuse guarantee WORKING; the bug was upstream of it.
 
 ## Working with Neon suspended (offline mode)
 
