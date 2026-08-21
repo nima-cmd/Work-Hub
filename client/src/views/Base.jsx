@@ -163,8 +163,25 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
     return (
       <div className="bsWork">
         <div className="bsWorkLeft">
-          <button className="btnGhost bsBack" onClick={() => openBuilding(null)}>← the whole base</button>
-          <BuildingInterior building={sel} state={selState} />
+          {/* Nima, 2026-08-21: "instead of what is above it being a link to going
+              back to the overall base view, a link to the other buildings." Going
+              back is the building image itself now; this strip is how you cross the
+              base without returning to it first — the point of the workspace being
+              that you never have to switch views.
+              ⚠️ Routed through openBuilding, so switching keeps the urgent-paint
+              split from #151: the new lane lights immediately, its view follows. */}
+          <div className="bsWorkNav">
+            {BUILDINGS.filter((b) => b.key !== sel.key).map((b) => (
+              <button key={b.key} type="button"
+                      className={`bsNavBtn tone-${b.tone}`}
+                      onClick={() => openBuilding(b.key)}
+                      title={`${b.label} — ${states[b.key]?.count ?? 0} ${b.of}`}>
+                <span className="bsNavLabel">{b.label}</span>
+                <span className="bsNavN">{states[b.key]?.count ?? 0}</span>
+              </button>
+            ))}
+          </div>
+          <BuildingInterior building={sel} state={selState} onBack={() => openBuilding(null)} />
           {/* The items stay reachable here too: the embedded view is the lane's own
               surface, but a building's ALERTS are findings that live nowhere else. */}
           {!!(selState.alerts || []).length && (
