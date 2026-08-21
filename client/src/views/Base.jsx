@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from '../../../src/model/baseMap.js'
 import { NsLink } from '../lib.jsx'
-import { useTraceDrawer } from '../traceDrawerContext.js'
+import BuildingInterior from './BuildingInterior.jsx'
 import './base.css'
 
 // Base — the command base, seen from directly above (Nima, 2026-08-20/21).
@@ -51,47 +51,8 @@ const AGE = (iso) => {
   return days <= 0 ? 'today' : `${days}d`
 }
 
-// One row of a building's work list. What a row IS depends on the building's `kind`,
-// which the model declares — never inferred from the shape of the object.
-function WorkRow({ kind, item, onOpen }) {
-  if (kind === 'order') {
-    return (
-      <div className="bsRow">
-        <NsLink doc={item.soNumber} />
-        <span className="bsRowMain">{item.customer}</span>
-        <span className="bsRowSide">{item.stageLabel || item.stage}</span>
-      </div>
-    )
-  }
-  if (kind === 'fulfillment') {
-    return (
-      <div className="bsRow">
-        <NsLink doc={item.ifNumber} />
-        <span className="bsRowMain">{[item.status, item.packedStatus].filter(Boolean).join(' · ')}</span>
-        <span className="bsRowSide">{item.labelled ? 'labelled' : 'no label'}</span>
-      </div>
-    )
-  }
-  if (kind === 'email') {
-    return (
-      <button className="bsRow bsRowBtn" onClick={() => onOpen?.({ docType: 'EMAIL', docNumber: item.id })}>
-        <span className="bsRowMain">{item.subject || '(no subject)'}</span>
-        <span className="bsRowSide">{item.fromName || item.from_name || ''}</span>
-      </button>
-    )
-  }
-  // task
-  return (
-    <button className="bsRow bsRowBtn" onClick={() => onOpen?.({ docType: 'TASK', docNumber: String(item.id) })}>
-      <span className="bsRowMain">{item.subject || '(untitled task)'}</span>
-      <span className="bsRowSide">{item.urgency || ''}</span>
-    </button>
-  )
-}
-
-export default function Base({ orders = [], tasks = [], emails = [], events = [], onNavigate }) {
+export default function Base({ orders = [], tasks = [], emails = [], events = [], onNavigate, viewFor }) {
   const [open, setOpen] = useState(null)
-  const drawer = useTraceDrawer()
 
   // ── Fit the map to whatever room is actually left ─────────────────────────
   //
@@ -129,6 +90,53 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
   const busiest = Math.max(1, ...BUILDINGS.map((b) => states[b.key]?.count || 0))
   const sel = open ? BUILDING[open] : null
   const selState = open ? states[open] : null
+
+  // ── Two modes: the whole base, or one building open as a WORKSPACE ────────
+  //
+  // Nima, 2026-08-21: "the most important part though is that clicking the building
+  // opens that view to the right of the base so it can be navigated here… we want
+  // this to replace having to switch to the other view."
+  //
+  // So an open building is not a panel over the map — it is a split screen: the
+  // building zoomed on the left, and the REAL lane view on the right, live and fully
+  // navigable. `viewFor` comes from App and hands back exactly the component the tab
+  // would render, with exactly the props the tab would get, so the embedded copy
+  // cannot drift from the tab.
+  if (sel) {
+    const embedded = viewFor?.(sel.view)
+    return (
+      <div className="bsWork">
+        <div className="bsWorkLeft">
+          <button className="btnGhost bsBack" onClick={() => setOpen(null)}>← the whole base</button>
+          <BuildingInterior building={sel} state={selState} />
+          {/* The items stay reachable here too: the embedded view is the lane's own
+              surface, but a building's ALERTS are findings that live nowhere else. */}
+          {!!(selState.alerts || []).length && (
+            <div className="bsAlerts">
+              {selState.alerts.map((a) => (
+                <span key={a.key} className="bsAlertRow">
+                  <b>{a.count}</b> {a.label}
+                  <span className="bsAlertDocs">
+                    {a.items.slice(0, 8).map((f) => (
+                      <NsLink key={f.ifNumber || f.id} doc={f.ifNumber} />
+                    ))}
+                    {a.items.length > 8 ? ` +${a.items.length - 8}` : ''}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bsWorkRight">
+          {embedded || (
+            <div className="empty">
+              This building has no view of its own yet — its work is in the panel on the left.
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="bsWrap">
@@ -212,54 +220,6 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
           )
         })}
       </div>
-
-      {/* ── The work panel: this is the "work from it" half ─────────────────── */}
-      {sel && (
-        <div className={`bsPanel tone-${sel.tone}`}>
-          <div className="bsPanelHead">
-            <span className="bsPanelName">{sel.label}</span>
-            <span className="bsPanelCount">{selState.count}</span>
-            <span className="bsPanelOf">{sel.of}</span>
-            <div className="bsPanelBtns">
-              {onNavigate && (
-                <button className="btnGhost" onClick={() => onNavigate(sel.view)}>Open the full lane</button>
-              )}
-              <button className="btnGhost" onClick={() => setOpen(null)}>✕</button>
-            </div>
-          </div>
-          {!!(selState.alerts || []).length && (
-            <div className="bsAlerts">
-              {selState.alerts.map((a) => (
-                <span key={a.key} className="bsAlertRow">
-                  <b>{a.count}</b> {a.label}
-                  <span className="bsAlertDocs">
-                    {a.items.slice(0, 6).map((f) => (
-                      <NsLink key={f.ifNumber || f.id} doc={f.ifNumber} />
-                    ))}
-                    {a.items.length > 6 ? ` +${a.items.length - 6}` : ''}
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
-          {!selState.count && <div className="empty">Nothing waiting here — that is the honest number, not a loading state.</div>}
-          <div className="bsRows">
-            {selState.items.slice(0, 40).map((item, i) => (
-              <WorkRow
-                key={item.soNumber || item.ifNumber || item.id || i}
-                kind={selState.kind}
-                item={item}
-                onOpen={(ref) => drawer?.open(ref)}
-              />
-            ))}
-          </div>
-          {selState.count > 40 && (
-            <div className="bsMore">
-              Showing 40 of {selState.count} — the full lane has the rest.
-            </div>
-          )}
-        </div>
-      )}
 
       {/* What is on the roads right now, named. A dot you cannot identify is
           decoration; this is the line that makes it information. */}

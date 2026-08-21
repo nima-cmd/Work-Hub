@@ -158,3 +158,97 @@
   background: #d9a4410f; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
 }
 .bsAlertDocs { display: inline-flex; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+
+/* ── An open building is a WORKSPACE, not a panel ──────────────────────────
+   Left: the building, zoomed, with its console. Right: the real lane view, live and
+   navigable — so you never switch tabs to work (Nima, 2026-08-21). */
+.bsWork {
+  display: grid;
+  grid-template-columns: minmax(300px, 26%) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+/* ⚠️ minmax(0, 1fr) on the right, not 1fr: a grid child defaults to min-content
+   width, so a wide table inside an embedded view would push the column and blow the
+   layout out sideways instead of scrolling. */
+.bsWorkLeft { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; }
+.bsWorkRight { min-width: 0; }
+.bsBack { align-self: flex-start; margin-left: 0; }
+
+/* Narrow: the console stops earning a column and goes above the work. */
+@media (max-width: 1100px) {
+  .bsWork { grid-template-columns: minmax(0, 1fr); }
+  .bsWorkLeft { position: static; }
+}
+
+/* ── The interior ─────────────────────────────────────────────────────────── */
+.biWrap { display: flex; flex-direction: column; gap: 10px; }
+
+.biZoom {
+  position: relative; overflow: hidden;
+  background: #05070d; border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px;
+}
+.biSprite { display: block; width: 100%; height: auto; filter: drop-shadow(0 0 14px var(--tone)); }
+/* A scan line crossing the roof — says "being looked at", claims nothing. */
+.biScan {
+  position: absolute; left: 0; right: 0; height: 2px; top: 0;
+  background: linear-gradient(90deg, transparent, var(--tone), transparent);
+  opacity: 0.5; animation: biScan 4.5s linear infinite;
+}
+@keyframes biScan { 0% { top: 0; } 100% { top: 100%; } }
+
+.biConsole {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone); border-radius: 0 10px 10px 0; padding: 11px 13px;
+}
+.biConsoleTop { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; }
+.biName {
+  font-family: var(--display); font-size: 11px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--tone);
+}
+.biSub { font-size: 10px; color: var(--muted); }
+
+.biBanks { display: flex; gap: 11px; align-items: stretch; }
+.biCrt {
+  background: #05070d; border: 1px solid var(--line); border-radius: 7px;
+  padding: 8px 10px; display: flex; flex-direction: column; justify-content: center;
+}
+.biCrtBig { flex: 1; min-width: 0; }
+.biCrtNum { font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1; }
+.biCrtCap { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+/* Indicator lamps: the number LIT is the number of items, so a busy building is
+   visibly lit and an empty one visibly dark — without either lying about a figure. */
+.biLamps {
+  display: grid; grid-template-columns: repeat(6, 7px); gap: 4px;
+  align-content: center; flex: none;
+}
+.biLamp { width: 7px; height: 7px; border-radius: 2px; background: #14304d; }
+.biLampOn { background: var(--tone); animation: biBlink 3.4s ease-in-out infinite; }
+@keyframes biBlink { 0%, 100% { opacity: 1; } 45% { opacity: 0.3; } }
+
+/* The only thing that BLINKS is a real finding — the one that wants an answer. */
+.biAlerts { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+.biAlertRow {
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: 12px; color: var(--accent);
+}
+.biAlertPip {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none;
+  animation: biBlink 1.6s ease-in-out infinite;
+}
+.biOldest { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* Chrome, and honest about it: a moving trace with no numbers on it, rather than
+   invented readouts that would look like data. */
+.biTrace { height: 3px; background: #05070d; border-radius: 2px; margin-top: 10px; overflow: hidden; }
+.biTrace > span {
+  display: block; width: 32%; height: 100%; background: var(--tone); opacity: 0.55;
+  animation: biTrace 3.8s ease-in-out infinite;
+}
+@keyframes biTrace { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .biScan, .biLampOn, .biAlertPip, .biTrace > span { animation: none; }
+}

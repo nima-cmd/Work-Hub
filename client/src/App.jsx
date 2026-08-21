@@ -382,6 +382,32 @@ export default function App() {
   }
 
   const Active = VIEWS.find((v) => v.key === view).C
+
+  // ── ONE prop bundle, used for a view whether it is a tab or embedded ───────
+  //
+  // The Base hosts other views inside itself now (Nima, 2026-08-21: "clicking the
+  // building opens that view to the right of the base so it can be navigated here…
+  // we want this to replace having to switch to the other view"). An embedded
+  // Mission Quests has to BE Mission Quests — so both paths hand the component the
+  // identical props from one place. Two prop lists would drift, and the embedded
+  // copy would quietly lose a feature the tab kept.
+  const viewProps = {
+    orders, tasks, emails, activity, events, views: VIEWS,
+    labelGaps, custody, bay,
+    handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
+    onNavigate: navigate, onRefresh: refresh,
+  }
+
+  // Render any view by key, for a host that wants one inside itself.
+  // ⚠️ Refuses 'base' — the Base is the host, and hosting itself is an infinite
+  // recursion that renders as a frozen tab rather than an error.
+  const viewFor = (key) => {
+    if (!key || key === 'base') return null
+    const entry = VIEWS.find((v) => v.key === key)
+    if (!entry) return null
+    const V = entry.C
+    return <V {...viewProps} viewFor={viewFor} />
+  }
   const openTaskCount = tasks.filter((t) => t.status === 'open').length
   const attention = (orders ? orders.filter((o) => o.severity > 0).length : 0) + openTaskCount
 
@@ -455,10 +481,7 @@ export default function App() {
         <CourtStrip labelGaps={labelGaps} custody={custody} bay={bay} orders={orders || []} ediGaps={ediGaps} asnCartons={asnCartons} unfiled={unfiled} inbound={inbound} onNavigate={navigate} />
         {err && <div className="banner error">⚠ Couldn’t load orders: {err}</div>}
         {!orders && !err && <div className="banner">Loading orders…</div>}
-        {orders && <Active orders={orders} tasks={tasks} emails={emails} activity={activity} events={events} views={VIEWS}
-                           labelGaps={labelGaps} custody={custody} bay={bay}
-                           handoffTrace={handoffTrace} onHandoffTaken={() => setHandoffTrace(null)}
-                           onNavigate={navigate} onRefresh={refresh} />}
+        {orders && <Active {...viewProps} viewFor={viewFor} />}
       </main>
     </div>
     </TraceDrawerProvider>
