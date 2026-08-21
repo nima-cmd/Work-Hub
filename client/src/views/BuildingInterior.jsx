@@ -16,19 +16,29 @@
 
 const CRT_ROWS = 7
 
-export default function BuildingInterior({ building, state }) {
+export default function BuildingInterior({ building, state, onBack }) {
   const alerts = state?.alerts || []
   const count = state?.count ?? 0
 
   return (
     <div className={`biWrap tone-${building.tone}`}>
-      {/* ── The building itself, zoomed, still from above ─────────────────── */}
-      <div className="biZoom">
+      {/* ── The building itself, zoomed, still from above ───────────────────
+          Nima, 2026-08-21: "clicking that coms tower image should take you back to
+          the base". So the building you are standing in IS the way out — the same
+          gesture that brought you here, reversed. The strip above is no longer a
+          back link but a way across to the other buildings.
+          ⚠️ A <button>, and safe as one: this subtree is an img and a span, so
+          there is no button-in-button (the trap TacticalCore's custody rows hit). */}
+      <button type="button" className="biZoom" onClick={onBack}
+              title={`Back to the base — leave ${building.label}`}
+              aria-label={`Back to the base — leave ${building.label}`}>
         <img src={`/base/${building.sprite}.png`} alt="" className="biSprite" />
         {/* A scan line crossing the roof: the only ornament here, and it says
             "this building is being looked at" rather than inventing data. */}
         <span className="biScan" />
-      </div>
+        {/* The affordance. Without it the image is a secret door. */}
+        <span className="biBackHint">← the whole base</span>
+      </button>
 
       {/* ── The console ───────────────────────────────────────────────────── */}
       <div className="biConsole">
