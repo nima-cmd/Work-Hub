@@ -230,6 +230,31 @@ for (const { table_name: t } of tables) {
   }
 }
 try { await local.query(`SET session_replication_role = 'origin'`) } catch { /* never set */ }
+// ⚠️ CAPTURE STANDALONE SEQUENCES BEFORE THE SOURCE CLOSES. The block below finds
+// sequences with pg_get_serial_sequence(), which only returns COLUMN-OWNED ones — a
+// bare CREATE SEQUENCE has no owning column and is invisible to it. `bol_number_seq`
+// is exactly that, and it governs the one number in this app that must never be
+// reused; the DigitalOcean cutover left it behind bol_registry and BOL generation
+// failed on bol_registry_pkey until it was repaired by hand (2026-08-21).
+//
+// There is no MAX(column) to chase for one of these — nothing declares which column
+// consumes it — so the value is carried from the SOURCE, which is what a clone should
+// do anyway.
+const looseSeqValues = []
+try {
+  const { rows: loose } = await neon.query(
+    `SELECT c.relname AS seq
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+       LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'a'
+      WHERE c.relkind = 'S' AND d.objid IS NULL`)
+  for (const { seq } of loose) {
+    const { rows } = await neon.query(`SELECT last_value, is_called FROM ${ident(seq)}`)
+    if (rows.length) looseSeqValues.push({ seq, ...rows[0] })
+  }
+} catch (e) {
+  console.log(`  ⚠️  could not read standalone sequences from the source: ${e.message}`)
+}
 await neon.end()
 
 // ⚠️ RESET EVERY SEQUENCE. Copying explicit id values leaves each local sequence at 1,
@@ -255,6 +280,17 @@ for (const { tbl, col, seq } of seqs) {
   seqFixed++
 }
 
+// The standalone ones captured above, carried across verbatim.
+let looseFixed = 0
+for (const { seq, last_value: lastValue, is_called: isCalled } of looseSeqValues) {
+  try {
+    await local.query('SELECT setval($1, $2, $3)', [seq, String(lastValue), isCalled])
+    looseFixed++
+  } catch (e) {
+    console.log(`  ⚠️  could not carry standalone sequence ${seq}: ${e.message}`)
+  }
+}
+
 // 4. Stamp it. An unstamped mirror is indistinguishable from a live database, which is
 //    precisely the failure this feature must not cause.
 await local.query(
@@ -265,7 +301,8 @@ await local.end()
 
 console.log(`  ok  ${totalRows.toLocaleString()} rows across ${tables.length} tables`)
 console.log(`  ok  ${(totalBytes / 1048576).toFixed(1)} MB read from Neon (one-off)`)
-console.log(`  ok  ${seqFixed} sequence(s) advanced past the copied ids`)
+console.log(`  ok  ${seqFixed} column-owned sequence(s) advanced past the copied ids`)
+console.log(`  ok  ${looseFixed} of ${looseSeqValues.length} standalone sequence(s) carried from the source`)
 if (skipped.length) {
   console.log(`  ..  ${skipped.length} skipped - schema.sql is behind Neon:`)
   for (const x of skipped.slice(0, 10)) console.log(`        ${x}`)

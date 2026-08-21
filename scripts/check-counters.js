@@ -55,6 +55,7 @@ import { FILING_LEDGER_START } from '../src/model/filing.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
 import { sweepArithmeticFields } from '../src/ingest/arithmeticSweep.js'
 import { unrecorded, vanished, describeFinding, EXPECTED_DERIVED, EXPECTED_CONSTANT } from '../src/model/arithmeticFields.js'
+import { bolSequenceVerdict } from '../src/model/bolSequence.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -311,6 +312,34 @@ stale.derived.length || stale.constant.length
     `— if this is orders.ship_date, someone started typing real ship windows; update the baseline`)
   : ok('every recorded derived/constant field is still derived/constant',
     `${EXPECTED_DERIVED.length} derived + ${EXPECTED_CONSTANT.length} constant`)
+
+// ── The BOL sequence must stay ahead of the registry ────────────────────────
+//
+// A BOL number must never be reused, and the generator is
+// `'NB' || nextval('bol_number_seq')` — so the guarantee holds only while the
+// sequence is strictly above every number ever minted. It stopped being: the
+// DigitalOcean cutover left the sequence at 1731240 while bol_registry already held
+// NB1731267, and Nima found out by trying to make a BOL and getting
+// `duplicate key value violates unique constraint "bol_registry_pkey"`.
+//
+// ⚠️ That error was the guarantee WORKING. This check exists so the next drift
+// announces itself here instead of surfacing as a broken BOL button — the failure
+// was silent for nine days, from the cutover on 08-12 to 08-21.
+{
+  const seqRow = (await pool.query('SELECT last_value, is_called FROM bol_number_seq')).rows[0]
+  const regRow = (await pool.query(
+    `SELECT max(nullif(regexp_replace(bol_number, '\\D', '', 'g'), '')::bigint) AS max_used
+       FROM bol_registry`)).rows[0]
+  const v = bolSequenceVerdict({
+    lastValue: seqRow.last_value, isCalled: seqRow.is_called, maxUsed: regRow.max_used,
+  })
+  v.behind
+    ? bad('the BOL sequence is ahead of every number ever minted',
+      `next would be NB${v.next} but NB${v.maxUsed} is already minted — ${v.collisions} collision(s) queued. ` +
+      `Run: node --env-file=.env.local scripts/fix-bol-sequence.js --apply`)
+    : ok('the BOL sequence is ahead of every number ever minted',
+      `next NB${v.next}, highest minted ${v.maxUsed ?? '—'}`)
+}
 
 // ── report ──
 const failed = results.filter((r) => !r.pass)

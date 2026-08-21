@@ -248,7 +248,50 @@ for (const { tbl, col, seq } of seqs) {
   await dst.query(
     `SELECT setval($1, COALESCE((SELECT MAX(${ident(col)}) FROM ${ident(tbl)}), 0) + 1, false)`, [seq])
 }
-if (!verifyOnly) console.log(`  ok  ${seqs.length} sequence(s) advanced past the copied ids`)
+if (!verifyOnly) console.log(`  ok  ${seqs.length} column-owned sequence(s) advanced past the copied ids`)
+
+// 5b. ⚠️ STANDALONE SEQUENCES, WHICH STEP 5 CANNOT SEE. pg_get_serial_sequence only
+//     ever returns a sequence OWNED BY A COLUMN (SERIAL / IDENTITY). A sequence made
+//     with a bare CREATE SEQUENCE has no owning column, so it is invisible above —
+//     and step 5 then prints a reassuring "N sequence(s) advanced" that excluded it.
+//
+//     ⚠️ THIS COST A REAL OUTAGE. `bol_number_seq` is the only standalone sequence in
+//     this database (1 of 16), and it governs the one number in the whole app that
+//     MUST NEVER BE REUSED. The DigitalOcean cutover left it at 1731240 while
+//     bol_registry already held NB1731267, so BOL generation failed on
+//     bol_registry_pkey — 27 collisions deep — until it was repaired by hand
+//     (scripts/fix-bol-sequence.js). Nima hit it 2026-08-21.
+//
+//     There is no MAX(column) to chase for one of these, because nothing declares
+//     which column consumes it. So the value is CARRIED FROM THE SOURCE, which is the
+//     honest answer for a copy anyway: the target should continue where the source
+//     left off.
+const { rows: loose } = verifyOnly ? { rows: [] } : await dst.query(
+  `SELECT c.relname AS seq
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+     LEFT JOIN pg_depend d ON d.objid = c.oid AND d.deptype = 'a'
+    WHERE c.relkind = 'S' AND d.objid IS NULL`)
+let carried = 0
+for (const { seq } of loose) {
+  try {
+    const { rows } = await src.query(
+      `SELECT last_value, is_called FROM ${ident(seq)}`)
+    if (!rows.length) continue
+    await dst.query('SELECT setval($1, $2, $3)',
+      [seq, String(rows[0].last_value), rows[0].is_called])
+    carried++
+  } catch (e) {
+    // ⚠️ LOUD. A standalone sequence left at 1 makes its table read-only in practice,
+    // and the whole point of this block is that silence here already cost us once.
+    console.log(`  ⚠️  could not carry sequence ${seq} from the source: ${e.message}`)
+    console.log(`      Fix it before generating anything that draws on it.`)
+  }
+}
+if (!verifyOnly) {
+  console.log(`  ok  ${carried} of ${loose.length} standalone sequence(s) carried from the source`)
+  if (carried < loose.length) console.log(`  ⚠️  ${loose.length - carried} NOT carried — see above`)
+}
 
 // 6. VERIFY. Row counts on every table, plus an md5 over every shared column on both
 //    sides. ⚠️ A count is not a comparison — two tables can hold the same number of

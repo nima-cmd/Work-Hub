@@ -47,7 +47,8 @@
     "sync:routing": "node --env-file=.env.local scripts/sync-macys-routing.js",
     "check:tenders": "node --env-file=.env.local scripts/check-tenders.js",
     "check:routing": "node --env-file=.env.local scripts/check-routing.js",
-    "check:slack": "node --env-file=.env.local scripts/check-slack.js"
+    "check:slack": "node --env-file=.env.local scripts/check-slack.js",
+    "fix:bol-sequence": "node --env-file=.env.local scripts/fix-bol-sequence.js"
   },
   "dependencies": {
     "concurrently": "^10.0.3",
