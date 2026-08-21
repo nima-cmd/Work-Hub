@@ -1027,9 +1027,25 @@ const ediDeadlineSql = (col) => `
    GROUP BY 1, 2`
 
 export async function getAgenda({ today = new Date() } = {}) {
-  const [orders, tasks, cancels, notBefore, arrivals] = await Promise.all([
-    getOrders(),
-    getQuestTasks(),
+  // ⚠️ LEAN QUERIES, NOT getOrders()/getQuestTasks(). The first version called both and
+  // took 1,886ms for a 28 KB response. Measured: getQuestTasks() spends 2,017ms inside
+  // ensureRecurringTasks() (a WRITE, on a read path), and getOrders() builds per-order
+  // fulfilment/invoice JSON this endpoint never looks at. The agenda needs six columns
+  // from orders and two from tasks — 42ms and 38ms respectively.
+  //
+  // Deriving the lane needs `source`, `is_ats` and `oc_number`, so those come too;
+  // laneFor reads exactly those (orderLane.js).
+  const [ordersRes, tasksRes, cancels, notBefore, arrivals] = await Promise.all([
+    pool.query(
+      `SELECT so_number AS "soNumber", customer, source, stage,
+              is_ats AS "isAts", oc_number AS "ocNumber", po_number AS "poNumber",
+              window_end AS "windowEnd", window_start AS "windowStart"
+         FROM orders
+        WHERE stage IS DISTINCT FROM 'SHIPPED'
+          AND (window_end IS NOT NULL OR window_start IS NOT NULL)`),
+    pool.query(
+      `SELECT id, subject, status, due_at AS "dueAt"
+         FROM quest_tasks WHERE status <> 'done' AND due_at IS NOT NULL`),
     pool.query(ediDeadlineSql('cancel_after')),
     pool.query(ediDeadlineSql('ship_not_before')),
     // A container IS the POs sharing a due date (ocPoContainers.js). Only OPEN lines —
@@ -1045,8 +1061,8 @@ export async function getAgenda({ today = new Date() } = {}) {
   ])
 
   const entries = buildAgenda({
-    orders,
-    tasks,
+    orders: ordersRes.rows,
+    tasks: tasksRes.rows,
     ediCancels: cancels.rows,
     ediNotBefore: notBefore.rows,
     arrivals: arrivals.rows,
@@ -2307,6 +2323,41 @@ async function createEdiTaskFromOrder(o) {
 // POs with no SO yet only become tasks via the manual button (createEdiTaskFor)
 // — they're a "needs entering" judgment call, not automatic. Any EDI task whose
 // PO is no longer open work is closed. Best-effort caller (see ensureRecurringTasks).
+// How long an EDI reconcile stays fresh. Deliberately far FINER than the thing it
+// reconciles: the NetSuite/Orderful sync runs hourly, so nothing this reads can change
+// more often than that. Five minutes is generous, not lossy.
+const EDI_TASK_TTL_MS = 5 * 60 * 1000
+const EDI_TASK_KEY = 'edi_tasks_reconciled_at'
+
+/**
+ * ensureEdiTasks, but at most once per EDI_TASK_TTL_MS.
+ *
+ * ⚠️ `force` exists so the WRITE paths never skip it — the cron and the post-sync call
+ * must always reconcile, because they are the moments the data actually changed. Only
+ * the read path is allowed to see a stale-but-recent answer.
+ */
+export async function ensureEdiTasksIfStale({ force = false, ttlMs = EDI_TASK_TTL_MS } = {}) {
+  if (!force) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT updated_at FROM sync_meta WHERE key = $1', [EDI_TASK_KEY])
+      const last = rows[0]?.updated_at ? new Date(rows[0].updated_at).getTime() : 0
+      if (last && Date.now() - last < ttlMs) return { created: 0, skipped: true }
+    } catch {
+      // A gate that cannot be read must not block the work it guards.
+    }
+  }
+  const out = await ensureEdiTasks()
+  try {
+    await pool.query(
+      `INSERT INTO sync_meta (key, value, updated_at) VALUES ($1, '1', now())
+       ON CONFLICT (key) DO UPDATE SET updated_at = now()`, [EDI_TASK_KEY])
+  } catch {
+    // Failing to record the stamp only costs a redundant reconcile next time.
+  }
+  return { ...out, skipped: false }
+}
+
 export async function ensureEdiTasks() {
   const review = await getEdiReview()
   const work = computeEdiWork(review.orders || [], review.resolutions || [])
@@ -3869,7 +3920,8 @@ export async function syncEdi() {
   catch (e) { console.error('New-850 arrival detection failed:', e.message) }
   // Fresh Orderful data can shift what's open — refresh the auto-generated
   // tasks right after (best-effort; a failure here mustn't fail the sync).
-  try { await ensureEdiTasks() } catch (e) { console.error('EDI task generation after sync failed:', e.message) }
+  // force: the sync is the moment the data changed, so it must never see a cached gate.
+  try { await ensureEdiTasksIfStale({ force: true }) } catch (e) { console.error('EDI task generation after sync failed:', e.message) }
   return { ...r, ...arrivals }
 }
 
@@ -4512,7 +4564,20 @@ export async function ensureRecurringTasks() {
   // surface them as tasks automatically (Nima, 2026-07-20). Best-effort: an
   // Orderful/DB hiccup here must never break the core recurring reconcile.
   try {
-    const edi = await ensureEdiTasks()
+    // ⚠️ GATED, because this is 1,135–1,421ms of the ~1,438ms this whole function costs
+    // — and getQuestTasks() calls it on EVERY page load. Measured 2026-08-21: it was
+    // most of the app's perceived slowness.
+    //
+    // The header above says the read-path reconcile existed because there was "no
+    // separate scheduler needed until this is deployed somewhere always-on". It IS now:
+    // scripts/recurring-check.js runs on a cron, and refreshFromNetsuite already calls
+    // ensureEdiTasks directly after pulling (see the call further down this file). So
+    // the data this reconciles only changes on the sync, and re-deriving it on every
+    // read was pure waste.
+    //
+    // The cheap half — the recurring-template loop above, ~20ms — still runs on every
+    // read, so the daily nags keep their catch-up-when-opened behaviour.
+    const edi = await ensureEdiTasksIfStale()
     created += edi.created
   } catch (e) {
     console.error('EDI task generation failed (recurring tasks still processed):', e.message)
