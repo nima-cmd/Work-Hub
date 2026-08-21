@@ -1796,3 +1796,21 @@ CREATE TABLE IF NOT EXISTS weaver_divergence (
 );
 CREATE INDEX IF NOT EXISTS weaver_divergence_run_idx  ON weaver_divergence (run_id);
 CREATE INDEX IF NOT EXISTS weaver_divergence_kind_idx ON weaver_divergence (kind, internal_id);
+
+-- ── When a fulfilment was actually CREATED ───────────────────────────────────
+--
+-- `if_date` is the IF's transaction date, and NetSuite REWRITES it to the ship date
+-- when the IF ships (measured: if_date = actual_ship_date on all 205 shipped rows). So
+-- the IF_CREATED event derived from it — the FIRST line of every order's timeline —
+-- was wrong on 255 of 281 events, 57 of them dated exactly on the ship day and the
+-- worst adrift by 55 days (IF6986 said 14 July, was created 20 May).
+--
+-- `createddate` in NetSuite is the real thing, and a TIMESTAMP rather than a DATE, so
+-- it carries the time of day `if_date` never could: IF7240 was created 2026-06-22 12:18
+-- against a trandate of 2026-07-10.
+--
+-- ⚠️ The 26 events that stayed wrong have no createddate — their fulfilments predate the
+-- sync window. They were deliberately left alone rather than guessed; see
+-- scripts/backfill-if-created.js, which only ever corrects a row where a real creation
+-- timestamp exists.
+ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS if_created_at TIMESTAMPTZ;

@@ -123,6 +123,10 @@ export async function getOrders() {
             'packedStatus', f.packed_status, 'daysPending', f.days_pending,
             'invoice', f.invoice_number, 'actualShipDate', f.actual_ship_date,
             'ifDate', f.if_date,
+            -- The real creation timestamp (NetSuite createddate). ifDate above is the
+            -- DOCUMENT date and becomes the ship date on shipping — see schema.sql.
+            -- (No backticks in here — the whole query is a JS template literal.)
+            'ifCreatedAt', f.if_created_at,
             -- Does a carrier label exist for this fulfilment? The post-custody
             -- board needs it to tell "make the label" from "mark it packed"
             -- (src/model/postCustody.js): for a boutique parcel the label is

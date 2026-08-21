@@ -98,8 +98,8 @@ export async function loadFulfillments(records, db = pool) {
     const so = r.soNumber && r.soNumber !== 'UNLINKED' ? r.soNumber : null
     await db.query(
       `INSERT INTO fulfillments
-         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, tracking_numbers, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+         (if_number, so_number, status, packed_status, days_pending, invoice_number, if_date, actual_ship_date, tracking_numbers, if_created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
        ON CONFLICT (if_number) DO UPDATE SET
          tracking_numbers = COALESCE(EXCLUDED.tracking_numbers, fulfillments.tracking_numbers),
          so_number        = COALESCE(EXCLUDED.so_number, fulfillments.so_number),
@@ -109,11 +109,15 @@ export async function loadFulfillments(records, db = pool) {
          invoice_number   = COALESCE(EXCLUDED.invoice_number, fulfillments.invoice_number),
          if_date          = COALESCE(EXCLUDED.if_date, fulfillments.if_date),
          actual_ship_date = COALESCE(EXCLUDED.actual_ship_date, fulfillments.actual_ship_date),
+         -- ⚠️ COALESCE, so a CSV import (which cannot see createddate) never wipes a
+         -- creation timestamp the live pull established.
+         if_created_at    = COALESCE(EXCLUDED.if_created_at, fulfillments.if_created_at),
          updated_at       = now()`,
       [
         r.ifNumber, so, r.ifStatus || r.packedStatus || null, r.packedStatus || null,
         r.daysPending ?? null, r.invoice || null, r.date || null, r.actualShipDate || null,
         r.trackingNumbers && r.trackingNumbers.length ? r.trackingNumbers : null,
+        r.ifCreatedAt || null,
       ],
     )
     n++

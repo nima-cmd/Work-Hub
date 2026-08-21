@@ -14,6 +14,7 @@ import { shipWindow, shipWindowFlags, isoDay, PACK_LEAD_DAYS, isDefaultedShipDat
 import { MACYS_DCS, MERGE_CENTERS, routingShipTo, macysDc, NORDSTROM_DCS, bolAuthLine, shipToFor } from '../src/model/bolAddresses.js'
 import { deriveSource } from '../src/model/source.js'
 import { STAGE } from '../src/model/stages.js'
+import { eventsFromFulfillments } from '../src/model/orderEvents.js'
 import { computeOcPoMatches } from '../src/model/ocPoMatch.js'
 import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { computeAffection } from '../src/model/affection.js'
@@ -3066,4 +3067,53 @@ test('yesterday DOES read as a day old', () => {
     new Date('2026-08-21T12:00:00Z'),
   )
   assert.ok(flags.some((f) => f.key === 'NEEDS_HANDOFF_SCAN'), 'the guard must still bite')
+})
+
+
+// ── IF_CREATED must come from the creation date, not the document date ───────
+
+test('IF_CREATED prefers NetSuite createddate over the transaction date', () => {
+  // if_date is the IF's transaction date and NetSuite REWRITES it to the ship date when
+  // the IF ships (measured: identical on all 205 shipped fulfilments). Deriving the
+  // first event on an order's timeline from it dated 255 of 281 events wrong — the worst
+  // by 55 days.
+  const events = eventsFromFulfillments([{
+    ifNumber: 'IF1', soNumber: 'SO1', ifDate: '2026-07-10',
+    ifCreatedAt: '2026-06-22T12:18:00Z', ifStatus: 'Shipped',
+  }])
+  const created = events.find((e) => e.eventType === 'IF_CREATED')
+  // ⚠️ toISOString, not String() — occurredAt is a Date, and String(date) is
+  // "Mon Jun 22 2026 …", which slices to a weekday rather than a date.
+  assert.equal(new Date(created.occurredAt).toISOString().slice(0, 10), '2026-06-22',
+    'the creation timestamp wins')
+})
+
+test('IF_CREATED falls back to the document date when no creation date is known', () => {
+  // 26 fulfilments predate the sync window and have no createddate. A fallback is
+  // better than no event; inventing a timestamp would not be.
+  const events = eventsFromFulfillments([{
+    ifNumber: 'IF2', soNumber: 'SO1', ifDate: '2026-07-10', ifStatus: 'Shipped',
+  }])
+  const created = events.find((e) => e.eventType === 'IF_CREATED')
+  assert.equal(new Date(created.occurredAt).toISOString().slice(0, 10), '2026-07-10')
+})
+
+test('no date at all yields an OBSERVED event, never a fabricated timestamp', () => {
+  // The honest-timestamp rule does not mean "emit nothing" — it means never claim a
+  // date you do not have. evt() marks a dateless event `observed` with a null
+  // occurredAt, and the caller stamps sync time; the module header explains why that is
+  // both honest and useful. (I first asserted the event was suppressed; it is not, and
+  // the design is right.)
+  const events = eventsFromFulfillments([{ ifNumber: 'IF3', soNumber: 'SO1', ifStatus: 'Picked' }])
+  const created = events.find((e) => e.eventType === 'IF_CREATED')
+  assert.ok(created, 'the transition still happened')
+  assert.equal(created.occurredAt, null, 'no date is claimed')
+  assert.equal(created.tsQuality, 'observed', 'and it is labelled as observed, not actual')
+})
+
+test('a real creation date is marked ACTUAL, not observed', () => {
+  const [created] = eventsFromFulfillments([{
+    ifNumber: 'IF4', soNumber: 'SO1', ifCreatedAt: '2026-06-22T12:18:00Z',
+  }])
+  assert.equal(created.tsQuality, 'actual')
 })

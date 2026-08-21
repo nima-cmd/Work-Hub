@@ -201,28 +201,32 @@ export const ASSUMPTIONS = [
   {
     field: "order_events IF_CREATED (\"Fulfilment created\", derived from fulfillments.if_date)",
     shape: S.MISLABELLED.key,
-    pr: 138, date: '2026-08-20', status: 'open',
-    assumed: 'if_date is when the fulfilment was created, so it can date the IF_CREATED event — the '
-      + 'first thing on every order\'s timeline',
-    // ⚠️ NOT a defect in the COLUMN. Nima already ruled on that (see the
-    // fulfillments.actual_ship_date entry, 2026-08-14): the IF transaction date IS
-    // the ship date, authoritative, and check:fields has recorded the two being
-    // identical since PR #102. The column is doing exactly what it should.
-    // What nobody had drawn is the CONSEQUENCE for the event named off it: a column
-    // that becomes the ship date on shipping cannot also carry a creation date, so
-    // the label "Fulfilment created" is describing a different fact from the date
-    // beside it. The detector found the equality; it cannot find a LABEL that stops
-    // being true — that is shape 2, and shape 2 needs a reader.
-    actually: 'NetSuite rewrites the IF transaction date to the ship date when the IF ships — measured '
-      + 'if_date = actual_ship_date on 204 of 204 shipped fulfilments and 0 of 76 unshipped. So it is a '
-      + 'creation date only while the IF has not shipped, which is the opposite of durable',
-    cost: '83 of 280 IF_CREATED events are dated with the SHIP day — those fulfilments read on the '
-      + 'Ledger and in the trace as though they were created the day they went out. The other 121 are '
-      + 'genuinely earlier only because eventKey dedupe froze the date captured before the rewrite, so '
-      + 'the timeline is right by accident of sync ORDER, not because the column means anything. Fixing '
-      + 'it needs a real creation date from NetSuite (createddate), which is a sync change, not a relabel',
-    caught: 'building the trace header: IF7486\'s header said created 2026-08-17 while its own '
-      + 'IF_CREATED event said 2026-08-06. Two dates for one fact on one screen is the whole tell',
+    pr: 149, date: '2026-08-21', status: 'fixed',
+    assumed: 'if_date is when the fulfilment was created, so it can date the IF_CREATED '
+      + 'event — the first thing on every order\'s timeline',
+    // ⚠️ NOT a defect in the COLUMN. Nima ruled on that (see the
+    // fulfillments.actual_ship_date entry): the IF transaction date IS the ship date,
+    // authoritative, and check:fields has recorded the two being identical since PR
+    // #102. The column is doing exactly what it should. What nobody had drawn is the
+    // consequence for the event named off it.
+    actually: 'NetSuite rewrites the IF transaction date to the ship date when the IF '
+      + 'ships — if_date = actual_ship_date on all 205 shipped fulfilments. So it is a '
+      + 'creation date only while the IF has not shipped. NetSuite\'s own `createddate` '
+      + 'is the real thing, and a TIMESTAMP rather than a DATE: IF7240 was created '
+      + '2026-06-22 12:18 against a trandate of 2026-07-10',
+    cost: '⚠️ FAR WORSE THAN FIRST RECORDED. The original entry said 83 of 280, counting '
+      + 'only events dated EXACTLY on the ship day. Pulling createddate revealed 255 of '
+      + '281 disagreed — 57 of them on the ship day, the worst adrift by 55 days (IF6986 '
+      + 'said 14 July, created 20 May). Every one of those was the first line of an '
+      + 'order\'s timeline in the Ledger and in every data packet',
+    caught: 'building the trace header: IF7486 said created 2026-08-17 while its own '
+      + 'IF_CREATED event said 2026-08-06. Two dates for one fact on one screen. ⚠️ AND '
+      + 'THE FIRST MEASUREMENT UNDERSTATED IT by 3x, because it only asked "does this '
+      + 'equal the ship date" rather than "does this equal the truth" — there was no '
+      + 'source of truth to compare against until createddate was ingested. Fixed '
+      + 'forward in the sync and corrected once by scripts/backfill-if-created.js; 26 '
+      + 'events predate the sync window, have no createddate, and were deliberately left '
+      + 'alone rather than guessed',
   },
   {
     field: 'explainDbError UNREACHABLE pattern', shape: S.PHANTOM_MECHANISM.key,
