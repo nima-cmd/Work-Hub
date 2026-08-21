@@ -136,6 +136,29 @@ export async function getOrders() {
                            WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_OUT'),
             'custodyIn',  (SELECT MAX(e.occurred_at) FROM order_events e
                            WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_IN'),
+            -- ⚠️ AN EDI SHIPMENT IS SCANNED ON ITS CARGO TAG, NOT ITS SLIP, and until
+            -- now none of that evidence reached the pipeline: both subqueries above read
+            -- doc_type='IF' only. So NEEDS_HANDOFF_SCAN told you to go print a label and
+            -- scan out 54 fulfilments — 53 of them EDI, every one of whose DC tags had
+            -- already been scanned. scanGap.js learned this in PR #74 (28 of 28 false);
+            -- pipeline.js never got the fix.
+            --
+            -- Two tag shapes are real, so both are matched: the per-PO form
+            -- <po>:<dc> and the grouped master form <partner>|<dc>|<po,po,...>.
+            -- (No backticks in here — this whole query is a JS template literal.)
+            -- Measured: 163 of the 211 fulfilments with no IF scan have a DC scan.
+            'dcCustodyOut', (SELECT MAX(e.occurred_at) FROM order_events e
+                             JOIN fulfillment_dc fd ON fd.if_number = f.if_number
+                             WHERE e.doc_type = 'DC' AND e.event_type = 'CUSTODY_OUT'
+                               AND (e.doc_number = fd.po_number || ':' || fd.dc
+                                 OR (e.doc_number LIKE '%|' || fd.dc || '|%'
+                                     AND (',' || split_part(e.doc_number, '|', 3) || ',') LIKE '%,' || fd.po_number || ',%'))),
+            'dcCustodyIn',  (SELECT MAX(e.occurred_at) FROM order_events e
+                             JOIN fulfillment_dc fd ON fd.if_number = f.if_number
+                             WHERE e.doc_type = 'DC' AND e.event_type = 'CUSTODY_IN'
+                               AND (e.doc_number = fd.po_number || ':' || fd.dc
+                                 OR (e.doc_number LIKE '%|' || fd.dc || '|%'
+                                     AND (',' || split_part(e.doc_number, '|', 3) || ',') LIKE '%,' || fd.po_number || ',%'))),
             -- "our part is done", recorded without telling NetSuite. Gates the
             -- mark-it-packed nudge for orders we must not invoice yet — see
             -- src/model/prepped.js.
