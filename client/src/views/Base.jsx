@@ -44,6 +44,16 @@ function roadPath(from, to) {
   return `M ${px(a.x)} ${py(a.y)} L ${px(mx)} ${py(a.y)} L ${px(mx)} ${py(b.y)} L ${px(b.x)} ${py(b.y)}`
 }
 
+// How many of a building's twelve windows are lit: proportional to its share of the
+// busiest building's load, so the base reads at a glance. Always at least one when
+// there is ANY work — a building with three things in it should not look abandoned —
+// and always zero when there is none.
+const WINDOWS = 12
+function litWindows(count, busiest) {
+  if (!count) return 0
+  return Math.max(1, Math.round((count / Math.max(1, busiest)) * WINDOWS))
+}
+
 const AGE = (iso) => {
   if (!iso) return null
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
@@ -198,10 +208,30 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               onClick={() => setOpen(open === b.key ? null : b.key)}
               title={`${b.label} — ${st.count} ${b.of}`}
             >
-              <img src={`/base/${b.sprite}.png`} alt="" className="bsSprite" />
+              <img src={`/base/${b.sprite}.png`} alt=""
+                   className={`bsSprite${b.flip ? ' bsSpriteFlip' : ''}`} />
+              {/* ── LIVED IN ─────────────────────────────────────────────────
+                  Nima, 2026-08-21: "it'd be nice if the base looked lived in so
+                  computer going off data flowing type of thing from the top view…
+                  by live inside i mean in the building."
+                  Windows lit on the roof, and the NUMBER LIT is proportional to the
+                  work inside — so a busy building glows and a quiet one goes dark,
+                  and neither invents a figure. A grid of lights that flickered
+                  identically regardless of the data would be exactly the
+                  looks-live-driven-by-nothing trap this base was built to avoid. */}
+              <span className="bsWindows" aria-hidden="true">
+                {Array.from({ length: 12 }, (_, i) => (
+                  <span key={i}
+                        className={'bsWin' + (i < litWindows(st.count, busiest) ? ' bsWinOn' : '')}
+                        style={{ animationDelay: `${(i % 7) * 0.45}s` }} />
+                ))}
+              </span>
               <span className="bsPlate">
                 <span className="bsName">{b.label}</span>
-                <span className="bsCount">{st.count}</span>
+                {/* An uncountable building shows what it IS, not a fabricated zero. */}
+                {b.countable === false
+                  ? <span className="bsOpen">open</span>
+                  : <span className="bsCount">{st.count}</span>}
                 <span className="bsOf">{b.of}</span>
                 {/* More than a number: how long the oldest thing here has sat.
                     Absent rather than zero when nothing carries a date. */}
@@ -215,7 +245,9 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               </span>
               {/* A load bar, relative to the busiest building — so the base reads at a
                   glance before any number is read. */}
-              <span className="bsLoad"><span style={{ width: `${(st.count / busiest) * 100}%` }} /></span>
+              {b.countable !== false && (
+                <span className="bsLoad"><span style={{ width: `${(st.count / busiest) * 100}%` }} /></span>
+              )}
             </button>
           )
         })}

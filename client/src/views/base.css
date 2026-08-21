@@ -252,3 +252,37 @@
 @media (prefers-reduced-motion: reduce) {
   .biScan, .biLampOn, .biAlertPip, .biTrace > span { animation: none; }
 }
+
+/* A duplicated sprite, mirrored — the scan bay is the pack house the other way
+   round, which is what a two-hall warehouse complex looks like from above. */
+.bsSpriteFlip { transform: scaleX(-1); }
+
+/* ── Lived in ──────────────────────────────────────────────────────────────
+   Windows lit on the roof. The NUMBER lit is proportional to the work inside, so a
+   busy building glows and a quiet one is dark — the light is data, not decoration. */
+/* FIXED-SIZE cells, centred — not a percentage grid. Sized in % they scaled with the
+   building and came out as coloured blocks on the big ones; a window is a window
+   whatever the roof it sits on. */
+.bsWindows {
+  position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+  display: grid; grid-template-columns: repeat(6, 3px); gap: 3px;
+  pointer-events: none;
+}
+.bsWin { width: 3px; height: 3px; border-radius: 1px; background: #0e1a28; }
+.bsWinOn {
+  background: var(--tone);
+  /* Two rates multiplied: a slow flicker plus a faster data pulse, so a roof reads as
+     consoles running rather than as one blinking light. */
+  animation: bsWinFlicker 5.2s steps(1, end) infinite, bsWinPulse 1.9s ease-in-out infinite;
+  box-shadow: 0 0 5px var(--tone);
+}
+@keyframes bsWinFlicker { 0%, 62% { opacity: 1; } 64%, 68% { opacity: 0.25; } 70%, 100% { opacity: 1; } }
+@keyframes bsWinPulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
+
+/* Not a number, and not pretending to be one. */
+.bsOpen {
+  font-family: var(--display); font-size: 12px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--tone);
+}
+
+@media (prefers-reduced-motion: reduce) { .bsWinOn { animation: none; } }
