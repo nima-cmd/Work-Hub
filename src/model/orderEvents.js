@@ -201,7 +201,14 @@ export function eventsFromFulfillments(fulfillments = []) {
   const out = []
   for (const f of fulfillments) {
     if (!f.ifNumber) continue
-    out.push(evt('IF_CREATED', 'IF', f.ifNumber, f.soNumber, f.ifDate))
+    // ⚠️ THE CREATION TIMESTAMP FIRST, and only then the document date. `if_date` is
+    // the IF's transaction date and NetSuite rewrites it to the ship date on shipping,
+    // so deriving "Fulfilment created" from it dated 255 of 281 events wrong — 57 of
+    // them exactly on the ship day, the worst adrift by 55 days (IF6986: said 14 July,
+    // actually created 20 May). Corrected once by scripts/backfill-if-created.js.
+    // `ifCreatedAt` is NetSuite's own createddate — a real timestamp, and materially
+    // different (IF7240: created 2026-06-22 12:18, trandate 2026-07-10).
+    out.push(evt('IF_CREATED', 'IF', f.ifNumber, f.soNumber, f.ifCreatedAt || f.ifDate))
     if (isPacked(f.status)) out.push(evt('PACKED', 'IF', f.ifNumber, f.soNumber, null))
     if (isShipped(f.status)) {
       // ⚠️ THIS IS A PAPER EVENT, NOT A PHYSICAL ONE — corrected 2026-08-05.

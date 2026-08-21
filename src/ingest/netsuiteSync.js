@@ -203,6 +203,8 @@ export function mapFulfillmentRow(row) {
     ifStatus,
     date: row.trandate || null,
     actualShipDate: shipped ? row.trandate || null : null,
+    // When the fulfilment was actually made, as opposed to the date on the document.
+    ifCreatedAt: row.createddate || null,
   }
 }
 
@@ -404,8 +406,16 @@ export function foldOrderLines(rows = []) {
 }
 
 export function fulfillmentSql(since) {
+  // ⚠️ `createddate` IS THE ONLY HONEST CREATION DATE. `trandate` is the IF's
+  // transaction date, and NetSuite REWRITES it to the ship date when the IF ships —
+  // measured: if_date = actual_ship_date on all 205 shipped fulfilments. So the
+  // "Fulfilment created" event derived from trandate was dated with the ship day on 83
+  // of 281 rows. createddate is a real timestamp and materially different: IF7240 was
+  // created 2026-06-22 12:18 and carries a trandate of 2026-07-10, eighteen days later.
+  // See fieldAssumptions.js.
   return `SELECT DISTINCT c.tranid AS if_number, t.tranid AS so_number, c.status,
-                 TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate
+                 TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate,
+                 TO_CHAR(c.createddate,'YYYY-MM-DD\"T\"HH24:MI:SS') AS createddate
           FROM transaction t
           JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
           JOIN transaction c ON c.id = l.nextdoc AND c.type='ItemShip'
