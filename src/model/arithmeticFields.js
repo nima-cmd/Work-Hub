@@ -231,6 +231,42 @@ export const EXPECTED_CONSTANT = [
   // is the truth and not a dead field. Recorded rather than silenced — the day a
   // second store appears, this entry stops matching and says so.
   { table: 'shipstation_order', column: 'store_id', why: 'one push destination — ShipStation store 351819 ("Label Api")' },
+
+  // ── The weaver_* snapshot timestamps (2026-08-20) ──────────────────────────
+  //
+  // These are constant BY DESIGN, and not the way `is_ats` was. Every weaver_*
+  // snapshot is written by one `npm run weaver:sync` transaction, so a timestamp
+  // defaulted or set to now() takes the same value on every row in the batch.
+  // They are per-RUN stamps living on each row, not per-row observations.
+  //
+  // What makes them benign is that each goes non-constant on the event you would
+  // want to hear about, so recording them does not blind the check:
+  //
+  //   first_seen_at  — set on insert, never updated. One value while the whole
+  //                    population arrived together; a second value appears the
+  //                    first time a genuinely NEW item shows up, and from then on
+  //                    it is a real arrival date.
+  //   observed_at /
+  //   last_seen_at   — refreshed for every row still observed. One value means
+  //                    "everything present last run is still present". It goes
+  //                    non-constant PRECISELY when a row stops being observed —
+  //                    an item pulled from NetSuite, a product deleted in Weaver.
+  //                    Here the constant IS the healthy state and the change is
+  //                    the finding, which is the inverse of the usual reading.
+  //
+  // Worth knowing rather than fixing: observed_at duplicates
+  // weaver_sync_run.finished_at across ~5,600 rows. A join would say the same
+  // thing with one copy; the per-row stamp is kept because it survives the run
+  // row being pruned and makes "when did we last see this" answerable from the
+  // snapshot alone.
+  { table: 'weaver_netsuite_item', column: 'first_seen_at', why: 'set once, whole population inserted in one weaver:sync transaction' },
+  { table: 'weaver_netsuite_item', column: 'observed_at', why: 'refreshed for every still-present row per run — differs only when an item stops being observed' },
+  { table: 'weaver_product', column: 'first_seen_at', why: 'set once, whole population inserted in one weaver:sync transaction' },
+  { table: 'weaver_product', column: 'observed_at', why: 'refreshed for every still-present row per run — differs only when a product stops being observed' },
+  { table: 'weaver_sku_history', column: 'first_seen_at', why: 'set once per (item, sku) pair, all seeded in one transaction' },
+  { table: 'weaver_sku_history', column: 'last_seen_at', why: 'refreshed per run — differs only when a sku stops appearing for that item' },
+  { table: 'weaver_product_sku_history', column: 'first_seen_at', why: 'set once per (product, sku) pair, all seeded in one transaction' },
+  { table: 'weaver_product_sku_history', column: 'last_seen_at', why: 'refreshed per run — differs only when a product stops computing that sku' },
 ]
 
 export function isExpected(table, column, basis) {
