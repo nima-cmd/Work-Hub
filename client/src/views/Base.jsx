@@ -31,15 +31,17 @@ import './base.css'
 // disagree about where a building is. The container is locked to this aspect ratio
 // for exactly that reason.
 const VB_W = 1000
-const VB_H = 600
+const VB_H = 600            // starting guess only; the real height is measured
 const px = (x) => (x / 100) * VB_W
-const py = (y) => (y / 100) * VB_H
 
 // A dogleg between two centres: out to the halfway line, across, then in. Streets
 // turn corners; a straight diagonal between every pair reads as a cobweb.
-function roadPath(from, to) {
+// `vbH` is passed in because the viewBox height follows the rendered box — see the
+// note in the component.
+function roadPath(from, to, vbH) {
   const a = centreOf(BUILDING[from])
   const b = centreOf(BUILDING[to])
+  const py = (y) => (y / 100) * vbH
   const mx = (a.x + b.x) / 2
   return `M ${px(a.x)} ${py(a.y)} L ${px(mx)} ${py(a.y)} L ${px(mx)} ${py(b.y)} L ${px(b.x)} ${py(b.y)}`
 }
@@ -64,31 +66,51 @@ const AGE = (iso) => {
 export default function Base({ orders = [], tasks = [], emails = [], events = [], onNavigate, viewFor }) {
   const [open, setOpen] = useState(null)
 
-  // ── Fit the map to whatever room is actually left ─────────────────────────
+  // ── The viewBox follows the box, so nothing distorts ─────────────────────
   //
-  // The app stacks a dismissible EDI-arrivals banner and the court strip above every
-  // view, so the space above this map is not a constant — a fixed `calc(100vh - 280px)`
-  // put the bottom row and the ticker below the fold on one screen and left a gap on
-  // another. So measure the map's own top and publish the room below it as a CSS
-  // variable; the stylesheet caps the WIDTH from it, which keeps the aspect ratio
-  // exact (a squashed box would pull the roads off their buildings).
+  // ⚠️ CSS OWNS THE MAP'S SIZE NOW, and this measurement only refines the SVG's
+  // viewBox. The previous version computed the WIDTH from a measured height, and it
+  // could LATCH: measured once while the layout was still settling it fell back to the
+  // 320px floor and stayed there — a 533x320 map on a 1920x1080 screen with 1,387px of
+  // horizontal waste, which is exactly what Nima was looking at. Sizing in CSS cannot
+  // latch, and if this measurement never lands the only cost is a slightly stretched
+  // road, not a tiny base.
+  //
+  // The viewBox height is derived from the rendered aspect so roads and buildings share
+  // one coordinate space at any window size. preserveAspectRatio="none" would have been
+  // one line, but it scales stroke widths unevenly and the roads would go oval.
   const mapRef = useRef(null)
+  const [vbH, setVbH] = useState(VB_H)
   useEffect(() => {
-    const fit = () => {
-      const el = mapRef.current
-      if (!el) return
-      const top = el.getBoundingClientRect().top
-      // Leaves room for the ticker and its gap beneath the map.
-      const room = Math.max(320, window.innerHeight - top - 108)
-      el.style.setProperty('--bsRoom', `${room}px`)
+    const el = mapRef.current
+    if (!el) return undefined
+    const measure = () => {
+      const r = el.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) setVbH(Math.round(VB_W * (r.height / r.width)))
     }
-    fit()
-    window.addEventListener('resize', fit)
-    // The banners appear and disappear as arrivals are dismissed, which moves the map
-    // without a resize event. Re-measure when anything above it changes size.
-    const ro = new ResizeObserver(fit)
-    if (document.querySelector('main')) ro.observe(document.querySelector('main'))
-    return () => { window.removeEventListener('resize', fit); ro.disconnect() }
+    // ⚠️ NO requestAnimationFrame HERE, and that is not a style preference. A version
+    // of this deferred the measurement one frame to let layout settle; rAF DOES NOT
+    // FIRE in a hidden or background tab, so the callback never ran, `vbH` stayed at
+    // its initial 600, and the SVG letterboxed its 1000x600 viewBox inside a 1.93 box
+    // — drawing every road up to 87px inboard of the building it was supposed to reach.
+    // Measuring straight from the observer is what worked, so it is what this does.
+    //
+    // A timeout for the settle instead: it still fires when a frame would not, and the
+    // observer corrects anything it catches early anyway.
+    // Measure now, and again once layout has settled. The trailing pass matters on
+    // RESIZE too, not just at mount: the observer fires mid-layout, so the first read
+    // can be one step behind and leaves the roads slightly inboard of their buildings
+    // until something else changes size.
+    let settle = 0
+    const bump = () => {
+      measure()
+      clearTimeout(settle)
+      settle = setTimeout(measure, 150)
+    }
+    bump()
+    const ro = new ResizeObserver(bump)
+    ro.observe(el)
+    return () => { clearTimeout(settle); ro.disconnect() }
   }, [])
 
   const states = useMemo(
@@ -159,18 +181,19 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
         <span className="bsLive">● live</span>
       </div>
 
+      <div className="bsField">
       <div className="bsMap" ref={mapRef}>
-        <svg className="bsRoads" viewBox={`0 0 ${VB_W} ${VB_H}`} aria-hidden="true">
+        <svg className="bsRoads" viewBox={`0 0 ${VB_W} ${vbH}`} aria-hidden="true">
           <defs>
             <pattern id="bsDeck" width="40" height="40" patternUnits="userSpaceOnUse">
               <path d="M40 0 L0 0 0 40" fill="none" stroke="#14304d" strokeWidth="0.8" opacity="0.5" />
             </pattern>
             {ROADS.map((r) => (
-              <path key={r.key} id={`bsRoad-${r.key}`} d={roadPath(r.from, r.to)} />
+              <path key={r.key} id={`bsRoad-${r.key}`} d={roadPath(r.from, r.to, vbH)} />
             ))}
           </defs>
 
-          <rect x="0" y="0" width={VB_W} height={VB_H} fill="url(#bsDeck)" />
+          <rect x="0" y="0" width={VB_W} height={vbH} fill="url(#bsDeck)" />
 
           {/* Asphalt, then a dashed centre line — the two passes that make a line
               read as a street rather than a connector. */}
@@ -253,8 +276,12 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
         })}
       </div>
 
-      {/* What is on the roads right now, named. A dot you cannot identify is
-          decoration; this is the line that makes it information. */}
+      {/* What is on the roads right now, named — a dot you cannot identify is
+          decoration, and this is the line that makes it information.
+          ⚠️ A SIDE RAIL, not a strip beneath the map (Nima, 2026-08-21: "perhaps we can
+          open space by having the top banner and lower banner beneath the base go to
+          the side"). As a full-width strip it cost 68px of the one dimension the map
+          was starved of. */}
       <div className="bsTicker">
         <span className="bsTickerLabel">In transit · {movers.length}</span>
         {!movers.length && <span className="bsTickerQuiet">Nothing has moved between lanes recently.</span>}
@@ -267,6 +294,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
             </span>
           </span>
         ))}
+      </div>
       </div>
     </div>
   )

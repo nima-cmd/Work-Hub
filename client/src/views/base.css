@@ -17,24 +17,44 @@
    Locked to the SVG's aspect ratio. The roads are drawn in a 0–100 space scaled to
    this box and the buildings are positioned in percentages of the same box — if the
    two ratios diverged, a road would stop meeting the building it runs to. */
-/* Sized to FIT THE WINDOW, not just the column. This is the always-open view; a base
-   whose bottom row sits below the fold is a base you scroll instead of read. The width
-   is capped so the height lands inside the viewport (the subtraction is the chrome and
-   banners above it), and the aspect ratio is preserved either way — because the roads
-   are drawn in a 0–100 space scaled to this box and the buildings are positioned in
-   percentages of it, so a squashed box would pull roads off their buildings. */
+/* ── The field: map + the transit rail beside it ──────────────────────────
+   Nima, 2026-08-21: "were not using the full length of the screen in most cases…
+   perhaps we can open space by having the top banner and lower banner beneath the base
+   go to the side." The ticker was a full-width strip costing 68px of the one dimension
+   the map was starved of; as a rail it costs width, which there is plenty of. */
+.bsField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  /* Below this the rail is stealing from the map. Back to a strip underneath. */
+  .bsField { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ⚠️ SIZED IN CSS, NOT MEASURED IN JS. The previous version computed the width from a
+   measured height and could LATCH a mid-layout reading — it fell back to the 320px
+   floor and stayed there, giving a 533x320 map on a 1920x1080 screen. Viewport units
+   cannot latch.
+   `min()` of the two: the vh term keeps the base on screen, the vw term stops it
+   growing absurdly tall on a narrow one. The SVG viewBox follows the RESULT (see
+   Base.jsx), so the aspect is whatever the screen gives and nothing distorts.
+   ⚠️ THE 290px IS THE CHROME ABOVE (topbar 83 + arrivals banner + court strip 62 +
+   heading), and it is a CONSTANT on purpose. It is approximate — dismissing the
+   arrivals banner leaves ~55px unused — but the error is bounded and it cannot latch,
+   which the measured version could and did. A small gutter beats a 533px map. */
 .bsMap {
   position: relative;
-  /* --bsRoom is measured in Base.jsx — see the note there on why it cannot be a
-     constant. The fallback keeps the map sane before the first measurement. */
-  width: min(100%, calc(var(--bsRoom, 60vh) * (1000 / 600)));
-  margin: 0 auto;
-  aspect-ratio: 1000 / 600;
+  width: 100%;
+  height: min(calc(100vh - 290px), 46vw);
+  min-height: 420px;
   background: #05070d;
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
 }
+
 .bsRoads { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 .bsRoadBed { fill: none; stroke: #14304d; stroke-width: 15; stroke-linecap: round; stroke-linejoin: round; }
@@ -124,16 +144,38 @@
 
 /* ── The ticker ────────────────────────────────────────────────────────── */
 .bsTicker {
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   background: #0b0f16; border: 1px solid var(--line); border-radius: 9px;
-  padding: 8px 12px; font-size: 11px;
+  padding: 10px 12px; font-size: 11px;
+  max-height: min(calc(100vh - 290px), 46vw); overflow-y: auto;
+}
+@media (max-width: 1200px) {
+  .bsTicker { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 16px; max-height: none; }
 }
 .bsTickerLabel {
   font-family: var(--display); font-size: 10px; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--muted); flex: none;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 2px;
 }
 .bsTickerQuiet { color: var(--muted); }
-.bsTickerItem { display: inline-flex; align-items: center; gap: 6px; }
+/* Two lines in the rail: the document on the first, what happened to it on the
+   second. As one wrapping flex row the items ran into each other and you could not
+   tell where one mover ended and the next began.
+   ⚠️ `grid-column: 1 / -1` on the caption is load-bearing — a grid child defaults to
+   its own column and the caption would be squeezed into the doc-number track. */
+.bsTickerItem {
+  display: grid; grid-template-columns: 9px minmax(0, 1fr);
+  column-gap: 6px; row-gap: 1px; align-items: baseline;
+  padding-bottom: 7px; border-bottom: 1px solid var(--line);
+}
+.bsTickerItem .bsTickerWhat { grid-column: 1 / -1; line-height: 1.35; }
+.bsTickerItem:last-child { border-bottom: none; padding-bottom: 0; }
+@media (max-width: 1200px) {
+  /* Back to a horizontal strip: one line per mover would be a very tall strip. */
+  .bsTickerItem { display: inline-flex; gap: 6px; border-bottom: none; padding-bottom: 0; }
+  .bsTickerItem .bsTickerWhat { grid-column: auto; }
+  .bsTickerLabel { padding-bottom: 0; border-bottom: none; margin-bottom: 0; }
+}
 .bsTickerWhat { color: var(--muted); }
 .bsPip {
   width: 7px; height: 7px; border-radius: 50%; background: var(--tone); flex: none;
@@ -143,7 +185,9 @@
 /* Narrow screens: the map stops being a map long before it stops fitting, so give it
    more height rather than letting the buildings collide. */
 @media (max-width: 900px) {
-  .bsMap { aspect-ratio: 1000 / 820; }
+  /* Taller relative to width, so the three rows of buildings do not collide. Height,
+     not aspect-ratio — the box is height-driven now. */
+  .bsMap { height: min(78vh, 90vw); }
   .bsCount { font-size: 15px; }
   .bsOf, .bsAge { display: none; }
 }
