@@ -95,6 +95,94 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'Calendar deadline dots (orders.ship_date + orders.cancel_date)', shape: S.ARITHMETIC.key,
+    pr: 148, date: '2026-08-21', status: 'fixed',
+    assumed: 'the calendar could plot deadlines from the order: a "Ship due" dot on '
+      + 'ship_date and a "Cancel by" dot on cancel_date',
+    actually: 'BOTH ARE UNUSABLE. Measured: cancel_date is NULL on all 121 unshipped '
+      + 'orders, so that dot could never appear; and ALL 121 ship_dates are the NetSuite '
+      + 'trandate+28 default (isDefaultedShipDate true on 121, false on 0), so 81 orders '
+      + 'showed a future deadline that was just their creation date plus four weeks. The '
+      + 'real dates are orders.window_end/window_start and the partner\'s own '
+      + 'edi_transactions.cancel_after',
+    cost: 'the whole Calendar view. Nima: "the dots mean nothing to me really and not '
+      + 'working" — he was right, and it was not a design problem. PR #94 stopped the '
+      + 'pipeline flags trusting ship_date; nothing propagated that to the calendar',
+    caught: 'him saying the view was useless, then measuring the columns it plotted '
+      + 'rather than redesigning it. ⚠️ A view can be keyed on a field that another '
+      + 'surface already stopped trusting — a fix has to be chased across every reader',
+  },
+  {
+    field: 'pipeline.js NEEDS_HANDOFF_SCAN (fulfillments.custody_out only)', shape: S.HAND_SET.key,
+    pr: 147, date: '2026-08-21', status: 'fixed',
+    assumed: 'a fulfilment with no CUSTODY_OUT scan on its own IF was never handed over',
+    actually: 'AN EDI SHIPMENT IS SCANNED ON ITS PER-DC CARGO TAG, NOT ITS IF SLIP — by '
+      + 'design. /api/orders read doc_type=IF events only, so none of that evidence ever '
+      + 'reached the pipeline. Measured: 54 live flags, 53 of them EDI, and all 5 distinct '
+      + 'EDI POs already had their DC tags scanned. Across all fulfilments, 163 of the 211 '
+      + 'with no IF scan have a DC scan',
+    cost: '54 false flags at severity 1 on the board — the second-largest flag there — each '
+      + 'telling him to go print a label and scan out freight that had already gone out on '
+      + 'its tag. Now 0, and the zero is honest: 38 fulfilments have no scan of any kind '
+      + 'but 35 are already SHIPPED and the branch is gated on stage PICKED',
+    caught: 'Nima asked what to build next; measuring the flag before recommending it '
+      + 'showed 53 of 54 in one lane. ⚠️ THE FIX ALREADY EXISTED — scanGap.js learned this '
+      + 'in PR #74 (28 of 28 false, identical cause) and its header says so in full; '
+      + 'pipeline.js simply never got it. Look for the rule before writing one',
+  },
+  {
+    field: 'pipeline.js daysBetween() applied to fulfillments.if_date (a DATE)', shape: S.MISLABELLED.key,
+    pr: 147, date: '2026-08-21', status: 'fixed',
+    assumed: 'daysBetween(if_date, today) counts whole days, so ">= 1" excludes today',
+    actually: 'node-pg returns a Postgres DATE as UTC MIDNIGHT, and daysBetween compares '
+      + 'LOCAL midnights (setHours(0,0,0,0)). West of UTC that shifts the date back a day: '
+      + 'proved in America/Los_Angeles that a DATE of TODAY measures as 1 day old',
+    cost: 'NEEDS_HANDOFF_SCAN fired on SAME-DAY fulfilments despite its ">= 1 day" guard — '
+      + 'chasing a slip that was printed an hour ago. Now compared as ISO day strings, '
+      + 'which is what scanGap.js already did for exactly this reason',
+    caught: 'the second reported symptom of the flag above. ⚠️ The test suite is only green '
+      + 'in America/* zones — main fails 1 in UTC and 16 in Asia/Tokyo, unrelated to this '
+      + 'and unfixed. The new tests here pass in all six zones checked',
+  },
+  {
+    field: 'baseMap Almanac count (orders.cancel_date)', shape: S.UNREACHABLE.key,
+    pr: 145, date: '2026-08-21', status: 'fixed',
+    assumed: 'orders carry a cancel date, so "cancel dates inside a week" could be the '
+      + 'Almanac building\'s number',
+    actually: 'cancel_date is NULL on ALL 121 unshipped orders. The counter could never '
+      + 'fire — it read 0 and would have read 0 forever, which is indistinguishable from '
+      + 'a genuinely clear week. The real ship window is `window_end` (NetSuite\'s '
+      + '`enddate`, ingested in PR #118), populated on 43 of them',
+    cost: 'none — caught before merge by asking whether a zero was real, which is the '
+      + 'only question that separates this shape from good news. The EDI lane does rank '
+      + 'on a partner cancel-after, but that lives in shipWindow/ediWindow, not in this '
+      + 'column',
+    caught: 'refusing to accept a 0. A counter reading zero on live data is either the '
+      + 'happy path or structurally dead, and the two look identical on screen',
+  },
+  {
+    field: 'baseMap pack-house AND launch-pad counts (work-in-progress including shipped freight)', shape: S.MISLABELLED.key,
+    pr: 143, date: '2026-08-21', status: 'fixed',
+    assumed: 'an open custody tag means the goods are still out of our hands — so it '
+      + 'could headline the pack house as "out on the floor, not back"',
+    actually: 'the tag is paperwork and it outlives the shipment. Measured on live data '
+      + 'before this shipped: 14 fulfilments had custodyOut with no custodyIn and ALL 14 '
+      + 'had already SHIPPED (IF7447 scanned out 31 Jul, shipped 5 Aug). Genuinely still '
+      + 'on the floor: zero. The counter was describing departed freight',
+    cost: 'none — caught before merge, by reading the work list the count opened into and '
+      + 'noticing every row said "Shipped". The count is now out-and-not-back-AND-NOT-'
+      + 'SHIPPED, and the 14 are surfaced separately as "custody tags never closed", '
+      + 'which is what they are',
+    caught: 'building the view against live data instead of fixtures. 14 of 14 being one '
+      + 'thing is the tell — a finding that is 100% one lane is a rule bug, not a data '
+      + 'finding (same lesson as PR #74 and PR #127). ⚠️ THEN THE SAME MISTAKE APPEARED '
+      + 'AGAIN sixty lines down: the launch pad counted 44 "cleared, waiting on the truck" '
+      + 'of which only 8 had not shipped — the other 36 left weeks ago (oldest 71 days) '
+      + 'and merely predate the confirm button, which has only existed since 2026-08-13. '
+      + 'Twice in one file, so there is now a test asserting NO building headlines a count '
+      + 'that includes shipped freight',
+  },
+  {
     field: "health.js INTEGRATIONS 'Database (Neon)' label", shape: S.MISLABELLED.key,
     pr: 141, date: '2026-08-20', status: 'fixed',
     assumed: 'the name of the database could be written into the string that names it',

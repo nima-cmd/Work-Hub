@@ -612,6 +612,13 @@ export async function fetchOrderEvents(opts = {}) {
   return res.json()
 }
 
+// The Calendar's agenda: what is coming, and what already happened.
+export async function fetchAgenda() {
+  const res = await fetch('/api/agenda')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 // ── View usage (Nima, 2026-08-20) ───────────────────────────────────────────
 // Fire-and-forget on purpose: this is telemetry about ourselves and a lost count must
 // never surface to the person using the app. keepalive so the last visit still lands

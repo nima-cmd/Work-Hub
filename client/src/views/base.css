@@ -1,0 +1,332 @@
+/* Base view — the command base from above.
+   Its own stylesheet, imported by views/Base.jsx, rather than more lines on the end
+   of the app-wide styles.css: this view has ~60 rules of its own and none of them are
+   shared, so keeping them here means a change to the base cannot restyle the board. */
+
+.bsWrap { display: flex; flex-direction: column; gap: 12px; }
+
+.bsHead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.bsTitle {
+  font-family: var(--display); font-size: 14px; letter-spacing: 0.17em;
+  text-transform: uppercase; color: var(--accent);
+}
+.bsHint { font-size: 12px; color: var(--muted); }
+.bsLive { margin-left: auto; font-size: 11px; color: #58c7e0; }
+
+/* ── The map ──────────────────────────────────────────────────────────────
+   Locked to the SVG's aspect ratio. The roads are drawn in a 0–100 space scaled to
+   this box and the buildings are positioned in percentages of the same box — if the
+   two ratios diverged, a road would stop meeting the building it runs to. */
+/* ── The field: map + the transit rail beside it ──────────────────────────
+   Nima, 2026-08-21: "were not using the full length of the screen in most cases…
+   perhaps we can open space by having the top banner and lower banner beneath the base
+   go to the side." The ticker was a full-width strip costing 68px of the one dimension
+   the map was starved of; as a rail it costs width, which there is plenty of. */
+.bsField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  /* Below this the rail is stealing from the map. Back to a strip underneath. */
+  .bsField { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ⚠️ SIZED IN CSS, NOT MEASURED IN JS. The previous version computed the width from a
+   measured height and could LATCH a mid-layout reading — it fell back to the 320px
+   floor and stayed there, giving a 533x320 map on a 1920x1080 screen. Viewport units
+   cannot latch.
+   `min()` of the two: the vh term keeps the base on screen, the vw term stops it
+   growing absurdly tall on a narrow one. The SVG viewBox follows the RESULT (see
+   Base.jsx), so the aspect is whatever the screen gives and nothing distorts.
+   ⚠️ THE 290px IS THE CHROME ABOVE (topbar 83 + arrivals banner + court strip 62 +
+   heading), and it is a CONSTANT on purpose. It is approximate — dismissing the
+   arrivals banner leaves ~55px unused — but the error is bounded and it cannot latch,
+   which the measured version could and did. A small gutter beats a 533px map. */
+.bsMap {
+  position: relative;
+  width: 100%;
+  height: min(calc(100vh - 290px), 46vw);
+  min-height: 420px;
+  background: #05070d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.bsRoads { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.bsRoadBed { fill: none; stroke: #14304d; stroke-width: 15; stroke-linecap: round; stroke-linejoin: round; }
+.bsRoadLine {
+  fill: none; stroke: #1f6feb; stroke-opacity: 0.45; stroke-width: 1.2;
+  stroke-dasharray: 8 14; stroke-linecap: round;
+}
+.bsMover { fill: var(--tone, #e6edf3); filter: drop-shadow(0 0 5px var(--tone, #e6edf3)); }
+/* Someone who asked for less motion gets a static base, not a shaking one. */
+@media (prefers-reduced-motion: reduce) { .bsMover animateMotion { display: none; } }
+
+/* ── Buildings ─────────────────────────────────────────────────────────── */
+.bsBldg {
+  position: absolute; transform: translate(0, 0);
+  background: transparent; border: none; padding: 0; margin: 0;
+  cursor: pointer; text-align: left; color: inherit; font: inherit;
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+.bsSprite {
+  /* Fills the DECLARED box (see the note in Base.jsx) — `contain` so a sprite is never
+     stretched out of proportion to fit a footprint. */
+  width: 100%; height: 100%; object-fit: contain; object-position: center; display: block;
+  /* The sprites are rendered dark-on-transparent with amber edges already, so they
+     need no filter — only a lift on hover so a building feels pickable. */
+  transition: filter 120ms ease-out;
+}
+.bsBldg:hover .bsSprite,
+.bsBldgOpen .bsSprite { filter: drop-shadow(0 0 10px var(--tone)); }
+.bsBldg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+/* The name plate sits UNDER the roof rather than on it: a label over the artwork
+   hides the building you rendered. */
+/* Below the building's declared box, so it never covers the artwork and never adds
+   to the building's height. */
+.bsPlate {
+  position: absolute; top: 100%; left: 0; margin-top: 3px;
+  display: flex; flex-direction: column; gap: 1px;
+  background: rgba(5, 7, 13, 0.78); border: 1px solid var(--line);
+  border-left: 2px solid var(--tone); border-radius: 0 6px 6px 0;
+  padding: 4px 7px; min-width: 100%;
+}
+.bsName {
+  font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--tone);
+  white-space: nowrap;
+}
+.bsCount { font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1.05; }
+.bsOf { font-size: 9px; color: var(--muted); line-height: 1.25; }
+.bsAge { font-size: 9px; color: var(--mid); }
+
+.bsLoad {
+  position: absolute; top: 100%; left: 0; margin-top: 1px;
+  display: block; width: 100%; height: 2px; background: var(--line);
+}
+.bsLoad > span { display: block; height: 100%; background: var(--tone); }
+
+/* ── The work panel ────────────────────────────────────────────────────── */
+.bsPanel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone); border-radius: 0 9px 9px 0; padding: 12px 14px;
+}
+.bsPanelHead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.bsPanelName {
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--tone);
+}
+.bsPanelCount { font-family: var(--display); font-size: 20px; font-weight: 700; }
+.bsPanelOf { font-size: 12px; color: var(--muted); }
+.bsPanelBtns { margin-left: auto; display: flex; align-items: center; }
+
+/* A grid, so a long lane fans across the width instead of queueing down a column —
+   the same treatment the Ledger, Tasks and the Datapad got. */
+.bsRows {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 4px 14px; margin-top: 10px;
+}
+.bsRow {
+  display: flex; align-items: baseline; gap: 8px; padding: 4px 0;
+  border-bottom: 1px solid var(--line); font-size: 13px; min-width: 0;
+}
+.bsRowBtn {
+  background: transparent; border: none; border-bottom: 1px solid var(--line);
+  color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; width: 100%;
+}
+.bsRowBtn:hover { color: #4fd1ff; }
+.bsRowMain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bsRowSide { margin-left: auto; font-size: 11px; color: var(--muted); flex: none; }
+.bsMore { font-size: 11px; color: var(--muted); margin-top: 9px; }
+
+/* ── The ticker ────────────────────────────────────────────────────────── */
+.bsTicker {
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
+  background: #0b0f16; border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 12px; font-size: 11px;
+  max-height: min(calc(100vh - 290px), 46vw); overflow-y: auto;
+}
+@media (max-width: 1200px) {
+  .bsTicker { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 16px; max-height: none; }
+}
+.bsTickerLabel {
+  font-family: var(--display); font-size: 10px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--muted); flex: none;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 2px;
+}
+.bsTickerQuiet { color: var(--muted); }
+/* Two lines in the rail: the document on the first, what happened to it on the
+   second. As one wrapping flex row the items ran into each other and you could not
+   tell where one mover ended and the next began.
+   ⚠️ `grid-column: 1 / -1` on the caption is load-bearing — a grid child defaults to
+   its own column and the caption would be squeezed into the doc-number track. */
+.bsTickerItem {
+  display: grid; grid-template-columns: 9px minmax(0, 1fr);
+  column-gap: 6px; row-gap: 1px; align-items: baseline;
+  padding-bottom: 7px; border-bottom: 1px solid var(--line);
+}
+.bsTickerItem .bsTickerWhat { grid-column: 1 / -1; line-height: 1.35; }
+.bsTickerItem:last-child { border-bottom: none; padding-bottom: 0; }
+@media (max-width: 1200px) {
+  /* Back to a horizontal strip: one line per mover would be a very tall strip. */
+  .bsTickerItem { display: inline-flex; gap: 6px; border-bottom: none; padding-bottom: 0; }
+  .bsTickerItem .bsTickerWhat { grid-column: auto; }
+  .bsTickerLabel { padding-bottom: 0; border-bottom: none; margin-bottom: 0; }
+}
+.bsTickerWhat { color: var(--muted); }
+.bsPip {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--tone); flex: none;
+  box-shadow: 0 0 6px var(--tone);
+}
+
+/* Narrow screens: the map stops being a map long before it stops fitting, so give it
+   more height rather than letting the buildings collide. */
+@media (max-width: 900px) {
+  /* Taller relative to width, so the three rows of buildings do not collide. Height,
+     not aspect-ratio — the box is height-driven now. */
+  .bsMap { height: min(78vh, 90vw); }
+  .bsCount { font-size: 15px; }
+  .bsOf, .bsAge { display: none; }
+}
+
+/* A second, differently-named fact about a building — never folded into the headline
+   count. Amber, not red: "14 tags never closed" is paperwork to tidy, not an alarm. */
+.bsAlert { font-size: 9px; color: var(--accent); }
+.bsAlerts { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
+.bsAlertRow {
+  font-size: 12px; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 7px; padding: 5px 9px;
+  background: #d9a4410f; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.bsAlertDocs { display: inline-flex; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+
+/* ── An open building is a WORKSPACE, not a panel ──────────────────────────
+   Left: the building, zoomed, with its console. Right: the real lane view, live and
+   navigable — so you never switch tabs to work (Nima, 2026-08-21). */
+.bsWork {
+  display: grid;
+  grid-template-columns: minmax(300px, 26%) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+/* ⚠️ minmax(0, 1fr) on the right, not 1fr: a grid child defaults to min-content
+   width, so a wide table inside an embedded view would push the column and blow the
+   layout out sideways instead of scrolling. */
+.bsWorkLeft { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; }
+.bsWorkRight { min-width: 0; }
+.bsBack { align-self: flex-start; margin-left: 0; }
+
+/* Narrow: the console stops earning a column and goes above the work. */
+@media (max-width: 1100px) {
+  .bsWork { grid-template-columns: minmax(0, 1fr); }
+  .bsWorkLeft { position: static; }
+}
+
+/* ── The interior ─────────────────────────────────────────────────────────── */
+.biWrap { display: flex; flex-direction: column; gap: 10px; }
+
+.biZoom {
+  position: relative; overflow: hidden;
+  background: #05070d; border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px;
+}
+.biSprite { display: block; width: 100%; height: auto; filter: drop-shadow(0 0 14px var(--tone)); }
+/* A scan line crossing the roof — says "being looked at", claims nothing. */
+.biScan {
+  position: absolute; left: 0; right: 0; height: 2px; top: 0;
+  background: linear-gradient(90deg, transparent, var(--tone), transparent);
+  opacity: 0.5; animation: biScan 4.5s linear infinite;
+}
+@keyframes biScan { 0% { top: 0; } 100% { top: 100%; } }
+
+.biConsole {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone); border-radius: 0 10px 10px 0; padding: 11px 13px;
+}
+.biConsoleTop { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; }
+.biName {
+  font-family: var(--display); font-size: 11px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--tone);
+}
+.biSub { font-size: 10px; color: var(--muted); }
+
+.biBanks { display: flex; gap: 11px; align-items: stretch; }
+.biCrt {
+  background: #05070d; border: 1px solid var(--line); border-radius: 7px;
+  padding: 8px 10px; display: flex; flex-direction: column; justify-content: center;
+}
+.biCrtBig { flex: 1; min-width: 0; }
+.biCrtNum { font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1; }
+.biCrtCap { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+/* Indicator lamps: the number LIT is the number of items, so a busy building is
+   visibly lit and an empty one visibly dark — without either lying about a figure. */
+.biLamps {
+  display: grid; grid-template-columns: repeat(6, 7px); gap: 4px;
+  align-content: center; flex: none;
+}
+.biLamp { width: 7px; height: 7px; border-radius: 2px; background: #14304d; }
+.biLampOn { background: var(--tone); animation: biBlink 3.4s ease-in-out infinite; }
+@keyframes biBlink { 0%, 100% { opacity: 1; } 45% { opacity: 0.3; } }
+
+/* The only thing that BLINKS is a real finding — the one that wants an answer. */
+.biAlerts { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+.biAlertRow {
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: 12px; color: var(--accent);
+}
+.biAlertPip {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none;
+  animation: biBlink 1.6s ease-in-out infinite;
+}
+.biOldest { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* Chrome, and honest about it: a moving trace with no numbers on it, rather than
+   invented readouts that would look like data. */
+.biTrace { height: 3px; background: #05070d; border-radius: 2px; margin-top: 10px; overflow: hidden; }
+.biTrace > span {
+  display: block; width: 32%; height: 100%; background: var(--tone); opacity: 0.55;
+  animation: biTrace 3.8s ease-in-out infinite;
+}
+@keyframes biTrace { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .biScan, .biLampOn, .biAlertPip, .biTrace > span { animation: none; }
+}
+
+/* A duplicated sprite, mirrored — the scan bay is the pack house the other way
+   round, which is what a two-hall warehouse complex looks like from above. */
+.bsSpriteFlip { transform: scaleX(-1); }
+
+/* ── Lived in ──────────────────────────────────────────────────────────────
+   Windows lit on the roof. The NUMBER lit is proportional to the work inside, so a
+   busy building glows and a quiet one is dark — the light is data, not decoration. */
+/* FIXED-SIZE cells, centred — not a percentage grid. Sized in % they scaled with the
+   building and came out as coloured blocks on the big ones; a window is a window
+   whatever the roof it sits on. */
+.bsWindows {
+  position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+  display: grid; grid-template-columns: repeat(6, 3px); gap: 3px;
+  pointer-events: none;
+}
+.bsWin { width: 3px; height: 3px; border-radius: 1px; background: #0e1a28; }
+.bsWinOn {
+  background: var(--tone);
+  /* Two rates multiplied: a slow flicker plus a faster data pulse, so a roof reads as
+     consoles running rather than as one blinking light. */
+  animation: bsWinFlicker 5.2s steps(1, end) infinite, bsWinPulse 1.9s ease-in-out infinite;
+  box-shadow: 0 0 5px var(--tone);
+}
+@keyframes bsWinFlicker { 0%, 62% { opacity: 1; } 64%, 68% { opacity: 0.25; } 70%, 100% { opacity: 1; } }
+@keyframes bsWinPulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
+
+/* Not a number, and not pretending to be one. */
+.bsOpen {
+  font-family: var(--display); font-size: 12px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--tone);
+}
+
+@media (prefers-reduced-motion: reduce) { .bsWinOn { animation: none; } }

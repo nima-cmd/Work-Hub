@@ -1,283 +1,228 @@
 import { useEffect, useMemo, useState } from 'react'
-import { SourceBadge, NsLink } from '../lib.jsx'
-import { imagesFor } from '../data/characterImages.js'
-import { departureLabel, departureSummary } from '../../../src/model/departures.js'
-import { fetchCalendarEvents, createManualTask, fetchDepartures, fetchLedgerDaily } from '../api.js'
+import { NsLink } from '../lib.jsx'
+import { useTraceDrawer } from '../traceDrawerContext.js'
+import { fetchAgenda, fetchCalendarEvents, fetchLedgerDaily } from '../api.js'
+import {
+  AGENDA_META, byDay, weekDays, monthDays, isoDay, agendaSummary,
+} from '../../../src/model/calendarAgenda.js'
+import './calendar.css'
 
-const DAY = 86400000
+// Calendar — WHAT IS COMING, and what already happened (rebuilt 2026-08-21).
+//
+// Nima: "the dots mean nothing to me really and not working and i was hoping for the
+// calendar to give me more of a view of what is upcoming in terms of work that we need
+// to do. right now the view is just a calendar with dots and a date." And on shape:
+// "two tabbed version perhaps one looking forward one to review the past" — plus month,
+// week AND day, "so we have more room to put more than the dots".
+//
+// ⚠️ HE WAS RIGHT AND IT WAS NOT A DESIGN PROBLEM. The old grid plotted
+// `orders.ship_date` and `orders.cancel_date`: cancel_date is NULL on all 121 unshipped
+// orders and ALL 121 ship_dates are the NetSuite trandate+28 default. The dots meant
+// nothing because they were nothing. Everything here comes from /api/agenda, which
+// reads the columns that are actually populated and says so on the response.
+//
+// The rules — what counts, how it groups, forward vs review — are in
+// src/model/calendarAgenda.js, tested. This file is the drawing.
 
-// Calendar (rebuilt 2026-07-18 to Nima's spec): three zones —
-//   [ open tasks | month grid | selected day's events ]
-// The calendar sits to the RIGHT of the tasks; clicking a day opens everything
-// that happened/is due that day in the right-hand panel: ship/cancel deadlines,
-// actual departures, custody scans + ledger events, and the task journal.
-export default function Calendar({ orders, tasks = [], activity = [], events = [], onRefresh }) {
-  const today = startOfDay(Date.now())
-  const [selected, setSelected] = useState(today)
-  const [cursor, setCursor] = useState(today)
-  const [cal, setCal] = useState({ configured: false, events: [] }) // Google Calendar
-  // Departures come from the API already grouped into SHIPMENTS. Deriving them
-  // from orders[].fulfillments here is what produced "50 departures" on
-  // 2026-07-30 when eight trucks left — every DC on an EDI PO has its own IF.
-  const [departures, setDepartures] = useState([])
-  // Per-day ledger totals. The `events` prop is the newest 500 rows, which is
-  // fine for showing a day's detail but silently undercounts the grid once the
-  // ledger passes 500 (it's at 2,783). These counts come from a GROUP BY, so a
-  // day cell reports what actually happened rather than what fit in the feed.
-  const [ledgerDaily, setLedgerDaily] = useState(new Map())
+const VIEWS = [
+  { key: 'month', label: 'Month' },
+  { key: 'week', label: 'Week' },
+  { key: 'day', label: 'Day' },
+]
+
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const fmtDay = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+const fmtMonth = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+const dayNum = (iso) => Number(iso.slice(8, 10))
+
+function shiftMonth(iso, by) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(1)
+  d.setUTCMonth(d.getUTCMonth() + by)
+  return isoDay(d)
+}
+function shiftDays(iso, by) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + by)
+  return isoDay(d)
+}
+
+// One agenda entry. The count leads, because a count is the thing he asked for — "the
+// number of boutiques about to close" — and the documents ride underneath so any one of
+// them opens its data packet, which he called the most important version of any
+// information.
+function Entry({ e, open, onToggle, drawer }) {
+  const meta = AGENDA_META[e.kind] || {}
+  return (
+    <div className={`calEntry tone-${e.tone}${e.overdue ? ' calOverdue' : ''}`}>
+      <button className="calEntryTop" onClick={onToggle}>
+        <span className="calEntryCount">{e.count}</span>
+        <span className="calEntryBody">
+          <span className="calEntryLabel">{meta.label || e.kind}</span>
+          <span className="calEntryHead">{e.headline}</span>
+        </span>
+        {e.overdue && <span className="calLate">{-e.inDays}d late</span>}
+      </button>
+      {open && !!e.items?.length && (
+        <div className="calItems">
+          {e.items.slice(0, 24).map((it) => (
+            <span key={`${it.docType}:${it.docNumber}`} className="calItem">
+              {/* THEIR_PO and PO are not traceable subjects, so NsLink degrades to the
+                  NetSuite link or plain text rather than offering a dead hop. */}
+              <NsLink doc={it.docNumber} />
+              {it.label && <span className="calItemLabel">{it.label}</span>}
+            </span>
+          ))}
+          {e.items.length > 24 && <span className="calItemLabel">+{e.items.length - 24} more</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function Calendar() {
+  const [tab, setTab] = useState('forward')      // forward | review
+  const [grain, setGrain] = useState('month')
+  const [anchor, setAnchor] = useState(isoDay(new Date()))
+  const [agenda, setAgenda] = useState(null)
+  const [openId, setOpenId] = useState(null)
+  const [cal, setCal] = useState({ configured: false, events: [] })
+  const [ledger, setLedger] = useState(new Map())
+  const drawer = useTraceDrawer()
 
   useEffect(() => {
-    fetchCalendarEvents().then(setCal).catch(() => setCal({ configured: false, events: [] }))
-    fetchDepartures().then(setDepartures).catch(() => setDepartures([]))
-    fetchLedgerDaily()
-      .then((rows) => setLedgerDaily(new Map(rows.map((r) => [r.day, r]))))
-      .catch(() => setLedgerDaily(new Map()))
+    fetchAgenda().then(setAgenda).catch(() => setAgenda({ forward: [], past: [], summary: null }))
+    fetchCalendarEvents().then(setCal).catch(() => {})
+    fetchLedgerDaily().then((rows) => setLedger(new Map(rows.map((r) => [r.day, r])))).catch(() => {})
   }, [])
 
-  // ── every dated thing, indexed by day ─────────────────────────────────────
-  const byDay = useMemo(() => {
-    const m = new Map()
-    const push = (day, item) => { if (!m.has(day)) m.set(day, []); m.get(day).push(item) }
-    for (const o of orders) {
-      if (o.shipDate) push(startOfDay(new Date(o.shipDate).getTime()), { cat: 'deadline', kind: 'Ship due', o })
-      if (o.cancelDate) push(startOfDay(new Date(o.cancelDate).getTime()), { cat: 'deadline', kind: 'Cancel by', o })
-    }
-    // One entry per SHIPMENT — a BOL covering 18 fulfilments is one departure.
-    for (const d of departures) {
-      if (d.shipDate) push(startOfDay(new Date(d.shipDate).getTime()), { cat: 'shipped', kind: 'Departed', d })
-    }
-    for (const a of activity) push(startOfDay(new Date(a.createdAt).getTime()), { cat: 'journal', kind: a.kind?.replace('_', ' ') || 'note', a })
-    for (const e of events) push(startOfDay(new Date(e.occurredAt).getTime()), { cat: 'ledger', kind: ledgerKind(e), e })
-    for (const ev of cal.events || []) {
-      if (ev.start) push(startOfDay(new Date(ev.start).getTime()), { cat: 'invite', kind: ev.holocall ? 'Holocall' : 'Invite', ev })
-    }
-    return m
-  }, [orders, activity, events, cal, departures])
+  const entries = useMemo(
+    () => (tab === 'forward' ? agenda?.forward : agenda?.past) || [],
+    [agenda, tab],
+  )
+  const index = useMemo(() => byDay(entries), [entries])
+  const summary = useMemo(() => agendaSummary(entries), [entries])
 
-  // Local YYYY-MM-DD, matching how the daily-counts query formats its keys.
-  const dateKey = (ms) => {
-    const d = new Date(ms)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  }
+  const days = useMemo(() => {
+    if (grain === 'day') return [anchor]
+    if (grain === 'week') return weekDays(anchor)
+    return monthDays(anchor)
+  }, [grain, anchor])
 
-  const openTasks = tasks.filter((t) => t.status === 'open')
-  const overdue = []
-  for (const o of orders) {
-    if (o.shipDate && startOfDay(new Date(o.shipDate).getTime()) < today && o.stage !== 'SHIPPED')
-      overdue.push(o)
-  }
+  if (!agenda) return <div className="banner">Reading the agenda…</div>
 
-  const gridStart = startOfWeek(startOfMonth(cursor))
-  const days = Array.from({ length: 42 }, (_, i) => gridStart + i * DAY)
-  const curMonth = new Date(cursor).getMonth()
-  const dayItems = byDay.get(selected) || []
+  const todayIso = isoDay(new Date())
+  const step = (by) => setAnchor(grain === 'month' ? shiftMonth(anchor, by) : shiftDays(anchor, grain === 'week' ? by * 7 : by))
+  const title = grain === 'month' ? fmtMonth(anchor)
+    : grain === 'week' ? `${fmtDay(days[0])} – ${fmtDay(days[6])}`
+      : fmtDay(anchor)
 
   return (
-    <div className="calendar3">
-      {/* ── zone 1: duties ── */}
-      <aside className="calTasks">
-        <div className="sectorHead"><span className="sectorTitle">◤ DUTIES</span><span className="sectorCount">{openTasks.length}</span></div>
-        {overdue.length > 0 && (
-          <div className="calOverdueNote">⚠ {overdue.length} order{overdue.length > 1 ? 's' : ''} past ship date</div>
-        )}
-        {cal.needsReauth && (
-          <div className="calOverdueNote">📅 Connect Google Calendar — re-run <code>connect-gmail.js</code> to grant calendar access.</div>
-        )}
-        {cal.apiDisabled && (
-          <div className="calOverdueNote">📅 Calendar access is granted, but the Google Calendar API is disabled for this project — enable it in the Google Cloud console (APIs &amp; Services → Library → Google Calendar API), wait a few minutes, then reload.</div>
-        )}
-        {openTasks.map((t) => {
-          const img = imagesFor(t.characterId)[0]
-          return (
-            <div key={t.id} className={'calTask ' + (t.urgency === 'hi' ? 'sev-hi' : t.urgency === 'mid' ? 'sev-mid' : 'sev-lo')}>
-              <span className="calTaskAvatar">{img ? <img src={img} alt="" /> : '◈'}</span>
-              <span className="calTaskBody">
-                <b>{t.character?.name || 'Messenger'}</b>
-                <span>{t.subject}</span>
-              </span>
-            </div>
-          )
-        })}
-        {!openTasks.length && <div className="empty">No open tasks.</div>}
-      </aside>
-
-      {/* ── zone 2: the month grid ── */}
-      <section className="calMain">
-        <div className="calNav">
-          <button className="calNavBtn" onClick={() => setCursor(addMonths(cursor, -1).getTime())}>‹</button>
-          <h3 className="calTitle">{new Date(cursor).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h3>
-          <button className="calNavBtn" onClick={() => setCursor(addMonths(cursor, 1).getTime())}>›</button>
-          <button className="calToday" onClick={() => { setCursor(today); setSelected(today) }}>Today</button>
+    <div className="calWrap">
+      <div className="calHead">
+        <div className="calTabs">
+          {/* His structure: one looking forward, one to review the past. */}
+          <button className={'calTab' + (tab === 'forward' ? ' on' : '')} onClick={() => setTab('forward')}>
+            What's coming <span className="calTabN">{agenda.forward.length}</span>
+          </button>
+          <button className={'calTab' + (tab === 'review' ? ' on' : '')} onClick={() => setTab('review')}>
+            Review <span className="calTabN">{agenda.past.length}</span>
+          </button>
         </div>
-        <div className="calGrid">
-          {WEEKDAYS.map((w) => <div key={w} className="calWeekday">{w}</div>)}
-          {days.map((day) => {
-            const items = byDay.get(day) || []
-            const cats = new Set(items.map((i) => i.cat))
-            const inMonth = new Date(day).getMonth() === curMonth
-            // Ledger events counted from the server's GROUP BY, not the capped
-            // feed — so the number on a cell is the real one.
-            const ledgerN = ledgerDaily.get(dateKey(day))?.total ?? items.filter((i) => i.cat === 'ledger').length
-            const total = items.filter((i) => i.cat !== 'ledger').length + ledgerN
-            if (ledgerN > 0) cats.add('ledger')
+        <div className="calGrains">
+          {VIEWS.map((v) => (
+            <button key={v.key} className={'btnGhost' + (grain === v.key ? ' btnOn' : '')}
+                    onClick={() => setGrain(v.key)}>{v.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="calBar">
+        <button className="btnGhost" onClick={() => step(-1)}>←</button>
+        <span className="calTitle">{title}</span>
+        <button className="btnGhost" onClick={() => step(1)}>→</button>
+        <button className="btnGhost" onClick={() => setAnchor(todayIso)}>Today</button>
+        {tab === 'forward' && (
+          <span className="calSummary">
+            {summary.overdue > 0 && <b className="calLate">{summary.overdue} overdue</b>}
+            {summary.today > 0 && <span> · {summary.today} today</span>}
+            <span> · {summary.next7} in the next 7 days</span>
+          </span>
+        )}
+      </div>
+
+      {/* ── Month and week: a grid whose cells carry the work, not dots ─────── */}
+      {grain !== 'day' && (
+        <div className={`calGrid calGrid-${grain}`}>
+          {WD.map((d) => <div key={d} className="calWd">{d}</div>)}
+          {days.map((iso) => {
+            const list = index.get(iso) || [];
+            const outside = grain === 'month' && iso.slice(0, 7) !== anchor.slice(0, 7)
             return (
-              <button
-                key={day}
-                onClick={() => setSelected(day)}
-                className={'calCell calCellBtn' + (inMonth ? '' : ' calCell-dim') +
-                  (day === today ? ' calCell-today' : '') + (day === selected ? ' calCell-sel' : '')}
-              >
-                <div className="calDayNum">{new Date(day).getDate()}</div>
-                <div className="calDots">
-                  {cats.has('deadline') && <i className="calDot d-deadline" title="deadline" />}
-                  {cats.has('shipped') && <i className="calDot d-shipped" title="departure" />}
-                  {cats.has('ledger') && <i className="calDot d-ledger" title="custody / ledger" />}
-                  {cats.has('journal') && <i className="calDot d-journal" title="journal" />}
-                  {cats.has('invite') && <i className="calDot d-invite" title="calendar invite / holocall" />}
+              <div key={iso}
+                   className={'calCell' + (iso === todayIso ? ' calToday' : '') + (outside ? ' calOutside' : '')}
+                   onDoubleClick={() => { setAnchor(iso); setGrain('day') }}>
+                <div className="calCellTop">
+                  <span className="calCellNum">{dayNum(iso)}</span>
+                  {!!list.length && <span className="calCellN">{list.length}</span>}
                 </div>
-                {total > 0 && <div className="calCount">{total}</div>}
-              </button>
+                {list.map((e) => (
+                  <Entry key={e.id} e={e} drawer={drawer}
+                         open={openId === e.id}
+                         onToggle={() => setOpenId(openId === e.id ? null : e.id)} />
+                ))}
+              </div>
             )
           })}
         </div>
-        <div className="calKey">
-          <i className="calDot d-deadline" /> deadline &nbsp; <i className="calDot d-shipped" /> departed &nbsp;
-          <i className="calDot d-ledger" /> custody/ledger &nbsp; <i className="calDot d-journal" /> journal &nbsp;
-          <i className="calDot d-invite" /> invite/holocall
-        </div>
-      </section>
+      )}
 
-      {/* ── zone 3: everything on the selected day ── */}
-      <aside className="calDay">
-        <div className="sectorHead">
-          <span className="sectorTitle">◤ {fmtLong(selected)}</span>
-          <span className="sectorCount">{dayItems.length}</span>
-        </div>
-        {CAT_ORDER.map((cat) => {
-          const list = dayItems.filter((i) => i.cat === cat)
-          if (!list.length) return null
-          return (
-            <div key={cat} className="calDayGroup">
-              <div className="taskGroupHead">
-                {CAT_LABEL[cat]} <span className="sectorCount">{list.length}</span>
-                {/* Both numbers, always — "8" alone was previously "50", and a
-                    shipment count that silently means fulfilments is the whole
-                    bug this fixes. */}
-                {cat === 'shipped' && (() => {
-                  const s = departureSummary(list.map((i) => i.d))
-                  return s.includes('·') ? <span className="muted"> · {s.split('· ')[1]}</span> : null
-                })()}
+      {/* ── Day: one date, everything on it ────────────────────────────────── */}
+      {grain === 'day' && (
+        <div className="calDay">
+          <div className="calDayMain">
+            {!(index.get(anchor) || []).length && (
+              <div className="empty">
+                Nothing dated on {fmtDay(anchor)}
+                {tab === 'forward' ? ' — and that is the honest answer, not a loading state.' : '.'}
               </div>
-              {list.map((it, i) => <DayItem key={i} it={it} onRefresh={onRefresh} />)}
-            </div>
-          )
-        })}
-        {!dayItems.length && <div className="empty">Nothing recorded on this day.</div>}
-      </aside>
+            )}
+            {(index.get(anchor) || []).map((e) => (
+              <Entry key={e.id} e={e} drawer={drawer} open onToggle={() => {}} />
+            ))}
+          </div>
+          <div className="calDaySide">
+            {/* Invites, when Google is connected. Not work — context. */}
+            {!!(cal.events || []).filter((ev) => isoDay(ev.start) === anchor).length && (
+              <div className="calSideBlock">
+                <div className="calSideTitle">Calendar invites</div>
+                {(cal.events || []).filter((ev) => isoDay(ev.start) === anchor).map((ev) => (
+                  <div key={ev.id || ev.summary} className="calInvite">{ev.summary}</div>
+                ))}
+              </div>
+            )}
+            {ledger.get(anchor) && (
+              <div className="calSideBlock">
+                <div className="calSideTitle">Ledger that day</div>
+                <div className="calLedgerN">{ledger.get(anchor).total} events recorded</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ⚠️ Says where the numbers came from. The field this replaced was fabricated and
+          nothing on screen admitted it. */}
+      {agenda.sources && (
+        <details className="calSources">
+          <summary>Where these dates come from</summary>
+          <ul>
+            {Object.entries(agenda.sources).map(([k, v]) => (
+              <li key={k}><b>{k}</b> — {v}</li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }
-
-const CAT_ORDER = ['invite', 'deadline', 'shipped', 'ledger', 'journal']
-const CAT_LABEL = {
-  invite: 'Calendar & holocalls', deadline: 'Deadlines', shipped: 'Departures', ledger: 'Custody & ledger', journal: 'Journal',
-}
-
-function DayItem({ it, onRefresh }) {
-  if (it.cat === 'invite') return <InviteRow ev={it.ev} onRefresh={onRefresh} />
-  // A departure is a shipment. Freight names its BOL and says how many
-  // fulfilments rode on it, so the consolidation is visible rather than implied.
-  if (it.cat === 'shipped') {
-    const d = it.d
-    const n = d.fulfilments?.length || 0
-    return (
-      <div className="calRow">
-        <span className="caltag sev-lo">{d.kind === 'freight' ? 'BOL out' : 'Departed'}</span>
-        <span className="so">{departureLabel(d)}</span>
-        <span className="cust">{d.customer || d.partner || ''}</span>
-        {n > 1 && (
-          <span className="calNote" title={d.fulfilments.map((f) => f.ifNumber).join(', ')}>
-            {n} fulfilments{d.dc ? ` · DC ${d.dc}` : ''}
-          </span>
-        )}
-        {d.source && <SourceBadge source={d.source} />}
-      </div>
-    )
-  }
-  if (it.cat === 'deadline') {
-    return (
-      <div className={'calRow ' + (it.kind === 'Cancel by' ? 'cancel' : '')}>
-        <span className={'caltag ' + (it.kind === 'Cancel by' ? 'sev-hi' : 'sev-mid')}>{it.kind}</span>
-        <span className="so"><NsLink doc={it.o.soNumber} /></span>
-        <span className="cust">{it.o.customer}</span>
-        <SourceBadge source={it.o.source} />
-      </div>
-    )
-  }
-  if (it.cat === 'ledger') {
-    const e = it.e
-    return (
-      <div className="calRow">
-        <span className="caltag sev-lo">{it.kind}</span>
-        <span className="so">{e.docNumber}</span>
-        <span className="cust">{e.customer || e.soNumber || ''}</span>
-        {e.note && <span className="calNote">“{e.note}”</span>}
-        <span className="caldate">{fmtTime(e.occurredAt)}</span>
-      </div>
-    )
-  }
-  return (
-    <div className="calRow">
-      <span className="caltag sev-lo">{it.kind}</span>
-      <span className="cust">{it.a.subject || it.a.note || ''}</span>
-      <span className="caldate">{fmtTime(it.a.createdAt)}</span>
-    </div>
-  )
-}
-
-// A Google Calendar event on the day panel. A Zoom/Meet link renders it as a
-// "holocall" (Nima, 2026-07-21) with a join button, and any invite can be
-// dropped onto the task list.
-function InviteRow({ ev, onRefresh }) {
-  const [busy, setBusy] = useState(false)
-  const [added, setAdded] = useState(false)
-  async function addTask() {
-    setBusy(true)
-    try {
-      const when = ev.start ? new Date(ev.start).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
-      const bits = [when, ev.conferenceUrl ? `[Join ${ev.conferenceKind === 'zoom' ? 'Zoom' : 'call'}](${ev.conferenceUrl})` : null].filter(Boolean)
-      await createManualTask({ subject: `${ev.holocall ? '📡 ' : '📅 '}${ev.title}`, snippet: bits.join(' · '), urgency: '' })
-      setAdded(true)
-      onRefresh?.()
-    } finally { setBusy(false) }
-  }
-  return (
-    <div className={'calRow' + (ev.holocall ? ' holocall' : '')}>
-      <span className={'caltag ' + (ev.holocall ? 'holo' : 'sev-lo')}>{ev.holocall ? '📡 Holocall' : '📅 Invite'}</span>
-      <span className="cust">{ev.title}</span>
-      {!ev.allDay && ev.start && <span className="caldate">{fmtTime(ev.start)}</span>}
-      {ev.conferenceUrl && <a className="linkBtn" href={ev.conferenceUrl} target="_blank" rel="noreferrer">Join ↗</a>}
-      {ev.htmlLink && <a className="linkBtn" href={ev.htmlLink} target="_blank" rel="noreferrer">open ↗</a>}
-      <button className="linkBtn" disabled={busy || added} onClick={addTask}>{added ? '✓ tasked' : '＋ task'}</button>
-    </div>
-  )
-}
-
-function ledgerKind(e) {
-  switch (e.eventType) {
-    case 'CUSTODY_OUT': return '⬆ out to warehouse'
-    case 'CUSTODY_IN': return '⬇ back in hands'
-    case 'CUSTODY_CLEARED': return 'custody closed'
-    case 'REACHED_APPROVED': return 'cleared to ship'
-    case 'SHIPPED_VALUE': return 'value logged'
-    default: return e.eventType.toLowerCase().replace(/_/g, ' ')
-  }
-}
-
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-function startOfDay(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime() }
-function startOfWeek(ms) { const d = startOfDay(ms); return d - new Date(d).getDay() * DAY }
-function startOfMonth(ms) { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), 1).getTime() }
-function addMonths(ms, n) { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth() + n, 1) }
-function fmtLong(ms) { return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
-function fmtTime(x) { return new Date(x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }

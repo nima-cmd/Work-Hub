@@ -1,0 +1,89 @@
+/* Calendar — an agenda, not a dot grid (rebuilt 2026-08-21).
+   Its own stylesheet, imported by the view, so a change here cannot restyle the board. */
+
+.calWrap { display: flex; flex-direction: column; gap: 10px; }
+
+.calHead { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.calTabs { display: flex; gap: 4px; }
+.calTab {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  padding: 5px 12px; border-radius: 7px; font-size: 12px; cursor: pointer;
+}
+.calTab.on { color: var(--text); border-color: var(--accent); background: #d9a4411f; }
+.calTabN { color: var(--muted); margin-left: 5px; font-family: ui-monospace, Menlo, monospace; }
+.calGrains { margin-left: auto; display: flex; }
+
+.calBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.calTitle { font-family: var(--display); font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; }
+.calSummary { margin-left: auto; font-size: 12px; color: var(--muted); }
+.calLate { color: var(--hi); }
+
+/* ── The grid ──────────────────────────────────────────────────────────────
+   Cells carry ENTRIES, not dots — that is the whole point of the rebuild, and it is
+   why the week view exists: "so we have more room to put more than the dots". */
+.calGrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.calWd {
+  font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--muted); padding: 2px 4px;
+}
+.calCell {
+  min-height: 96px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 6px; display: flex; flex-direction: column; gap: 4px;
+  min-width: 0;
+}
+/* A week has seven cells instead of thirty-five, so each one can be much taller. */
+.calGrid-week .calCell { min-height: min(58vh, 520px); }
+.calToday { border-color: var(--accent); }
+.calOutside { opacity: 0.42; }
+.calCellTop { display: flex; align-items: baseline; justify-content: space-between; }
+.calCellNum { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+.calCellN {
+  font-size: 9px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 0 5px;
+}
+
+/* ── An entry ──────────────────────────────────────────────────────────────── */
+.calEntry {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-left: 3px solid var(--tone); border-radius: 0 6px 6px 0; min-width: 0;
+}
+/* Only a passed DEADLINE is red. A container that landed last week is history, and a
+   window that opened is not late — the model decides, this only paints it. */
+.calOverdue { border-color: var(--hi); background: rgba(248, 81, 73, 0.07); }
+.calEntryTop {
+  display: flex; align-items: flex-start; gap: 7px; width: 100%;
+  background: transparent; border: none; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; padding: 5px 7px;
+}
+.calEntryCount {
+  font-family: var(--display); font-size: 15px; font-weight: 700; line-height: 1;
+  color: var(--tone); flex: none; min-width: 18px;
+}
+.calEntryBody { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.calEntryLabel { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.calEntryHead { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.calEntry .calLate { font-size: 9px; margin-left: auto; flex: none; }
+
+.calItems { display: flex; flex-wrap: wrap; gap: 4px 9px; padding: 0 7px 7px; }
+.calItem { display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; }
+.calItemLabel { color: var(--muted); font-size: 10px; }
+
+/* ── Day view ─────────────────────────────────────────────────────────────── */
+.calDay { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 280px); gap: 14px; align-items: start; }
+.calDayMain { display: flex; flex-direction: column; gap: 7px; }
+.calDaySide { display: flex; flex-direction: column; gap: 10px; }
+.calSideBlock { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+.calSideTitle {
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 5px;
+}
+.calInvite { font-size: 12px; padding: 2px 0; }
+.calLedgerN { font-size: 12px; color: var(--muted); }
+@media (max-width: 1000px) { .calDay { grid-template-columns: minmax(0, 1fr); } }
+
+/* Provenance, on the page. The field this view replaced was fabricated and nothing on
+   screen admitted it. */
+.calSources { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.calSources summary { cursor: pointer; }
+.calSources ul { margin: 6px 0 0; padding-left: 18px; }
+.calSources li { margin-bottom: 3px; }

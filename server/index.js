@@ -35,7 +35,7 @@ import {
   getQuestTasks, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
-  recordViewVisit, getViewUsage,
+  recordViewVisit, getViewUsage, getAgenda,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
@@ -1128,6 +1128,18 @@ app.get('/api/ledger-notes', async (_req, res) => {
 
 // Universal notes (Nima, 2026-07-20) — the generic Datapad-on-anything API.
 
+
+// What is coming, and what already happened — the Calendar's two tabs.
+// See getAgenda: the old calendar plotted a fabricated date, this reads the populated
+// signals and says on the response which column each entry rests on.
+app.get('/api/agenda', async (_req, res) => {
+  try {
+    res.json(await getAgenda())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
 
 // ── View usage (Nima, 2026-08-20) ───────────────────────────────────────────
 // "can we track how much we use certain view … to give you a better idea of what is

@@ -2924,6 +2924,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .tone-edi    { --tone: #e3b341; }   /* transmission */
 .tone-holo   { --tone: #4fd1ff; }   /* tracking */
 .tone-muted  { --tone: #8b949e; }
+.tone-accent { --tone: #d9a441; }   /* the archive — the app's own accent */
+.tone-mid    { --tone: #d9822b; }   /* routing yard */
 
 .traceSearch { position: relative; display: flex; align-items: center; gap: 8px; margin: 4px 0 18px; }
 .traceSearchInput {
