@@ -95,6 +95,28 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'baseMap pack-house AND launch-pad counts (work-in-progress including shipped freight)', shape: S.MISLABELLED.key,
+    pr: 143, date: '2026-08-21', status: 'fixed',
+    assumed: 'an open custody tag means the goods are still out of our hands — so it '
+      + 'could headline the pack house as "out on the floor, not back"',
+    actually: 'the tag is paperwork and it outlives the shipment. Measured on live data '
+      + 'before this shipped: 14 fulfilments had custodyOut with no custodyIn and ALL 14 '
+      + 'had already SHIPPED (IF7447 scanned out 31 Jul, shipped 5 Aug). Genuinely still '
+      + 'on the floor: zero. The counter was describing departed freight',
+    cost: 'none — caught before merge, by reading the work list the count opened into and '
+      + 'noticing every row said "Shipped". The count is now out-and-not-back-AND-NOT-'
+      + 'SHIPPED, and the 14 are surfaced separately as "custody tags never closed", '
+      + 'which is what they are',
+    caught: 'building the view against live data instead of fixtures. 14 of 14 being one '
+      + 'thing is the tell — a finding that is 100% one lane is a rule bug, not a data '
+      + 'finding (same lesson as PR #74 and PR #127). ⚠️ THEN THE SAME MISTAKE APPEARED '
+      + 'AGAIN sixty lines down: the launch pad counted 44 "cleared, waiting on the truck" '
+      + 'of which only 8 had not shipped — the other 36 left weeks ago (oldest 71 days) '
+      + 'and merely predate the confirm button, which has only existed since 2026-08-13. '
+      + 'Twice in one file, so there is now a test asserting NO building headlines a count '
+      + 'that includes shipped freight',
+  },
+  {
     field: "health.js INTEGRATIONS 'Database (Neon)' label", shape: S.MISLABELLED.key,
     pr: 141, date: '2026-08-20', status: 'fixed',
     assumed: 'the name of the database could be written into the string that names it',
