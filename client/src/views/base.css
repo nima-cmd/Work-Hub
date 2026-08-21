@@ -314,14 +314,26 @@
 }
 .bsWin { width: 3px; height: 3px; border-radius: 1px; background: #0e1a28; }
 .bsWinOn {
+  position: relative;
   background: var(--tone);
-  /* Two rates multiplied: a slow flicker plus a faster data pulse, so a roof reads as
-     consoles running rather than as one blinking light. */
-  animation: bsWinFlicker 5.2s steps(1, end) infinite, bsWinPulse 1.9s ease-in-out infinite;
+  /* Two rates still, but on TWO ELEMENTS — see the pulse below. */
+  animation: bsWinFlicker 5.2s steps(1, end) infinite;
   box-shadow: 0 0 5px var(--tone);
 }
+/* ⚠️ THE PULSE LIVES ON ITS OWN ELEMENT, and that is not decoration-by-committee.
+   It used to animate `filter: brightness`, which repaints the lamp every frame — up
+   to 40 of them at once, on the main thread. The composited equivalent is `opacity`,
+   but the flicker above already animates opacity and two animations on ONE property do
+   not combine: the last one declared simply wins, so swapping filter->opacity here
+   would have silently DELETED the flicker. A white overlay pulsing its own opacity
+   reads as brightness, keeps both rates, and composites. */
+.bsWinOn::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: #fff; opacity: 0;
+  animation: bsWinPulse 1.9s ease-in-out infinite;
+}
 @keyframes bsWinFlicker { 0%, 62% { opacity: 1; } 64%, 68% { opacity: 0.25; } 70%, 100% { opacity: 1; } }
-@keyframes bsWinPulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
+@keyframes bsWinPulse { 0%, 100% { opacity: 0; } 50% { opacity: 0.35; } }
 
 /* Not a number, and not pretending to be one. */
 .bsOpen {
@@ -329,4 +341,4 @@
   text-transform: uppercase; color: var(--tone);
 }
 
-@media (prefers-reduced-motion: reduce) { .bsWinOn { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .bsWinOn, .bsWinOn::after { animation: none; } }

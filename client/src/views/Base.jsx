@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from '../../../src/model/baseMap.js'
 import { NsLink } from '../lib.jsx'
 import BuildingInterior from './BuildingInterior.jsx'
@@ -64,7 +64,31 @@ const AGE = (iso) => {
 }
 
 export default function Base({ orders = [], tasks = [], emails = [], events = [], onNavigate, viewFor }) {
+  // ── OPENING A BUILDING, WITHOUT MAKING THE CLICK WAIT FOR IT ──────────────
+  //
+  // Measured 2026-08-21 in Nima's Performance panel: INP 208ms on a pointer, against
+  // an LCP of 0.53s and a CLS of 0.00 — so loading was never the problem, RESPONDING
+  // was. Measured cause: opening a building takes the page from 456 to 1,181 DOM
+  // elements (44 Kanban cards among them) in one synchronous render, and the browser
+  // cannot paint anything — not even the glow on the building just clicked — until
+  // that finishes.
+  //
+  // `armed` is the urgent half: it is the clicked key and nothing else, so React can
+  // paint the building lit on the very next frame. `open` is the same value again
+  // inside a transition, which lets React build the heavy tree without blocking that
+  // paint.
+  //
+  // ⚠️ THIS DOES NOT MAKE THE VIEW MOUNT ANY FASTER, and it should not be described
+  // that way. The work is identical; what changes is that the click is ANSWERED first.
+  // Time-to-Kanban is unchanged, time-to-feedback goes from 208ms to one frame.
   const [open, setOpen] = useState(null)
+  const [armed, setArmed] = useState(null)
+  const [, startTransition] = useTransition()
+  const openBuilding = (key) => {
+    const next = armed === key ? null : key
+    setArmed(next)                                 // urgent — paints immediately
+    startTransition(() => setOpen(next))           // deferred — the 725-node mount
+  }
 
   // ── The viewBox follows the box, so nothing distorts ─────────────────────
   //
@@ -139,7 +163,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
     return (
       <div className="bsWork">
         <div className="bsWorkLeft">
-          <button className="btnGhost bsBack" onClick={() => setOpen(null)}>← the whole base</button>
+          <button className="btnGhost bsBack" onClick={() => openBuilding(null)}>← the whole base</button>
           <BuildingInterior building={sel} state={selState} />
           {/* The items stay reachable here too: the embedded view is the lane's own
               surface, but a building's ALERTS are findings that live nowhere else. */}
@@ -221,14 +245,14 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
           return (
             <button
               key={b.key}
-              className={`bsBldg tone-${b.tone}${open === b.key ? ' bsBldgOpen' : ''}`}
+              className={`bsBldg tone-${b.tone}${armed === b.key ? ' bsBldgOpen' : ''}`}
               // ⚠️ HEIGHT IS DECLARED, not left to the image. The sprite used to size
               // by width with height:auto, so a building's real height came from the
               // PNG's aspect ratio while the roads met the centre implied by `h` — the
               // two disagreed, and tall sprites overflowed the map. Now the model's
               // geometry governs and the sprite fits inside it.
               style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}
-              onClick={() => setOpen(open === b.key ? null : b.key)}
+              onClick={() => openBuilding(b.key)}
               title={`${b.label} — ${st.count} ${b.of}`}
             >
               <img src={`/base/${b.sprite}.png`} alt=""
