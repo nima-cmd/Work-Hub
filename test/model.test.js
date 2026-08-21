@@ -2996,3 +2996,74 @@ test('no INTEGRATIONS entry hard-codes a database vendor name', () => {
     assert.doesNotMatch(i.label, /neon|digitalocean/i, `${i.key} must not name a database vendor`)
   }
 })
+
+// ── NEEDS_HANDOFF_SCAN: the lane, and the timezone ──────────────────────────
+//
+// Live before the fix: 54 flags, 53 of them EDI, and all 5 distinct EDI POs already
+// had their DC cargo tags scanned. An EDI shipment goes out on a per-DC tag, not on
+// the IF slip — scanGap.js learned this in PR #74 (28 of 28 false) and pipeline.js
+// never got the fix.
+
+const pickedWith = (f) => ({
+  stage: STAGE.PICKED, isAts: true, source: 'edi', poNumber: '7242989',
+  qtyOrdered: 1, qtyAllocated: 1, qtyFulfilled: 0,
+  fulfillments: [{ ifNumber: 'IF1', ...f }],
+})
+
+test('NEEDS_HANDOFF_SCAN still fires for a genuinely unscanned fulfilment', () => {
+  // Reachability. The fix took the live count to 0, and a counter that reads zero is
+  // either good news or structurally dead — this test is which.
+  const flags = computeFlags(pickedWith({ ifDate: '2026-08-18' }), new Date('2026-08-21T12:00:00Z'))
+  assert.ok(flags.some((f) => f.key === 'NEEDS_HANDOFF_SCAN'), 'the flag must still be reachable')
+})
+
+test('a scanned DC cargo tag suppresses NEEDS_HANDOFF_SCAN', () => {
+  const flags = computeFlags(
+    pickedWith({ ifDate: '2026-08-18', dcCustodyOut: '2026-08-19T10:00:00Z' }),
+    new Date('2026-08-21T12:00:00Z'),
+  )
+  assert.ok(!flags.some((f) => f.key === 'NEEDS_HANDOFF_SCAN'),
+    'the freight went out on its tag — the slip was never the evidence for this lane')
+})
+
+test('a DC tag does NOT invent a with-warehouse flag', () => {
+  // The DC scan only SUPPRESSES the never-scanned claim. A cargo tag scanned out means
+  // the freight LEFT on that tag; there is no Nestor round trip to wait for, and
+  // reporting one would trade this wrong flag for a different wrong flag.
+  const flags = computeFlags(
+    pickedWith({ ifDate: '2026-08-18', dcCustodyOut: '2026-08-19T10:00:00Z' }),
+    new Date('2026-08-21T12:00:00Z'),
+  )
+  for (const key of ['WITH_WAREHOUSE', 'WAREHOUSE_HOLDS', 'BACK_NOT_PACKED', 'PACK_ON_ROUTE_DAY']) {
+    assert.ok(!flags.some((f) => f.key === key), `${key} must not be minted from a DC tag`)
+  }
+})
+
+test('an IF scan still wins over the DC tag for the with-warehouse branches', () => {
+  const flags = computeFlags(
+    pickedWith({ ifDate: '2026-08-10', custodyOut: '2026-08-11T10:00:00Z' }),
+    new Date('2026-08-21T12:00:00Z'),
+  )
+  assert.ok(flags.some((f) => f.key === 'WAREHOUSE_HOLDS'), 'a real IF handoff still ages')
+})
+
+test('a fulfilment dated TODAY does not read as a day old', () => {
+  // ⚠️ node-pg hands a Postgres DATE back as UTC midnight, and the old comparison used
+  // LOCAL midnight — so in PDT an IF created today measured as 1 day old and the flag
+  // fired on same-day fulfilments despite its ">= 1 day" guard.
+  const todayAsPgDate = new Date('2026-08-21T00:00:00.000Z')
+  const flags = computeFlags(
+    pickedWith({ ifDate: todayAsPgDate }),
+    new Date('2026-08-21T20:00:00Z'),   // late in the day, UTC-7 => still the 21st local
+  )
+  assert.ok(!flags.some((f) => f.key === 'NEEDS_HANDOFF_SCAN'),
+    'made today — scan it as it prints, not a lost thread')
+})
+
+test('yesterday DOES read as a day old', () => {
+  const flags = computeFlags(
+    pickedWith({ ifDate: new Date('2026-08-20T00:00:00.000Z') }),
+    new Date('2026-08-21T12:00:00Z'),
+  )
+  assert.ok(flags.some((f) => f.key === 'NEEDS_HANDOFF_SCAN'), 'the guard must still bite')
+})

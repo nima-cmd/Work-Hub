@@ -95,6 +95,38 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'pipeline.js NEEDS_HANDOFF_SCAN (fulfillments.custody_out only)', shape: S.HAND_SET.key,
+    pr: 147, date: '2026-08-21', status: 'fixed',
+    assumed: 'a fulfilment with no CUSTODY_OUT scan on its own IF was never handed over',
+    actually: 'AN EDI SHIPMENT IS SCANNED ON ITS PER-DC CARGO TAG, NOT ITS IF SLIP — by '
+      + 'design. /api/orders read doc_type=IF events only, so none of that evidence ever '
+      + 'reached the pipeline. Measured: 54 live flags, 53 of them EDI, and all 5 distinct '
+      + 'EDI POs already had their DC tags scanned. Across all fulfilments, 163 of the 211 '
+      + 'with no IF scan have a DC scan',
+    cost: '54 false flags at severity 1 on the board — the second-largest flag there — each '
+      + 'telling him to go print a label and scan out freight that had already gone out on '
+      + 'its tag. Now 0, and the zero is honest: 38 fulfilments have no scan of any kind '
+      + 'but 35 are already SHIPPED and the branch is gated on stage PICKED',
+    caught: 'Nima asked what to build next; measuring the flag before recommending it '
+      + 'showed 53 of 54 in one lane. ⚠️ THE FIX ALREADY EXISTED — scanGap.js learned this '
+      + 'in PR #74 (28 of 28 false, identical cause) and its header says so in full; '
+      + 'pipeline.js simply never got it. Look for the rule before writing one',
+  },
+  {
+    field: 'pipeline.js daysBetween() applied to fulfillments.if_date (a DATE)', shape: S.MISLABELLED.key,
+    pr: 147, date: '2026-08-21', status: 'fixed',
+    assumed: 'daysBetween(if_date, today) counts whole days, so ">= 1" excludes today',
+    actually: 'node-pg returns a Postgres DATE as UTC MIDNIGHT, and daysBetween compares '
+      + 'LOCAL midnights (setHours(0,0,0,0)). West of UTC that shifts the date back a day: '
+      + 'proved in America/Los_Angeles that a DATE of TODAY measures as 1 day old',
+    cost: 'NEEDS_HANDOFF_SCAN fired on SAME-DAY fulfilments despite its ">= 1 day" guard — '
+      + 'chasing a slip that was printed an hour ago. Now compared as ISO day strings, '
+      + 'which is what scanGap.js already did for exactly this reason',
+    caught: 'the second reported symptom of the flag above. ⚠️ The test suite is only green '
+      + 'in America/* zones — main fails 1 in UTC and 16 in Asia/Tokyo, unrelated to this '
+      + 'and unfixed. The new tests here pass in all six zones checked',
+  },
+  {
     field: 'baseMap Almanac count (orders.cancel_date)', shape: S.UNREACHABLE.key,
     pr: 145, date: '2026-08-21', status: 'fixed',
     assumed: 'orders carry a cancel date, so "cancel dates inside a week" could be the '

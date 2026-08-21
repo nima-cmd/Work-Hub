@@ -389,9 +389,21 @@ export function computeFlags(o, today) {
             severity: 2,
           })
         }
-      } else if (f.ifDate && daysBetween(f.ifDate, today) >= 1) {
+      } else if (!f.dcCustodyOut && !f.dcCustodyIn && f.ifDate && daysSinceDate(f.ifDate, today) >= 1) {
         // IF exists but was never scanned out — either the handoff never
         // happened, or it happened unscanned. Print the label and scan it.
+        //
+        // ⚠️ UNLESS ITS CARGO TAG WAS SCANNED. An EDI shipment goes out on a per-DC
+        // tag, not on the IF slip, and that is by design — so an unscanned slip is not
+        // a lost thread for that lane. Measured before this fix: 54 live flags, 53 of
+        // them EDI, and all 5 distinct EDI POs already had their DC tags scanned. The
+        // identical finding is in scanGap.js's header (28 of 28 false in PR #74); this
+        // file simply never got it. A finding that is 100% one lane is a rule bug.
+        //
+        // ⚠️ The DC scan only SUPPRESSES this claim; it deliberately does NOT feed the
+        // with-warehouse branches above. A cargo tag scanned out means the freight left
+        // on that tag — there is no Nestor round trip to wait for, and reporting one
+        // would trade this wrong flag for a different wrong flag.
         flags.push({
           key: 'NEEDS_HANDOFF_SCAN',
           label: `${f.ifNumber} has no handoff scan — print label & scan OUT`,
@@ -468,6 +480,16 @@ export function computeFlags(o, today) {
 // whole days from `from` to `to` (negative = `to` is in the past)
 function daysBetween(from, to) {
   return Math.round((startOfDay(to) - startOfDay(from)) / DAY)
+}
+
+// ⚠️ FOR A DATE COLUMN, NOT A TIMESTAMP. node-pg hands a Postgres DATE back as UTC
+// midnight, and `startOfDay` above uses LOCAL midnight — so in PDT a fulfilment dated
+// TODAY measured as 1 day old, and NEEDS_HANDOFF_SCAN fired on same-day fulfilments
+// despite its ">= 1 day" guard. Comparing ISO day strings keeps a UTC-midnight date on
+// its own day, which is what scanGap.js already does for exactly this reason.
+function daysSinceDate(dateish, to) {
+  const day = (d) => new Date(d).toISOString().slice(0, 10)
+  return Math.floor((new Date(`${day(to)}T00:00:00Z`) - new Date(`${day(dateish)}T00:00:00Z`)) / DAY)
 }
 function startOfDay(d) {
   const x = new Date(d)
