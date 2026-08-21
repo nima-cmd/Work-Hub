@@ -21,6 +21,7 @@
 // from "what connects to what" is how a dot ends up crossing a building.
 
 import { laneFor } from './orderLane.js'
+import { paymentBlocked } from './paymentGate.js'
 import { SPINE_LABEL } from './orderEvents.js'
 
 // ── The buildings ───────────────────────────────────────────────────────────
@@ -29,52 +30,76 @@ import { SPINE_LABEL } from './orderEvents.js'
 // what each structure actually is and why it carries this lane. Swapping two is a
 // one-line change here and nowhere else.
 export const BUILDINGS = [
-  {
-    key: 'receiving', label: 'Receiving', sprite: 'bldg-02', tone: 'arrive',
-    // A shed on legs with an annex, at the west gate: where goods enter the base.
-    x: 6, y: 40, w: 15, h: 20,
-    of: 'presold, waiting on stock',
-    view: 'allocations',
-  },
-  {
-    key: 'stock', label: 'Stock depot', sprite: 'bldg-03', tone: 'money',
-    // Twin silos beside a long hall — the pool ATS orders pull from.
-    x: 25, y: 62, w: 14, h: 18,
-    of: 'orders pulling from stock',
-    view: 'table',
-  },
-  {
-    key: 'pack', label: 'Pack house', sprite: 'bldg-04', tone: 'hands',
-    // Dock doors right around the perimeter. The busiest building on the base.
-    x: 43, y: 34, w: 15, h: 20,
-    of: 'out on the floor, not back',
-    view: 'kanban',
-  },
-  {
-    key: 'routing', label: 'Routing yard', sprite: 'bldg-05', tone: 'edi',
-    x: 62, y: 62, w: 12, h: 16,
-    of: 'freight waiting to be routed',
-    view: 'routing',
-  },
-  {
-    key: 'launch', label: 'Launch pad', sprite: 'bldg-00', tone: 'holo',
-    // The docking ring, twelve bays. East end: where it leaves.
-    x: 79, y: 32, w: 18, h: 24,
-    of: 'cleared, waiting on the truck',
-    view: 'ship',
-  },
+  // ── North row: the desk and the wires ──────────────────────────────────
   {
     key: 'comms', label: 'Comms tower', sprite: 'bldg-06', tone: 'edi',
-    x: 28, y: 8, w: 10, h: 14,
-    of: 'transmissions to answer',
-    view: 'transmissions',
+    x: 10, y: 3, w: 9, h: 13,
+    of: 'transmissions to answer', view: 'transmissions',
   },
   {
     key: 'ops', label: 'Ops centre', sprite: 'bldg-01', tone: 'go',
     // The stepped terrace block, tallest on the sheet. The desk.
-    x: 62, y: 6, w: 13, h: 17,
-    of: 'open on the day plan',
-    view: 'plan',
+    x: 32, y: 2, w: 11, h: 15,
+    of: 'open on the day plan', view: 'plan',
+  },
+  {
+    key: 'calendar', label: 'Almanac', sprite: 'bldg-09', tone: 'arrive',
+    // A narrow tower — a clock tower, for the view about dates.
+    x: 56, y: 3, w: 8, h: 13,
+    of: 'ship windows closing or closed', view: 'calendar',
+  },
+  {
+    key: 'datapad', label: 'Archive', sprite: 'bldg-07', tone: 'accent',
+    // The data packet surface. ⚠️ NOT COUNTABLE — see `countable` below.
+    x: 76, y: 3, w: 10, h: 13,
+    of: 'trace anything', view: 'datapad', countable: false,
+  },
+
+  // ── Middle row: the flow of goods, west to east ─────────────────────────
+  {
+    key: 'receiving', label: 'Receiving', sprite: 'bldg-02', tone: 'arrive',
+    x: 2, y: 34, w: 13, h: 17,
+    of: 'presold, waiting on stock', view: 'allocations',
+  },
+  {
+    key: 'pack', label: 'Pack house', sprite: 'bldg-04', tone: 'hands',
+    // Dock doors right around the perimeter.
+    x: 30, y: 32, w: 14, h: 19,
+    of: 'out on the floor, not back', view: 'kanban',
+  },
+  {
+    key: 'scan', label: 'Scan bay', sprite: 'bldg-04', tone: 'money', flip: true,
+    // ⚠️ THE SAME SPRITE AS THE PACK HOUSE, MIRRORED — Nima explicitly allowed
+    // duplicating buildings for the new lanes, and a second dock hall beside the
+    // first is what a warehouse complex actually looks like. `flip` keeps them
+    // visually distinct; the sprite+flip pair is what has to be unique.
+    x: 48, y: 33, w: 13, h: 18,
+    of: 'scanned back in, needs a label', view: 'scan',
+  },
+  {
+    key: 'launch', label: 'Launch pad', sprite: 'bldg-00', tone: 'holo',
+    // The docking ring, twelve bays. East end: where it leaves.
+    x: 76, y: 30, w: 17, h: 22,
+    of: 'clear for departure', view: 'ship',
+  },
+
+  // ── South row: supply and the partners ─────────────────────────────────
+  {
+    key: 'stock', label: 'Stock depot', sprite: 'bldg-03', tone: 'money',
+    // Twin silos beside a long hall — the pool ATS orders pull from.
+    x: 10, y: 66, w: 12, h: 16,
+    of: 'orders pulling from stock', view: 'table',
+  },
+  {
+    key: 'edi', label: 'EDI relay', sprite: 'bldg-08', tone: 'edi',
+    // A long low block: the transmission hall for the partner lane.
+    x: 34, y: 67, w: 13, h: 15,
+    of: 'partner orders still open', view: 'edi',
+  },
+  {
+    key: 'routing', label: 'Routing yard', sprite: 'bldg-05', tone: 'mid',
+    x: 58, y: 67, w: 11, h: 15,
+    of: 'freight waiting to be routed', view: 'routing',
   },
 ]
 
@@ -94,14 +119,24 @@ export const centreOf = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
 // than inventing one. That is the whole guarantee — a mover can only ever travel
 // between buildings that are genuinely connected.
 export const ROADS = [
+  // The flow of goods, west to east.
   { key: 'in-stock', from: 'receiving', to: 'stock' },
+  { key: 'in-pack', from: 'receiving', to: 'pack' },
   { key: 'stock-pack', from: 'stock', to: 'pack' },
-  { key: 'pack-routing', from: 'pack', to: 'routing' },
-  { key: 'pack-launch', from: 'pack', to: 'launch' },
+  { key: 'pack-scan', from: 'pack', to: 'scan' },
+  { key: 'scan-launch', from: 'scan', to: 'launch' },
+  // The partner lane, along the south side.
+  { key: 'stock-edi', from: 'stock', to: 'edi' },
+  { key: 'pack-edi', from: 'pack', to: 'edi' },
+  { key: 'edi-routing', from: 'edi', to: 'routing' },
   { key: 'routing-launch', from: 'routing', to: 'launch' },
+  // The north road: the desk, and the surfaces you read rather than work.
   { key: 'comms-ops', from: 'comms', to: 'ops' },
   { key: 'comms-pack', from: 'comms', to: 'pack' },
-  { key: 'ops-launch', from: 'ops', to: 'launch' },
+  { key: 'ops-calendar', from: 'ops', to: 'calendar' },
+  { key: 'ops-scan', from: 'ops', to: 'scan' },
+  { key: 'calendar-archive', from: 'calendar', to: 'datapad' },
+  { key: 'archive-launch', from: 'datapad', to: 'launch' },
 ]
 
 /** The road joining two buildings, either way round, or null when none exists. */
@@ -156,22 +191,72 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
     .filter((o) => lane(o) === 'edi')
     .flatMap((o) => ifsOf(o).filter((f) => !shipped(f.status)))
 
-  // Labelled and not yet confirmed gone. `labelled` is a boolean the API derives from
-  // tracking numbers; departureConfirmedAt is a human attesting it left. A label is
-  // NOT a departure — that distinction is why both are read here.
+  // ── The launch pad: what is CLEAR, and what is GROUNDED and why ──────────
   //
-  // ⚠️ AND NOT SHIPPED, for the SAME reason the pack house needed it — this is the
-  // second instance of one mistake. Measured live: 44 were labelled-and-unconfirmed,
-  // of which only 8 had not shipped. The other 36 shipped weeks ago (oldest 71 days)
-  // and were never manually confirmed, because the manual confirmation only exists
-  // since 2026-08-13. "Cleared, waiting on the truck" was describing history: no
-  // truck is still waiting on a shipment that left in June.
-  const labelledUnconfirmed = orders.flatMap((o) =>
-    ifsOf(o).filter((f) => f.labelled && !f.departureConfirmedAt))
-  const cleared = labelledUnconfirmed.filter((f) => !shipped(f.status))
-  // A real backlog, but a different one: departures nobody ever attested. Mostly
-  // pre-dating the feature. Named for what it is.
-  const neverConfirmed = labelledUnconfirmed.filter((f) => shipped(f.status))
+  // Nima, 2026-08-21: "launch bay should show us whats clear for departure i.e need to
+  // be marked as shipped and whats grounded categorized by its reason missing invoice
+  // missing payment etc."
+  //
+  // ⚠️ THE REASONS COME FROM paymentGate.js, NOT FROM A FRESH SET OF RULES. That module
+  // already holds the policy, including two decisions no new code would have guessed:
+  // net terms that have gone PAST DUE do NOT block a shipment (chasing an invoice is
+  // not a shipping decision), and the NY office's "Approved For Shipping" is a one-way
+  // waiver over an open balance. Re-deriving "missing payment" here would have quietly
+  // contradicted the Ship Desk.
+  //
+  // Order matters: the FIRST thing that grounds it is the reason reported, because a
+  // fulfilment with no label AND no invoice is not two problems — the label is the one
+  // to act on.
+  const groundedReason = (o, f) => {
+    if (/fob/i.test(f.packedStatus || '')) return 'FOB — collected in China, we make no label'
+    if (!f.labelled) return 'no label yet'
+    const inv = (o.invoices || [])[0] || null
+    if (!f.invoice && !inv) return 'no invoice yet'
+    if (paymentBlocked({ terms: o.terms, amountRemaining: inv?.amountRemaining, shipGate: inv?.shippingStatus })) {
+      return 'awaiting payment'
+    }
+    return null   // nothing grounds it
+  }
+
+  const clear = []
+  const groundedBy = new Map()
+  for (const o of orders) {
+    for (const f of ifsOf(o)) {
+      if (shipped(f.status)) continue          // already gone; not the launch pad's question
+      const why = groundedReason(o, f)
+      if (!why) { clear.push(f); continue }
+      if (!groundedBy.has(why)) groundedBy.set(why, [])
+      groundedBy.get(why).push(f)
+    }
+  }
+  // Biggest pile first — that is the one worth clearing.
+  const groundedAlerts = [...groundedBy.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([why, items]) => ({ key: `grounded-${why}`, label: why, count: items.length, items }))
+
+  // Scanned back in and still without a label: the Launch Bay's own "back in our
+  // hands — label it and get it out" list, which is the scan bay's question.
+  const backNeedsLabel = orders.flatMap((o) =>
+    ifsOf(o).filter((f) => f.custodyIn && !f.labelled && !shipped(f.status)))
+
+  // Partner orders still open — the EDI book. Distinct grain from the routing yard,
+  // which counts that lane's FULFILMENTS awaiting a routing request.
+  const ediOpen = orders.filter((o) => laneFor(o)?.key === 'edi' && !shipped(o.stage))
+
+  // The one thing on this base that is about a DATE rather than a state — which is
+  // what the calendar is for: ship windows closing, plus the ones already closed and
+  // still sitting there, because those are the urgent half.
+  //
+  // ⚠️ KEYED ON window_end, NOT cancel_date. The first version read `cancelDate` and
+  // reported 0 — measured: cancelDate is NULL on all 121 unshipped orders, so that
+  // counter could never fire at all. `window_end` is NetSuite's own `enddate`, the
+  // real ship window ingested in PR #118, and it is populated on 43 of them. An
+  // always-empty column dressed as a deadline is the unreachable-branch shape.
+  const soon = orders.filter((o) => {
+    if (shipped(o.stage) || !o.windowEnd) return false
+    const days = (new Date(o.windowEnd).getTime() - Date.now()) / 86400000
+    return days <= 7
+  })
 
   const unread = emails.filter((e) => e.isUnread ?? e.is_unread ?? false)
   const openTasks = tasks.filter((t) => t.status !== 'done')
@@ -194,9 +279,16 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
       { key: 'staleTags', label: 'custody tags never closed', count: staleTags.length, items: staleTags },
     ]),
     routing: state(toRoute.length, toRoute, 'fulfillment', (f) => f.ifDate),
-    launch: state(cleared.length, cleared, 'fulfillment', (f) => f.ifDate, [
-      { key: 'neverConfirmed', label: 'shipped, departure never confirmed', count: neverConfirmed.length, items: neverConfirmed },
-    ]),
+    // ⚠️ The headline is CLEAR FOR DEPARTURE — things to go and mark shipped. Zero is
+    // a real and common answer, and it must not be padded with grounded freight.
+    launch: state(clear.length, clear, 'fulfillment', (f) => f.ifDate, groundedAlerts),
+    scan: state(backNeedsLabel.length, backNeedsLabel, 'fulfillment', (f) => f.custodyIn),
+    edi: state(ediOpen.length, ediOpen, 'order', (o) => o.startDate),
+    calendar: state(soon.length, soon, 'order', (o) => o.windowEnd),
+    // ⚠️ NOT COUNTABLE. The Archive is a way IN to anything, not a backlog — a number
+    // here would have to be invented, and an invented number on a base of real ones is
+    // worse than none. The view renders its label instead.
+    datapad: state(0, [], 'none', () => null),
     comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
     ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }
@@ -227,14 +319,16 @@ function oldestOf(items, stamp) {
 const EVENT_LEG = {
   PO_RECEIVED: ['receiving', 'stock'],
   IF_CREATED: ['stock', 'pack'],
-  CUSTODY_OUT: ['stock', 'pack'],
-  CUSTODY_IN: ['pack', 'routing'],
-  PACKED: ['pack', 'launch'],
-  ROUTED: ['pack', 'routing'],
+  // Custody is SCANNED, and the scan bay is where that happens — so these two now
+  // travel the pack↔scan road rather than standing in for a routing move.
+  CUSTODY_OUT: ['pack', 'scan'],
+  CUSTODY_IN: ['scan', 'pack'],
+  PACKED: ['scan', 'launch'],
+  ROUTED: ['edi', 'routing'],
   ASN_SENT: ['routing', 'launch'],
   DEPARTED: ['routing', 'launch'],
-  DEPARTURE_CONFIRMED: ['routing', 'launch'],
-  INVOICE_SENT: ['ops', 'launch'],
+  DEPARTURE_CONFIRMED: ['scan', 'launch'],
+  INVOICE_SENT: ['ops', 'calendar'],
   TASK_DONE: ['comms', 'ops'],
 }
 

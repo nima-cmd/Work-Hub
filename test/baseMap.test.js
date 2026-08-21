@@ -15,9 +15,12 @@ test('every building names a real sprite and a view it can open', () => {
   }
 })
 
-test('no two buildings claim the same sprite', () => {
-  const sprites = BUILDINGS.map((b) => b.sprite)
-  assert.equal(new Set(sprites).size, sprites.length)
+test('no two buildings look identical — sprite+flip must be unique', () => {
+  // Duplicating a sprite is allowed (Nima authorised it for the new lanes), but two
+  // buildings rendering the same pixels the same way round are indistinguishable on
+  // the map. The scan bay is the pack house mirrored, and that is the point.
+  const looks = BUILDINGS.map((b) => `${b.sprite}:${b.flip ? 'flip' : 'nat'}`)
+  assert.equal(new Set(looks).size, looks.length)
 })
 
 test('every building sits inside the map', () => {
@@ -127,25 +130,61 @@ test('every building carries an alerts array, so none renders undefined', () => 
   for (const b of BUILDINGS) assert.ok(Array.isArray(s[b.key].alerts), `${b.key} has no alerts array`)
 })
 
-test('the launch pad counts LABELLED, unconfirmed AND NOT SHIPPED', () => {
-  // A label is not a departure — but neither is a shipment from June something a
-  // truck is still waiting for. Measured live: 44 labelled-unconfirmed, only 8 not
-  // shipped; the other 36 left weeks ago and simply predate the confirm button.
+test('the launch pad headlines CLEAR FOR DEPARTURE and grounds the rest by reason', () => {
+  // Nima: "launch bay should show us whats clear for departure i.e need to be marked
+  // as shipped and whats grounded categorized by its reason".
   const s = buildingStates({
-    orders: [so({
+    orders: [{
+      soNumber: 'SO1', source: 'boutique', isAts: false, stage: 'OPEN', terms: 'Net 30',
+      invoices: [{ invNumber: 'INV1', amountRemaining: 0, shippingStatus: 'Approved For Shipping' }],
       fulfillments: [
-        { ifNumber: 'IF1', labelled: true, status: 'Packed' },                      // really waiting
-        { ifNumber: 'IF2', labelled: true, departureConfirmedAt: '2026-08-20' },    // confirmed gone
-        { ifNumber: 'IF3', labelled: false },                                      // no label yet
-        { ifNumber: 'IF4', labelled: true, status: 'Shipped' },                    // left, never attested
+        { ifNumber: 'IF1', labelled: true, invoice: 'INV1', status: 'Packed' },   // clear
+        { ifNumber: 'IF2', labelled: false, status: 'Packed' },                   // no label
+        { ifNumber: 'IF3', labelled: true, packedStatus: 'FOB Order Awaiting Shipment', status: 'Packed' },
+        { ifNumber: 'IF4', status: 'Shipped', labelled: true },                   // gone
       ],
-    })],
+    }],
   })
-  assert.equal(s.launch.count, 1)
+  assert.equal(s.launch.count, 1, 'only the genuinely clear one is the headline')
   assert.equal(s.launch.items[0].ifNumber, 'IF1')
-  const never = s.launch.alerts.find((a) => a.key === 'neverConfirmed')
-  assert.equal(never.count, 1)
-  assert.match(never.label, /never confirmed/)
+  const reasons = s.launch.alerts.map((a) => a.label)
+  assert.ok(reasons.some((r) => /no label/.test(r)), 'the unlabelled one is grounded, and says why')
+  assert.ok(reasons.some((r) => /FOB/.test(r)), 'FOB is its own reason, not "no label"')
+  assert.ok(!s.launch.alerts.some((a) => a.items.some((f) => f.ifNumber === 'IF4')),
+    'a shipped fulfilment is not grounded — it is gone')
+})
+
+test('grounded reasons are ordered biggest pile first', () => {
+  const s = buildingStates({
+    orders: [{
+      soNumber: 'SO1', stage: 'OPEN', source: 'boutique', isAts: false, invoices: [],
+      fulfillments: [
+        { ifNumber: 'A', labelled: false, status: 'Packed' },
+        { ifNumber: 'B', labelled: false, status: 'Packed' },
+        { ifNumber: 'C', labelled: true, packedStatus: 'FOB Order Awaiting Shipment', status: 'Packed' },
+      ],
+    }],
+  })
+  assert.equal(s.launch.alerts[0].count, 2, 'the biggest pile is the one worth clearing')
+})
+
+test('payment grounding comes from paymentGate, so policy cannot fork', () => {
+  // paymentGate holds two decisions no fresh rule would guess: past-due net terms do
+  // NOT block, and the NY office's "Approved For Shipping" waives an open balance.
+  const ground = (invoice, terms) => buildingStates({
+    orders: [{
+      soNumber: 'SO1', stage: 'OPEN', source: 'boutique', isAts: false, terms,
+      invoices: [invoice],
+      fulfillments: [{ ifNumber: 'IF1', labelled: true, invoice: 'INV1', status: 'Packed' }],
+    }],
+  })
+  // Owed, due, no waiver → grounded.
+  const blocked = ground({ invNumber: 'INV1', amountRemaining: 900, shippingStatus: 'Pending Payment' }, 'Due on receipt')
+  assert.equal(blocked.launch.count, 0)
+  assert.match(blocked.launch.alerts[0].label, /payment/)
+  // Same balance, but the office waived it → clear.
+  const waived = ground({ invNumber: 'INV1', amountRemaining: 900, shippingStatus: 'Approved For Shipping' }, 'Due on receipt')
+  assert.equal(waived.launch.count, 1, 'the NY waiver is honoured, not re-litigated here')
 })
 
 test('NO building headlines a count that includes shipped freight', () => {
@@ -202,9 +241,11 @@ test('every building gets a state, so none renders undefined', () => {
 // ── Movers travel real roads, or they do not exist ──────────────────────────
 
 test('a mover is placed on the road for its lane transition', () => {
+  // PACKED travels scan → launch: the scan bay is where custody is recorded, so it
+  // sits in the flow between the pack house and the pad.
   const [m] = moversFrom([{ id: 1, eventType: 'PACKED', docType: 'IF', docNumber: 'IF7486', label: 'Packed' }])
-  assert.equal(m.road, roadFor('pack', 'launch').key)
-  assert.equal(m.from, 'pack')
+  assert.equal(m.road, roadFor('scan', 'launch').key)
+  assert.equal(m.from, 'scan')
   assert.equal(m.to, 'launch')
   assert.equal(m.docNumber, 'IF7486')
   assert.ok(m.tone, 'a mover is coloured by the lane it is leaving')
@@ -293,4 +334,67 @@ test('an event type with no known label falls back to the type, not to blank', (
   // Better a raw key than an empty chip that looks like a rendering bug.
   const [m] = moversFrom([{ id: 1, eventType: 'PACKED', label: 'Packed by hand' }])
   assert.equal(m.label, 'Packed by hand', 'an explicit label from the feed still wins')
+})
+
+// ── The four new buildings ──────────────────────────────────────────────────
+
+test('the scan bay counts scanned-back-in fulfilments still without a label', () => {
+  const s = buildingStates({
+    orders: [so({
+      fulfillments: [
+        { ifNumber: 'IF1', custodyIn: '2026-08-20', labelled: false, status: 'Packed' },  // yes
+        { ifNumber: 'IF2', custodyIn: '2026-08-20', labelled: true, status: 'Packed' },   // has one
+        { ifNumber: 'IF3', labelled: false, status: 'Packed' },                            // never went out
+        { ifNumber: 'IF4', custodyIn: '2026-08-01', labelled: false, status: 'Shipped' }, // gone
+      ],
+    })],
+  })
+  assert.equal(s.scan.count, 1)
+  assert.equal(s.scan.items[0].ifNumber, 'IF1')
+})
+
+test('the EDI relay counts open partner ORDERS, a different grain from the routing yard', () => {
+  const s = buildingStates({
+    orders: [
+      so({ soNumber: 'A', source: 'edi', poNumber: '1', fulfillments: [{ ifNumber: 'IF1', status: 'Picked' }] }),
+      so({ soNumber: 'B', source: 'edi', poNumber: '2', stage: 'SHIPPED' }),
+      so({ soNumber: 'C', source: 'boutique', isAts: true }),
+    ],
+  })
+  assert.equal(s.edi.count, 1, 'one open EDI order')
+  assert.equal(s.routing.count, 1, 'and one EDI fulfilment to route — orders vs fulfilments')
+})
+
+test('the Almanac is keyed on window_end, a field that is actually populated', () => {
+  // cancel_date was NULL on all 121 unshipped orders, so the first version could never
+  // fire — a dead counter reads exactly like a clear week.
+  const soonIso = new Date(Date.now() + 3 * 86400000).toISOString()
+  const farIso = new Date(Date.now() + 60 * 86400000).toISOString()
+  const s = buildingStates({
+    orders: [
+      so({ soNumber: 'A', windowEnd: soonIso }),
+      so({ soNumber: 'B', windowEnd: farIso }),
+      so({ soNumber: 'C', windowEnd: new Date(Date.now() - 5 * 86400000).toISOString() }), // already closed
+      so({ soNumber: 'D', cancelDate: soonIso }),   // the dead field — must not count
+      so({ soNumber: 'E', windowEnd: soonIso, stage: 'SHIPPED' }),
+    ],
+  })
+  assert.equal(s.calendar.count, 2, 'closing and already-closed, and nothing keyed on cancel_date')
+})
+
+test('the Archive declares itself uncountable rather than inventing a number', () => {
+  const archive = BUILDINGS.find((b) => b.key === 'datapad')
+  assert.equal(archive.countable, false)
+  const s = buildingStates({ orders: [so()] })
+  assert.equal(s.datapad.count, 0)
+})
+
+test('every building still has a state after growing to eleven', () => {
+  const s = buildingStates({ orders: [so()] })
+  assert.equal(BUILDINGS.length, 11)
+  for (const b of BUILDINGS) {
+    assert.ok(s[b.key], `${b.key} has no state`)
+    assert.ok(Array.isArray(s[b.key].items))
+    assert.ok(Array.isArray(s[b.key].alerts))
+  }
 })

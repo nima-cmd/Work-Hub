@@ -95,6 +95,22 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'baseMap Almanac count (orders.cancel_date)', shape: S.UNREACHABLE.key,
+    pr: 145, date: '2026-08-21', status: 'fixed',
+    assumed: 'orders carry a cancel date, so "cancel dates inside a week" could be the '
+      + 'Almanac building\'s number',
+    actually: 'cancel_date is NULL on ALL 121 unshipped orders. The counter could never '
+      + 'fire — it read 0 and would have read 0 forever, which is indistinguishable from '
+      + 'a genuinely clear week. The real ship window is `window_end` (NetSuite\'s '
+      + '`enddate`, ingested in PR #118), populated on 43 of them',
+    cost: 'none — caught before merge by asking whether a zero was real, which is the '
+      + 'only question that separates this shape from good news. The EDI lane does rank '
+      + 'on a partner cancel-after, but that lives in shipWindow/ediWindow, not in this '
+      + 'column',
+    caught: 'refusing to accept a 0. A counter reading zero on live data is either the '
+      + 'happy path or structurally dead, and the two look identical on screen',
+  },
+  {
     field: 'baseMap pack-house AND launch-pad counts (work-in-progress including shipped freight)', shape: S.MISLABELLED.key,
     pr: 143, date: '2026-08-21', status: 'fixed',
     assumed: 'an open custody tag means the goods are still out of our hands — so it '
