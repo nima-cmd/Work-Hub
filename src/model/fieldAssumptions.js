@@ -95,6 +95,24 @@ const S = SHAPES
  */
 export const ASSUMPTIONS = [
   {
+    field: 'Calendar deadline dots (orders.ship_date + orders.cancel_date)', shape: S.ARITHMETIC.key,
+    pr: 148, date: '2026-08-21', status: 'fixed',
+    assumed: 'the calendar could plot deadlines from the order: a "Ship due" dot on '
+      + 'ship_date and a "Cancel by" dot on cancel_date',
+    actually: 'BOTH ARE UNUSABLE. Measured: cancel_date is NULL on all 121 unshipped '
+      + 'orders, so that dot could never appear; and ALL 121 ship_dates are the NetSuite '
+      + 'trandate+28 default (isDefaultedShipDate true on 121, false on 0), so 81 orders '
+      + 'showed a future deadline that was just their creation date plus four weeks. The '
+      + 'real dates are orders.window_end/window_start and the partner\'s own '
+      + 'edi_transactions.cancel_after',
+    cost: 'the whole Calendar view. Nima: "the dots mean nothing to me really and not '
+      + 'working" — he was right, and it was not a design problem. PR #94 stopped the '
+      + 'pipeline flags trusting ship_date; nothing propagated that to the calendar',
+    caught: 'him saying the view was useless, then measuring the columns it plotted '
+      + 'rather than redesigning it. ⚠️ A view can be keyed on a field that another '
+      + 'surface already stopped trusting — a fix has to be chased across every reader',
+  },
+  {
     field: 'pipeline.js NEEDS_HANDOFF_SCAN (fulfillments.custody_out only)', shape: S.HAND_SET.key,
     pr: 147, date: '2026-08-21', status: 'fixed',
     assumed: 'a fulfilment with no CUSTODY_OUT scan on its own IF was never handed over',
