@@ -41,6 +41,7 @@ import {
 import { isoDate } from '../src/model/upsRates.js'
 import { laneFor, anchorFor } from '../src/model/orderLane.js'
 import { USAGE_KEY } from '../src/model/viewUsage.js'
+import { buildAgenda, splitAgenda, agendaSummary } from '../src/model/calendarAgenda.js'
 import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
@@ -968,6 +969,102 @@ export async function getPoLedger(poNumber) {
 
 // A window of the ledger, newest first — the Calendar's feed and the general
 // search. `q` matches a document number so "IF7413" finds its whole trail.
+
+// ── THE AGENDA (Nima, 2026-08-21) ───────────────────────────────────────────
+//
+// "i was hoping for the calendar to give me more of a view of what is upcoming in terms
+//  of work that we need to do. right now the view is just a calendar with dots and a
+//  date." Plus, on structure: "two tabbed version perhaps one looking forward one to
+//  review the past."
+//
+// ⚠️ THE OLD CALENDAR PLOTTED A FABRICATED DATE — orders.ship_date (all 121 unshipped
+// are the trandate+28 default) and orders.cancel_date (NULL on all 121). This reads the
+// signals that are actually populated instead; the rules and the grouping live in
+// src/model/calendarAgenda.js, tested.
+//
+// The two large feeds are grouped IN SQL because they are per-line: 1,436 open PO lines
+// collapse to six container dates, and 4,027 EDI transactions to a handful of partner
+// deadlines. Orders are already in memory and group in the model.
+// ⚠️ SCOPE THIS TO LIVE WORK OR IT IS WORSE THAN THE DOTS. The first version read
+// every row in `edi_transactions` — 4,027 of them, spanning years — and produced 131
+// "overdue" deadlines, the forward tab leading with a Nordstrom cancel-after 3,140 days
+// late. A closed 2018 PO is not tomorrow's work.
+//
+// Three conditions, each for a reason:
+//   • NOT resolved — 74 of the dated rows sit on POs already closed or cancelled.
+//   • has an unshipped order — the plainly live case. Only 9 of 331 qualify.
+//   • OR no order at all AND the date is within 30 days back — a PO nobody has entered
+//     yet still has a real deadline (the arrivals banner exists for exactly this), but
+//     300 rows have no order and most are ancient. The bound keeps the ones that are
+//     still plausibly actionable and drops the archive. ediWork.js draws the same
+//     distinction with MISSED_AFTER_DAYS; this is deliberately looser because a
+//     calendar showing a deadline slightly too long is kinder than one hiding it.
+//
+// Result: 14 live cancel-afters over 7 dates, all ahead, versus 331 raw.
+const EDI_LIVE = `
+  t.business_number IS NOT NULL
+  AND t.business_number NOT IN (SELECT business_number FROM edi_po_resolutions)
+  AND (
+    EXISTS (SELECT 1 FROM orders o
+             WHERE o.po_number = t.business_number AND o.stage IS DISTINCT FROM 'SHIPPED')
+    OR (NOT EXISTS (SELECT 1 FROM orders o WHERE o.po_number = t.business_number)
+        AND t.$COL >= current_date - 30)
+  )`
+
+// `needsEntering` rides along: a partner deadline on a PO with no sales order yet is a
+// different job from one already entered, and the calendar should say which.
+const ediDeadlineSql = (col) => `
+  SELECT t.${col}::date AS day, t.trading_partner AS partner, COUNT(*) AS count,
+         ARRAY_AGG(DISTINCT t.business_number) AS "businessNumbers",
+         bool_and(NOT EXISTS (SELECT 1 FROM orders o WHERE o.po_number = t.business_number))
+           AS "needsEntering"
+    FROM edi_transactions t
+   WHERE t.${col} IS NOT NULL AND ${EDI_LIVE.replace('$COL', col)}
+   GROUP BY 1, 2`
+
+export async function getAgenda({ today = new Date() } = {}) {
+  const [orders, tasks, cancels, notBefore, arrivals] = await Promise.all([
+    getOrders(),
+    getQuestTasks(),
+    pool.query(ediDeadlineSql('cancel_after')),
+    pool.query(ediDeadlineSql('ship_not_before')),
+    // A container IS the POs sharing a due date (ocPoContainers.js). Only OPEN lines —
+    // a received line is not an arrival to expect.
+    pool.query(
+      `SELECT expected_receipt::date AS day,
+              COUNT(DISTINCT po_number) AS pos, COUNT(*) AS lines,
+              SUM(qty_remaining) AS units,
+              ARRAY_AGG(DISTINCT po_number) AS "poNumbers"
+         FROM purchase_orders
+        WHERE expected_receipt IS NOT NULL AND COALESCE(qty_remaining, 0) > 0
+        GROUP BY 1`),
+  ])
+
+  const entries = buildAgenda({
+    orders,
+    tasks,
+    ediCancels: cancels.rows,
+    ediNotBefore: notBefore.rows,
+    arrivals: arrivals.rows,
+    today,
+  })
+  const { forward, past } = splitAgenda(entries)
+  return {
+    forward,
+    past,
+    summary: agendaSummary(entries),
+    // ⚠️ Says WHERE EVERY NUMBER CAME FROM, on the response itself. The field this
+    // replaced was fabricated and nothing on screen admitted it; a reader should be
+    // able to see which column an entry rests on without opening the source.
+    sources: {
+      shipWindows: 'orders.window_end / window_start (NetSuite enddate/startdate, PR #118)',
+      ediDeadlines: "edi_transactions.cancel_after / ship_not_before (the partner's own 850)",
+      containers: 'purchase_orders.expected_receipt, open lines only',
+      tasks: 'quest_tasks.due_at',
+      notUsed: 'orders.ship_date and orders.cancel_date — fabricated / always null, see fieldAssumptions.js',
+    },
+  }
+}
 
 // ── WHICH VIEWS ARE ACTUALLY USED (Nima, 2026-08-20) ────────────────────────
 //
