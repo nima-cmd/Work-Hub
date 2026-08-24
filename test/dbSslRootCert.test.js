@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stripMissingSslRootCert } from '../src/model/connectionString.js'
+import { stripMissingSslRootCert, prepareConnectionString } from '../src/model/connectionString.js'
 
 // ⚠️ THIS TOOK THE FIRST DIGITALOCEAN DEPLOY DOWN. `.env.local` carries
 // sslrootcert=/Users/nimaerfani/.config/workhub/do-ca-certificate.crt because psql
@@ -56,4 +56,50 @@ test('a ~ path is expanded before the existence check, not treated as literal', 
   // directory never exists, so without expansion this would strip a cert that IS there.
   const out = stripMissingSslRootCert(`${HOST}?sslrootcert=~/definitely/not/here.crt`)
   assert.ok(!/sslrootcert/.test(out))
+})
+
+// ── The URL's TLS params override the ssl object we pass beside it ───────────
+//
+// Proven against the live database 2026-08-24:
+//   sslmode=require in the url + our ssl object -> self-signed certificate in chain
+//   no sslmode in the url      + our ssl object -> connects, and a BOGUS ca is refused
+//
+// pg-connection-string turns `sslmode` into its own config.ssl and that wins. Modern
+// pg also treats `require` as `verify-full`, so the url verifies against the SYSTEM CA
+// store, which has no DigitalOcean private CA.
+
+test('when we supply the CA, every TLS param is removed from the url', () => {
+  const out = prepareConnectionString(
+    `${HOST}?sslmode=require&uselibpqcompat=true&sslrootcert=/nope.crt`, { ownCa: true })
+  assert.equal(new URL(out).search, '', 'nothing left to override our ssl object')
+})
+
+test('⚠️ Render\'s exact url form is neutralised — it was verifying NOTHING', () => {
+  // uselibpqcompat=true&sslmode=require means "encrypt, do not verify" in libpq
+  // semantics. Tested by tampering: with that url a bogus CA still connected, so the
+  // committed certificate had never actually been in force on the deploy.
+  const out = prepareConnectionString(`${HOST}?uselibpqcompat=true&sslmode=require`, { ownCa: true })
+  assert.ok(!/sslmode|uselibpqcompat/.test(out))
+})
+
+test('⚠️ with NO CA of our own, sslmode is LEFT ALONE — an outage is worse', () => {
+  // Stripping sslmode with nothing to replace it drops to plaintext against a server
+  // that demands TLS: a verification failure traded for a dead app.
+  const url = `${HOST}?sslmode=require`
+  assert.equal(prepareConnectionString(url, { ownCa: false }), url)
+})
+
+test('a missing sslrootcert is still stripped even when we have no CA', () => {
+  const out = prepareConnectionString(`${HOST}?sslmode=verify-full&sslrootcert=/nope.crt`, { ownCa: false })
+  assert.ok(!/sslrootcert/.test(out), 'the ENOENT crash is fixed regardless')
+  assert.match(out, /sslmode=require/)
+})
+
+test('the userinfo and database name survive the rewrite', () => {
+  const out = prepareConnectionString(`${HOST}?sslmode=require`, { ownCa: true })
+  const u = new URL(out)
+  assert.equal(u.username, 'u')
+  assert.equal(u.password, 'p')
+  assert.equal(u.pathname, '/defaultdb')
+  assert.equal(u.port, '25060')
 })

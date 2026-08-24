@@ -98,10 +98,28 @@ Neon simply does not exist here.
 - **TLS:** DO signs each cluster with a private per-project CA. Locally that means
   `sslmode=verify-full&sslrootcert=~/.config/workhub/do-ca-certificate.crt` (works for
   node-pg AND psql). ⚠️ **Render has no such file**, so its `DATABASE_URL` uses
-  `?uselibpqcompat=true&sslmode=require`. ✅ **That no longer costs verification:** the CA is
-  committed (`db/do-ca-certificate.crt`) and `src/db.js` applies it to any DigitalOcean host
-  in code, so the deploy verifies without an env change. Proven by tampering — a bogus CA and
-  an absent CA are both refused.
+  `?uselibpqcompat=true&sslmode=require`. The CA is committed (`db/do-ca-certificate.crt`)
+  and `src/db.js` applies it to any DigitalOcean host in code, so no env change is needed.
+
+  ⚠️ **THIS SECTION USED TO CLAIM "the deploy verifies … proven by tampering", AND THAT WAS
+  FALSE FOR EVERY DEPLOY** (corrected 2026-08-24). The tampering proof was run LOCALLY,
+  where the URL's own `sslrootcert` did the verifying. **pg lets the connection string
+  override the `ssl` option**: `sslmode` becomes pg's own `config.ssl` and wins, and under
+  libpq semantics `uselibpqcompat=true&sslmode=require` means *encrypt, do not verify*.
+  Re-tested by tampering against Render's exact URL form: **a bogus CA still connected.**
+  The committed certificate had never been in force on a deploy.
+
+  It is now. `prepareConnectionString` (src/model/connectionString.js) strips `sslmode`,
+  `sslrootcert` and `uselibpqcompat` whenever we are supplying the CA ourselves, so our
+  object is the only authority — and tampering in that configuration is refused. ⚠️ The
+  params are stripped ONLY when the committed CA was readable; with nothing to fall back
+  on, removing `sslmode` would drop to plaintext against a server that demands TLS, trading
+  a verification failure for an outage.
+
+  ⚠️ The same mechanism also took the first DigitalOcean deploy down twice: the laptop's
+  `sslrootcert` path threw ENOENT from inside pg's PARSER on every connection, and once
+  that was stripped, the surviving `sslmode=require` verified against the system CA store
+  and reported `self-signed certificate in certificate chain`.
 - **Rollback:** uncomment `WORKHUB_DB=mirror` in `.env.local`. The mirror is untouched.
 
 ⚠️ **`DATABASE_URL_NEON` MUST BE KEPT.** Neon holds the only copy of the app-owned rows

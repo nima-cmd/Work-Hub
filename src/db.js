@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import pg from 'pg'
 import { poolSettings } from './model/poolLimits.js'
 import { hostKind } from './model/dbCopyPlan.js'
-import { stripMissingSslRootCert } from './model/connectionString.js'
+import { prepareConnectionString } from './model/connectionString.js'
 
 const { Pool } = pg
 
@@ -95,7 +95,10 @@ function sslFor(u) {
 export const TLS_VERIFIED = !!sslFor(url)
 
 
-const connectionString = stripMissingSslRootCert(url)
+// ⚠️ The URL's own TLS parameters are removed when we are supplying the CA, because
+// pg lets the URL override the `ssl` option — see prepareConnectionString. Without this
+// the committed CA is ignored and DigitalOcean's private chain reads as self-signed.
+const connectionString = prepareConnectionString(url, { ownCa: !!sslFor(url) })
 
 // One shared pool for the whole app.
 //
