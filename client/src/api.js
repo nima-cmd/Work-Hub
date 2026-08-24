@@ -1017,6 +1017,15 @@ export async function confirmDeparted(body = {}) {
   return res.json()
 }
 
+// Every 850 we hold for one PO, each diffed against the one before it. Bodies are
+// fetched live from Orderful server-side, so this can be slow — call it on demand
+// (when a PO is expanded), never on page load.
+export async function fetch850Versions(po) {
+  const res = await fetch(`/api/edi/850-versions?po=${encodeURIComponent(po)}`)
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'could not read the 850 versions')
+  return res.json()
+}
+
 export async function pushToShipstation(body = {}) {
   const res = await fetch('/api/shipstation/push', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

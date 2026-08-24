@@ -9,6 +9,7 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
 import { mergePushReports } from '../src/model/pushReport.js'
+import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -44,7 +45,7 @@ import { isoDate } from '../src/model/upsRates.js'
 import { laneFor, anchorFor } from '../src/model/orderLane.js'
 import { USAGE_KEY } from '../src/model/viewUsage.js'
 import { buildAgenda, splitAgenda, agendaSummary } from '../src/model/calendarAgenda.js'
-import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs } from '../src/ingest/orderful.js'
+import { fetchEdiTransactions, syncOrderful, fetchEdiDocumentPoRefs, fetchOrderfulMessage } from '../src/ingest/orderful.js'
 import {
   fetchEdiFulfillments, fetchEdiManualLinks, upsertEdiManualLink, deleteEdiManualLink,
   createEdiManualOrder, fetchEdiManualOrders, deleteEdiManualOrder,
@@ -2676,6 +2677,62 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     pl,
     { scope, shipments: shipments.length, seen: parcel.length, locationHeld: locationHeld.length },
   )
+}
+
+/**
+ * Every 850 we hold for a PO, newest first, each diffed against the one before it.
+ *
+ * Answers "a new 850 arrived for a PO I have already made fulfilments for — do I
+ * have to redo the work?" (Nima, 2026-08-24). Doing it by hand meant pulling two
+ * message bodies and comparing 930 fields.
+ *
+ * ⚠️ THE BODIES ARE FETCHED LIVE AND NOT STORED. Two reasons. They are ~35 KB each,
+ * and this question is asked occasionally about two POs, not continuously about
+ * 4,027 transactions — storing them would add real weight to every backup and sync
+ * to answer a question nobody asks most days. And a stored copy is a copy that can
+ * go stale against Orderful while looking authoritative, which is the whole failure
+ * mode of the `dc` that stayed stale when a newer 850 moved the FC.
+ *
+ * ⚠️ Soft-fails per version. Orderful 404s on some older transactions; one
+ * unreachable body must degrade to "cannot compare this pair" rather than taking the
+ * whole answer down — a missing diff is a gap, an error page is a dead end.
+ */
+export async function getPo850Versions(poNumber) {
+  const po = String(poNumber || '').trim()
+  if (!po) throw new Error('a PO number is required')
+  const { rows } = await pool.query(
+    `SELECT id, created_at AS "createdAt", ship_not_before AS "shipNotBefore",
+            cancel_after AS "cancelAfter", total_units AS "totalUnits",
+            line_count AS "lineCount", delivery_status AS "deliveryStatus",
+            acknowledgment_status AS "ackStatus"
+       FROM edi_transactions
+      WHERE type = '850_PURCHASE_ORDER' AND business_number = $1
+      ORDER BY created_at DESC NULLS LAST`, [po])
+  if (!rows.length) return { po, versions: [], diffs: [], configured: !!process.env.ORDERFUL_API_KEY }
+  if (!process.env.ORDERFUL_API_KEY) {
+    return { po, versions: rows, diffs: [], configured: false,
+      note: 'ORDERFUL_API_KEY is not set, so the message bodies cannot be compared' }
+  }
+
+  const bodies = new Map()
+  for (const r of rows) {
+    try { bodies.set(r.id, await fetchOrderfulMessage(process.env.ORDERFUL_API_KEY, r.id)) }
+    catch (e) { bodies.set(r.id, null) }
+  }
+  // Newest first, so each pair is (this version, the one before it).
+  const diffs = []
+  for (let i = 0; i < rows.length - 1; i++) {
+    const newer = rows[i], older = rows[i + 1]
+    const a = bodies.get(older.id), b = bodies.get(newer.id)
+    if (!a || !b) {
+      diffs.push({ from: older.id, to: newer.id, unavailable: true,
+        reason: `Orderful would not return ${!a ? 'the earlier' : 'the newer'} message body` })
+      continue
+    }
+    const d = diff850(a, b)
+    diffs.push({ from: older.id, to: newer.id, at: newer.createdAt, ...d, headline: diff850Headline(d) })
+  }
+  return { po, versions: rows, diffs, configured: true }
 }
 
 // Write down what we just pushed. A dry run records NOTHING — it did not happen.

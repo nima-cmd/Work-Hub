@@ -5,6 +5,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, fetchSeasons, saveSeason, createEdiTask,
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
   fetchAsnCartons, refreshAsnCartons, fetchPoLedger, fetchEdiDeliveryGaps,
+  fetch850Versions,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
@@ -288,6 +289,86 @@ function AsnCartonPanel() {
 // Ship-window calendar (Nima, 2026-07-20): the EDI view's own month grid —
 // every open PO plotted on its cancel-after (red = the drop-dead day) and
 // ship-not-before (cyan = window opens). Click a day for exactly what's due.
+// ── What changed between two versions of the same 850 ───────────────────────
+//
+// Nima, 2026-08-24: a new 850 arrived for two Nordstrom POs whose IFs were already
+// made — "can you tell me if we need to make IF for the new 850 or if we can use the
+// if we have". Answering it by hand meant diffing 930 fields of JSON.
+//
+// ⚠️ Loaded ON DEMAND, never on page load: each version is a ~35 KB live fetch from
+// Orderful, and most POs have one 850 and nothing to compare.
+//
+// ⚠️ The control-number count is SHOWN, not hidden. Nine of every ten differences
+// between two transmissions are envelope metadata; saying "9 hidden" is what stops
+// someone hunting for nine changes that do not exist.
+// Enough to read a normal re-send at a glance; see the note at the render site.
+const DIFF_ROW_CAP = 12
+
+function Po850Versions({ poNumber }) {
+  const [state, setState] = useState(null)   // null = not asked yet
+  const [busy, setBusy] = useState(false)
+  const load = async () => {
+    setBusy(true)
+    try { setState(await fetch850Versions(poNumber)) }
+    catch (e) { setState({ error: e.message }) }
+    finally { setBusy(false) }
+  }
+  if (!state) {
+    return (
+      <div className="edi850Versions">
+        <button className="btnGhost" disabled={busy} onClick={load}>
+          {busy ? 'Reading the 850s…' : 'Compare 850 versions'}
+        </button>
+      </div>
+    )
+  }
+  if (state.error) return <div className="edi850Versions"><span className="flag sev-mid">{state.error}</span></div>
+  if (!state.configured) return <div className="edi850Versions"><span className="muted">{state.note}</span></div>
+  if (state.versions.length < 2) {
+    return <div className="edi850Versions"><span className="muted">
+      Only one 850 on file for this PO — nothing to compare. That is the answer, not a gap.
+    </span></div>
+  }
+  return (
+    <div className="edi850Versions">
+      <div className="edi850Head">{state.versions.length} versions of this 850</div>
+      {state.diffs.map((d) => (
+        <div key={d.from + '>' + d.to} className={'edi850Diff' + (d.reworkLikely ? ' rework' : '')}>
+          <div className="edi850DiffTop">
+            <span className="edi850When">{d.at ? new Date(d.at).toLocaleDateString() : ''}</span>
+            {d.unavailable
+              ? <span className="flag sev-lo">{d.reason}</span>
+              : <span className={'flag ' + (d.reworkLikely ? 'sev-hi' : 'sev-lo')}>
+                  {d.reworkLikely ? 'check the lines' : 'no rework needed'}
+                </span>}
+            <span className="edi850Headline">{d.headline}</span>
+          </div>
+          {/* ⚠️ CAPPED, AND THE CAP IS STATED. One real pair produced 676 substantive
+              changes — the April 850 was genuinely restructured, not just re-sent —
+              and rendering all of them put 761 rows on screen. A wall of JSON paths
+              answers no question, and it is the same DOM weight that made a click
+              take 208ms elsewhere in this app. The count is the actionable part; the
+              rows are for reading a SMALL diff, which is the normal case. */}
+          {(d.substantive || []).slice(0, DIFF_ROW_CAP).map((s) => (
+            <div key={s.path} className="edi850Row">
+              <span className="edi850Field">{s.label || s.path}</span>
+              <span className="edi850From">{String(s.from)}</span>
+              <span className="edi850Arrow">→</span>
+              <span className="edi850To">{String(s.to)}</span>
+            </div>
+          ))}
+          {(d.substantive || []).length > DIFF_ROW_CAP && (
+            <div className="edi850More">
+              +{d.substantive.length - DIFF_ROW_CAP} more changed field{d.substantive.length - DIFF_ROW_CAP === 1 ? '' : 's'} not listed
+              {' — '}this 850 was restructured, not just re-sent. Compare the lines in Orderful.
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function EdiCalendar({ openPos }) {
   const today = sod(Date.now())
   const [cursor, setCursor] = useState(today)
@@ -1084,6 +1165,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
                 {isOpen && (
                   <div className="poDetail">
                     <PoTimeline poNumber={o.businessNumber} />
+                    <Po850Versions poNumber={o.businessNumber} />
                     {/* manual resolution — the NetSuite connection the searches can't see */}
                     <div className="resolveRow">
                       <input className="qtyInput" style={{ width: 150 }} placeholder="NetSuite ref (SO/IF/INV#)"
