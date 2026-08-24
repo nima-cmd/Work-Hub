@@ -230,11 +230,29 @@ export function explainDbError(err) {
   // instead of reporting "Local Postgres is SUSPENDED", which is impossible and which
   // the first cut of this did say.
   const local = useMirror && !quota
-  const where = local ? 'Local Postgres' : 'Neon'
+  // ⚠️ NAME THE DATABASE WE ARE ACTUALLY TALKING TO. This said 'Neon' unconditionally
+  // and cost real time on 2026-08-24: the first DigitalOcean deploy could not reach
+  // workhub-db, and the log read "Error: Neon is not answering — it may be suspended...
+  // Check with npm run check:neon". Every word of that is about a database this process
+  // was not using, and it pointed the diagnosis at a billing reset instead of at the
+  // trusted-source list that was actually dropping the packets.
+  //
+  // This is the SAME BUG CLASS CLAUDE.md already records from the cutover — three
+  // green-looking checks reporting NEON while reading DigitalOcean, because the target
+  // was assumed rather than derived. DB_TARGET has been derived from the connection
+  // since then; this message was simply never updated to read it.
+  const isDo = DB_TARGET === 'digitalocean'
+  const where = local ? 'Local Postgres' : isDo ? 'The DigitalOcean database' : 'Neon'
   const advice = local
     ? 'Is the local server running?  pg_ctl -D /usr/local/var/postgresql@17 status'
-    : 'It comes back at the billing reset or on upgrade. To keep working now: '
-      + 'npm run dev:offline (local Postgres, writes permitted). Check with npm run check:neon.'
+    : isDo
+      // ⚠️ The trusted-source list FIRST, because a timeout is what a firewall drop
+      // looks like, and it is the one cause that produces silence rather than a refusal.
+      ? 'A connection TIMEOUT here is usually the database firewall, not the database: '
+        + 'check workhub-db -> Settings -> Trusted Sources includes this app or IP. '
+        + 'Then confirm with npm run check:neon (it names whichever database it reached).'
+      : 'It comes back at the billing reset or on upgrade. To keep working now: '
+        + 'npm run dev:offline (local Postgres, writes permitted). Check with npm run check:neon.'
   // A quota suspension is a FACT Neon stated, so say it as one. Everything else is
   // still a guess, and keeps the hedge.
   // ⚠️ Three different situations, three different sentences. Saying "likely suspended"
@@ -244,7 +262,9 @@ export function explainDbError(err) {
     ? `${where} is SUSPENDED — the monthly data-transfer quota is used up.`
     : local
       ? 'Local Postgres is not answering.'
-      : 'Neon is not answering — it may be suspended, or the network is down.'
+      : isDo
+        ? `${where} is not answering — the network, or a trusted-source rule dropping this connection.`
+        : 'Neon is not answering — it may be suspended, or the network is down.'
   const e = new Error(`${lead} ${advice} [${msg}]`)
   e.dbUnreachable = true
   e.quotaExceeded = quota
