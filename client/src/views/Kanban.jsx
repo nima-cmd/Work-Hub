@@ -3,7 +3,7 @@ import { matchesQuery, describeMatch } from '../../../src/model/cardSearch.js'
 import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton, CustomsButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
-import { isParcelLane } from '../../../src/model/parcelLane.js'
+import { isParcelLane, showsParcelPushButton } from '../../../src/model/parcelLane.js'
 import {
   TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK, PC_COLOR,
   missionTab, postCustodyState, routingForPo, fulfilledNeverScanned, PC,
@@ -370,7 +370,7 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
                       better pushed than re-keyed. Offered on the parcel lane only:
                       an EDI freight shipment's label question is a BOL, not a
                       parcel label. Nothing is pushed until it's clicked. */}
-                  {!o.isGroup && (o.source !== 'edi' || isParcelLane(o)) &&
+                  {showsParcelPushButton(o) &&
                     (o.fulfillments || []).filter((f) => f.ifNumber && !/shipped/i.test(f.status || '')).map((f) => (
                       // ⚠️ A FRAGMENT, not a comma. `(<A/>, <B/>)` is the comma
                       // operator — it evaluates to B and silently DROPS A, which here
