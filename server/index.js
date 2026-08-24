@@ -69,6 +69,21 @@ app.post('/api/logout', (req, res) => {
   clearSessionCookie(res)
   res.json({ ok: true })
 })
+// ⚠️ A LIVENESS PROBE MUST SIT ABOVE THE GATE, and it must say NOTHING.
+//
+// Registered before authGate on purpose: a platform health check gets no cookie, so
+// anything below the gate answers 401. DigitalOcean App Platform (and most others)
+// require a 2xx to mark an instance healthy — point a health check at /api/health,
+// which is below the gate, and the deploy never goes healthy and rolls itself back.
+// Found while writing .do/app.yaml, before it could waste a cutover.
+//
+// ⚠️ It returns { ok: true } and nothing else — deliberately. /api/health reports
+// database state, counters and the field-assumption register, none of which belongs on
+// an unauthenticated endpoint. A liveness probe proves the process answers; it is not
+// a status page, and the temptation to "just add the DB check here" would put this
+// app's internals on the public internet.
+app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
 app.use(authGate)
 
 app.get('/api/orders', async (_req, res) => {
