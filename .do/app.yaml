@@ -26,7 +26,16 @@ services:
       deploy_on_push: true
 
     # Same two commands Render runs, so there is one build definition to reason about.
-    build_command: npm install && npm run client:build
+    #
+    # ⚠️ `--include=dev` IS LOAD-BEARING, and it lives inside the client:build script so
+    # both platforms get it. `vite` and `@vitejs/plugin-react` are devDependencies, and
+    # a Node buildpack that sets NODE_ENV=production at build time makes `npm install`
+    # SKIP devDependencies — the build then dies on "vite: not found". Render happens to
+    # work because it does not set NODE_ENV; relying on that is relying on a default we
+    # do not control. --include=dev is correct under either behaviour.
+    #
+    # ⚠️ Do NOT set NODE_ENV=production as a build-time env var here for the same reason.
+    build_command: npm install --include=dev && npm run client:build
     run_command: npm start
 
     environment_slug: node-js
