@@ -52,6 +52,40 @@ export function isParcelLane({ customer, location } = {}) {
   return PARCEL_PATTERNS.some((re) => re.test(s))
 }
 
+/**
+ * Should this card offer the per-fulfilment ShipStation push button?
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE CONDITION IN Kanban.jsx WAS STRUCTURALLY DEAD.
+ * It read:
+ *
+ *     !o.isGroup && (o.source !== 'edi' || isParcelLane(o))
+ *
+ * The second half is the parcel-lane exception — written specifically so ShopBop
+ * could get a parcel label. But EDI orders are ALWAYS rendered as grouped PO cards
+ * (src/model/poGroups.js), so `!o.isGroup` is false for every EDI order and the
+ * exception beside it can never be reached. The button was unreachable for the one
+ * partner it was added for: Nima, 2026-08-24, "my shopbop isn't going into
+ * shipstation" — and the card genuinely had no button while the boutique cards
+ * beside it did.
+ *
+ * That is the unreachable-branch shape, first in CLAUDE.md's list of counter bugs,
+ * and it is why this is a tested function instead of a condition in JSX.
+ *
+ * The rules, stated once:
+ *   · a parcel-lane order gets the button whether grouped or not — the whole point
+ *     is that ShopBop is EDI by channel and parcel by lane;
+ *   · a non-EDI order keeps the existing behaviour: ungrouped only, because a
+ *     boutique GROUP is already served by GroupLabelButtons and would double up;
+ *   · an EDI freight order never gets it — its label question is a BOL, not a
+ *     parcel label.
+ */
+export function showsParcelPushButton(order = {}) {
+  const parcel = isParcelLane(order)
+  const isEdi = String(order.source || '').toLowerCase() === 'edi'
+  if (isEdi) return parcel              // grouped or not — the lane decides
+  return !order.isGroup                 // unchanged for everything else
+}
+
 // May we generate a Bill of Lading for this order?
 //
 // ⚠️ Live evidence that this needs to be a RULE and not a convention: BOL

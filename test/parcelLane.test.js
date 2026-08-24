@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isParcelLane, bolAllowed, noBolReason, PARCEL_LANE_SQL } from '../src/model/parcelLane.js'
+import { isParcelLane, bolAllowed, noBolReason, showsParcelPushButton, PARCEL_LANE_SQL } from '../src/model/parcelLane.js'
 import { partnerForDc } from '../src/model/dc.js'
 import { deriveSource } from '../src/model/source.js'
 
@@ -84,4 +84,54 @@ test('break-glass: force can NEVER lift an existing label', async () => {
   // Belt and braces: the function takes no `force`, so no caller can smuggle one.
   const forced = shipstationEligibility({ status: 'Picked', labelCount: 1, carrier: 'UPS', shipMethodName: 'UPS® Ground', force: true })
   assert.equal(forced.push, false)
+})
+
+// ── The button that could never appear (2026-08-24) ─────────────────────────
+//
+// Nima: "my shopbop isn't going into shipstation". The push path was fine — a dry
+// run created WH-IF7533 / POJ00384243 without complaint. The button simply was not
+// on the card, because Kanban.jsx gated it on
+//     !o.isGroup && (o.source !== 'edi' || isParcelLane(o))
+// and EDI orders are ALWAYS grouped into PO cards, so the parcel-lane exception
+// sitting right beside `!o.isGroup` was unreachable for every EDI order — i.e. for
+// the only partner it was written for.
+
+test('a GROUPED ShopBop PO card offers the push button — the case that was dead', () => {
+  assert.equal(showsParcelPushButton({
+    isGroup: true, source: 'edi', customer: 'ShopBop - SDF4', location: 'Shopbop',
+  }), true)
+})
+
+test('the old condition really was unreachable, so this is not a cosmetic change', () => {
+  const o = { isGroup: true, source: 'edi', customer: 'ShopBop - SDF4', location: 'Shopbop' }
+  const old = !o.isGroup && (o.source !== 'edi' || isParcelLane(o))
+  assert.equal(old, false, 'the old gate refused it')
+  assert.equal(showsParcelPushButton(o), true, 'the new one allows it')
+})
+
+test('an ungrouped ShopBop order still offers it', () => {
+  assert.equal(showsParcelPushButton({
+    isGroup: false, source: 'edi', customer: 'ShopBop', location: 'Shopbop',
+  }), true)
+})
+
+test('an EDI FREIGHT group never offers it — its label question is a BOL', () => {
+  assert.equal(showsParcelPushButton({
+    isGroup: true, source: 'edi', customer: "Bloomingdale's", location: 'Warehouse',
+  }), false)
+  assert.equal(showsParcelPushButton({
+    isGroup: true, source: 'edi', customer: 'Nordstrom (US) (Direct to Store)', location: 'Warehouse',
+  }), false)
+})
+
+test('a boutique GROUP still does not, so GroupLabelButtons is not doubled up', () => {
+  assert.equal(showsParcelPushButton({
+    isGroup: true, source: 'boutique', customer: 'Gee Beauty Canada', location: 'Warehouse',
+  }), false)
+})
+
+test('a boutique single order is unchanged', () => {
+  assert.equal(showsParcelPushButton({
+    isGroup: false, source: 'boutique', customer: "Gracie's", location: 'Warehouse',
+  }), true)
 })
