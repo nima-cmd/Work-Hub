@@ -86,7 +86,13 @@ services:
         sync: false
       - key: WAREHOUSE_SUPABASE_KEY
         sync: false
-      - key: SLACK_BOT_TOKEN
+      # ⚠️ SLACK_USER_TOKEN, not SLACK_BOT_TOKEN. This said BOT until 2026-08-24 and
+      # NOTHING IN THE CODE READS THAT NAME — src/ingest/slack.js reads
+      # SLACK_USER_TOKEN, because the catch-up lane needs a USER token (xoxp-) to see
+      # DMs at all. So the Slack lane has never once been live on the deploy: the
+      # value was set under a key no code consumes, the feature gated itself off, and
+      # nothing said so. Found while listing the env vars for the DigitalOcean move.
+      - key: SLACK_USER_TOKEN
         sync: false
       - key: CRON_SECRET
         sync: false
