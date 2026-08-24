@@ -8,6 +8,7 @@ import { shipWindow } from '../src/model/shipWindow.js'
 import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
+import { mergePushReports } from '../src/model/pushReport.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -2503,7 +2504,7 @@ async function fetchShipmentStoreCartons(ids = []) {
 // force's reach by construction — and it stays that way. A second live label on a
 // box already carrying one is a double charge and a wrong tracking number on the
 // ASN, and certainty about NetSuite being down does not make it safe. Tested.
-export async function pushToShipstation({ scope = 'edi', dryRun = false, force = false, ifNumbers = null, storeId = SHIPSTATION_STORE_ID } = {}) {
+export async function pushToShipstation({ scope = 'edi', dryRun = false, force = false, ifNumbers = null, storeId = SHIPSTATION_STORE_ID, parcelOnly = false } = {}) {
   const only = Array.isArray(ifNumbers) && ifNumbers.length
     ? new Set(ifNumbers.map((s) => String(s).trim().toUpperCase()))
     : null
@@ -2555,7 +2556,7 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
               ${DEAD_LABEL_SQL} AS "deadTracking"
        FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
        WHERE f.actual_ship_date IS NULL
-         AND (o.source = 'boutique' OR ${PARCEL_LANE_SQL})
+         AND (${parcelOnly ? PARCEL_LANE_SQL : `o.source = 'boutique' OR ${PARCEL_LANE_SQL}`})
          AND COALESCE(o.location,'') NOT ILIKE '%china%'
        ORDER BY f.if_number`)
     // Location gate first, so a Warehouse fulfilment never reaches the builder.
@@ -2640,11 +2641,41 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
   const { orders, records } = ediOrdersFor(shipments, { storeId })
   const res = await pushOrders(orders, { dryRun })
   const recorded = await rememberPush(records, res, dryRun)
-  return {
-    ...res, scope, shipments: shipments.length, seen: parcel.length,
-    skipped: locationHeld, locationHeld: locationHeld.length,
-    candidates: orders.length, recorded,
-  }
+
+  // ── ⚠️ THE PARCEL LANE RIDES ALONG, BECAUSE ONE BUTTON MEANT ONE BUTTON ─────
+  //
+  // Nima, 2026-08-24: "we expected in routing when we pushed to shipstation that it
+  // would push that order as well as the bloomingdales it pushed."
+  //
+  // He is right, and the old behaviour was worse than a missing feature. This EDI
+  // path builds candidates from ROUTING SHIPMENTS, and a ShopBop order must never
+  // have one — a routing shipment mints a BOL, and ShopBop's BOL comes from Source
+  // Alliance (src/model/parcelLane.js). So `scope: 'edi'` found ShopBop 0 times out
+  // of 0 and reported a clean success: a button announcing it had pushed everything,
+  // about a set that could never contain the order he was looking for.
+  //
+  // ⚠️ It is a SEPARATE PASS, not a widened query, and that is deliberate. The two
+  // lanes answer different questions with different inputs — freight builds from a
+  // routing shipment and a BOL, parcel builds from a fulfilment plus a live NetSuite
+  // address and service. Folding them into one query is the shape that has drifted
+  // every time it has been tried here (see the PARCEL_LANE_SQL comment on writing one
+  // rule twice).
+  //
+  // ⚠️ AND THE TOTALS ARE SUMMED, NOT SHADOWED. `...res` carries pushed/failed/
+  // results from the freight pass, so every one of them is recomputed below across
+  // BOTH passes. Spreading and forgetting would report the freight numbers under a
+  // label that now covers two lanes — this repo's most common counter bug, committed
+  // in the act of fixing another one.
+  const pl = await pushToShipstation({
+    scope: 'boutique', parcelOnly: true, dryRun, force, ifNumbers, storeId,
+  })
+  // The arithmetic lives in src/model/pushReport.js, tested — see its header for why
+  // the obvious inline version reports one lane's `pushed` under a two-lane label.
+  return mergePushReports(
+    { ...res, candidates: orders.length, recorded, skipped: locationHeld },
+    pl,
+    { scope, shipments: shipments.length, seen: parcel.length, locationHeld: locationHeld.length },
+  )
 }
 
 // Write down what we just pushed. A dry run records NOTHING — it did not happen.
