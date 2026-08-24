@@ -2082,8 +2082,14 @@ export async function getHealth() {
 // (decided 2026-07-17): its import pipelines do app-specific processing
 // (full-replace semantics, style-color indexes), so Work-Hub only reads
 // freshness and links to that app — it never writes these tables.
-const NW_SUPABASE_URL = process.env.VITE_SUPABASE_URL
-const NW_SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY
+// ⚠️ THE SAME FALLBACK src/ingest/warehouseFeed.js ALREADY HAD, and it was missing
+// here. That module reads `WAREHOUSE_SUPABASE_URL || VITE_SUPABASE_URL`; this one read
+// only the VITE_ name. So a deploy configured with the WAREHOUSE_ pair — which is what
+// render.yaml declares — had a working PUSH and a silently unconfigured freshness READ.
+// Two halves of one integration keyed on different names, failing by going quiet.
+// Found while listing env vars for the DigitalOcean move, 2026-08-24.
+const NW_SUPABASE_URL = process.env.WAREHOUSE_SUPABASE_URL || process.env.VITE_SUPABASE_URL
+const NW_SUPABASE_KEY = process.env.WAREHOUSE_SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const NW_APP_URL = process.env.NAGHEDI_WAREHOUSE_URL || 'https://naghedi-warehouse.vercel.app'
 
 const NW_SOURCES = [

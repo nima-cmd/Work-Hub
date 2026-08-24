@@ -125,12 +125,20 @@ services:
       - key: ORDERFUL_API_KEY
         scope: RUN_TIME
         type: SECRET
-      - key: WAREHOUSE_SUPABASE_URL
+      # ⚠️ THE VITE_ NAMES, and that is not a typo. warehouseFeed.js accepts either
+      # WAREHOUSE_SUPABASE_* or VITE_SUPABASE_*, but server/queries.js reads ONLY the
+      # VITE_ pair (NW_SUPABASE_URL/KEY). Setting only the WAREHOUSE_ names leaves the
+      # PUSH working and the freshness READ silently unconfigured — two halves of one
+      # integration reading different keys. queries.js now takes the same fallback, so
+      # either pair works; these are the ones already in .env.local.
+      - key: VITE_SUPABASE_URL
         scope: RUN_TIME
         type: SECRET
-      - key: WAREHOUSE_SUPABASE_KEY
+      - key: VITE_SUPABASE_ANON_KEY
         scope: RUN_TIME
         type: SECRET
-      - key: SLACK_BOT_TOKEN
+      # ⚠️ SLACK_USER_TOKEN, not SLACK_BOT_TOKEN — see render.yaml. A USER token
+      # (xoxp-) is required to read DMs; the bot name was never read by any code.
+      - key: SLACK_USER_TOKEN
         scope: RUN_TIME
         type: SECRET
