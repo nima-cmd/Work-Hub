@@ -27,6 +27,44 @@ than the price:
 - **Private networking.** A DO app can reach a DO managed database over the VPC, which
   means that traffic is not public egress at all.
 
+## Where to read the bandwidth breakdown (do this FIRST)
+
+Render exposes it in two places (confirmed against their docs 2026-08-21):
+
+- **Per service** — the service's **Metrics** page has an **Outbound Bandwidth** graph
+  broken down **BY TRAFFIC TYPE**. This is the attribution that decides whether moving
+  is the fix or a distraction.
+- **Workspace total** — <https://dashboard.render.com/billing>, the cumulative monthly
+  figure the warning email quotes.
+
+### ⚠️ THE DATABASE LEG IS BILLED OUTBOUND ON RENDER, AND CANNOT NOT BE
+
+Render bills "service-initiated communication outside Render" and explicitly does NOT
+bill "private network traffic between Render services in the same region".
+
+**`workhub-db` is not a Render service**, so it can never qualify for the free
+same-region path. Every query the deploy sends to DigitalOcean SFO3 is billed outbound
+— and the deploy makes roughly **157k queries/day**. The same applies to every
+service-initiated sync: NetSuite, Gmail, Orderful, ShipStation, and in particular the
+warehouse-feed PUSH, which sends real payloads out.
+
+⚠️ This is a HYPOTHESIS until the traffic-type graph confirms it. Query text is small
+and the responses coming back are INBOUND (not billed), so the honest position is
+"plausibly hundreds of MB/month, and the graph will say". Do not repeat it as a
+measured cause.
+
+**Either way it sharpens the decision:**
+
+- browser traffic dominates → #156 already removed 2.2 MB per uncached load, and the
+  move is optional (latency and tidiness, not necessity)
+- service-initiated traffic dominates → the move is the actual fix, and no amount of
+  image squeezing would ever have helped
+
+And it adds an argument the price table misses: on DO App Platform in SFO3, with the
+app in the database's trusted sources, the database leg becomes DO private-network
+traffic, which DO does not meter either. **The move does not just buy a bigger bucket
+for that leg — it removes the metering.**
+
 ⚠️ **This is the SECOND metered wall in two weeks** — Neon suspended over 5 GB of
 transfer on 08-17. That one turned out to be caused by *our own tooling*, not real
 usage. So: read Render's bandwidth breakdown before assuming the move is the fix.
