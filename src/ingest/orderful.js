@@ -93,7 +93,10 @@ export async function loadEdiTransactions(transactions, db = pool) {
   return { count: n, insertedIds }
 }
 
-async function fetchTransactionMessage(apiKey, id) {
+// ⚠️ EXPORTED, and deliberately the SAME function the backfills use. A second
+// fetcher would be a second place for the auth header and base URL to drift — and
+// the header is `orderful-api-key`, not `Authorization`, which is not guessable.
+export async function fetchOrderfulMessage(apiKey, id) {
   const res = await fetch(`${API_BASE}/${id}/message`, {
     headers: { 'orderful-api-key': apiKey, 'Content-Type': 'application/json' },
   })
@@ -115,7 +118,7 @@ export async function backfillPo850Details(apiKey, db = pool) {
   )
   let n = 0
   for (const { id } of rows) {
-    const message = await fetchTransactionMessage(apiKey, id)
+    const message = await fetchOrderfulMessage(apiKey, id)
     const { shipNotBefore, cancelAfter } = extractPoDates(message)
     const lineItems = extractPoLines(message)
     const storeCodes = extractStoreCodes(message)
@@ -178,7 +181,7 @@ export async function backfillDocumentPoRefs(apiKey, db = pool) {
   )
   let n = 0
   for (const { id, type } of rows) {
-    const message = await fetchTransactionMessage(apiKey, id)
+    const message = await fetchOrderfulMessage(apiKey, id)
     const poNumbers = extractPoRefs(type, message)
     await loadDocumentPoRefs(id, poNumbers, db)
     if (poNumbers.length) n++

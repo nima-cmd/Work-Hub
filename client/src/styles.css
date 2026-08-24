@@ -3162,3 +3162,31 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .vu-glanced { color: var(--mid); border-color: var(--mid); }
 .vu-unused  { color: var(--muted); border-color: var(--line); }
 .vu-default { color: #4fd1ff; border-color: #4fd1ff; }
+
+/* ── 850 version diff (EdiOrders → Po850Versions) ───────────────────────────
+   Nine of every ten differences between two 850 transmissions are envelope
+   metadata, so the substantive rows get the emphasis and the noise gets a count.
+   `rework` is the only state that draws the eye — a duplicate that moved a date
+   needs no attention and must not look like it does. */
+.edi850Versions { margin: 8px 0; }
+.edi850Head {
+  font-family: var(--display); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 5px;
+}
+.edi850Diff {
+  border: 1px solid var(--line); border-left: 2px solid var(--line);
+  border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; background: var(--panel);
+}
+.edi850Diff.rework { border-left-color: var(--sev-hi, #f85149); }
+.edi850DiffTop { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.edi850When { font-family: var(--display); font-size: 10px; color: var(--muted); }
+.edi850Headline { font-size: 12px; color: var(--mid); }
+.edi850Row {
+  display: grid; grid-template-columns: minmax(140px, 1fr) auto 12px auto;
+  gap: 8px; align-items: baseline; padding: 3px 0 0 2px; font-size: 12px;
+}
+.edi850Field { color: var(--muted); }
+.edi850From { color: var(--mid); text-decoration: line-through; opacity: 0.75; }
+.edi850Arrow { color: var(--muted); }
+.edi850To { color: var(--accent); }
+.edi850More { font-size: 11.5px; color: var(--muted); padding: 4px 0 0 2px; }

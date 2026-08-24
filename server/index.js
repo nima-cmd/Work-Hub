@@ -31,7 +31,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
-  getQuestTasks, getQuestTaskPayload, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
+  getQuestTasks, getQuestTaskPayload, getPo850Versions, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
   recordViewVisit, getViewUsage, getAgenda,
@@ -318,6 +318,18 @@ app.get('/api/labels/dead', async (_req, res) => {
   try {
     res.json(await listDeadLabels())
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// Every 850 we hold for one PO, each diffed against the one before it. Answers "a
+// new 850 arrived for a PO we have already made IFs for — do we have to redo it?"
+// The bodies are fetched live from Orderful, not stored — see getPo850Versions.
+app.get('/api/edi/850-versions', async (req, res) => {
+  try {
+    res.json(await getPo850Versions(req.query.po))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
 })
 
 app.post('/api/shipstation/push', async (req, res) => {
