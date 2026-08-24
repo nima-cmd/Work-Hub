@@ -1,0 +1,127 @@
+# DigitalOcean App Platform spec — the counterpart to render.yaml.
+# https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+#
+# Why this exists: Render's Hobby plan allows 5 GB/month of outbound bandwidth and
+# warned at 70%. This is the second metered wall in two weeks (Neon suspended over its
+# own 5 GB on 08-17). The full reasoning, the steps, and what I cannot do for you are
+# in docs/digitalocean-migration.md — READ THAT FIRST; this file is only the shape.
+#
+# ⚠️ REGION IS SFO3 ON PURPOSE, AND IT IS THE WHOLE POINT. `workhub-db` is in SFO3.
+# Render runs in gcp-us-west1, and that cross-provider hop is the ~29ms per-query
+# floor measured 2026-08-21 — paid on roughly 157k queries a day. Transfer being free
+# does not make latency free. Do not "simplify" this to a default region.
+#
+# ⚠️ NO SECRET LIVES IN THIS FILE, exactly as with render.yaml. Every env var below is
+# declared with no value and must be set in the DO console (or as an encrypted app
+# secret). 19 of them — the list, and which one is easy to forget, are in the doc.
+
+name: work-hub
+region: sfo
+
+services:
+  - name: web
+    github:
+      repo: nima-cmd/Work-Hub
+      branch: main
+      deploy_on_push: true
+
+    # Same two commands Render runs, so there is one build definition to reason about.
+    build_command: npm install && npm run client:build
+    run_command: npm start
+
+    environment_slug: node-js
+    http_port: 3001
+
+    # ⚠️ apps-s-1vcpu-0.5gb is $5/mo and 50 GiB outbound — already 10x Render's free
+    # allowance. Step up to apps-s-1vcpu-1gb ($10, 100 GiB) if the breakdown shows the
+    # traffic is real rather than waste. Do NOT use a static-site plan: this is a Node
+    # service that talks to Postgres.
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+
+    # ⚠️ /api/ping, NOT /api/health. The app is behind SITE_PASSWORD and /api/health
+    # sits BELOW authGate, so it answers 401 to a platform probe — DO requires a 2xx,
+    # so that health check would never pass and the deploy would roll itself back.
+    # /api/ping is registered above the gate and returns { ok: true } and nothing else.
+    health_check:
+      http_path: /api/ping
+      initial_delay_seconds: 20
+      period_seconds: 30
+      failure_threshold: 5
+
+    envs:
+      # ── the database ──────────────────────────────────────────────────────
+      # ⚠️ src/db.js applies the committed CA (db/do-ca-certificate.crt) in code for
+      # any DigitalOcean host, so the SAME URL Render uses works here unchanged.
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      # ⚠️ MUST COME TOO. Neon holds the ONLY copy of app-owned rows written to the
+      # deploy after the mirror was cloned 2026-08-17 — five orders'
+      # DEPARTURE_CONFIRMED among them. Reconciling is a separate, insert-only job.
+      - key: DATABASE_URL_NEON
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── the front door + the cron's shared secret ─────────────────────────
+      - key: SITE_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+      # ⚠️ Must MATCH the CRON_SECRET GitHub Actions repo secret, or the hourly
+      # recurring-check silently 401s and the 9am/2pm reminders stop firing.
+      - key: CRON_SECRET
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── NetSuite (read-only TBA) ──────────────────────────────────────────
+      - key: NS_ACCOUNT_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: NS_CONSUMER_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: NS_CONSUMER_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: NS_TOKEN_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: NS_TOKEN_SECRET
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── ShipStation (two accounts; see src/model/upsRates.js) ─────────────
+      - key: SHIPSTATION_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: SHIPSTATION_API_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: SHIPSTATION_API_KEY_V2
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── Google (Gmail + Calendar + Drive) ─────────────────────────────────
+      - key: GOOGLE_CLIENT_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: GOOGLE_CLIENT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: GOOGLE_REFRESH_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+
+      # ── EDI + the warehouse app's Supabase + Slack ────────────────────────
+      - key: ORDERFUL_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: WAREHOUSE_SUPABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: WAREHOUSE_SUPABASE_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: SLACK_BOT_TOKEN
+        scope: RUN_TIME
+        type: SECRET
