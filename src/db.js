@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import pg from 'pg'
 import { poolSettings } from './model/poolLimits.js'
 import { hostKind } from './model/dbCopyPlan.js'
+import { stripMissingSslRootCert } from './model/connectionString.js'
 
 const { Pool } = pg
 
@@ -93,6 +94,9 @@ function sslFor(u) {
 /** Whether this process is verifying DigitalOcean's certificate (shown on Health). */
 export const TLS_VERIFIED = !!sslFor(url)
 
+
+const connectionString = stripMissingSslRootCert(url)
+
 // One shared pool for the whole app.
 //
 // ⚠️ `max` IS SET DELIBERATELY — see src/model/poolLimits.js. node-pg's default of 10
@@ -101,7 +105,7 @@ export const TLS_VERIFIED = !!sslFor(url)
 // transfer, not connections; moving to a database that meters no transfer swaps one
 // ceiling for another, and this is the other one.
 export const POOL = poolSettings(process.env)
-export const pool = new Pool({ connectionString: url, ...POOL, ...(sslFor(url) ? { ssl: sslFor(url) } : {}) })
+export const pool = new Pool({ connectionString, ...POOL, ...(sslFor(url) ? { ssl: sslFor(url) } : {}) })
 
 // ── Transfer metering ───────────────────────────────────────────────────────
 //
