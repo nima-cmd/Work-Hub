@@ -370,3 +370,52 @@ test('an unmappable carrier leaves the scac blank rather than filling it wrong',
   assert.equal(e.set.scac, undefined)
   assert.equal(e.set.carrier, 'Mystery Freight Co', 'the name still lands; only the code is withheld')
 })
+
+// ── What an UNATTENDED caller may write (2026-08-24) ────────────────────────
+//
+// The hourly cron now applies tenders. matchStop deliberately falls back to a same-DC
+// shipment that lists NO POs — a can't-rule-it-out that is right for a human reading
+// the result and wrong for a job that writes without being watched, because it would
+// stamp a pickup date onto whatever happened to share the DC.
+
+const CERT_TENDER = {
+  shipmentId: 'S1', carrier: 'CTE Carrier', pickupAt: new Date('2026-08-25T15:00:00Z'),
+  stops: [{ dc: '569', srr: 'RR068', poNumbers: ['50073688'] }],
+}
+
+test('a PO-BACKED match is certain, and lands in autoEdits', () => {
+  const p = planTenderApply(CERT_TENDER, [{ id: 1, dc: '569', memberPos: ['50073688'] }])
+  assert.equal(p.edits[0].certain, true)
+  assert.equal(p.autoEdits.length, 1)
+  assert.equal(p.manualEdits.length, 0)
+})
+
+test('⚠️ a DC-ONLY match is NOT certain — the cron must not write it', () => {
+  // The shipment lists no POs, so matchStop cannot rule it out and returns it anyway.
+  const p = planTenderApply(CERT_TENDER, [{ id: 2, dc: '569', memberPos: [] }])
+  assert.equal(p.edits.length, 1, 'still planned, so a human can see it')
+  assert.equal(p.edits[0].certain, false)
+  assert.equal(p.autoEdits.length, 0, 'but nothing for the unattended path')
+  assert.equal(p.manualEdits.length, 1)
+})
+
+test('a match on a DIFFERENT PO is not certain either', () => {
+  const p = planTenderApply(CERT_TENDER, [{ id: 3, dc: '569', memberPos: ['50073685'] }])
+  // matchStop finds no overlap and no PO-less candidate, so nothing is planned at all.
+  assert.equal(p.autoEdits.length, 0)
+})
+
+test('⚠️ certainty is about the MATCH, never about the values', () => {
+  // A certain match with an unmappable carrier still withholds the SCAC — the two
+  // judgements are independent, and conflating them would auto-write a guess.
+  const p = planTenderApply({ ...CERT_TENDER, carrier: 'Nobody Mapped Ltd' },
+    [{ id: 1, dc: '569', memberPos: ['50073688'] }])
+  assert.equal(p.autoEdits.length, 1, 'the match is still certain')
+  assert.equal(p.autoEdits[0].set.scac, undefined, 'and the code is still withheld')
+})
+
+test('a stop with no POs at all can never be certain', () => {
+  const p = planTenderApply({ ...CERT_TENDER, stops: [{ dc: '569', srr: 'RR068', poNumbers: [] }] },
+    [{ id: 1, dc: '569', memberPos: ['50073688'] }])
+  assert.equal((p.autoEdits || []).length, 0)
+})

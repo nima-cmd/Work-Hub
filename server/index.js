@@ -31,7 +31,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
-  getQuestTasks, getQuestTaskPayload, getPo850Versions, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
+  getQuestTasks, getQuestTaskPayload, getPo850Versions, autoApplyTenders, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
   recordViewVisit, getViewUsage, getAgenda,
@@ -1630,6 +1630,23 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       } catch (e) {
         console.error('tender sync failed (recurring tasks still checked):', e.message)
       }
+
+    // ⚠️ AND APPLY THEM. Nima, 2026-08-24: "i believe we get the date off the email
+    // the carrier code we know and cte is mentioned in the email". All three are
+    // parsed from a mail we already receive, so making him click for them is friction,
+    // not caution. autoApplyTenders takes only PO-BACKED matches and only ever fills a
+    // blank SRR/SCAC — a differing hand-entered value is still reported, never
+    // overwritten. The pickup date IS overwritten, because an accepted tender is
+    // Nordstrom's booking and our date is a plan.
+    // Soft-fails like everything else in this endpoint: a failed apply must not stop
+    // the recurring checks.
+    let tendersApplied = null
+    try {
+      const a = await autoApplyTenders()
+      tendersApplied = { applied: a.applied, needsHuman: a.skippedUncertain, conflicts: a.conflicts }
+    } catch (e) {
+      console.error('tender auto-apply failed (rest of the check continues):', e.message)
+    }
     }
     // The OTHER routing lane: Macy's/Bloomingdale's routing notifications, which
     // carry the authorization number, carrier and pickup date. Until 2026-08-13
@@ -1670,7 +1687,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       }
     }
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, tenders, macysRouting, asnCartons, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, tenders, tendersApplied, macysRouting, asnCartons, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

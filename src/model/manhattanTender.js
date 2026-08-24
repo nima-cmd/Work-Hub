@@ -426,13 +426,27 @@ export function reconcileTender(tender, shipments = []) {
  */
 export function planTenderApply(tender, shipments = []) {
   const report = reconcileTender(tender, shipments)
-  if (report.outOfScope) return { shipmentId: tender.shipmentId, outOfScope: true, edits: [] }
+  // ⚠️ THE SAME SHAPE ON EVERY PATH. This used to return { edits: [] } and nothing
+  // else, so a caller reading plan.autoEdits.length crashed on an out-of-scope tender
+  // while working fine on a live one — a branch that changes an object's shape is a
+  // trap that only fires on the rarer path.
+  if (report.outOfScope) {
+    return { shipmentId: tender.shipmentId, outOfScope: true, edits: [], autoEdits: [], manualEdits: [], shipments: 0, changes: 0, conflicts: 0 }
+  }
 
   const pickupYmd = report.pickupYmd
   const edits = []
   for (const stop of tender.stops) {
     const s = matchStop(stop, shipments)
     if (!s) continue
+    // ⚠️ HOW SURE IS THIS MATCH? matchStop falls back to a same-DC shipment that lists
+    // NO POs when it cannot find a PO overlap — a deliberate can't-rule-it-out. That is
+    // fine for a human pressing a button and reading the result; it is NOT fine for an
+    // unattended cron, which would write a pickup date onto whatever shared the DC. So
+    // the certainty is carried out with the edit and the automatic path takes only the
+    // PO-backed ones. `certain` is about the MATCH, never about the values.
+    const stopPos = (stop.poNumbers || []).map(String)
+    const certain = stopPos.length > 0 && (s.memberPos || []).some((pnum) => stopPos.includes(String(pnum)))
     const set = {}
     const kept = []
     if (pickupYmd && ymd(s.shipDate) !== pickupYmd) set.shipDate = pickupYmd
@@ -456,7 +470,7 @@ export function planTenderApply(tender, shipments = []) {
       }
     }
     if (Object.keys(set).length || kept.length) {
-      edits.push({ shipmentId: s.id, dc: stop.dc, bolNumber: s.bolNumber || null, set, kept })
+      edits.push({ shipmentId: s.id, dc: stop.dc, bolNumber: s.bolNumber || null, set, kept, certain })
     }
   }
   return {
@@ -467,6 +481,10 @@ export function planTenderApply(tender, shipments = []) {
     edits,
     // Named so a caller can say "9 BOLs" out loud before writing anything.
     shipments: edits.length,
+    // ⚠️ What an UNATTENDED caller may write, and what it must leave for a human.
+    // Split here rather than in the cron so the rule has one home and a test.
+    autoEdits: edits.filter((e) => e.certain),
+    manualEdits: edits.filter((e) => !e.certain),
     changes: edits.reduce((n, e) => n + Object.keys(e.set).length, 0),
     conflicts: edits.reduce((n, e) => n + e.kept.length, 0),
   }

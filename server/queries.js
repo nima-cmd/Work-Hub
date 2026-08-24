@@ -3655,6 +3655,67 @@ export async function setShipmentRefs(id, fields = {}) {
  *
  * A hand-entered SRR is still never overwritten, even here — see planTenderApply.
  */
+/**
+ * Apply every LIVE tender automatically — the hourly cron's version of the button.
+ *
+ * Nima, 2026-08-24: "i believe we get the date off the email the carrier code we know
+ * and cte is mentioned in the email". He is right on all three, and making him click
+ * for values we have already parsed is friction, not caution. The rule against
+ * silently overwriting hand-entered fields still holds — it is enforced by
+ * planTenderApply, which only ever FILLS a blank SRR or SCAC and reports a difference
+ * through `kept`.
+ *
+ * ⚠️ THE PICKUP DATE IS THE ONE FIELD THIS OVERWRITES, and it is the one field where
+ * the partner is the authority. A "Tender Accepted" email is Nordstrom's TMS
+ * confirming the booking; our date is a plan. When they disagree, theirs is the fact.
+ *
+ * ⚠️ ONLY PO-BACKED MATCHES. matchStop deliberately falls back to a same-DC shipment
+ * with no POs listed — a can't-rule-it-out that is fine for a human reading the result
+ * and wrong for an unattended job, which would stamp a pickup date onto whatever
+ * happened to share the DC. planTenderApply now marks each edit `certain`; this takes
+ * `autoEdits` only and reports the rest as needing a person.
+ *
+ * ⚠️ EVERY WRITE IS RECORDED. An automatic change nobody can see afterwards is how a
+ * board stops being trustworthy — the same reason the manual path returns its changes.
+ */
+export async function autoApplyTenders({ dryRun = false } = {}) {
+  const [tenders, shipments] = await Promise.all([loadTenders({ limit: 50 }), loadRoutingShipments()])
+  const out = { applied: 0, tenders: 0, skippedUncertain: 0, conflicts: 0, details: [] }
+  for (const tender of tenders) {
+    const plan = planTenderApply(tender, shipments)
+    if (plan.outOfScope) continue
+    const auto = (plan.autoEdits || []).filter((e) => Object.keys(e.set).length)
+    const uncertain = (plan.manualEdits || []).filter((e) => Object.keys(e.set).length)
+    out.conflicts += plan.conflicts || 0
+    out.skippedUncertain += uncertain.length
+    if (!auto.length && !uncertain.length) continue
+    out.tenders++
+    for (const e of auto) {
+      if (!dryRun) {
+        await updateShipmentRefs(e.shipmentId, e.set)
+        // Recorded against the BOL so the change is legible on the card's own history.
+        // ⚠️ Soft-fails on purpose: the note is how the change becomes VISIBLE, but the
+        // write above is the change itself, and a notes failure must not roll it back
+        // or repeat it on the next run.
+        if (e.bolNumber) {
+          try {
+            await addNote({ docType: 'BOL', docNumber: e.bolNumber,
+              note: `Auto-applied from Nordstrom tender ${tender.shipmentId}: `
+                + Object.entries(e.set).map(([k, v]) => `${k} = ${v}`).join(', ') })
+          } catch { /* visibility is a courtesy; the write above is the point */ }
+        }
+      }
+      out.applied++
+      out.details.push({ tender: tender.shipmentId, dc: e.dc, bol: e.bolNumber, set: e.set })
+    }
+    for (const e of uncertain) {
+      out.details.push({ tender: tender.shipmentId, dc: e.dc, bol: e.bolNumber, needsHuman: true,
+        reason: 'no PO overlap — matched on DC alone', set: e.set })
+    }
+  }
+  return out
+}
+
 export async function applyTender(tenderShipmentId) {
   const [tenders, shipments] = await Promise.all([loadTenders({ limit: 50 }), loadRoutingShipments()])
   const tender = tenders.find((t) => t.shipmentId === tenderShipmentId)
