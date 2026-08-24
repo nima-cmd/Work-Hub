@@ -183,6 +183,27 @@ export const CARRIERS = {
   'Pilot LTL': 'PAAF',
   'PERFORMANCE TRANSPORT LLC': 'GLTN',
   'California Transport Enterprises': 'CAIE',
+  // ⚠️ THE NAME NORDSTROM'S TENDER ACTUALLY SENDS. The Manhattan "Tender Accepted"
+  // email carries `Carrier : CTE Carrier`, and it has no SCAC field at all (checked
+  // against the real message for S000210389). Without this alias the tender fills a
+  // carrier that this table cannot resolve, so the card ends up with a carrier and a
+  // BLANK SCAC — worse than the null it started from, because nothing then prompts for
+  // it. Same company as the entry above; Nima confirmed CAIE 2026-08-24.
+  'CTE Carrier': 'CAIE',
+  'CTE': 'CAIE',
+}
+
+/** SCAC for a carrier name, case- and spacing-insensitive.
+ *  ⚠️ A LOOKUP, NEVER A GUESS. An unknown carrier returns null so the field stays
+ *  empty and visibly needs a human — a wrong SCAC on a BOL misroutes freight, which
+ *  is the one outcome worse than a missing one. */
+export function scacFor(carrier) {
+  if (!carrier) return null
+  const want = String(carrier).trim().toLowerCase().replace(/\s+/g, ' ')
+  for (const [name, scac] of Object.entries(CARRIERS)) {
+    if (name.toLowerCase().replace(/\s+/g, ' ') === want) return scac
+  }
+  return null
 }
 
 export const COMMODITY = { description: 'Polyester Handbags', nmfc: '', class: '100', packaging: 'PLT' }

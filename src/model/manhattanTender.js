@@ -63,6 +63,8 @@
 
 /** Fields we lift out of the tender body. Kept as one list so the parser and the
  *  persistence layer cannot drift about what a tender is. */
+import { scacFor } from './bolAddresses.js'
+
 export const TENDER_FIELDS = [
   'shipmentId', 'pickupAt', 'pickupRaw', 'carrier',
   'originFacility', 'originCity', 'originState',
@@ -435,6 +437,18 @@ export function planTenderApply(tender, shipments = []) {
     const kept = []
     if (pickupYmd && ymd(s.shipDate) !== pickupYmd) set.shipDate = pickupYmd
     if (tender.carrier && (s.carrier || null) !== tender.carrier) set.carrier = tender.carrier
+    // ⚠️ THE SCAC RIDES WITH THE CARRIER, or applying a tender leaves a card holding a
+    // carrier name with no code — and the BOL prints the SCAC, not the name. The tender
+    // itself carries NO SCAC field (verified against the real Nordstrom message), so it
+    // is resolved from the CARRIERS table, which returns null for anything unknown
+    // rather than guessing. An existing scac is never overwritten: it is hand-entered,
+    // and a stale one is a signal (see this function's own header).
+    if (!s.scac) {
+      const code = scacFor(tender.carrier)
+      if (code) set.scac = code
+    } else if (scacFor(tender.carrier) && s.scac !== scacFor(tender.carrier)) {
+      kept.push({ field: 'scac', ours: s.scac, theirs: scacFor(tender.carrier) })
+    }
     if (stop.srr) {
       if (!s.routingRequestNumber) set.routingRequestNumber = stop.srr
       else if (s.routingRequestNumber !== stop.srr) {
