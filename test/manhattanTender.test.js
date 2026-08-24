@@ -4,6 +4,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { scacFor } from '../src/model/bolAddresses.js'
 import {
   parseTenderEmail, parsePickup, parseSpo, normalizeDc, pickupLocalYmd,
   reconcileTender, summarizeTenderDiffs, matchStop, planTenderApply, SRR_PAIRING, TENDER_DIFF,
@@ -258,15 +259,19 @@ test('a PARTIAL match still names the missing stops', () => {
 
 // ── planTenderApply — the click, not the cron ─────────────────────────────────
 
-test('accepting the tender rewrites the date and fills the carrier', () => {
+test('accepting the tender rewrites the date and fills the carrier AND its SCAC', () => {
   const p = planTenderApply(parseTenderEmail(S190212), LIVE_ROWS)
   assert.equal(p.outOfScope, false)
   assert.equal(p.shipments, 9, 'all nine BOLs in one press')
-  assert.equal(p.changes, 18, 'a date and a carrier each')
+  // ⚠️ WAS 18 ("a date and a carrier each") until 2026-08-24. The SCAC now rides with
+  // the carrier, because a card holding a carrier name with no code is worse than one
+  // holding neither — the BOL prints the code, and nothing prompts for a blank that
+  // arrived looking filled-in.
+  assert.equal(p.changes, 27, 'a date, a carrier and a SCAC each')
   assert.equal(p.conflicts, 0)
   assert.equal(p.pickupDate, '2026-08-10')
   const e = p.edits.find((x) => x.dc === '89')
-  assert.deepEqual(e.set, { shipDate: '2026-08-10', carrier: 'CTE Carrier' })
+  assert.deepEqual(e.set, { shipDate: '2026-08-10', carrier: 'CTE Carrier', scac: 'CAIE' })
   assert.equal(e.bolNumber, 'NB1731254')
 })
 
@@ -287,10 +292,16 @@ test('an EMPTY SRR is filled', () => {
 })
 
 test('applying an already-applied tender plans nothing — the button goes quiet', () => {
-  const rows = LIVE_ROWS.map((r) => ({ ...r, shipDate: '2026-08-10', carrier: 'CTE Carrier' }))
+  // ⚠️ THE FIXTURE NOW CARRIES THE SCAC TOO, and that is the point of the test rather
+  // than a concession to it: an "already applied" card is one where every field the
+  // apply writes is already correct. Adding a field the apply sets means adding it
+  // here, or the button would stay lit forever after one press — which is exactly the
+  // property this guards.
+  const rows = LIVE_ROWS.map((r) => ({ ...r, shipDate: '2026-08-10', carrier: 'CTE Carrier', scac: 'CAIE' }))
   const p = planTenderApply(parseTenderEmail(S190212), rows)
   assert.deepEqual(p.edits, [])
   assert.equal(p.changes, 0)
+  assert.equal(p.conflicts, 0, 'a matching scac is agreement, never a conflict')
 })
 
 test('a historical tender plans nothing at all', () => {
@@ -305,4 +316,57 @@ test('a historical tender plans nothing at all', () => {
   const p = planTenderApply(june, LIVE_ROWS)
   assert.equal(p.outOfScope, true)
   assert.deepEqual(p.edits, [])
+})
+
+// ── The SCAC rides with the carrier (2026-08-24) ────────────────────────────
+//
+// Nima: "knowing cte is the carrier can we use their SCAC code now". The app already
+// knew CAIE — bolAddresses.CARRIERS has 'California Transport Enterprises': 'CAIE' —
+// but the tender says `Carrier : CTE Carrier`, which was not a key. So applying a
+// tender filled a carrier the lookup could not resolve and left the SCAC blank, which
+// is worse than the null it started from: nothing then prompts for it, and the BOL
+// prints the SCAC rather than the name. The tender itself carries NO SCAC field at all
+// (verified against the real message for S000210389).
+
+test("the tender's own carrier string resolves to a SCAC", () => {
+  assert.equal(scacFor('CTE Carrier'), 'CAIE')
+  assert.equal(scacFor('California Transport Enterprises'), 'CAIE')
+  assert.equal(scacFor('  cte   carrier '), 'CAIE', 'case and spacing insensitive')
+})
+
+test('⚠️ an unknown carrier returns null — never a guess', () => {
+  // A wrong SCAC on a BOL misroutes freight, which is worse than a missing one.
+  assert.equal(scacFor('Some Haulier Nobody Mapped'), null)
+  assert.equal(scacFor(''), null)
+  assert.equal(scacFor(null), null)
+})
+
+test('applying a tender sets the scac alongside the carrier', () => {
+  const tender = { shipmentId: 'S1', carrier: 'CTE Carrier', pickupAt: new Date('2026-08-25T15:00:00Z'),
+    stops: [{ dc: '569', srr: 'RR068', poNumbers: ['50073688'] }] }
+  const plan = planTenderApply(tender, [{ id: 1, dc: '569', memberPos: ['50073688'], cartons: 12 }])
+  const e = plan.edits.find((x) => x.shipmentId === 1)
+  assert.equal(e.set.carrier, 'CTE Carrier')
+  assert.equal(e.set.scac, 'CAIE', 'the code, not just the name')
+})
+
+test('⚠️ a hand-entered scac is NEVER overwritten — it is reported as a conflict', () => {
+  const tender = { shipmentId: 'S1', carrier: 'CTE Carrier', pickupAt: new Date('2026-08-25T15:00:00Z'),
+    stops: [{ dc: '569', srr: 'RR068', poNumbers: ['50073688'] }] }
+  const plan = planTenderApply(tender, [{ id: 1, dc: '569', memberPos: ['50073688'], scac: 'XXXX' }])
+  const e = plan.edits.find((x) => x.shipmentId === 1)
+  assert.equal(e.set.scac, undefined, 'left alone')
+  // ⚠️ `plan.conflicts` is a COUNT, not a list — the disagreements themselves live on
+  // each edit's `kept`, the same shape the SRR conflict uses.
+  assert.deepEqual(e.kept, [{ field: 'scac', ours: 'XXXX', theirs: 'CAIE' }])
+  assert.equal(plan.conflicts, 1, 'surfaced, never silently kept')
+})
+
+test('an unmappable carrier leaves the scac blank rather than filling it wrong', () => {
+  const tender = { shipmentId: 'S1', carrier: 'Mystery Freight Co', pickupAt: new Date('2026-08-25T15:00:00Z'),
+    stops: [{ dc: '569', srr: 'RR068', poNumbers: ['50073688'] }] }
+  const plan = planTenderApply(tender, [{ id: 1, dc: '569', memberPos: ['50073688'] }])
+  const e = plan.edits.find((x) => x.shipmentId === 1)
+  assert.equal(e.set.scac, undefined)
+  assert.equal(e.set.carrier, 'Mystery Freight Co', 'the name still lands; only the code is withheld')
 })
