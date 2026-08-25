@@ -206,6 +206,51 @@ async function putPdf(folderId, filename, buffer, headers) {
 // Upload a PDF buffer to /Work-Hub BOLs/<partner>/<po>/<filename>. When a
 // shipment consolidates multiple POs, it's filed under each PO's folder so it's
 // findable from any of them (the manual process filed per PO too).
+/**
+ * List what is already filed under a PO folder, so history can be linked without
+ * re-scanning anything.
+ *
+ * ⚠️ READ-ONLY. It resolves the existing path and never calls ensurePath, because
+ * ensurePath CREATES missing folders — pointing a backfill at it would leave a trail
+ * of empty directories for every PO that was never filed.
+ *
+ * Returns [] for a PO with no folder, which is a fact and not an error.
+ */
+export async function listFiledDocuments({ partner, po, root = DRIVE_ROOT_BOLS }) {
+  const headers = await authHeader()
+  // ⚠️ A LOOKUP THAT NEVER CREATES. ensureFolder() makes a missing folder, which is
+  // right for filing and wrong here — a backfill across every PO would leave an empty
+  // directory for each one that was never filed. So the query is repeated read-only.
+  const findOnly = async (name, parentId) => {
+    const q = [
+      "mimeType='application/vnd.google-apps.folder'", 'trashed=false',
+      `name='${String(name).replace(/'/g, "\\'")}'`,
+      parentId ? `'${parentId}' in parents` : "'root' in parents",
+    ].join(' and ')
+    const list = await driveFetch(
+      `${FILES}?q=${encodeURIComponent(q)}&fields=files(id,name)`
+      + '&supportsAllDrives=true&includeItemsFromAllDrives=true', { headers })
+    if (list.failure) return { failure: list.failure }
+    return { id: (await list.res.json()).files?.[0]?.id || null }
+  }
+  let parent = null
+  for (const seg of [DRIVE_PARENT, root, partner, String(po)]) {
+    const found = await findOnly(seg, parent)
+    if (found.failure) return { failure: found.failure }
+    if (!found.id) return { ok: true, files: [] }   // never filed — a fact, not an error
+    parent = found.id
+  }
+  const r = await driveFetch(
+    `${FILES}?q=${encodeURIComponent(`'${parent}' in parents and trashed=false`)}`
+    + '&fields=files(id,name,webViewLink,size,createdTime)'
+    + '&supportsAllDrives=true&includeItemsFromAllDrives=true', { headers })
+  if (r.failure) return { failure: r.failure }
+  const body = await r.res.json()
+  return { ok: true, files: (body.files || []).map((f) => ({
+    id: f.id, name: f.name, url: f.webViewLink, size: Number(f.size || 0), createdAt: f.createdTime,
+  })) }
+}
+
 export async function uploadBolPdf({ partner, pos, filename, buffer, root = DRIVE_ROOT_BOLS }) {
   if (!process.env.GOOGLE_REFRESH_TOKEN) return { ok: false, configured: false }
   let headers
