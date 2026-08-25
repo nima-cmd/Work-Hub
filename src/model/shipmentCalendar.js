@@ -48,6 +48,27 @@ export function isoShipDay(v) {
   return d.toLocaleDateString('en-CA', { timeZone: SHIP_TZ })
 }
 
+/**
+ * YYYY-MM-DD for a Postgres DATE — a day with no time, which must NOT be re-zoned.
+ *
+ * ⚠️ THE TWIN OF isoShipDay, AND THE OPPOSITE RULE. node-pg hands back a JS Date for a
+ * DATE column too, at LOCAL midnight, so `String(d).slice(0, 10)` yields "Sat Jun 27" —
+ * the same weekday bug #170 fixed for timestamptz, still live on this path: the proof
+ * panel's shipDates read "Sat Jun 27" in production until this was found by running the
+ * calendar dry run (2026-08-25). And toISOString() is not the fix either — local
+ * midnight in a negative-offset zone is the previous day in UTC, which is how a DATE
+ * moves backwards. Formatted from the LOCAL parts, so the day round-trips exactly.
+ */
+export function isoPlainDay(v) {
+  if (!v) return null
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null
+    const p = (n) => String(n).padStart(2, '0')
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`
+  }
+  return String(v).slice(0, 10)
+}
+
 /** The one date to put the event on, chosen by the same ranking as the proof.
  *  ⚠️ Prefers what a third party attested over what we recorded. */
 export function eventDate(evidence = {}, shipDates = []) {
@@ -116,6 +137,15 @@ export function shipmentEvent({ po, partner, evidence, shipDates = [] } = {}) {
   if (scans.length) {
     lines.push('Signed paperwork:')
     for (const s of scans) lines.push(`  ${s.dc ? s.dc + ' — ' : ''}${s.name}\n    ${s.url}`)
+  } else if (evidence.scansChecked === false) {
+    // ⚠️ NOT "none filed" — WE NEVER LOOKED. Drive is searched under the partner the
+    // file was filed beneath, so a PO with no partner resolved gets no lookup at all
+    // (184 of 235 candidates, 2026-08-25). Printing "No signed paperwork filed" there
+    // states a finding we never made, to the warehouse, in writing — the same class of
+    // claim the title guard exists to prevent. `=== false` on purpose: an older caller
+    // that does not set the flag keeps the original wording rather than silently
+    // acquiring a hedge.
+    lines.push('Signed paperwork: not checked — no partner on file for this PO.')
   } else {
     lines.push('No signed paperwork filed for this PO.')
   }
