@@ -1634,6 +1634,10 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     // tenders arrive a few times a month. `npm run sync:tenders` sweeps the full
     // mailbox. Gmail creds only; no NetSuite or Orderful dependency.
     let tenders = null
+    // ⚠️ DECLARED OUT HERE, not inside the Gmail gate below. It lived in that
+    // block and res.json() sits outside it, so every cron run threw
+    // `tendersApplied is not defined` AFTER doing 3.5 minutes of real work.
+    let tendersApplied = null
     if (process.env.GOOGLE_REFRESH_TOKEN) {
       try {
         const r = await syncTenders({ sinceDays: 7 })
@@ -1642,22 +1646,6 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         console.error('tender sync failed (recurring tasks still checked):', e.message)
       }
 
-    // ⚠️ AND APPLY THEM. Nima, 2026-08-24: "i believe we get the date off the email
-    // the carrier code we know and cte is mentioned in the email". All three are
-    // parsed from a mail we already receive, so making him click for them is friction,
-    // not caution. autoApplyTenders takes only PO-BACKED matches and only ever fills a
-    // blank SRR/SCAC — a differing hand-entered value is still reported, never
-    // overwritten. The pickup date IS overwritten, because an accepted tender is
-    // Nordstrom's booking and our date is a plan.
-    // Soft-fails like everything else in this endpoint: a failed apply must not stop
-    // the recurring checks.
-    let tendersApplied = null
-    try {
-      const a = await autoApplyTenders()
-      tendersApplied = { applied: a.applied, needsHuman: a.skippedUncertain, conflicts: a.conflicts }
-    } catch (e) {
-      console.error('tender auto-apply failed (rest of the check continues):', e.message)
-    }
     }
     // The OTHER routing lane: Macy's/Bloomingdale's routing notifications, which
     // carry the authorization number, carrier and pickup date. Until 2026-08-13
@@ -1680,6 +1668,21 @@ app.post('/api/internal/recurring-check', async (req, res) => {
       } catch (e) {
         console.error('Macy\'s routing sync failed (recurring tasks still checked):', e.message)
       }
+    }
+    // ⚠️ AND APPLY THEM. Nima, 2026-08-24: "i believe we get the date off the email
+    // the carrier code we know and cte is mentioned in the email". All three are
+    // parsed from a mail we already receive, so making him click for them is friction,
+    // not caution. autoApplyTenders takes only PO-BACKED matches and only ever fills a
+    // blank SRR/SCAC — a differing hand-entered value is still reported, never
+    // overwritten. The pickup date IS overwritten, because an accepted tender is
+    // Nordstrom's booking and our date is a plan.
+    // Soft-fails like everything else in this endpoint: a failed apply must not stop
+    // the recurring checks.
+    try {
+      const a = await autoApplyTenders()
+      tendersApplied = { applied: a.applied, needsHuman: a.skippedUncertain, conflicts: a.conflicts }
+    } catch (e) {
+      console.error('tender auto-apply failed (rest of the check continues):', e.message)
     }
     // Carton-level ASN reconciliation — did every carton that left get announced
     // on an 856 the partner received? Needs BOTH integrations (NetSuite for the
