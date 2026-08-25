@@ -6,6 +6,8 @@ import {
   setEdiSupply, clearEdiSupply, fetchLabelSizes, printCargoTag,
   fetchAsnCartons, refreshAsnCartons, fetchPoLedger, fetchEdiDeliveryGaps,
   fetch850Versions,
+  searchEdi,
+  fetchShipmentEvidence,
 } from '../api.js'
 import { computeEdiWork } from '../../../src/model/ediWork.js'
 import { computeEdiPartnerTabs } from '../../../src/model/ediPartnerTabs.js'
@@ -289,6 +291,160 @@ function AsnCartonPanel() {
 // Ship-window calendar (Nima, 2026-07-20): the EDI view's own month grid —
 // every open PO plotted on its cancel-after (red = the drop-dead day) and
 // ship-not-before (cyan = window opens). Click a day for exactly what's due.
+// ── Type any number, find the PO ────────────────────────────────────────────
+//
+// Nima, 2026-08-25: "We want to be able to [be] here and search which is another
+// feature missing in the EDI and pull everything up for it." Until now a PO could only
+// be reached by scrolling the tabs — which is how "did 7242978 ship?" became a question
+// somebody else had to answer.
+//
+// ⚠️ Each result says WHY it matched. A bare list of POs after typing an invoice number
+// leaves the reader guessing which document did the matching, and a number that hits two
+// POs has to look like two POs rather than a resolved answer.
+function EdiSearch() {
+  const [q, setQ] = useState('')
+  const [picked, setPicked] = useState(null)
+  const [res, setRes] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  const run = async (e) => {
+    e?.preventDefault?.()
+    const term = q.trim()
+    if (!term) { setRes(null); return }
+    setBusy(true); setErr(null); setPicked(null)
+    try { setRes(await searchEdi(term)) } catch (x) { setErr(x.message); setRes(null) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <>
+    <form className="ediSearch" onSubmit={run}>
+      <input className="tasksSearch" value={q} placeholder="PO, BOL, invoice, SO or IF number…"
+             onChange={(e) => setQ(e.target.value)} />
+      <button className="btn" type="submit" disabled={busy}>{busy ? 'Searching…' : 'Search'}</button>
+      {res && <button className="btnGhost" type="button" onClick={() => { setQ(''); setRes(null); setPicked(null) }}>Clear</button>}
+      {err && <span className="flag sev-mid">{err}</span>}
+      {res && !res.rows.length && (
+        <span className="muted">
+          Nothing matches “{res.query}”. ⚠ Exact numbers only — a document number is an identifier, not a search term.
+        </span>
+      )}
+      {res && res.rows.map((r) => (
+        <button key={r.poNumber} type="button"
+                className={'ediSearchHit' + (picked === r.poNumber ? ' on' : '')}
+                onClick={() => setPicked(picked === r.poNumber ? null : r.poNumber)}>
+          <span className="ediSearchPo">{r.summary}</span>
+          {r.partner && <span className="muted"> · {r.partner}</span>}
+        </button>
+      ))}
+
+    </form>
+
+    {/* ⚠️ THE ANSWER APPEARS HERE, not on a tab. My first version added the PO to
+        `expanded` and switched to the Open tab — which silently showed nothing for a
+        CLOSED PO, and 7242978 (the one Nima was asking about) is closed. A search
+        result must not depend on which tab happens to contain it.
+
+        ⚠️ AND IT SITS OUTSIDE THE <form>, which is not cosmetic. A <button> inside a
+        form with no explicit type defaults to type="submit" — so clicking "Show the
+        proof" SUBMITTED THE SEARCH, which re-ran it and cleared `picked`, and the panel
+        vanished the instant you asked for it. The buttons below also carry an explicit
+        type now, but the real fix is not nesting them in a form at all. Same family as
+        the button-in-button that React refused in TacticalCore. */}
+    {picked && (
+      <div className="ediSearchAnswer">
+        <div className="ediSearchAnswerHead">PO {picked}</div>
+        <ShipmentEvidence poNumber={picked} />
+        <Po850Versions poNumber={picked} />
+      </div>
+    )}
+    </>
+  )
+}
+
+// ── Did it ship, and what proves it ─────────────────────────────────────────
+//
+// ⚠️ The headline NAMES ITS BASIS rather than asserting "Shipped" — see
+// src/model/shipmentEvidence.js. Our own ship date alone is not proof, and this is the
+// panel someone will screenshot to answer the question for a partner.
+function ShipmentEvidence({ poNumber }) {
+  const [state, setState] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = async () => {
+    setBusy(true)
+    try { setState(await fetchShipmentEvidence(poNumber)) }
+    catch (e) { setState({ error: e.message }) }
+    finally { setBusy(false) }
+  }
+  if (!state) {
+    return (
+      <div className="shipEv">
+        <button type="button" className="btnGhost" disabled={busy} onClick={load}>
+          {busy ? 'Gathering the proof…' : 'Did this ship? Show the proof'}
+        </button>
+      </div>
+    )
+  }
+  if (state.error) return <div className="shipEv"><span className="flag sev-mid">{state.error}</span></div>
+  const t = state.backTrace || {}
+  return (
+    <div className={'shipEv' + (state.proven ? ' proven' : '')}>
+      <div className="shipEvHead">
+        <span className={'flag ' + (state.proven ? 'sev-lo' : 'sev-mid')}>{state.proven ? 'proven' : 'not proven'}</span>
+        <span className="shipEvLine">{state.headline}</span>
+      </div>
+      {state.driveError && <div className="muted">⚠ Drive did not answer ({state.driveError}) — the EDI half is still shown.</div>}
+
+      {!!(t.asns || []).length && (
+        <div className="shipEvBlock">
+          <div className="shipEvTitle">ASN (856) / BOL</div>
+          {t.asns.map((a) => (
+            <span key={a.id} className="shipEvDoc">
+              {a.number}<span className={a.accepted ? 'shipEvOk' : 'shipEvNo'}>{a.accepted ? ' accepted' : ' NOT accepted'}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!!(t.invoices || []).length && (
+        <div className="shipEvBlock">
+          <div className="shipEvTitle">Invoice (810) · {t.invoices.length}</div>
+          {/* ⚠️ Capped. 23 invoices listed in full bury the document links below them. */}
+          {t.invoices.slice(0, 8).map((i) => (
+            <span key={i.id} className="shipEvDoc">
+              {i.number}<span className={i.accepted ? 'shipEvOk' : 'shipEvNo'}>{i.accepted ? ' ✓' : ' ✗'}</span>
+            </span>
+          ))}
+          {t.invoices.length > 8 && (
+            <span className="muted">
+              +{t.invoices.length - 8} more, {t.invoices[0].number}–{t.invoices[t.invoices.length - 1].number}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="shipEvBlock">
+        <div className="shipEvTitle">Signed paperwork</div>
+        {(t.scans || []).length
+          ? t.scans.map((s) => (
+              <a key={s.id} className="shipEvScan" href={s.url} target="_blank" rel="noreferrer">
+                {s.dc ? s.dc + ' — ' : ''}{s.name}
+              </a>
+            ))
+          : <span className="muted">Nothing filed for this PO.</span>}
+      </div>
+
+      {/* ⚠️ What is ABSENT is stated. A panel that only lists what it found reads as
+          complete, and someone deciding whether to chase a scan needs to see there is
+          not one. */}
+      {!!(state.missing || []).length && (
+        <div className="muted shipEvMissing">Not on file: {state.missing.map((m) => m.label).join(' · ')}</div>
+      )}
+    </div>
+  )
+}
+
 // ── What changed between two versions of the same 850 ───────────────────────
 //
 // Nima, 2026-08-24: a new 850 arrived for two Nordstrom POs whose IFs were already
@@ -316,7 +472,7 @@ function Po850Versions({ poNumber }) {
   if (!state) {
     return (
       <div className="edi850Versions">
-        <button className="btnGhost" disabled={busy} onClick={load}>
+        <button type="button" className="btnGhost" disabled={busy} onClick={load}>
           {busy ? 'Reading the 850s…' : 'Compare 850 versions'}
         </button>
       </div>
@@ -819,6 +975,12 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
 
         {/* ── the open work queue ── */}
         <section className="ediQueue">
+          {/* ⚠️ ABOVE the calendar and the tabs, because it is how you arrive when you
+              already know a number — the tabs are for browsing, this is for looking
+              something up. The answer renders inside the search block, so it works for
+              a CLOSED PO too (see the note on ediSearchAnswer). */}
+          <EdiSearch />
+
           <EdiCalendar openPos={allOpen} />
 
           {/* partner-level tabs, right below the calendar (Nima, 2026-07-20) */}
@@ -1092,6 +1254,10 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
             const rd = resolveDrafts[o.businessNumber]
             return (
               <div key={o.businessNumber}
+                   /* the anchor EdiSearch scrolls to — without it a picked result
+                      expands the card and leaves you looking at the wrong part of a
+                      long board */
+                   id={`po-${o.businessNumber}`}
                    className={'poCard' + (w.needsRecheck || w.cancelState === 'passed' || w.missed850 ? ' po-danger' : w.cancelState === 'soon' ? ' po-warn' : '')}>
                 <div className="poHead" onClick={() => toggle(o.businessNumber)}>
                   <span className="miniSo">{o.businessNumber}</span>
@@ -1164,6 +1330,7 @@ export default function EdiOrders({ orders = [], onNavigate } = {}) {
 
                 {isOpen && (
                   <div className="poDetail">
+                    <ShipmentEvidence poNumber={o.businessNumber} />
                     <PoTimeline poNumber={o.businessNumber} />
                     <Po850Versions poNumber={o.businessNumber} />
                     {/* manual resolution — the NetSuite connection the searches can't see */}

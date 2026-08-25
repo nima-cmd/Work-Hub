@@ -10,6 +10,7 @@ import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
 import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
+import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
@@ -3824,6 +3825,61 @@ export async function streamShipmentBol(res, id) {
  * before today, so for anything filed earlier the folder is the only record — and a
  * cached link that has been moved or trashed in Drive is worse than looking.
  */
+/**
+ * Type any number, find the PO.
+ *
+ * Nima, 2026-08-25: "We want to be able to [be] here and search which is another
+ * feature missing in the EDI and pull everything up for it." Today a PO can only be
+ * reached by scrolling the tabs.
+ *
+ * ⚠️ EVERY IDENTIFIER COLUMN IS SEARCHED, and each hit carries the field it matched —
+ * see src/model/ediSearch.js for why classifying the input first is guessing.
+ *
+ * ⚠️ EXACT MATCHES ONLY, no LIKE '%…%'. A partial search across five columns on a
+ * 4,000-row transaction table is both slow and wrong: typing 1142 would return
+ * invoice 11420 and PO 511423 with equal confidence. A document number is an
+ * identifier, not prose.
+ */
+export async function searchEdi(query) {
+  const q = normalizeQuery(query)
+  if (!q) return { query: '', rows: [] }
+
+  const { rows } = await pool.query(
+    `-- the PO itself
+     SELECT DISTINCT o.po_number AS "poNumber", o.customer AS partner, 'po' AS field, o.po_number AS value
+       FROM orders o WHERE UPPER(o.po_number) = $1
+     UNION ALL
+     -- a BOL we minted, resolved to the POs it covers
+     SELECT DISTINCT unnest(r.member_pos), r.partner, 'bol', r.bol_number
+       FROM routing_shipment r WHERE UPPER(r.bol_number) = $1
+     UNION ALL
+     -- an 856's businessNumber is the BOL, an 810's is the invoice; both reach the PO
+     -- only through the refs table (businessNumber is NOT the PO on those documents)
+     SELECT DISTINCT p.po_number, e.trading_partner,
+            CASE WHEN e.type LIKE '856%' THEN 'bol'
+                 WHEN e.type LIKE '810%' THEN 'invoice'
+                 ELSE 'po' END,
+            e.business_number
+       FROM edi_transactions e JOIN edi_document_po_refs p ON p.transaction_id = e.id
+      WHERE UPPER(e.business_number) = $1
+     UNION ALL
+     -- an 850's businessNumber IS the PO
+     SELECT DISTINCT e.business_number, e.trading_partner, 'po', e.business_number
+       FROM edi_transactions e
+      WHERE UPPER(e.business_number) = $1 AND e.type LIKE '850%'
+     UNION ALL
+     -- our own sales order and fulfilment numbers, with or without their prefix
+     SELECT DISTINCT o.po_number, o.customer, 'so', o.so_number
+       FROM orders o WHERE UPPER(o.so_number) = $1 OR UPPER(o.so_number) = 'SO' || $1
+     UNION ALL
+     SELECT DISTINCT o.po_number, o.customer, 'if', f.if_number
+       FROM fulfillments f JOIN orders o ON o.so_number = f.so_number
+      WHERE UPPER(f.if_number) = $1 OR UPPER(f.if_number) = 'IF' || $1`,
+    [q],
+  )
+  return { query: q, rows: groupSearchHits(rows).map((r) => ({ ...r, summary: hitSummary(r) })) }
+}
+
 export async function getShipmentEvidence(poNumber) {
   const po = String(poNumber || '').trim()
   if (!po) throw new Error('a PO number is required')
