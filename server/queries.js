@@ -9,6 +9,7 @@ import { STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from '../src/model/stages.js'
 import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
 import { mergePushReports } from '../src/model/pushReport.js'
+import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
@@ -96,7 +97,7 @@ import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { asnCheckDue, asnSummary, ASN_CHECK_MIN_HOURS, ASN_CHECK_WINDOW_DAYS } from '../src/model/asnCartonCheck.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
-import { uploadBolPdf } from '../src/ingest/googleDrive.js'
+import { uploadBolPdf, listFiledDocuments } from '../src/ingest/googleDrive.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, setQuestEmailLabelsLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, countQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
@@ -3796,14 +3797,132 @@ export async function streamShipmentBol(res, id) {
   await renderBolTo(res, shipment)
 }
 
+/**
+ * Remember where a filed PDF landed in Drive.
+ *
+ * ⚠️ THE LINK WAS ALWAYS THERE AND ALWAYS DISCARDED. uploadBolPdf returns
+ * `{ po, id, link, replaced }` per PO folder, and every caller threw it away — so the
+ * app filed 5 signed PDFs for PO 7242978 and could not show one of them. doc_links has
+ * carried a `url` column for external destinations since PR #98; nothing wrote to it
+ * from here.
+ *
+ * ⚠️ Soft-fails per row. A recorded link is how the document becomes REACHABLE; the
+ * upload above is the filing itself. Losing the link must not fail the file.
+ */
+/**
+ * Everything that proves a PO shipped, in one call.
+ *
+ * Nima, 2026-08-25: "we want a link saying that PO shipped with a link to the
+ * documentation to prove it and the 856 810 link or document number to back trace".
+ *
+ * ⚠️ AN 856/810's businessNumber IS NOT THE PO. On an 850 it is; on a ship notice it
+ * is the BOL number and on an invoice it is the invoice number. The join therefore
+ * goes through edi_document_po_refs, which exists because keying on businessNumber
+ * once filed 1,975 ledger events under unjoinable keys ([[po-document-timeline]]).
+ *
+ * ⚠️ Drive is read LIVE, not from doc_links alone. The links were never persisted
+ * before today, so for anything filed earlier the folder is the only record — and a
+ * cached link that has been moved or trashed in Drive is worse than looking.
+ */
+export async function getShipmentEvidence(poNumber) {
+  const po = String(poNumber || '').trim()
+  if (!po) throw new Error('a PO number is required')
+
+  const { rows: docs } = await pool.query(
+    `SELECT DISTINCT e.id, e.type, e.business_number, e.created_at,
+            e.delivery_status, e.acknowledgment_status
+       FROM edi_transactions e
+       LEFT JOIN edi_document_po_refs p ON p.transaction_id = e.id
+      WHERE p.po_number = $1 OR e.business_number = $1
+      ORDER BY e.created_at, e.type`, [po])
+
+  const { rows: ord } = await pool.query(
+    `SELECT DISTINCT o.customer, f.actual_ship_date
+       FROM orders o LEFT JOIN fulfillments f ON f.so_number = o.so_number
+      WHERE o.po_number = $1`, [po])
+
+  // ⚠️ THE PARTNER MUST BE THE ONE THE FILE WAS FILED UNDER, not one derived from the
+  // customer string. Drive's path is /<partner>/<po>/, written from
+  // routing_shipment.partner — so that row is the authority. Deriving "Bloomingdale's"
+  // out of "Bloomingdale's - 0034 Wisconsin Place (MD)" would usually agree and would
+  // silently miss whenever it did not, which is the whole class of bug this repo keeps
+  // finding. The customer prefix is only a fallback for a PO with no routing shipment.
+  const { rows: rs } = await pool.query(
+    `SELECT DISTINCT partner FROM routing_shipment WHERE $1 = ANY(member_pos) AND partner IS NOT NULL`, [po])
+  const partner = rs[0]?.partner
+    || (ord[0]?.customer ? String(ord[0].customer).split(/\s+-\s+/)[0].trim() : null)
+
+  // ⚠️ Soft-fails. Drive being unreachable must not turn "did it ship" into an error
+  // page — the EDI half of the answer is still worth having, and the response says
+  // which half is missing rather than implying there are no documents.
+  let scans = []
+  let driveError = null
+  if (partner) {
+    try {
+      const r = await listFiledDocuments({ partner, po })
+      if (r.failure) driveError = r.failure.message || 'Drive did not answer'
+      // The scan app names a per-DC split "<po>-<DC>.pdf"; a master carries its BOL
+      // number instead. ⚠️ Labelled, not left blank — an unlabelled row in a proof
+      // panel reads as a document nobody could identify.
+      else scans = r.files.map((f) => ({
+        ...f,
+        dc: (f.name.match(/-([A-Z]{2,3})\.pdf$/i) || [])[1] || null,
+        kind: /master/i.test(f.name) ? 'master BOL' : 'signed BOL',
+      }))
+    } catch (e) { driveError = e.message }
+  }
+
+  const asns = docs.filter((d) => d.type.startsWith('856')).map((d) => ({
+    id: d.id, bolNumber: d.business_number, deliveryStatus: d.delivery_status,
+    ackStatus: d.acknowledgment_status, at: d.created_at,
+  })).sort((a, b) => String(a.bolNumber).localeCompare(String(b.bolNumber), undefined, { numeric: true }))
+  // ⚠️ SORTED BY NUMBER, not by timestamp. All 23 of PO 7242978's invoices share one
+  // date, so the SQL order was arbitrary and the summary read "11437-11436" — a range
+  // running backwards, which makes a surface look broken even when the data is right.
+  const invoices = docs.filter((d) => d.type.startsWith('810')).map((d) => ({
+    id: d.id, invoiceNumber: d.business_number, deliveryStatus: d.delivery_status,
+    ackStatus: d.acknowledgment_status, at: d.created_at,
+  })).sort((a, b) => String(a.invoiceNumber).localeCompare(String(b.invoiceNumber), undefined, { numeric: true }))
+  const orders850 = docs.filter((d) => d.type.startsWith('850')).map((d) => ({ id: d.id, at: d.created_at }))
+  const shipDates = [...new Set(ord.map((r) => r.actual_ship_date).filter(Boolean).map((d) => String(d).slice(0, 10)))]
+
+  const evidence = shipmentEvidence({ asns, invoices, scans, shipDates })
+  return {
+    po, partner, orders850, shipDates, driveError,
+    ...evidence,
+    headline: evidenceHeadline(evidence),
+  }
+}
+
+async function rememberDriveFiles(uploaded = [], { partner, filename } = {}) {
+  let n = 0
+  for (const u of uploaded) {
+    if (!u?.po || !u?.link) continue
+    try {
+      await addDocLink({
+        aType: 'PO', aNumber: String(u.po),
+        // ⚠️ b_number is the Drive FILE ID, not the URL — docLinkUrl.js records why:
+        // the same file arrives under different share URLs, and the id is what makes
+        // the UNIQUE constraint fire on a re-file instead of duplicating the row.
+        bType: 'DRIVE', bNumber: u.id,
+        label: filename || 'filed document', url: u.link,
+      })
+      n++
+    } catch { /* the file is filed; the link is a convenience */ }
+  }
+  return n
+}
+
 export async function fileShipmentToDrive(id) {
   const shipment = await withLineItems(await fetchRoutingShipmentById(id))
   if (!shipment) throw new Error('shipment not found')
   const buffer = await buildBolPdf(shipment)
   const filename = `BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf`
-  return uploadBolPdf({
+  const res = await uploadBolPdf({
     partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
   })
+  const linked = res.ok ? await rememberDriveFiles(res.uploaded, { partner: shipment.partner, filename }) : 0
+  return { ...res, linked }
 }
 
 // ── Commercial invoice for an international shipment ────────────────────────
@@ -3998,7 +4117,9 @@ export async function fileMasterToDrive(authNumber) {
   const master = await buildMasterShipment(authNumber)
   const buffer = await buildBolPdf(master, { kind: 'master' })
   const filename = `MASTER_BOL_${master.bolNumber}.pdf`
-  return uploadBolPdf({ partner: master.partner, pos: master.memberPos, filename, buffer })
+  const res = await uploadBolPdf({ partner: master.partner, pos: master.memberPos, filename, buffer })
+  const linked = res.ok ? await rememberDriveFiles(res.uploaded, { partner: master.partner, filename }) : 0
+  return { ...res, linked }
 }
 
 export async function assignRoutingBol(body = {}) {
