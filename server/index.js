@@ -31,7 +31,7 @@ import {
   getQuestEmails, syncQuestEmails, markQuestEmailRead, assignQuestEmail, applyQuestEmailLabel, dismissQuestEmailLine, getLedgerNotes,
   getNotesFor, addNote, deleteNote, getAllNotes,
   getGmailLabels, spamQuestEmail, getCalendarEvents,
-  getQuestTasks, getQuestTaskPayload, getPo850Versions, autoApplyTenders, getShipmentEvidence, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
+  getQuestTasks, getQuestTaskPayload, getPo850Versions, autoApplyTenders, getShipmentEvidence, searchEdi, createTaskFromQuestEmail, acknowledgeQuestEmail, setEmailNote, addManualTask, addTasksBulk, completeTask, getQuestEmailThread,
   setTaskNeeds, setTaskUrgency, setTaskCharacter, setTaskChecklistItem, setTaskSchedule, searchQuestArchive, getTaskActivity,
   getTrace, getTraceRecent, searchTraceSubjects,
   recordViewVisit, getViewUsage, getAgenda,
@@ -323,6 +323,16 @@ app.get('/api/labels/dead', async (_req, res) => {
 // Every 850 we hold for one PO, each diffed against the one before it. Answers "a
 // new 850 arrived for a PO we have already made IFs for — do we have to redo it?"
 // The bodies are fetched live from Orderful, not stored — see getPo850Versions.
+// Type any number — PO, BOL, invoice, SO, IF — and find the PO it belongs to.
+app.get('/api/edi/search', async (req, res) => {
+  try {
+    res.json(await searchEdi(req.query.q))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
 // Did this PO ship, what proves it, and every document number to back-trace.
 // ⚠️ Reads Drive live — see getShipmentEvidence for why a cached link is worse.
 app.get('/api/edi/shipment-evidence', async (req, res) => {
