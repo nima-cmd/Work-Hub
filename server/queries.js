@@ -10,6 +10,7 @@ import { deriveTaskUrgency, isTaskDone } from '../src/model/taskUrgency.js'
 import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWindow.js'
 import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
+import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -3927,6 +3928,12 @@ export async function getShipmentEvidence(poNumber) {
       }))
     } catch (e) { driveError = e.message }
   }
+  // ⚠️ "WE LOOKED AND FOUND NONE" IS NOT "WE NEVER LOOKED", and only this flag can tell
+  // them apart. The Drive lookup is skipped entirely when no partner resolved — 184 of
+  // 235 calendar candidates, measured 2026-08-25 — and without this the shipment
+  // calendar prints "No signed paperwork filed for this PO" for every one of them, on a
+  // calendar the warehouse reads. An absence we never checked for is not a finding.
+  const scansChecked = !!partner && !driveError
 
   const asns = docs.filter((d) => d.type.startsWith('856')).map((d) => ({
     id: d.id, bolNumber: d.business_number, deliveryStatus: d.delivery_status,
@@ -3940,14 +3947,96 @@ export async function getShipmentEvidence(poNumber) {
     ackStatus: d.acknowledgment_status, at: d.created_at,
   })).sort((a, b) => String(a.invoiceNumber).localeCompare(String(b.invoiceNumber), undefined, { numeric: true }))
   const orders850 = docs.filter((d) => d.type.startsWith('850')).map((d) => ({ id: d.id, at: d.created_at }))
-  const shipDates = [...new Set(ord.map((r) => r.actual_ship_date).filter(Boolean).map((d) => String(d).slice(0, 10)))]
+  // ⚠️ isoPlainDay, NOT String(d).slice(0, 10). actual_ship_date is a pg DATE and
+  // arrives as a JS Date, so the slice yielded "Sat Jun 27" — a weekday, shipped to
+  // this endpoint's callers. See src/model/shipmentCalendar.js:isoPlainDay.
+  const shipDates = [...new Set(ord.map((r) => r.actual_ship_date).filter(Boolean).map(isoPlainDay).filter(Boolean))]
 
   const evidence = shipmentEvidence({ asns, invoices, scans, shipDates })
   return {
-    po, partner, orders850, shipDates, driveError,
+    po, partner, orders850, shipDates, driveError, scansChecked,
     ...evidence,
     headline: evidenceHeadline(evidence),
   }
+}
+
+/**
+ * Every PO the shipment calendar could publish, with its evidence already assembled.
+ *
+ * ⚠️ IT REUSES getShipmentEvidence() PER PO RATHER THAN RE-QUERYING IN BULK, and the
+ * cost is deliberate. A set-based rewrite would be faster and would be a SECOND
+ * implementation of "did this PO ship" — so the calendar could then assert something
+ * the app's own proof panel denies for the same PO. On a surface the warehouse reads,
+ * one source of truth is worth more than the round trips.
+ *
+ * ⚠️ THE CANDIDATE SET IS A UNION OF TWO POPULATIONS. POs carrying an 856/810 are the
+ * EDI lane; POs with only our own fulfilment date are the boutique lane and would be
+ * invisible to an EDI-shaped query. Asking only edi_document_po_refs would have made
+ * this an EDI feature wearing a two-calendar label.
+ */
+export async function loadCalendarCandidates({ max = null, poNumbers = null } = {}) {
+  let pos
+  if (poNumbers?.length) {
+    pos = [...new Set(poNumbers.map((p) => String(p).trim()).filter(Boolean))]
+  } else {
+    const { rows } = await pool.query(
+      `SELECT po_number FROM (
+         SELECT DISTINCT p.po_number
+           FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+          WHERE e.type LIKE '856%' OR e.type LIKE '810%'
+         UNION
+         SELECT DISTINCT o.po_number
+           FROM orders o JOIN fulfillments f ON f.so_number = o.so_number
+          WHERE o.po_number IS NOT NULL AND f.actual_ship_date IS NOT NULL
+       ) u
+        WHERE po_number IS NOT NULL AND btrim(po_number) <> ''
+        ORDER BY po_number`)
+    pos = rows.map((r) => r.po_number)
+  }
+  if (max && pos.length > max) pos = pos.slice(0, max)
+  if (!pos.length) return []
+
+  // Two facts the per-PO evidence query does not carry, fetched once for the batch.
+  //
+  // ⚠️ `has_edi_docs` IS THE LANE, and it is an observed fact rather than a name match.
+  // ⚠️ `trading_partner` is the counterparty named ON the 856/810 itself, and it is the
+  // only name available for 184 of 235 candidates — those POs join to no order row and
+  // no routing shipment, so without it every one of them is unclassifiable.
+  const { rows: facts } = await pool.query(
+    `SELECT c.po AS po_number,
+            EXISTS (SELECT 1 FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+                     WHERE p.po_number = c.po AND (e.type LIKE '856%' OR e.type LIKE '810%')) AS has_edi_docs,
+            (SELECT string_agg(DISTINCT e.trading_partner, ' / ')
+               FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+              WHERE p.po_number = c.po AND e.trading_partner IS NOT NULL) AS trading_partner
+       FROM unnest($1::text[]) AS c(po)`, [pos])
+  const factFor = new Map(facts.map((r) => [r.po_number, r]))
+
+  const out = []
+  for (const po of pos) {
+    const f = factFor.get(po) || {}
+    try {
+      const e = await getShipmentEvidence(po)
+      out.push({
+        po,
+        // ⚠️ routing_shipment.partner still WINS where it exists — it is what Drive
+        // filed the paperwork under, and getShipmentEvidence already searched Drive
+        // with it. trading_partner is a fallback for naming the event, never a
+        // re-derivation of a partner we already know.
+        partner: e.partner || f.trading_partner || null,
+        customer: null, location: null,
+        hasEdiDocs: !!f.has_edi_docs,
+        tradingPartner: f.trading_partner || null,
+        evidence: e, shipDates: e.shipDates || [], driveError: e.driveError || null,
+      })
+    } catch (err) {
+      // ⚠️ Recorded, never dropped. A PO that vanishes from the candidate list because
+      // its lookup threw looks identical to one with nothing to publish, and the plan
+      // would under-report by exactly the POs most likely to be broken.
+      out.push({ po, loadError: err.message })
+    }
+  }
+  return out
 }
 
 async function rememberDriveFiles(uploaded = [], { partner, filename } = {}) {
