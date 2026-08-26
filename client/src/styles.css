@@ -2865,6 +2865,9 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cxTable th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 6px 3px 0; }
 .cxTable td { padding: 2px 6px 2px 0; vertical-align: top; }
 .cxFoot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+/* The clean-check line. Quiet on purpose — it confirms a check RAN, and a confirmation
+   styled as loudly as a warning trains the eye to skip both. */
+.cxOk { display: block; margin: 6px 0; font-size: 12px; }
 
 /* ── State colours on the card title (Nima, 2026-08-14) ──────────────────────
    Only the five states he named. Tuned to stay legible on both themes, and always
