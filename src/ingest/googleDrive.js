@@ -154,6 +154,12 @@ export const DRIVE_PARENT = 'Work-Hub Shipping Documents'
 // too — `npm run migrate:drive` does both trees and is idempotent. Drive keeps a
 // folder's ID across a rename, so existing files and their webViewLinks survive.
 export const DRIVE_ROOT_BOLS = 'BOLs'
+// ⚠️ TWO TREES, AND A PO'S PAPERWORK IS IN EXACTLY ONE OF THEM. EDI freight is filed
+// under BOLs/<partner>/, boutique packing slips under Boutiques/<customer>/ (measured
+// 2026-08-26: BOLs holds "Nordstrom" and "Bloomingdale's"; Boutiques holds "Splash" and
+// "Andrews"). Anything asking "is there paperwork for this PO" must search BOTH, or it
+// reports a whole channel as unfiled — which is what the shipment calendar did for
+// every boutique shipment until this was found.
 export const DRIVE_ROOT_SLIPS = 'Boutiques'
 
 // Resolve a nested folder path (["Bloomingdale's", "7527064"]) under a root,
@@ -249,6 +255,56 @@ export async function listFiledDocuments({ partner, po, root = DRIVE_ROOT_BOLS }
   return { ok: true, files: (body.files || []).map((f) => ({
     id: f.id, name: f.name, url: f.webViewLink, size: Number(f.size || 0), createdAt: f.createdTime,
   })) }
+}
+
+/**
+ * The partner folders that ACTUALLY exist under BOLs/ — the authority for
+ * src/model/drivePartnerFolder.js.
+ *
+ * ⚠️ CACHED FOR THE PROCESS, because the caller asks once PER PO. The calendar sync
+ * walks 237 POs, and an uncached listing would add 237 identical Drive round trips to
+ * a job that already makes one per PO. Partners are created about twice a year.
+ *
+ * ⚠️ A FAILURE IS NOT AN EMPTY LIST. Returning [] when Drive is unreachable would make
+ * every partner look unfileable and turn a transient outage into "no paperwork exists"
+ * written onto a shared calendar. The failure is returned so the caller can say so.
+ */
+// ⚠️ KEYED BY ROOT. A single cached value was wrong the moment a second root existed:
+// the BOLs listing and the Boutiques listing would overwrite each other, so whichever
+// ran last decided what "the partner folders" were for BOTH trees.
+const _folderCache = new Map()
+export async function listPartnerFolders({ root = DRIVE_ROOT_BOLS, refresh = false } = {}) {
+  if (_folderCache.has(root) && !refresh) return _folderCache.get(root)
+  if (!process.env.GOOGLE_REFRESH_TOKEN) return { ok: false, configured: false, folders: [] }
+  const headers = await authHeader()
+  const findOnly = async (name, parentId) => {
+    const q = [
+      "mimeType='application/vnd.google-apps.folder'", 'trashed=false',
+      `name='${String(name).replace(/'/g, "\\'")}'`,
+      parentId ? `'${parentId}' in parents` : "'root' in parents",
+    ].join(' and ')
+    const list = await driveFetch(
+      `${FILES}?q=${encodeURIComponent(q)}&fields=files(id,name)`
+      + '&supportsAllDrives=true&includeItemsFromAllDrives=true', { headers })
+    if (list.failure) return { failure: list.failure }
+    return { id: (await list.res.json()).files?.[0]?.id || null }
+  }
+  let parent = null
+  for (const seg of [DRIVE_PARENT, root]) {
+    const found = await findOnly(seg, parent)
+    if (found.failure) return { ok: false, failure: found.failure, folders: [] }
+    if (!found.id) return { ok: true, folders: [] } // the tree itself is absent
+    parent = found.id
+  }
+  const r = await driveFetch(
+    `${FILES}?q=${encodeURIComponent(`'${parent}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'`)}`
+    + '&fields=files(id,name)&pageSize=200'
+    + '&supportsAllDrives=true&includeItemsFromAllDrives=true', { headers })
+  if (r.failure) return { ok: false, failure: r.failure, folders: [] }
+  const body = await r.res.json()
+  const out = { ok: true, root, folders: (body.files || []).map((f) => f.name) }
+  _folderCache.set(root, out)
+  return out
 }
 
 export async function uploadBolPdf({ partner, pos, filename, buffer, root = DRIVE_ROOT_BOLS }) {

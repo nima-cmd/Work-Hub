@@ -11,6 +11,7 @@ import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWin
 import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
+import { resolveDriveFolder } from '../src/model/drivePartnerFolder.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -99,7 +100,7 @@ import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { asnCheckDue, asnSummary, ASN_CHECK_MIN_HOURS, ASN_CHECK_WINDOW_DAYS } from '../src/model/asnCartonCheck.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
-import { uploadBolPdf, listFiledDocuments } from '../src/ingest/googleDrive.js'
+import { uploadBolPdf, listFiledDocuments, listPartnerFolders, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
 import {
   fetchQuestEmails, loadQuestEmails, reconcileReadStatus, assignQuestEmailCharacter, markQuestEmailReadLocal, setQuestEmailLabelsLocal, dismissQuestEmail, setQuestEmailNote,
   fetchQuestEmailById, createQuestTask, createManualTask, fetchQuestTasks, countQuestTasks, fetchQuestTaskById, fetchOpenReplyTasks, completeQuestTask,
@@ -3887,7 +3888,7 @@ export async function getShipmentEvidence(poNumber) {
 
   const { rows: docs } = await pool.query(
     `SELECT DISTINCT e.id, e.type, e.business_number, e.created_at,
-            e.delivery_status, e.acknowledgment_status
+            e.delivery_status, e.acknowledgment_status, e.trading_partner
        FROM edi_transactions e
        LEFT JOIN edi_document_po_refs p ON p.transaction_id = e.id
       WHERE p.po_number = $1 OR e.business_number = $1
@@ -3912,28 +3913,67 @@ export async function getShipmentEvidence(poNumber) {
   // ⚠️ Soft-fails. Drive being unreachable must not turn "did it ship" into an error
   // page — the EDI half of the answer is still worth having, and the response says
   // which half is missing rather than implying there are no documents.
-  let scans = []
+  // ⚠️ THE DRIVE FOLDER IS NOT THE PARTNER FIELD, AND THERE ARE TWO TREES.
+  //
+  // Drive is /BOLs/<partner>/<po>/ for EDI freight and /Boutiques/<customer>/<po>/ for
+  // boutique packing slips, both named from routing_shipment.partner. Two faults met
+  // here and each one silently reported "no paperwork":
+  //
+  //   · 184 of 235 calendar candidates resolve NO partner, so the lookup never ran.
+  //     edi_transactions.trading_partner names the counterparty on the document, but it
+  //     is ORDERFUL's label ("Nordstrom (US) (Direct to Store)"), not a folder name.
+  //   · only BOLs/ was ever searched, so every BOUTIQUE shipment's slips were invisible.
+  //
+  // resolveDriveFolder maps a label onto the folders that ACTUALLY exist in each tree —
+  // never a hardcoded list, because listFiledDocuments walks the path by exact name and
+  // a wrong segment returns zero files INDISTINGUISHABLE from "nothing was filed".
+  const tradingPartner = docs.map((d) => d.trading_partner).find(Boolean) || null
+  const partnerName = partner || tradingPartner
   let driveError = null
-  if (partner) {
+  let scans = []
+  let driveFolder = null
+  let rootsSearched = 0
+
+  for (const root of [DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS]) {
+    let folders
     try {
-      const r = await listFiledDocuments({ partner, po })
-      if (r.failure) driveError = r.failure.message || 'Drive did not answer'
+      const pf = await listPartnerFolders({ root })
+      if (pf.failure) { driveError = pf.failure.message || 'Drive did not answer'; continue }
+      folders = pf.folders || []
+    } catch (e) { driveError = e.message; continue }
+
+    // Enumerating the tree IS the check. A partner with no folder here has nothing
+    // filed here — that is an answer, not a gap.
+    rootsSearched++
+    const folder = resolveDriveFolder(partnerName, folders)
+    if (!folder) continue
+    driveFolder = driveFolder || `${root}/${folder}`
+    try {
+      const r = await listFiledDocuments({ partner: folder, po, root })
+      if (r.failure) { driveError = r.failure.message || 'Drive did not answer'; continue }
       // The scan app names a per-DC split "<po>-<DC>.pdf"; a master carries its BOL
       // number instead. ⚠️ Labelled, not left blank — an unlabelled row in a proof
       // panel reads as a document nobody could identify.
-      else scans = r.files.map((f) => ({
+      scans = scans.concat((r.files || []).map((f) => ({
         ...f,
         dc: (f.name.match(/-([A-Z]{2,3})\.pdf$/i) || [])[1] || null,
-        kind: /master/i.test(f.name) ? 'master BOL' : 'signed BOL',
-      }))
+        kind: /master/i.test(f.name) ? 'master BOL' : root === DRIVE_ROOT_SLIPS ? 'packing slip' : 'signed BOL',
+      })))
     } catch (e) { driveError = e.message }
   }
+
   // ⚠️ "WE LOOKED AND FOUND NONE" IS NOT "WE NEVER LOOKED", and only this flag can tell
   // them apart. The Drive lookup is skipped entirely when no partner resolved — 184 of
   // 235 calendar candidates, measured 2026-08-25 — and without this the shipment
   // calendar prints "No signed paperwork filed for this PO" for every one of them, on a
   // calendar the warehouse reads. An absence we never checked for is not a finding.
-  const scansChecked = !!partner && !driveError
+  // ⚠️ Keyed on WHETHER WE ACTUALLY SEARCHED, not on the partner field. Both trees
+  // enumerated with no error means "none filed" is a verified answer even when the
+  // partner has no folder — ShopBop, Neiman Marcus and Saks have never had anything
+  // filed, and saying so is correct. Only a Drive failure (or Drive unconfigured) is
+  // honestly "not checked". Keying this on `partner` was the bug that made 184 POs
+  // assert an absence nobody had looked for.
+  const scansChecked = rootsSearched === 2 && !driveError
 
   const asns = docs.filter((d) => d.type.startsWith('856')).map((d) => ({
     id: d.id, bolNumber: d.business_number, deliveryStatus: d.delivery_status,
@@ -3954,7 +3994,7 @@ export async function getShipmentEvidence(poNumber) {
 
   const evidence = shipmentEvidence({ asns, invoices, scans, shipDates })
   return {
-    po, partner, orders850, shipDates, driveError, scansChecked,
+    po, partner, tradingPartner, driveFolder, orders850, shipDates, driveError, scansChecked,
     ...evidence,
     headline: evidenceHeadline(evidence),
   }
