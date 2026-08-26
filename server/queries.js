@@ -93,6 +93,7 @@ import { summarizeTransfer } from '../src/model/transferMeter.js'
 import {
   buildCustomsLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
 } from '../src/model/customsInvoice.js'
+import { reconcileShipment, priceAnomalies, reconcileWarnings } from '../src/model/customsReconcile.js'
 export { toCsv }
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
@@ -4149,29 +4150,57 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
 
   const built = buildCustomsLines(lines)
 
-  // ⚠️ Does the fulfilment actually contain the whole order? The IF lines are tripled,
-  // so they are deduped by item before counting — comparing the raw rows would report
-  // every shipment as three times its size.
+  // ⚠️ PER ITEM, NOT A TOTAL. This compared the fulfilment's unit COUNT against the
+  // order's, which cannot see a SWAP: ship 2 Onyx in place of 2 Rosso and the total is
+  // unchanged while every declared line is wrong. A customs form naming goods that are
+  // not in the box is the one failure this document must not have.
+  //
+  // ⚠️ POSITIVE InvtPart LINES ONLY. An Item Fulfilment writes THREE lines per item
+  // (-qty, +qty, -qty) for the inventory movement — verified on IF7594: SN03013LD-
+  // BORDEAUX comes back as -2, +2, -2. SUM(ABS()) triples every count. This is the
+  // same rule as ediPackagesLive.ifUnitsSql, which measured it on IF7420, rather than
+  // a second private fix for one NetSuite quirk. The old code deduped on `item|qty`,
+  // which also collapsed two genuine lines of the same item and quantity into one.
+  let reconciliation = null
   let shipmentNote = null
   try {
     const f = await runSuiteQL(
-      `SELECT BUILTIN.DF(tl.item) AS item, ABS(tl.quantity) AS qty
+      `SELECT BUILTIN.DF(tl.item) AS item, SUM(tl.quantity) AS qty
          FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
-        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}' AND tl.itemtype = 'InvtPart'`)
-    const seen = new Map()
-    for (const r of f.rows || []) seen.set(`${r.item}|${r.qty}`, Number(r.qty || 0))
-    const ifUnits = [...seen.values()].reduce((n, v) => n + v, 0)
-    if (ifUnits && ifUnits !== built.totalQty) {
-      shipmentNote = `${ifNum} holds ${ifUnits} unit(s) but ${head.soNumber} is priced at `
-        + `${built.totalQty} — this looks like a PARTIAL shipment, so check the quantities before declaring.`
-    }
-  } catch { shipmentNote = null }
+        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}'
+          AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+        GROUP BY BUILTIN.DF(tl.item)`)
+    reconciliation = reconcileShipment({
+      priced: lines,
+      shipped: (f.rows || []).map((r) => ({ item: r.item, qty: Number(r.qty || 0) })),
+    })
+  } catch (e) {
+    // ⚠️ A failed read is "not checked", never "agrees". Swallowing this to null was
+    // how an unreadable fulfilment came to look like a verified one.
+    reconciliation = reconcileShipment({ priced: lines, shipped: [] })
+    reconciliation.error = e.message
+  }
+  if (reconciliation && reconciliation.checked && !reconciliation.agrees
+      && reconciliation.pricedUnits !== reconciliation.shippedUnits) {
+    shipmentNote = `${ifNum} holds ${reconciliation.shippedUnits} unit(s) but ${head.soNumber} is priced at `
+      + `${reconciliation.pricedUnits} — this looks like a PARTIAL shipment, so check the quantities before declaring.`
+  }
+
+  // ⚠️ The check the happy accident was doing by eye: one STYLE at two unit prices.
+  const anomalies = priceAnomalies(lines)
+
+  // ⚠️ WARNINGS, NOT `problems`. `problems` gate the CSV because an unclassified line
+  // cannot be declared at all; a markdown and a partial shipment are both legitimate,
+  // so these inform rather than block. Blocking a real shipment on a legal price
+  // difference would teach everyone to ignore the gate.
+  const warnings = reconcileWarnings(reconciliation, anomalies, { ifNumber: ifNum, soNumber: head.soNumber })
 
   return {
     ifNumber: ifNum, soNumber: head.soNumber, customer: head.customer,
     status: head.status, location: head.location,
     ...built,
     shipmentNote,
+    reconciliation, priceAnomalies: anomalies, warnings,
     dhl: { columns: DHL_COLUMNS, rows: toDhlRows(built) },
     ups: { columns: UPS_COLUMNS, rows: toUpsRows(built) },
   }

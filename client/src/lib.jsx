@@ -1094,6 +1094,25 @@ export function CustomsButton({ ifNumber }) {
           </div>
           {/* ⚠️ A partial shipment declares goods that are not in the box. Loud. */}
           {doc.shipmentNote && <div className="banner warn">⚠ {doc.shipmentNote}</div>}
+          {/* ⚠️ CHECKED AGAINST NETSUITE AND AGAINST THE BOX — the state that has to be
+              visible BEFORE the CSV is downloaded, because the form is trusted once it
+              is on a courier's desk. A mispriced item was found here by eye once
+              (SO12300, one style at $114 and $102); these say it out loud instead. */}
+          {doc.warnings?.length > 0 && (
+            <div className="banner warn">
+              ⚠ Check before declaring:
+              <ul>{doc.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+            </div>
+          )}
+          {/* Silence is not proof. A clean check says so, so that "no warning" can be
+              told apart from "never checked" — the distinction is the whole point. */}
+          {doc.reconciliation && !doc.warnings?.length && (
+            <div className="cxOk muted">
+              ✓ {doc.reconciliation.checked
+                ? `Every line matches ${doc.soNumber} and ${doc.ifNumber} — ${doc.reconciliation.shippedUnits} units, item for item.`
+                : 'NOT checked against the fulfilment — NetSuite did not answer.'}
+            </div>
+          )}
           {/* ⚠️ An unclassified line has NO tariff code. Never let the form look
               finished while one is outstanding — a wrong code is a held shipment. */}
           {!doc.ready && (
