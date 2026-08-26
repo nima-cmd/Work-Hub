@@ -4111,6 +4111,50 @@ export async function fileShipmentToDrive(id) {
   return { ...res, linked }
 }
 
+/**
+ * Everything sitting in the warehouse that has not shipped.
+ *
+ * ⚠️ THE APP'S LEDGER IS THE AUTHORITY, NOT NETSUITE'S STATUS (Nima, 2026-08-26: "we
+ * will need to not look at its status in netsuite but in the app cause those 10 must be
+ * in our possession pending payment or an invoice"). NetSuite calls all 26 of these
+ * Picked or Packed, which says where they are in ITS workflow — not that we are holding
+ * goods. order_events records what we actually observed: a custody scan, a fulfilment
+ * created, an invoice raised, a payment received.
+ *
+ * ⚠️ Departure is `actual_ship_date IS NULL` plus the absence of a DEPARTED event. The
+ * date alone was nearly enough — but a shipment whose ship date has not synced yet
+ * would reappear in the warehouse the day after it left, and the ledger knows sooner.
+ */
+export async function loadHeldCandidates({ today = null } = {}) {
+  const { rows } = await pool.query(
+    `SELECT f.if_number, f.so_number, f.status, f.if_date, o.po_number, o.customer, o.source,
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'CUSTODY_IN') AS custody_in_at,
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'PACKED') AS packed_at,
+            EXISTS (SELECT 1 FROM order_events e
+                     WHERE e.so_number = f.so_number AND e.event_type = 'INVOICED') AS invoiced,
+            EXISTS (SELECT 1 FROM order_events e
+                     WHERE e.so_number = f.so_number AND e.event_type = 'PAID') AS paid,
+            EXISTS (SELECT 1 FROM order_events e
+                     WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number AND e.event_type = 'DEPARTED') AS departed
+       FROM fulfillments f
+       LEFT JOIN orders o ON o.so_number = f.so_number
+      WHERE f.actual_ship_date IS NULL
+      ORDER BY f.if_number`)
+
+  return rows
+    .filter((r) => !r.departed)
+    .map((r) => ({
+      ifNumber: r.if_number, so: r.so_number, po: r.po_number, customer: r.customer,
+      source: r.source, status: r.status,
+      events: {
+        custodyInAt: r.custody_in_at, ifDate: r.if_date, packedAt: r.packed_at,
+        invoiced: !!r.invoiced, paid: !!r.paid,
+      },
+    }))
+}
+
 // ── Commercial invoice for an international shipment ────────────────────────
 //
 // Nima, 2026-08-14: "Theres a tool in netsuite that creates the UPS commercial invoice

@@ -10,17 +10,23 @@
 
 import { deriveSource } from './source.js'
 import { shipmentEvent } from './shipmentCalendar.js'
+import { heldEvent } from './heldShipment.js'
 
-export const LANE = { EDI: 'edi', BOUTIQUE: 'boutique' }
+export const LANE = { EDI: 'edi', BOUTIQUE: 'boutique', HELD: 'held' }
 
 // Two calendars rather than one with colours, because Nima asked for TOGGLEABLE
 // LAYERS — and in Google the unit you can switch off is a calendar, not a colour.
 export const CALENDAR_NAME = {
   [LANE.EDI]: 'Naghedi Shipping — EDI',
   [LANE.BOUTIQUE]: 'Naghedi Shipping — Boutique',
+  // ⚠️ A THIRD LANE THAT IS NOT A SHIPMENT. The other two record freight that WENT;
+  // this one records goods still on our floor, and it sits on TODAY rather than on any
+  // predicted date. Named so a reader glancing at three toggled layers cannot mistake
+  // it for a shipping record.
+  [LANE.HELD]: 'Naghedi Shipping — In the warehouse',
 }
 
-export const ACTION = { CREATE: 'create', UPDATE: 'update', UNCHANGED: 'unchanged', SKIP: 'skip' }
+export const ACTION = { CREATE: 'create', UPDATE: 'update', UNCHANGED: 'unchanged', SKIP: 'skip', REMOVE: 'remove' }
 
 export const SKIP = {
   NO_EVENT: 'no-event',              // no date to put it on — shipmentEvent() returned null
@@ -183,6 +189,69 @@ export function summarize(entries = []) {
     // whose population is not its label is this repo's second-commonest counter bug.
     if (e.proven) out.proven++; else out.unproven++
     if (e.paperworkChecked === false) out.paperworkUnchecked++
+  }
+  return out
+}
+
+
+/**
+ * The held calendar: what is on our floor today, and what should stop being.
+ *
+ * @param candidates  loadHeldCandidates() output
+ * @param existing    Map(eventId -> google event) for the held calendar
+ * @param shippedKeys the keys the shipped lanes are publishing THIS RUN
+ * @param todayIso    the day every held entry sits on
+ */
+export function planHeldCalendar({ candidates = [], existing = new Map(), shippedKeys = new Set(), todayIso } = {}) {
+  const entries = []
+  const live = new Set()
+
+  for (const c of candidates) {
+    const ev = heldEvent({ ...c, todayIso })
+    if (!ev) { entries.push({ so: c.so, action: ACTION.SKIP, reason: 'no-key' }); continue }
+
+    // ⚠️ IT SHIPPED — the held copy must GO, or the same shipment shows twice on two
+    // calendars saying opposite things. This is the "move" half, and it is the only
+    // place this repo deletes a calendar event. Safe because the key is one WE minted
+    // and the shipped lane is publishing that same key in this very run.
+    if (shippedKeys.has(ev.key)) {
+      if (existing.get?.(ev.key)) entries.push({ so: c.so, key: ev.key, action: ACTION.REMOVE, reason: 'shipped' })
+      continue
+    }
+
+    live.add(ev.key)
+    const desired = {
+      id: ev.key, summary: ev.summary, description: ev.description,
+      start: { date: ev.date }, end: { date: nextDay(ev.date) }, transparency: 'transparent',
+    }
+    const here = existing.get?.(ev.key) || null
+    entries.push({
+      so: c.so, po: c.po, key: ev.key, date: ev.date, summary: ev.summary,
+      reason: ev.reason, daysHeld: ev.daysHeld, event: desired,
+      action: !here ? ACTION.CREATE : eventDiffers(here, desired) ? ACTION.UPDATE : ACTION.UNCHANGED,
+    })
+  }
+
+  // ⚠️ A HELD EVENT WITH NO CANDIDATE IS STALE, and staleness here is a lie about where
+  // goods are. It happens whenever a shipment leaves the population without appearing in
+  // a shipped lane — the ship date synced but no ASN, say. Removed rather than left to
+  // sit on today's date forever, quietly asserting that a departed box is on the floor.
+  for (const [key] of existing) {
+    if (live.has(key)) continue
+    if (entries.some((e) => e.key === key)) continue
+    entries.push({ key, action: ACTION.REMOVE, reason: 'no-longer-held' })
+  }
+
+  return { entries, summary: summarizeHeld(entries) }
+}
+
+export function summarizeHeld(entries = []) {
+  const out = { total: entries.length, create: 0, update: 0, unchanged: 0, remove: 0, skip: 0, byReason: {}, oldest: null }
+  for (const e of entries) {
+    out[e.action] = (out[e.action] || 0) + 1
+    if (e.action === ACTION.REMOVE || e.action === ACTION.SKIP) continue
+    out.byReason[e.reason] = (out.byReason[e.reason] || 0) + 1
+    if (e.daysHeld != null && (out.oldest === null || e.daysHeld > out.oldest)) out.oldest = e.daysHeld
   }
   return out
 }

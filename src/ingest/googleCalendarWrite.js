@@ -113,6 +113,28 @@ export async function upsertEvent(token, calendarId, event, { update = false } =
   }
 }
 
+/**
+ * Delete one event we minted.
+ *
+ * ⚠️ THE ONLY DELETE IN THIS CODEBASE'S CALENDAR PATH, and it is deliberate rather than
+ * convenient. It exists for exactly one motion: a shipment leaving the warehouse
+ * calendar as it arrives on a shipped one. Without it the same shipment sits on two
+ * calendars asserting opposite things, which is worse than either alone.
+ *
+ * ⚠️ A 404 or 410 IS SUCCESS. The event is already gone — someone deleted it by hand,
+ * or a previous run got there first. Treating "already absent" as an error would make
+ * every subsequent sync fail on a job that has nothing left to do.
+ */
+export async function deleteEvent(token, calendarId, eventId) {
+  try {
+    await call(token, `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' })
+    return { deleted: true }
+  } catch (e) {
+    if (e.status === 404 || e.status === 410) return { deleted: false, alreadyGone: true }
+    throw e
+  }
+}
+
 /** A share link for a calendar, for the CLI to print. */
 export const calendarUrl = (id) => `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(id || '')}`
 

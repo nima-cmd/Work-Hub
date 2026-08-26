@@ -42,7 +42,7 @@ npm run check:neon         # is the database answering, which one, and how close
 npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" emails
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
-npm run sync:calendar      # shipped POs -> two Google calendars (EDI / Boutique). DRY unless --write
+npm run sync:calendar      # shipped POs -> 3 Google calendars (EDI / Boutique / warehouse). DRY unless --write
 
 ```
 
@@ -309,6 +309,7 @@ src/ingest/shipstationRates.js  live V2 quotes, per UPS account
 src/model/manhattanTender.js  parse Nordstrom's TMS tender email; SRR's grain is the DC
 src/model/shipmentCalendar.js  a shipment as a shareable calendar entry (the event TEXT)
 src/model/shipmentCalendarPlan.js  which calendar, what changed — the sync's rules, pure
+src/model/heldShipment.js  a shipment still on our floor; dated TODAY because ship_date is fabricated
 src/ingest/googleCalendarWrite.js  the WRITE half of Google Calendar (googleCalendar.js reads)
 src/ingest/shipmentCalendarSync.js  plan + publish; candidates are an INPUT (src never imports server)
 src/ingest/manhattanTender.js pull + persist tenders; reconcile vs routing_shipment

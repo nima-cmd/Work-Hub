@@ -11,8 +11,8 @@
 // ⚠️ DRY BY DEFAULT. Every entry point defaults dryRun:true and the caller must ask for
 // a write. This publishes to a calendar the warehouse reads.
 
-import { getAccessToken, ensureCalendar, fetchOwnedEvents, upsertEvent, calendarUrl } from './googleCalendarWrite.js'
-import { planShipmentCalendar, summarize, CALENDAR_NAME, LANE, ACTION } from '../model/shipmentCalendarPlan.js'
+import { getAccessToken, ensureCalendar, fetchOwnedEvents, upsertEvent, deleteEvent, calendarUrl } from './googleCalendarWrite.js'
+import { planShipmentCalendar, planHeldCalendar, summarize, CALENDAR_NAME, LANE, ACTION } from '../model/shipmentCalendarPlan.js'
 
 export const configured = () =>
   !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN)
@@ -25,11 +25,13 @@ export const configured = () =>
  */
 export async function syncShipmentCalendar({
   candidates = [],
+  held = null,          // loadHeldCandidates() output; null = do not touch that calendar
+  todayIso = null,      // the day held entries sit on — an INPUT, never Date.now() here
   dryRun = true,
   lanes = [LANE.EDI, LANE.BOUTIQUE],
   deps = {},
 } = {}) {
-  const g = { getAccessToken, ensureCalendar, fetchOwnedEvents, upsertEvent, ...deps }
+  const g = { getAccessToken, ensureCalendar, fetchOwnedEvents, upsertEvent, deleteEvent, ...deps }
 
   if (!configured()) {
     return { configured: false, dryRun, calendars: {}, plan: { entries: [], summary: null, misfiled: [] }, results: [] }
@@ -48,7 +50,7 @@ export async function syncShipmentCalendar({
   // is realistic" would make --dry leave two permanent artefacts in his account — a
   // dry run with a side effect is not a dry run. Nor does a --lane=edi run create the
   // Boutique calendar it only reads.
-  const ALL_LANES = [LANE.EDI, LANE.BOUTIQUE]
+  const ALL_LANES = held ? [LANE.EDI, LANE.BOUTIQUE, LANE.HELD] : [LANE.EDI, LANE.BOUTIQUE]
   const calendars = {}
   for (const lane of ALL_LANES) {
     calendars[lane] = await g.ensureCalendar(token, CALENDAR_NAME[lane], { create: inLanes.has(lane) && !dryRun })
@@ -81,9 +83,41 @@ export async function syncShipmentCalendar({
     }
   }
 
+  // ── the warehouse calendar ────────────────────────────────────────────────
+  // ⚠️ PLANNED AFTER the shipped lanes, because it needs the keys they are publishing
+  // this run: a shipment appearing on a shipped calendar is precisely what makes its
+  // held entry stale. Planning them independently would leave both live for an hour.
+  let heldPlan = null
+  if (held) {
+    const shippedKeys = new Set(
+      plan.entries.filter((e) => e.action === ACTION.CREATE || e.action === ACTION.UPDATE || e.action === ACTION.UNCHANGED)
+        .map((e) => e.key).filter(Boolean))
+    heldPlan = planHeldCalendar({
+      candidates: held, existing: existing[LANE.HELD] || new Map(), shippedKeys, todayIso,
+    })
+    if (!dryRun) {
+      const calId = calendars[LANE.HELD]?.id
+      for (const e of heldPlan.entries) {
+        if (!calId) break
+        try {
+          if (e.action === ACTION.REMOVE) {
+            await g.deleteEvent(token, calId, e.key)
+            results.push({ so: e.so, lane: LANE.HELD, key: e.key, ok: true, mode: 'remove' })
+          } else if (e.action === ACTION.CREATE || e.action === ACTION.UPDATE) {
+            const r = await g.upsertEvent(token, calId, e.event, { update: e.action === ACTION.UPDATE })
+            results.push({ so: e.so, lane: LANE.HELD, key: e.key, ok: true, mode: r.mode })
+          }
+        } catch (err) {
+          results.push({ so: e.so, lane: LANE.HELD, key: e.key, ok: false, error: err.message })
+        }
+      }
+    }
+  }
+
   return {
     configured: true,
     dryRun,
+    held: heldPlan,
     calendars: Object.fromEntries(Object.entries(calendars).map(([l, c]) => [l, { ...c, url: c?.id ? calendarUrl(c.id) : null }])),
     plan,
     results,
