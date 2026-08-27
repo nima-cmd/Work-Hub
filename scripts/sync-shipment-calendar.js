@@ -11,9 +11,10 @@
 // before it leaves. A dry run does not even CREATE the two calendars.
 
 import { pool } from '../src/db.js'
-import { loadCalendarCandidates } from '../server/queries.js'
+import { loadCalendarCandidates, loadHeldCandidates } from '../server/queries.js'
 import { syncShipmentCalendar, configured } from '../src/ingest/shipmentCalendarSync.js'
 import { ACTION, SKIP_LABEL, CALENDAR_NAME, LANE } from '../src/model/shipmentCalendarPlan.js'
+import { REASON_LABEL } from '../src/model/heldShipment.js'
 
 const argv = process.argv.slice(2)
 const arg = (n) => (argv.find((a) => a.startsWith(`--${n}=`)) || '').split('=')[1] || null
@@ -22,6 +23,7 @@ const verbose = argv.includes('-v') || argv.includes('--verbose')
 const max = Number(arg('max')) || null
 const poNumbers = (arg('po') || '').split(',').map((s) => s.trim()).filter(Boolean)
 const laneArg = arg('lane')
+const noHeld = argv.includes('--no-held')
 const lanes = laneArg ? [laneArg] : [LANE.EDI, LANE.BOUTIQUE]
 
 if (laneArg && !Object.values(LANE).includes(laneArg)) {
@@ -45,12 +47,22 @@ console.log(`  ${candidates.length} candidate PO(s) loaded`
   + (loadErrors.length ? ` · ⚠️ ${loadErrors.length} failed to load` : '')
   + (driveErrors.length ? ` · ⚠️ ${driveErrors.length} with Drive unreachable` : ''))
 
-const r = await syncShipmentCalendar({ candidates: candidates.filter((c) => !c.loadError), dryRun: !write, lanes })
+// ⚠️ TODAY IS COMPUTED HERE AND PASSED DOWN. The model never asks the clock — that is
+// what makes the held calendar testable at all, and what stops "today" changing halfway
+// through a run that spans midnight.
+const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
+const held = noHeld ? null : await loadHeldCandidates()
+const r = await syncShipmentCalendar({
+  candidates: candidates.filter((c) => !c.loadError), held, todayIso, dryRun: !write, lanes,
+})
 const s = r.plan.summary
 
 console.log('')
-for (const lane of lanes) {
+// ⚠️ The held calendar is listed too when it is in play — a calendar whose id and URL
+// are never printed is one nobody can share, which is the entire point of publishing.
+for (const lane of [...lanes, ...(r.held ? [LANE.HELD] : [])]) {
   const c = r.calendars[lane]
+  if (!c) continue
   const state = c?.missing ? 'does not exist yet — --write would create it'
     : c?.created ? `created  ${c.id}` : `${c.id}`
   console.log(`  ${CALENDAR_NAME[lane].padEnd(30)} ${state}`)
@@ -74,6 +86,25 @@ if (s.paperworkUnchecked) {
 if (s.skip) {
   console.log('\n  Skipped:')
   for (const [reason, n] of Object.entries(s.skips)) console.log(`    ${String(n).padStart(4)}  ${SKIP_LABEL[reason] || reason}`)
+}
+
+if (r.held) {
+  const h = r.held.summary
+  console.log('')
+  console.log(`  ${CALENDAR_NAME[LANE.HELD]}   (everything on our floor, dated ${todayIso})`)
+  console.log(`  create ${h.create}   ·   update ${h.update}   ·   unchanged ${h.unchanged}   ·   remove ${h.remove}`)
+  const reasons = Object.entries(h.byReason).map(([k, n]) => `${n} ${REASON_LABEL[k] || k}`).join('  ·  ')
+  if (reasons) console.log(`  ${reasons}`)
+  if (h.oldest != null) console.log(`  oldest has been sitting ${h.oldest} day(s)`)
+  const moved = r.held.entries.filter((e) => e.action === ACTION.REMOVE && e.reason === 'shipped')
+  if (moved.length) console.log(`  → ${moved.length} shipped and will MOVE off this calendar`)
+  const stale = r.held.entries.filter((e) => e.action === ACTION.REMOVE && e.reason === 'no-longer-held')
+  if (stale.length) console.log(`  → ${stale.length} no longer held, removed`)
+  if (verbose) for (const e of r.held.entries) {
+    if (e.action === ACTION.REMOVE) { console.log(`    remove    ${String(e.key).padEnd(14)} ${e.reason}`); continue }
+    if (e.action === ACTION.SKIP) continue
+    console.log(`    ${e.action.padEnd(9)} ${String(e.so ?? e.key).padEnd(14)} ${String(e.daysHeld ?? '?').padStart(3)}d  ${e.summary}`)
+  }
 }
 
 if (r.plan.misfiled.length) {
