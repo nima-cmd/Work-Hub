@@ -58,3 +58,32 @@ test('nothing to match on is null, never a guess', () => {
   assert.equal(resolveDriveFolder('', BOLS), null)
   assert.equal(resolveDriveFolder('Nordstrom', []), null, 'an empty folder list cannot confirm anything')
 })
+
+// ── which folder name holds the documents ───────────────────────────────────
+import { folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
+
+test('folderKeysFor: each tree tries ITS OWN naming convention first', () => {
+  // ⚠️ BOLs/<partner>/7242978/ but Boutiques/<customer>/SO12474/ — measured 2026-08-26.
+  assert.deepEqual(folderKeysFor(TREE.BOLS, { po: '7242978', so: 'SO12300' }), ['7242978', 'SO12300'])
+  assert.deepEqual(folderKeysFor(TREE.SLIPS, { po: '911234-001', so: 'SO12474' }), ['SO12474', '911234-001'])
+})
+
+test('folderKeysFor: the other key is a FALLBACK, not an assumption', () => {
+  // A convention inferred from 21 folders is not a law, and a wrong key returns zero
+  // files indistinguishable from "nothing filed" — so both are tried, in order.
+  assert.equal(folderKeysFor(TREE.SLIPS, { po: 'X', so: 'Y' })[1], 'X')
+  assert.equal(folderKeysFor(TREE.BOLS, { po: 'X', so: 'Y' })[1], 'Y')
+})
+
+test('folderKeysFor: a missing identifier is dropped, never searched as blank', () => {
+  // ⚠️ A boutique PO with no po_number would otherwise search for a folder named ""
+  // and match the PARENT — listing every document filed under that customer.
+  assert.deepEqual(folderKeysFor(TREE.SLIPS, { po: null, so: 'SO12300' }), ['SO12300'])
+  assert.deepEqual(folderKeysFor(TREE.SLIPS, { po: '', so: 'SO12300' }), ['SO12300'])
+  assert.deepEqual(folderKeysFor(TREE.SLIPS, { po: '   ', so: 'SO12300' }), ['SO12300'])
+  assert.deepEqual(folderKeysFor(TREE.BOLS, {}), [])
+})
+
+test('folderKeysFor: one identifier serving both roles is tried once', () => {
+  assert.deepEqual(folderKeysFor(TREE.BOLS, { po: 'SAME', so: 'SAME' }), ['SAME'])
+})
