@@ -39,7 +39,7 @@ import {
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
-  loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getSyncMeta, setSyncMeta,
+  loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getTransferCards, getSyncMeta, setSyncMeta,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -412,6 +412,17 @@ app.post('/api/fulfillment/departed', async (req, res) => {
 
 // Where is this document right now — read-only, so the scan-to-NetSuite overlay can
 // SHOW custody state and let a human decide, rather than writing one on their behalf.
+// Transfers as board cards. ⚠️ Its own endpoint, not folded into /api/orders — the
+// board merges them, and `orders` stays exactly what it has always been.
+app.get('/api/transfers', async (_req, res) => {
+  try {
+    res.json(await getTransferCards())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.get('/api/custody/state', async (req, res) => {
   try {
     res.json(await getCustodyState(req.query.doc))
@@ -1735,7 +1746,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     let calendar = null
     try {
       calendar = startCalendarIncremental({
-        loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getSyncMeta, setSyncMeta,
+        loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getTransferCards, getSyncMeta, setSyncMeta,
       })
     } catch (e) {
       console.error('shipment calendar sync could not start (recurring tasks still checked):', e.message)

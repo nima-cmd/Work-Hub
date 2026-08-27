@@ -12,6 +12,7 @@ import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
+import { transferCard } from '../src/model/transferCard.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -4275,6 +4276,20 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null, sin
     }
   }
   return out
+}
+
+/**
+ * Transfers as board cards — the same shape getOrders returns, so the Kanban renders
+ * them without a second code path.
+ *
+ * ⚠️ Deliberately a SEPARATE call from getOrders. Transfers are not in `orders` and
+ * must not start arriving through it: 63 places read that function's table, and the
+ * whole reason transfers live elsewhere is that none of them should silently change
+ * meaning. The board asks for both and merges them where it wants them.
+ */
+export async function getTransferCards() {
+  const rows = await loadTransferCandidates()
+  return rows.map(transferCard).filter(Boolean)
 }
 
 /**
