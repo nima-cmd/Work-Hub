@@ -47,9 +47,47 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS dc TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_number TEXT;
 
 -- ── Item Fulfillments linked to an order ─────────────────────────────────────
+-- ── Transfer orders (Nima, 2026-08-27) ───────────────────────────────────────
+-- "we will ship to office or to consignment through transfer orders we right now
+-- have no way to track them ... its genuinely work we want to track."
+--
+-- ⚠️ A TRANSFER IS NOT A SALES ORDER, which is why it is not in `orders`. It has NO
+-- CUSTOMER — NetSuite's `entity` is null on TO217 — because it ships to a LOCATION.
+-- Putting it in `orders` would have silently changed what "an order" means for all
+-- 63 places that read that table, which is this repo's commonest bug shape applied
+-- to a dozen surfaces at once.
+--
+-- ⚠️ TRACKED DESTINATIONS ARE AN ENTERED LIST, NOT AN INFERRED RULE. Direction cannot
+-- be derived: `transaction.location` is not queryable on a transfer order (it returns
+-- zero rows even alone, the same shape as item.baseprice), so only the DESTINATION is
+-- observable. Nima named Office and Consignment; the other 173 transfers — 138 inbound
+-- to Warehouse/Virtual Warehouse and 33 to partner locations — are deliberately out of
+-- scope until he says otherwise. See src/model/transferOrder.js.
+CREATE TABLE IF NOT EXISTS transfer_order (
+  to_number     TEXT PRIMARY KEY,      -- 'TO217'
+  destination   TEXT,                  -- the location it ships TO ('Office')
+  status        TEXT,
+  trandate      DATE,
+  first_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_transfer_order_dest ON transfer_order(destination);
+
+-- ⚠️ Dropped on an existing database too, not just declared away above. schema.sql is
+-- re-applied by `npm run migrate`, and a column definition alone never removes a
+-- constraint that is already there.
+ALTER TABLE fulfillments DROP CONSTRAINT IF EXISTS fulfillments_so_number_fkey;
+
 CREATE TABLE IF NOT EXISTS fulfillments (
   if_number        TEXT PRIMARY KEY,
-  so_number        TEXT REFERENCES orders(so_number) ON DELETE CASCADE,
+  -- ⚠️ NO FOREIGN KEY, and that is a decision rather than an oversight (2026-08-27).
+  -- A fulfilment's parent is EITHER a sales order OR a transfer order — TO217 ships
+  -- IF7612 to the Office and has no customer at all — and SQL cannot express a
+  -- reference to one of two tables. The FK to orders(so_number) was dropped so a
+  -- transfer's fulfilment can exist; `npm run check:counters` replaces the guarantee by
+  -- asserting every so_number resolves to EXACTLY ONE of the two, which is the part
+  -- the FK was actually protecting.
+  so_number        TEXT,
   status           TEXT,                        -- Picked / Packed / Shipped
   packed_status    TEXT,                        -- IF-Packed-Status (Approved to Ship, FOB…, Pending Invoice, Waiting On Payment)
   days_pending     INTEGER,

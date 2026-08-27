@@ -50,7 +50,8 @@
     "check:slack": "node --env-file=.env.local scripts/check-slack.js",
     "fix:bol-sequence": "node --env-file=.env.local scripts/fix-bol-sequence.js",
     "sync:calendar": "node --env-file=.env.local scripts/sync-shipment-calendar.js",
-    "sync:prices": "node --env-file=.env.local scripts/sync-item-prices.js"
+    "sync:prices": "node --env-file=.env.local scripts/sync-item-prices.js",
+    "sync:transfers": "node --env-file=.env.local scripts/sync-transfers.js"
   },
   "dependencies": {
     "concurrently": "^10.0.3",

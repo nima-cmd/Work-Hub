@@ -445,6 +445,48 @@ export function ocLinkSql(since) {
           WHERE t.type='SalesOrd' AND ${openOrRecent(since)}`
 }
 
+// ── Transfer orders (Nima, 2026-08-27) ───────────────────────────────────────
+//
+// ⚠️ `BUILTIN.DF(transferlocation)` IS SELECTED ALONE, deliberately. Adding
+// `location` (the FROM side) to the same SELECT makes the whole query return ZERO
+// ROWS — not an error, zero rows — which is the item.baseprice shape. The destination
+// is therefore the only observable half, and why the tracked set is a named list.
+//
+// ⚠️ No `entity`: a transfer has no customer. Selecting it silently drops the row.
+export function transferOrderSql() {
+  return `SELECT t.tranid AS to_number,
+                 BUILTIN.DF(t.transferlocation) AS destination,
+                 BUILTIN.DF(t.status) AS status,
+                 TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate
+          FROM transaction t
+          WHERE t.type='TrnfrOrd'`
+}
+
+// A transfer's fulfilments, through the SAME link table the sales-order side uses.
+// ⚠️ transaction.createdfrom is unusable — selecting it returns zero rows — but
+// PreviousTransactionLineLink resolves TO217 → IF7612 exactly as it does SO → IF.
+export function transferFulfillmentSql() {
+  return `SELECT DISTINCT c.tranid AS if_number, t.tranid AS to_number, c.status,
+                 TO_CHAR(c.trandate,'YYYY-MM-DD') AS trandate,
+                 TO_CHAR(c.createddate,'YYYY-MM-DD"T"HH24:MI:SS') AS createddate
+          FROM transaction t
+          JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
+          JOIN transaction c ON c.id = l.nextdoc AND c.type='ItemShip'
+          WHERE t.type='TrnfrOrd'`
+}
+
+// Tracking numbers on a transfer's fulfilment — the number Nima checks by hand, since
+// ShipStation's delivery endpoint is behind a plan upgrade.
+export function transferTrackingSql() {
+  return `SELECT DISTINCT c.tranid AS if_number, tn.trackingnumber
+          FROM transaction t
+          JOIN PreviousTransactionLineLink l ON l.previousdoc = t.id
+          JOIN transaction c ON c.id = l.nextdoc AND c.type='ItemShip'
+          JOIN TrackingNumberMap m ON m.transaction = c.id
+          JOIN trackingnumber tn ON tn.id = m.trackingnumber
+          WHERE t.type='TrnfrOrd'`
+}
+
 // Tracking numbers per IF. NetSuite exposes these ONLY via the TrackingNumberMap
 // join (transaction.trackingnumbers / linkedtrackingnumbers are not queryable
 // fields — both fail as unknown identifiers). One IF can have several rows when the
