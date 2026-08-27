@@ -4086,7 +4086,7 @@ export async function getShipmentEvidence(poNumber, { so: soArg = null } = {}) {
  * invisible to an EDI-shaped query. Asking only edi_document_po_refs would have made
  * this an EDI feature wearing a two-calendar label.
  */
-export async function loadCalendarCandidates({ max = null, poNumbers = null } = {}) {
+export async function loadCalendarCandidates({ max = null, poNumbers = null, since = null } = {}) {
   // ⚠️ IDENTIFIED BY (PO, SO), NOT BY PO ALONE. Requiring a PO excluded every boutique
   // order whose customer never gave one — 10 of 21 scanned boutique shipments — and the
   // consequence was not a missing row but an INVISIBLE SHIPMENT: Splash SO12299 shipped
@@ -4096,6 +4096,38 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null } = 
   let ids
   if (poNumbers?.length) {
     ids = [...new Set(poNumbers.map((p) => String(p).trim()).filter(Boolean))].map((po) => ({ po, so: null }))
+  } else if (since) {
+    // ⚠️ INCREMENTAL, AND KEYED ON OBSERVED TRANSITIONS — never on `updated_at`.
+    // orders.updated_at and fulfillments.updated_at mean "last UPSERTED", not "last
+    // changed": every sync rewrites them whether or not anything moved. Measured
+    // 2026-08-27, they report 279 and 308 rows changed in the last hour and the same
+    // 281/310 over 24 hours — saturated, so a window built on them sweeps nearly the
+    // whole table every run and is not incremental at all.
+    //
+    // An 856/810 arriving or being acknowledged, and an order_event, are things that
+    // actually HAPPENED. Same window: 7 shipments in an hour (~6s) against 293 (~263s).
+    const { rows } = await pool.query(
+      `SELECT DISTINCT p.po_number AS po, NULL::text AS so
+         FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+        WHERE (e.type LIKE '856%' OR e.type LIKE '810%')
+          AND (e.created_at > $1 OR e.last_updated_at > $1)
+          AND p.po_number IS NOT NULL AND btrim(p.po_number) <> ''
+       UNION
+       SELECT DISTINCT o.po_number, o.so_number
+         FROM order_events ev
+         JOIN fulfillments f ON f.if_number = ev.doc_number
+         JOIN orders o ON o.so_number = f.so_number
+        WHERE ev.occurred_at > $1 AND o.so_number IS NOT NULL`, [since])
+    const byId = new Map()
+    for (const r of rows) {
+      const po = r.po && String(r.po).trim() ? String(r.po).trim() : null
+      const so = r.so && String(r.so).trim() ? String(r.so).trim() : null
+      if (!po && !so) continue
+      const k = po || `so:${so}`
+      const prev = byId.get(k)
+      byId.set(k, { po: po || prev?.po || null, so: so || prev?.so || null })
+    }
+    ids = [...byId.values()]
   } else {
     const { rows } = await pool.query(
       `SELECT DISTINCT p.po_number AS po, NULL::text AS so
@@ -4172,6 +4204,17 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null } = 
     }
   }
   return out
+}
+
+/** A watermark in sync_meta — facts about coverage only the sync knows. */
+export async function getSyncMeta(key) {
+  const { rows } = await pool.query('SELECT value FROM sync_meta WHERE key = $1', [key])
+  return rows[0]?.value ?? null
+}
+export async function setSyncMeta(key, value) {
+  await pool.query(
+    `INSERT INTO sync_meta (key, value, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [key, String(value)])
 }
 
 /**

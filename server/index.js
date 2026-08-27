@@ -5,6 +5,7 @@
 import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
+import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
 import { resolveNetsuiteLink } from '../src/ingest/netsuiteLink.js'
 import { LINK_ERROR, LINK_MESSAGE } from '../src/model/netsuiteLinks.js'
@@ -38,6 +39,7 @@ import {
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
+  loadCalendarCandidates, loadHeldCandidates, getSyncMeta, setSyncMeta,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -1720,8 +1722,28 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         asnCartons = { error: e.message }
       }
     }
+    // The three shipment calendars. ⚠️ INCREMENTAL — the full backfill is 293
+    // shipments at ~0.9s each (263 SECONDS) and belongs in `npm run sync:calendar`,
+    // never in a request that is already running four other syncs on one vCPU. The
+    // held calendar IS synced every time regardless: it is dated TODAY and rolls
+    // forward, so skipping a run leaves 30-odd entries sitting on yesterday claiming
+    // to be current. Best-effort, same contract as everything above.
+    // ⚠️ DETACHED, like startAsnCartonCheck. Awaiting it took this request from ~50s to
+    // 319s on its first run (a 24h backlog is 55 shipments at ~4s of Drive and NetSuite
+    // round trips each). This response says it STARTED; the watermark is the durable
+    // record, and it only advances on a clean run.
+    let calendar = null
+    try {
+      calendar = startCalendarIncremental({
+        loadCalendarCandidates, loadHeldCandidates, getSyncMeta, setSyncMeta,
+      })
+    } catch (e) {
+      console.error('shipment calendar sync could not start (recurring tasks still checked):', e.message)
+      calendar = { error: e.message }
+    }
+
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, tenders, tendersApplied, macysRouting, asnCartons, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, tenders, tendersApplied, macysRouting, asnCartons, calendar, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
