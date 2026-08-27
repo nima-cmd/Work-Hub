@@ -139,13 +139,13 @@ export function planShipmentCalendar({ candidates = [], existing = {} } = {}) {
       entries.push({ po: c.po, action: ACTION.SKIP, reason: SKIP.UNKNOWN_LANE })
       continue
     }
-    const ev = shipmentEvent({ po: c.po, partner: c.partner, evidence: c.evidence, shipDates: c.shipDates })
+    const ev = shipmentEvent({ po: c.po, so: c.so, partner: c.partner, evidence: c.evidence, shipDates: c.shipDates })
     if (!ev) {
-      entries.push({ po: c.po, lane, action: ACTION.SKIP, reason: SKIP.NO_EVENT })
+      entries.push({ po: c.po, so: c.so, lane, action: ACTION.SKIP, reason: SKIP.NO_EVENT })
       continue
     }
     if (!ev.publishable) {
-      entries.push({ po: c.po, lane, action: ACTION.SKIP, reason: SKIP.NOT_PUBLISHABLE })
+      entries.push({ po: c.po, so: c.so, lane, action: ACTION.SKIP, reason: SKIP.NOT_PUBLISHABLE })
       continue
     }
 
@@ -160,7 +160,7 @@ export function planShipmentCalendar({ candidates = [], existing = {} } = {}) {
     if (existing[otherLane]?.get?.(ev.key)) misfiled.push({ po: c.po, key: ev.key, staleIn: otherLane, belongsIn: lane })
 
     entries.push({
-      po: c.po, lane, key: ev.key, date: ev.date,
+      po: c.po, so: c.so, lane, key: ev.key, date: ev.date,
       summary: ev.summary, proven: ev.proven, event: desired,
       // ⚠️ Surfaced so the SUMMARY can say how many events carry the "paperwork not
       // checked" hedge. A caveat that only exists inside 184 event bodies is a caveat
@@ -236,10 +236,18 @@ export function planHeldCalendar({ candidates = [], existing = new Map(), shippe
   // goods are. It happens whenever a shipment leaves the population without appearing in
   // a shipped lane — the ship date synced but no ASN, say. Removed rather than left to
   // sit on today's date forever, quietly asserting that a departed box is on the floor.
+  // ⚠️ THE REASON IS DECIDED HERE, because the branch above CANNOT REACH IT.
+  // loadHeldCandidates filters `WHERE actual_ship_date IS NULL`, so a shipped shipment
+  // is never a held candidate — the loop above only ever sees things still on the
+  // floor, and its `shipped` removal was an UNREACHABLE BRANCH (shape #1 in
+  // fieldAssumptions.js). It reported every departure as "no longer held", and the
+  // CLI's "N shipped and will MOVE off this calendar" line could never print. The test
+  // that covered it passed by hand-building a candidate that was both held AND
+  // shipped — an input the loader cannot produce.
   for (const [key] of existing) {
     if (live.has(key)) continue
     if (entries.some((e) => e.key === key)) continue
-    entries.push({ key, action: ACTION.REMOVE, reason: 'no-longer-held' })
+    entries.push({ key, action: ACTION.REMOVE, reason: shippedKeys.has(key) ? 'shipped' : 'no-longer-held' })
   }
 
   return { entries, summary: summarizeHeld(entries) }

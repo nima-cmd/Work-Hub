@@ -300,3 +300,37 @@ test('shipmentEvent: never claims "no paperwork filed" when Drive was never sear
   const legacy = shipmentEvent({ po: '1', partner: 'X', evidence: ev })
   assert.match(legacy.description, /No signed paperwork filed/)
 })
+
+// ── a shipped order with no PO ──────────────────────────────────────────────
+import { LANE as L2 } from '../src/model/shipmentCalendarPlan.js'
+
+test('an SO is enough — a boutique order with no PO still gets an event', () => {
+  // ⚠️ Splash SO12299: shipped, signed BOL on file, and it appeared on NO calendar —
+  // dropped from the warehouse calendar because it had departed, and never eligible
+  // for a shipped one because it had no PO. 46 shipments were in this state.
+  const p = planShipmentCalendar({
+    candidates: [{ po: null, so: 'SO12299', partner: 'Splash', evidence: evidence(), shipDates: ['2026-08-26'] }],
+    existing: {},
+  })
+  assert.equal(p.entries[0].action, ACTION.CREATE)
+  assert.equal(p.entries[0].key, 'so12299')
+  assert.equal(p.entries[0].lane, LANE.BOUTIQUE)
+})
+
+test('a PO still wins, so every event published before this keeps its id', () => {
+  // ⚠️ The migration hazard. If the key scheme changed for existing events, 240 live
+  // entries would be orphaned and re-created as duplicates on a shared calendar.
+  const p = planShipmentCalendar({
+    candidates: [{ po: '7242978', so: 'SO999', partner: "Bloomingdale's", evidence: evidence(), shipDates: [] }],
+    existing: {},
+  })
+  assert.equal(p.entries[0].key, 'po7242978', 'unchanged from before SO-keying existed')
+})
+
+test('neither a PO nor an SO is still no event', () => {
+  const p = planShipmentCalendar({
+    candidates: [{ po: null, so: null, partner: 'Splash', evidence: evidence(), shipDates: ['2026-08-26'] }],
+    existing: {},
+  })
+  assert.equal(p.entries[0].action, ACTION.SKIP)
+})
