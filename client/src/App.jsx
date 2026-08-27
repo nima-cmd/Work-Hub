@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
 import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
@@ -441,6 +442,10 @@ export default function App() {
           ))}
         </nav>
         <div className="topmeta">
+          {/* Scan a tag from ANY view and open that record in NetSuite. Lives in the
+              top bar because the whole point is that it is reachable without
+              navigating to Scan Bay. ⚠️ It logs NOTHING — Scan Bay owns custody. */}
+          <ScanToNetsuite />
           <NetsuiteRefreshButton sync={nsSync} syncHealth={syncHealth} onRefresh={onRefreshNetsuite} />
           {nsSync.msg && (
             <span

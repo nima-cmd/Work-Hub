@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import jsQR from 'jsqr'
+import { useQrCamera } from '../lib/useQrCamera.js'
 import { recordCustodyScan, fetchOrderEvents, recordFulfillmentBox, deleteCustodyScan } from '../api.js'
 import { LabelButtons, ChannelTag, CustomerName } from '../lib.jsx'
 // Lazy so pdfjs (~1.2MB worker) only loads when someone opens Scan→Drive.
@@ -19,21 +19,16 @@ export default function ScanBay() {
   // file to Drive). Kept as a top-level switch so custody scanning is untouched.
   const [bayMode, setBayMode] = useState('custody')
   const [mode, setMode] = useState('OUT')
-  const [cameraOn, setCameraOn] = useState(false)
-  const [camErr, setCamErr] = useState(null)
   const [result, setResult] = useState(null) // last scan's server response
   const [busy, setBusy] = useState(false)
   const [manual, setManual] = useState('')
+  const [delErr, setDelErr] = useState(null)
   const [todayEvents, setTodayEvents] = useState([])
   // Re-scan mode (Nima, 2026-07-22): OFF by default — a repeat scan is silently
   // ignored so scanning stays fast. Flip it ON for a genuine re-handoff (e.g.
   // cargo sent back to the warehouse for a fix) to log the repeat on purpose.
   const [rescan, setRescan] = useState(false)
 
-  const videoRef = useRef(null)
-  const streamRef = useRef(null)
-  const rafRef = useRef(null)
-  const lastReadRef = useRef({ code: null, at: 0 })
   const modeRef = useRef(mode)
   modeRef.current = mode
   const rescanRef = useRef(rescan)
@@ -52,7 +47,11 @@ export default function ScanBay() {
     const label = e.docType === 'DC' ? `PO ${e.docNumber.split(':')[0]}` : e.docNumber
     const dir = e.eventType === 'CUSTODY_OUT' ? 'OUT' : 'IN'
     if (!window.confirm(`Permanently delete this ${dir} scan of ${label}? This removes it from the ledger and can't be undone.`)) return
-    try { await deleteCustodyScan({ id: e.id }); refreshEvents() } catch (err) { setCamErr(err.message) }
+    // ⚠️ Its OWN error, not the camera's. This reported a failed LEDGER DELETE through
+    // setCamErr, so "couldn't delete that scan" rendered as a camera problem — and once
+    // the camera state moved into useQrCamera it would have thrown instead. Two
+    // unrelated failures sharing one slot is how the wrong fix gets attempted.
+    try { await deleteCustodyScan({ id: e.id }); refreshEvents() } catch (err) { setDelErr(err.message) }
   }
 
   async function submitScan(docNumber, source) {
@@ -73,67 +72,12 @@ export default function ScanBay() {
   }
 
   // ── camera + decode loop ────────────────────────────────────────────────────
-  async function startCamera() {
-    setCamErr(null)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      })
-      streamRef.current = stream
-      const video = videoRef.current
-      video.srcObject = stream
-      await video.play()
-      setCameraOn(true)
-
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d', { willReadFrequently: true })
-      const detector = 'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null
-      let lastAttempt = 0
-
-      const tick = async (now) => {
-        if (!streamRef.current) return
-        // ~5 decode attempts/sec is plenty for a hand-held label and keeps the fan quiet
-        if (now - lastAttempt > 200 && video.readyState >= 2) {
-          lastAttempt = now
-          let code = null
-          try {
-            if (detector) {
-              const found = await detector.detect(video)
-              code = found[0]?.rawValue || null
-            } else {
-              canvas.width = video.videoWidth
-              canvas.height = video.videoHeight
-              ctx.drawImage(video, 0, 0)
-              const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-              code = jsQR(img.data, img.width, img.height)?.data || null
-            }
-          } catch { /* a failed frame is just a failed frame */ }
-          if (code) {
-            const last = lastReadRef.current
-            if (code !== last.code || now - last.at > COOLDOWN_MS) {
-              lastReadRef.current = { code, at: now }
-              submitScan(code, 'camera')
-            }
-          }
-        }
-        rafRef.current = requestAnimationFrame(tick)
-      }
-      rafRef.current = requestAnimationFrame(tick)
-    } catch (e) {
-      setCamErr(
-        e.name === 'NotAllowedError'
-          ? 'Camera permission denied — allow camera access for this site and try again.'
-          : `Couldn’t start the camera: ${e.message}`,
-      )
-    }
-  }
-
-  function stopCamera() {
-    cancelAnimationFrame(rafRef.current)
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
-    setCameraOn(false)
-  }
+  // ⚠️ SHARED WITH ScanToNetsuite via useQrCamera. The loop used to live here; two
+  // copies of a camera lifecycle is two sets of camera bugs. Behaviour is unchanged —
+  // same decode branches, same cooldown — and `submitScan` is still the only thing
+  // this surface does with a code.
+  const { videoRef, start: startCamera, stop: stopCamera, cameraOn, camErr } =
+    useQrCamera({ onCode: (code) => submitScan(code, 'camera'), cooldownMs: COOLDOWN_MS })
   useEffect(() => stopCamera, []) // release the camera on unmount
 
   const custodyToday = todayEvents.filter((e) => e.eventType === 'CUSTODY_OUT' || e.eventType === 'CUSTODY_IN')
@@ -175,6 +119,7 @@ export default function ScanBay() {
           {rescan ? '🔓 Re-scan mode ON — repeats will be logged' : '🔒 Re-scan mode off — repeats ignored'}
         </button>
 
+        {delErr && <div className="banner error">⚠ {delErr}</div>}
         <div className={'scanViewport' + (cameraOn ? ' live' : '')}>
           <video ref={videoRef} muted playsInline />
           {!cameraOn && (
