@@ -4299,16 +4299,31 @@ export async function getTransferCards() {
  * ingest already refused the other 173.
  */
 export async function loadTransferCandidates() {
+  // ⚠️ A LABEL LIVES IN THREE PLACES AND THIS READ ONE. fulfillments.tracking_numbers
+  // is NetSuite's copy; a label bought in ShipStation lands in shipstation_order and
+  // reaches NetSuite only when someone types it there. TO217 proved it within hours:
+  // the label was bought (1ZC6J6100325130658, $32.33) and the calendar still showed a
+  // shipment with no tracking, warning it "cannot be traced".
+  //
+  // labelEvidence.labelTracking already merges the three sources — NetSuite,
+  // ShipStation, minus any a human has marked dead — and it is what the push gate and
+  // labelGap read. Using anything narrower is the exact defect that module exists for,
+  // recorded in [[shipstation-label-lanes]]. I wrote it again anyway.
   const { rows } = await pool.query(
     `SELECT t.to_number, t.destination, t.status AS to_status,
-            f.if_number, f.status AS if_status, f.if_date, f.tracking_numbers
+            f.if_number, f.status AS if_status, f.if_date,
+            f.tracking_numbers AS ns_tracking,
+            ${SHIPSTATION_TRACKING_SQL} AS ss_tracking,
+            ${DEAD_LABEL_SQL} AS dead_tracking
        FROM transfer_order t
        LEFT JOIN fulfillments f ON f.so_number = t.to_number
       ORDER BY t.trandate DESC NULLS LAST`)
   return rows.map((r) => ({
     toNumber: r.to_number, destination: r.destination, toStatus: r.to_status,
     ifNumber: r.if_number, ifStatus: r.if_status, ifDate: r.if_date,
-    tracking: r.tracking_numbers || [],
+    tracking: labelTracking({
+      nsTracking: r.ns_tracking, ssTracking: r.ss_tracking, deadTracking: r.dead_tracking,
+    }),
   }))
 }
 

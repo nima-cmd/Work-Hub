@@ -132,3 +132,23 @@ test('the lifecycle skips INVOICED and APPROVED entirely', () => {
   assert.equal(stages.has(STAGE.APPROVED), false, 'and never needs approval to ship')
   assert.deepEqual([...stages].sort(), [STAGE.OPEN, STAGE.PACKED, STAGE.PICKED, STAGE.SHIPPED].sort())
 })
+
+test('⚠️ a label lives in THREE places — a transfer must read all of them', () => {
+  // The label for TO217 was bought in ShipStation (1ZC6J6100325130658, $32.33) and
+  // NEVER reached NetSuite, because nobody had typed it there yet. Reading only
+  // fulfillments.tracking_numbers showed a shipment with no tracking and warned it
+  // "cannot be traced" — hours after the label existed.
+  //
+  // labelEvidence.labelTracking is the merge, and it is what the push gate and
+  // labelGap already read. This pins that a transfer card reflects a ShipStation-only
+  // label, which is the ONLY kind a transfer can have: Nima cannot make these in
+  // NetSuite at all.
+  const ssOnly = transferCard({
+    toNumber: 'TO217', destination: 'Office', toStatus: PENDING,
+    ifNumber: 'IF7612', ifStatus: 'Packed',
+    tracking: ['1ZC6J6100325130658'],   // merged upstream from ShipStation
+  })
+  assert.equal(ssOnly.labelled, true)
+  assert.match(ssOnly.nextAction, /Ship it out/)
+  assert.doesNotMatch(ssOnly.nextAction, /Make the label/, 'the label exists — do not ask for it again')
+})
