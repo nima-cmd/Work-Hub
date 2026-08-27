@@ -37,7 +37,7 @@ import {
   recordViewVisit, getViewUsage, getAgenda,
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
-  recordFulfillmentBox, getCustodyRegister, clearCustodyItem, deleteCustodyScan,
+  recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -404,6 +404,16 @@ app.post('/api/fulfillment/departed', async (req, res) => {
     res.json(await setFulfillmentDeparted(req.body || {}))
   } catch (e) {
     console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Where is this document right now — read-only, so the scan-to-NetSuite overlay can
+// SHOW custody state and let a human decide, rather than writing one on their behalf.
+app.get('/api/custody/state', async (req, res) => {
+  try {
+    res.json(await getCustodyState(req.query.doc))
+  } catch (e) {
     res.status(400).json({ error: e.message })
   }
 })

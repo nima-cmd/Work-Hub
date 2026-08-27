@@ -89,3 +89,53 @@ test('aliases are understood on both sides', () => {
   assert.equal(exportedNames('export { inner as outer }').has('outer'), true)
   assert.equal(exportedNames('export { inner as outer }').has('inner'), false)
 })
+
+test('a name USED from a sibling module must also be IMPORTED', () => {
+  // ⚠️ THE OTHER HALF, and I hit it minutes after writing the first. Adding
+  // getCustodyState to queries.js and calling it from index.js without adding it to the
+  // import list passed the check above — that one only asks whether imports resolve,
+  // never whether a used name arrived at all. This is a ReferenceError at request time:
+  // the module loads fine and the route explodes when someone calls it.
+  const missing = []
+  for (const rel of serverFiles) {
+    const src = readFileSync(join(ROOT, rel), 'utf8')
+    // ⚠️ Dynamic imports count. This repo destructures them deliberately —
+    // `const { runSuiteQL } = await import('../src/ingest/netsuiteApi.js')` — to keep a
+    // NetSuite dependency out of the module graph until it is actually needed. Ignoring
+    // them made the check fire on five names that are imported perfectly correctly, and
+    // a guard that cries wolf is one people switch off.
+    const imported = new Set([
+      ...localImports(src).flatMap((i) => i.names),
+      ...[...src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(/g)]
+        .flatMap((m) => m[1].split(',').map((n) => n.trim().split(':')[0].trim()).filter(Boolean)),
+      // `const { a } = x ? y : await import(...)` and similar — take any destructure
+      // that mentions import() on the same statement.
+      ...[...src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=[^\n]*\bimport\s*\(/g)]
+        .flatMap((m) => m[1].split(',').map((n) => n.trim().split(':')[0].trim()).filter(Boolean)),
+    ])
+    // Names this file DEFINES locally are obviously fine.
+    const local = new Set([
+      ...[...src.matchAll(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)/gm)].map((m) => m[1]),
+      ...[...src.matchAll(/^(?:export\s+)?(?:const|let|var|class)\s+([A-Za-z0-9_$]+)/gm)].map((m) => m[1]),
+    ])
+    for (const { from } of localImports(src)) {
+      let targetSrc
+      try { targetSrc = readFileSync(resolve(ROOT, dirname(rel), from), 'utf8') } catch { continue }
+      for (const name of exportedNames(targetSrc)) {
+        if (imported.has(name) || local.has(name)) continue
+        // Called as `name(` — a plain mention in a comment or string does not count.
+        const called = new RegExp(`(?<![A-Za-z0-9_$.])${name}\\s*\\(`).test(stripComments(src))
+        if (called) missing.push(`${rel} calls ${name}() but never imports it (it lives in ${from})`)
+      }
+    }
+  }
+  assert.deepEqual(missing, [], `\n${missing.join('\n')}\n`)
+})
+
+// ⚠️ Comments and strings mention function names constantly in this repo — this file
+// is proof. Counting those as calls would make the check fire on documentation.
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^\s*\/\/.*$/gm, ' ')
+}

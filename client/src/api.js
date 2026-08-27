@@ -554,6 +554,13 @@ export async function fetchCalendarEvents() {
   return res.json()
 }
 
+// Where a document is right now — READ ONLY, writes nothing.
+export async function fetchCustodyState(doc) {
+  const res = await fetch(`/api/custody/state?doc=${encodeURIComponent(doc)}`)
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `API ${res.status}`)
+  return res.json()
+}
+
 // ── Custody scans (QR labels) — direction 'OUT' | 'IN' ──────────────────────
 export async function recordCustodyScan({ docNumber, direction, note, allowRescan }) {
   const res = await fetch('/api/custody/scan', {

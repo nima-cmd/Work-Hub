@@ -3235,3 +3235,29 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   font-family: var(--display); font-size: 11px; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--accent); margin-bottom: 5px;
 }
+
+/* ── Scan → NetSuite (Nima, 2026-08-27) ──────────────────────────────────────
+   A lookup, not a log. Deliberately styled as a pill in the top bar rather than a
+   tab: it is reachable from every view, which is the entire point of it existing
+   outside Scan Bay. */
+.scanNsBtn { cursor: pointer; border: 1px solid var(--line, #2a323d); background: transparent; }
+.scanNsBtn:hover { border-color: #4fd1ff; }
+.scanNsOverlay {
+  position: fixed; inset: 0; z-index: 900;
+  background: rgba(4, 7, 13, 0.72);
+  display: flex; align-items: center; justify-content: center;
+}
+.scanNsPanel {
+  width: min(560px, 92vw); background: var(--panel, #161b22);
+  border: 1px solid #4fd1ff; border-radius: 6px; padding: 16px;
+  box-shadow: 0 0 40px rgba(79, 209, 255, 0.16);
+}
+.scanNsHead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.scanNsClose { margin-left: auto; background: none; border: none; color: inherit; cursor: pointer; font-size: 15px; }
+/* object-fit: cover so a 16:9 stream fills the box without letterboxing the tag
+   into something too small to decode. */
+.scanNsVideo { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #05070d; border-radius: 4px; margin-bottom: 10px; }
+.scanNsHit { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scanNsCustody { width: 100%; margin-top: 8px; }
+.scanNsCustody .banner { margin: 6px 0 0; }
+.scanNsCustody .importBtn { margin-top: 8px; }

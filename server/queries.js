@@ -451,6 +451,48 @@ export async function recordFulfillmentBox({ ifNumber, weightLb, lengthIn, width
 // pick/pack, or re-handed out after a fix) vs 'returned' (back in our hands,
 // boxed, waiting to leave). Departed IFs are cleaned out by clearDepartedCustody
 // at ingest, and the actual_ship_date guard here is the belt-and-suspenders.
+/**
+ * Where is this document, right now — WITHOUT writing anything.
+ *
+ * ⚠️ READ-ONLY ON PURPOSE. The obvious way to ask "has this been scanned in?" is to
+ * call recordCustodyScan and see if it answers `ignored` — but that WRITES when the
+ * answer is no, which is precisely the case you were asking about. A probe with a side
+ * effect on the branch you care about is not a probe.
+ *
+ * ⚠️ State is the LATEST OUT vs the LATEST IN, never a count. schema.sql says why:
+ * custody rows are append-only because a re-handoff is real (an IF can go back out
+ * after a fix), so the newest event of each direction is the only thing that decides.
+ */
+export async function getCustodyState(docNumber) {
+  const doc = String(docNumber || '').trim()
+  if (!doc) throw new Error('a document number is required')
+  const { rows } = await pool.query(
+    `SELECT event_type, max(occurred_at) AS at
+       FROM order_events
+      WHERE doc_number = $1 AND event_type IN ('CUSTODY_OUT','CUSTODY_IN','CUSTODY_CLEARED','DEPARTED')
+      GROUP BY event_type`, [doc])
+  const at = (t) => rows.find((r) => r.event_type === t)?.at || null
+  const lastOut = at('CUSTODY_OUT')
+  const lastIn = at('CUSTODY_IN')
+  const departed = at('DEPARTED') || at('CUSTODY_CLEARED')
+
+  const { rows: f } = await pool.query(
+    `SELECT f.if_number, f.so_number, f.status, f.actual_ship_date, o.customer
+       FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+      WHERE f.if_number = $1`, [doc])
+
+  const inOurPossession = !!lastIn && (!lastOut || new Date(lastIn) >= new Date(lastOut))
+  return {
+    doc, found: !!f.length, fulfillment: f[0] || null,
+    lastOut, lastIn, departed,
+    inOurPossession,
+    // ⚠️ The question the overlay actually asks. "Handed out and never scanned back"
+    // is the ONLY state where a backup scan-in is the right thing to offer — and it is
+    // still offered, never applied.
+    missedScanIn: !!lastOut && !inOurPossession && !departed,
+  }
+}
+
 export async function getCustodyRegister({ today = new Date() } = {}) {
   const { rows } = await pool.query(`
     SELECT c.if_number AS "ifNumber",
