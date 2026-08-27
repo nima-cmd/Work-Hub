@@ -56,6 +56,7 @@ import { computeEdiWork } from '../src/model/ediWork.js'
 import { sweepArithmeticFields } from '../src/ingest/arithmeticSweep.js'
 import { unrecorded, vanished, describeFinding, EXPECTED_DERIVED, EXPECTED_CONSTANT } from '../src/model/arithmeticFields.js'
 import { bolSequenceVerdict } from '../src/model/bolSequence.js'
+import { isTrackedDestination } from '../src/model/transferOrder.js'
 
 const results = []
 const ok = (name, detail = '') => results.push({ pass: true, name, detail })
@@ -71,6 +72,49 @@ const partition = (name, parts, total, note = '') => {
 const floor = (name, value, existsCount, detail) => {
   if (Number(value) > 0 || Number(existsCount) === 0) ok(name, detail)
   else bad(name, `reads ${value} while ${detail}`)
+}
+
+// ── the guarantee that replaced a foreign key ────────────────────────────────
+//
+// ⚠️ fulfillments.so_number USED TO HAVE AN FK to orders(so_number). It was dropped so
+// a transfer's fulfilment could exist at all — TO217 ships IF7612 to the Office and has
+// no customer — because SQL cannot reference one of two tables. This assertion IS the
+// dropped constraint: every fulfilment's parent must resolve to EXACTLY ONE of orders
+// or transfer_order. Nothing else notices if that stops being true.
+{
+  const { rows } = await pool.query(`
+    SELECT
+      count(*) FILTER (WHERE o.so_number IS NULL AND t.to_number IS NULL) AS orphaned,
+      count(*) FILTER (WHERE o.so_number IS NOT NULL AND t.to_number IS NOT NULL) AS ambiguous,
+      count(*) AS total
+    FROM fulfillments f
+    LEFT JOIN orders o        ON o.so_number = f.so_number
+    LEFT JOIN transfer_order t ON t.to_number = f.so_number
+    WHERE f.so_number IS NOT NULL`)
+  const r = rows[0]
+  if (Number(r.orphaned) === 0 && Number(r.ambiguous) === 0) {
+    ok('every fulfilment resolves to exactly one parent (the dropped FK)',
+      `${r.total} fulfilment(s), 0 orphaned, 0 ambiguous`)
+  } else {
+    bad('every fulfilment resolves to exactly one parent (the dropped FK)',
+      `${r.orphaned} orphaned, ${r.ambiguous} claimed by BOTH orders and transfer_order`)
+  }
+
+  // ⚠️ A transfer must never reach the surfaces that count CUSTOMER orders. Keeping
+  // transfers out of `orders` is what protects the 63 places that read it, so this
+  // asserts the separation itself rather than trusting it.
+  const { rows: bleed } = await pool.query(
+    `SELECT count(*) AS n FROM orders WHERE so_number LIKE 'TO%'`)
+  if (Number(bleed[0].n) === 0) ok('no transfer order has leaked into `orders`', '0 rows')
+  else bad('no transfer order has leaked into `orders`', `${bleed[0].n} TO-numbered row(s) in orders`)
+
+  // ⚠️ Only the destinations Nima named are loaded. If an untracked one appears here,
+  // something started ingesting work nobody asked to see.
+  const { rows: dest } = await pool.query(
+    `SELECT DISTINCT destination FROM transfer_order WHERE destination IS NOT NULL`)
+  const stray = dest.map((d) => d.destination).filter((d) => !isTrackedDestination(d))
+  if (!stray.length) ok('every loaded transfer goes to a tracked destination', dest.map((d) => d.destination).join(', ') || 'none loaded')
+  else bad('every loaded transfer goes to a tracked destination', `untracked: ${stray.join(', ')}`)
 }
 
 // ── label gaps: the court strip's busiest family ─────────────────────────────

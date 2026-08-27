@@ -44,6 +44,7 @@ npm run check:tenders      # does the accepted pickup date/carrier match our rou
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
 npm run sync:calendar      # shipped POs -> 3 Google calendars (EDI / Boutique / warehouse). DRY unless --write
 npm run sync:prices        # NetSuite price list -> ns_item_price (Retail = the hang tag; Wholesale = the check)
+npm run sync:transfers     # transfer orders to Office/Consignment + their IFs (173 of 187 are NOT this work)
                            #   the hourly cron runs the INCREMENTAL leg; this is the full backfill
 
 ```
@@ -313,6 +314,7 @@ src/model/shipmentCalendar.js  a shipment as a shareable calendar entry (the eve
 src/model/shipmentCalendarPlan.js  which calendar, what changed — the sync's rules, pure
 src/model/heldShipment.js  a shipment still on our floor; dated TODAY because ship_date is fabricated
 src/model/itemPrice.js     which price level means what; a price of 0 is NOT a price
+src/model/transferOrder.js  which transfers are work; the tracked destinations are an ENTERED list
 src/ingest/netsuiteItemPrices.js  the `pricing` sublist (item.baseprice is EMPTY) + item display names
 src/ingest/googleCalendarWrite.js  the WRITE half of Google Calendar (googleCalendar.js reads)
 src/ingest/shipmentCalendarSync.js  plan + publish; candidates are an INPUT (src never imports server)
