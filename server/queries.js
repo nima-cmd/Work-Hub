@@ -11,7 +11,7 @@ import { taskListMeta, DEFAULT_DONE_WINDOW_DAYS } from '../src/model/taskListWin
 import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
-import { resolveDriveFolder } from '../src/model/drivePartnerFolder.js'
+import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -3896,7 +3896,7 @@ export async function getShipmentEvidence(poNumber) {
       ORDER BY e.created_at, e.type`, [po])
 
   const { rows: ord } = await pool.query(
-    `SELECT DISTINCT o.customer, f.actual_ship_date
+    `SELECT DISTINCT o.so_number, o.customer, f.actual_ship_date
        FROM orders o LEFT JOIN fulfillments f ON f.so_number = o.so_number
       WHERE o.po_number = $1`, [po])
 
@@ -3935,6 +3935,23 @@ export async function getShipmentEvidence(poNumber) {
   let driveFolder = null
   let rootsSearched = 0
 
+  // ⚠️ THE TWO TREES NAME THE PO FOLDER DIFFERENTLY, and that is the whole of this
+  // loop's complexity. Measured 2026-08-26:
+  //
+  //     BOLs/Bloomingdale's/7242978/            ← the PO number
+  //     Boutiques/Mitchells Westport/SO12474/   ← the SALES ORDER number
+  //
+  // Boutique scans are filed under the SO, so searching for the PO ("911234-001") found
+  // nothing for all 21 newly scanned boutique shipments — and a missing folder is a
+  // legitimate "nothing filed", so a wrong key and a genuinely unfiled PO are
+  // INDISTINGUISHABLE. It reported no paperwork, confidently, for every one of them.
+  //
+  // ⚠️ The tree's own convention is tried FIRST and the other only as a fallback, so the
+  // normal case stays one Drive call per tree. Both are tried because a convention we
+  // inferred from 21 folders is not a law, and the cost of being wrong is silence.
+  const soNumber = ord.map((r) => r.so_number).find(Boolean) || null
+  const keysFor = (root) => folderKeysFor(root === DRIVE_ROOT_SLIPS ? TREE.SLIPS : TREE.BOLS, { po, so: soNumber })
+
   for (const root of [DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS]) {
     let folders
     try {
@@ -3949,18 +3966,25 @@ export async function getShipmentEvidence(poNumber) {
     const folder = resolveDriveFolder(partnerName, folders)
     if (!folder) continue
     driveFolder = driveFolder || `${root}/${folder}`
-    try {
-      const r = await listFiledDocuments({ partner: folder, po, root })
-      if (r.failure) { driveError = r.failure.message || 'Drive did not answer'; continue }
-      // The scan app names a per-DC split "<po>-<DC>.pdf"; a master carries its BOL
-      // number instead. ⚠️ Labelled, not left blank — an unlabelled row in a proof
-      // panel reads as a document nobody could identify.
-      scans = scans.concat((r.files || []).map((f) => ({
-        ...f,
-        dc: (f.name.match(/-([A-Z]{2,3})\.pdf$/i) || [])[1] || null,
-        kind: /master/i.test(f.name) ? 'master BOL' : root === DRIVE_ROOT_SLIPS ? 'packing slip' : 'signed BOL',
-      })))
-    } catch (e) { driveError = e.message }
+
+    for (const key of keysFor(root)) {
+      try {
+        const r = await listFiledDocuments({ partner: folder, po: key, root })
+        if (r.failure) { driveError = r.failure.message || 'Drive did not answer'; break }
+        if (!r.files?.length) continue   // not under this key — try the other
+        // The scan app names a per-DC split "<po>-<DC>.pdf"; a master carries its BOL
+        // number instead. ⚠️ Labelled, not left blank — an unlabelled row in a proof
+        // panel reads as a document nobody could identify.
+        scans = scans.concat(r.files.map((f) => ({
+          ...f,
+          dc: (f.name.match(/-([A-Z]{2,3})\.pdf$/i) || [])[1] || null,
+          kind: /master/i.test(f.name) ? 'master BOL' : root === DRIVE_ROOT_SLIPS ? 'packing slip' : 'signed BOL',
+        })))
+        driveFolder = `${root}/${folder}/${key}`
+        break   // ⚠️ Found under one key; do NOT also fold in the other and risk listing
+                // the same document twice under two names.
+      } catch (e) { driveError = e.message }
+    }
   }
 
   // ⚠️ "WE LOOKED AND FOUND NONE" IS NOT "WE NEVER LOOKED", and only this flag can tell

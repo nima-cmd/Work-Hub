@@ -64,3 +64,30 @@ export function resolveDriveFolder(name, folders = []) {
 
 /** True when we know where to look. Distinguishes "searched, found none" from "never looked". */
 export const canCheckDrive = (name, folders = []) => resolveDriveFolder(name, folders) !== null
+
+
+/** Which tree a root is, so the key rule below needs no import from src/ingest. */
+export const TREE = { BOLS: 'bols', SLIPS: 'slips' }
+
+/**
+ * The PO-folder name(s) to try, in order, for one tree.
+ *
+ * ⚠️ THE TWO TREES NAME THIS FOLDER DIFFERENTLY. Measured 2026-08-26:
+ *
+ *     BOLs/Bloomingdale's/7242978/            ← the PO number
+ *     Boutiques/Mitchells Westport/SO12474/   ← the SALES ORDER number
+ *
+ * Searching for the PO in the boutique tree found nothing for all 21 newly scanned
+ * boutique shipments — and because a missing folder is a legitimate "nothing filed",
+ * a WRONG KEY AND A GENUINELY UNFILED PO ARE INDISTINGUISHABLE. The app reported no
+ * paperwork, confidently, for every one of them.
+ *
+ * ⚠️ The tree's own convention comes FIRST so the normal case is one Drive call; the
+ * other is a fallback because a convention inferred from 21 folders is not a law, and
+ * the cost of guessing wrong is silence rather than an error.
+ */
+export function folderKeysFor(tree, { po, so } = {}) {
+  const primary = tree === TREE.SLIPS ? so : po
+  const fallback = tree === TREE.SLIPS ? po : so
+  return [...new Set([primary, fallback].filter((v) => v != null && String(v).trim() !== ''))].map(String)
+}
