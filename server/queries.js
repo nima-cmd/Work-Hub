@@ -16,7 +16,7 @@ import { transferCard } from '../src/model/transferCard.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
-import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
+import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled, isDepartureConfirmed } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
 import { TASK_DONE } from '../src/model/orderEvents.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
@@ -4314,7 +4314,17 @@ export async function loadTransferCandidates() {
             f.if_number, f.status AS if_status, f.if_date,
             f.tracking_numbers AS ns_tracking,
             ${SHIPSTATION_TRACKING_SQL} AS ss_tracking,
-            ${DEAD_LABEL_SQL} AS dead_tracking
+            ${DEAD_LABEL_SQL} AS dead_tracking,
+            -- ⚠️ The SAME manual marker the Net-terms flow uses (netDeparture.js).
+            -- A transfer's Shipped status is set when the LABEL is made, so only a
+            -- person saying "yes, it left" is departure evidence. setFulfillmentDeparted
+            -- already accepts transfers — it keys on the IF number.
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number
+                AND e.event_type = 'DEPARTURE_CONFIRMED') AS departure_confirmed_at,
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number
+                AND e.event_type = 'DEPARTURE_UNCONFIRMED') AS departure_unconfirmed_at
        FROM transfer_order t
        LEFT JOIN fulfillments f ON f.so_number = t.to_number
       ORDER BY t.trandate DESC NULLS LAST`)
@@ -4324,6 +4334,13 @@ export async function loadTransferCandidates() {
     tracking: labelTracking({
       nsTracking: r.ns_tracking, ssTracking: r.ss_tracking, deadTracking: r.dead_tracking,
     }),
+    // Latest-event-wins, exactly like the Net-terms flow: a marker that can only ever
+    // be set would make a mis-click permanent.
+    departureConfirmed: isDepartureConfirmed({
+      departureConfirmedAt: r.departure_confirmed_at,
+      departureUnconfirmedAt: r.departure_unconfirmed_at,
+    }),
+    departureConfirmedAt: r.departure_confirmed_at,
   }))
 }
 
