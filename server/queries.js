@@ -4271,6 +4271,37 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
   }
 }
 
+async function rememberDriveFiles(uploaded = [], { partner, filename } = {}) {
+  let n = 0
+  for (const u of uploaded) {
+    if (!u?.po || !u?.link) continue
+    try {
+      await addDocLink({
+        aType: 'PO', aNumber: String(u.po),
+        // ⚠️ b_number is the Drive FILE ID, not the URL — docLinkUrl.js records why:
+        // the same file arrives under different share URLs, and the id is what makes
+        // the UNIQUE constraint fire on a re-file instead of duplicating the row.
+        bType: 'DRIVE', bNumber: u.id,
+        label: filename || 'filed document', url: u.link,
+      })
+      n++
+    } catch { /* the file is filed; the link is a convenience */ }
+  }
+  return n
+}
+
+export async function fileShipmentToDrive(id) {
+  const shipment = await withLineItems(await fetchRoutingShipmentById(id))
+  if (!shipment) throw new Error('shipment not found')
+  const buffer = await buildBolPdf(shipment)
+  const filename = `BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf`
+  const res = await uploadBolPdf({
+    partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
+  })
+  const linked = res.ok ? await rememberDriveFiles(res.uploaded, { partner: shipment.partner, filename }) : 0
+  return { ...res, linked }
+}
+
 // ── Retro QR tags, by ship date ─────────────────────────────────────────────
 //
 // Nima, 2026-08-14: fulfilments printed before the packing-slip QR landed have no
