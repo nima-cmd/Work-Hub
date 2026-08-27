@@ -20,6 +20,7 @@
 // the calendar a log of when the job ran.
 
 import { TIER } from './shipmentEvidence.js'
+import { shipmentKey } from './heldShipment.js'
 
 // The warehouse is in Glendale, California, and an all-day calendar entry means the
 // day a person there would name.
@@ -91,8 +92,13 @@ export function eventDate(evidence = {}, shipDates = []) {
  * @param evidence  the shipmentEvidence() result
  * @param shipDates our own dates, used only as a last resort
  */
-export function shipmentEvent({ po, partner, evidence, shipDates = [] } = {}) {
-  if (!po || !evidence) return null
+export function shipmentEvent({ po, so, partner, evidence, shipDates = [] } = {}) {
+  // ⚠️ AN SO IS ENOUGH WHEN THERE IS NO PO. Boutique customers frequently give none —
+  // 10 of 21 scanned boutique shipments carry no po_number — and requiring one meant a
+  // shipped order with signed paperwork on file appeared on NO calendar at all: dropped
+  // from the warehouse calendar when it shipped, and never eligible for a shipped one.
+  // Splash SO12299 was the first real case.
+  if ((!po && !so) || !evidence) return null
   const date = eventDate(evidence, shipDates)
   // ⚠️ NO DATE, NO EVENT. An event needs a day; inventing one would put freight on a
   // calendar on a day nothing happened.
@@ -101,7 +107,7 @@ export function shipmentEvent({ po, partner, evidence, shipDates = [] } = {}) {
   const c = evidence.counts || {}
   const verb = evidence.proven ? 'shipped' : 'ship date recorded'
   const bols = (evidence.backTrace?.asns || []).map((a) => a.number).filter(Boolean)
-  const summary = `${partner || 'PO'} ${po} — ${verb}`
+  const summary = `${partner || 'PO'} ${po || so} — ${verb}`
     + (bols.length ? ` (${bols.length} BOL${bols.length === 1 ? '' : 's'})` : '')
 
   const lines = []
@@ -158,7 +164,11 @@ export function shipmentEvent({ po, partner, evidence, shipDates = [] } = {}) {
     // rejected by the API with a cryptic 400. Caught by the test asserting the charset
     // rather than by a failed sync. A PO can also contain characters outside the set,
     // so it is filtered rather than trusted.
-    key: `po${String(po).toLowerCase().replace(/[^a-v0-9]/g, '')}`,
+    // ⚠️ THE SHARED KEY, so a shipment keeps ONE id across the warehouse calendar and
+    // the shipped one — that identity is what lets the move be detected. A PO still
+    // wins, so every event published before this keeps its id and is UPDATED rather
+    // than orphaned and duplicated.
+    key: shipmentKey({ po, so }),
     date,
     summary,
     description: lines.join('\n').trim(),

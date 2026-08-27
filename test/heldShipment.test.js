@@ -245,3 +245,27 @@ test('held entries are omitted entirely when `held` is not passed', () => withEn
   assert.equal(g.calls.ensure.some((c) => /warehouse/i.test(c.name)), false,
     'a caller that never asked for it must not have a calendar made in their account')
 }))
+
+test('the move now reports "shipped" — the branch that could never run', () => {
+  // ⚠️ loadHeldCandidates filters `WHERE actual_ship_date IS NULL`, so a shipped
+  // shipment is NEVER a held candidate. The removal branch inside the candidate loop
+  // was therefore UNREACHABLE (shape #1), every departure reported as "no longer
+  // held", and the CLI's "N shipped and will MOVE off this calendar" could not print.
+  // The reason is now decided in the stale sweep, which is the code that actually runs.
+  const key = 'po7242978'
+  const shipped = planHeldCalendar({
+    candidates: [],                                   // it has shipped, so it is gone from the loader
+    existing: new Map([[key, { summary: 'in the warehouse' }]]),
+    shippedKeys: new Set([key]),                      // and the shipped lane is publishing it
+    todayIso: TODAY,
+  })
+  assert.equal(shipped.entries[0].action, ACTION.REMOVE)
+  assert.equal(shipped.entries[0].reason, 'shipped')
+
+  // Gone from the floor but NOT on a shipped calendar is a different fact, and still
+  // has to be removed — otherwise a departed box sits on today's date forever.
+  const vanished = planHeldCalendar({
+    candidates: [], existing: new Map([[key, { summary: 'x' }]]), shippedKeys: new Set(), todayIso: TODAY,
+  })
+  assert.equal(vanished.entries[0].reason, 'no-longer-held')
+})

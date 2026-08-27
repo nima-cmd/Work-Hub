@@ -3883,9 +3883,14 @@ export async function searchEdi(query) {
   return { query: q, rows: groupSearchHits(rows).map((r) => ({ ...r, summary: hitSummary(r) })) }
 }
 
-export async function getShipmentEvidence(poNumber) {
+export async function getShipmentEvidence(poNumber, { so: soArg = null } = {}) {
   const po = String(poNumber || '').trim()
-  if (!po) throw new Error('a PO number is required')
+  // ⚠️ AN SO IS A VALID IDENTIFIER HERE. Boutique customers often give no PO at all,
+  // and requiring one meant a shipped order with signed paperwork on file could be
+  // asked about by nothing — Splash SO12299 shipped, was scanned, and appeared on no
+  // calendar. A PO still takes precedence when both are known.
+  const soIn = String(soArg || '').trim()
+  if (!po && !soIn) throw new Error('a PO or SO number is required')
 
   const { rows: docs } = await pool.query(
     `SELECT DISTINCT e.id, e.type, e.business_number, e.created_at,
@@ -3898,7 +3903,7 @@ export async function getShipmentEvidence(poNumber) {
   const { rows: ord } = await pool.query(
     `SELECT DISTINCT o.so_number, o.customer, f.actual_ship_date
        FROM orders o LEFT JOIN fulfillments f ON f.so_number = o.so_number
-      WHERE o.po_number = $1`, [po])
+      WHERE ($1 <> '' AND o.po_number = $1) OR ($2 <> '' AND o.so_number = $2)`, [po, soIn])
 
   // ⚠️ THE PARTNER MUST BE THE ONE THE FILE WAS FILED UNDER, not one derived from the
   // customer string. Drive's path is /<partner>/<po>/, written from
@@ -3907,7 +3912,7 @@ export async function getShipmentEvidence(poNumber) {
   // silently miss whenever it did not, which is the whole class of bug this repo keeps
   // finding. The customer prefix is only a fallback for a PO with no routing shipment.
   const { rows: rs } = await pool.query(
-    `SELECT DISTINCT partner FROM routing_shipment WHERE $1 = ANY(member_pos) AND partner IS NOT NULL`, [po])
+    `SELECT DISTINCT partner FROM routing_shipment WHERE $1 <> '' AND $1 = ANY(member_pos) AND partner IS NOT NULL`, [po])
   const partner = rs[0]?.partner
     || (ord[0]?.customer ? String(ord[0].customer).split(/\s+-\s+/)[0].trim() : null)
 
@@ -4019,7 +4024,7 @@ export async function getShipmentEvidence(poNumber) {
 
   const evidence = shipmentEvidence({ asns, invoices, scans, shipDates })
   return {
-    po, partner, tradingPartner, driveFolder, orders850, shipDates, driveError, scansChecked,
+    po: po || null, so: soNumber, partner, tradingPartner, driveFolder, orders850, shipDates, driveError, scansChecked,
     ...evidence,
     headline: evidenceHeadline(evidence),
   }
@@ -4040,26 +4045,41 @@ export async function getShipmentEvidence(poNumber) {
  * this an EDI feature wearing a two-calendar label.
  */
 export async function loadCalendarCandidates({ max = null, poNumbers = null } = {}) {
-  let pos
+  // ⚠️ IDENTIFIED BY (PO, SO), NOT BY PO ALONE. Requiring a PO excluded every boutique
+  // order whose customer never gave one — 10 of 21 scanned boutique shipments — and the
+  // consequence was not a missing row but an INVISIBLE SHIPMENT: Splash SO12299 shipped
+  // with a signed BOL on file, dropped off the warehouse calendar because it had
+  // departed, and was never eligible for a shipped calendar because it had no PO. It
+  // appeared nowhere at all.
+  let ids
   if (poNumbers?.length) {
-    pos = [...new Set(poNumbers.map((p) => String(p).trim()).filter(Boolean))]
+    ids = [...new Set(poNumbers.map((p) => String(p).trim()).filter(Boolean))].map((po) => ({ po, so: null }))
   } else {
     const { rows } = await pool.query(
-      `SELECT po_number FROM (
-         SELECT DISTINCT p.po_number
-           FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
-          WHERE e.type LIKE '856%' OR e.type LIKE '810%'
-         UNION
-         SELECT DISTINCT o.po_number
-           FROM orders o JOIN fulfillments f ON f.so_number = o.so_number
-          WHERE o.po_number IS NOT NULL AND f.actual_ship_date IS NOT NULL
-       ) u
-        WHERE po_number IS NOT NULL AND btrim(po_number) <> ''
-        ORDER BY po_number`)
-    pos = rows.map((r) => r.po_number)
+      `SELECT DISTINCT p.po_number AS po, NULL::text AS so
+         FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+        WHERE (e.type LIKE '856%' OR e.type LIKE '810%')
+          AND p.po_number IS NOT NULL AND btrim(p.po_number) <> ''
+       UNION
+       SELECT DISTINCT o.po_number, o.so_number
+         FROM orders o JOIN fulfillments f ON f.so_number = o.so_number
+        WHERE f.actual_ship_date IS NOT NULL AND o.so_number IS NOT NULL`)
+    // One shipment can arrive twice — once from its EDI documents (PO only) and once
+    // from its order (PO + SO). Merged on the PO so it is asked about once, keeping
+    // whichever SO was found.
+    const byId = new Map()
+    for (const r of rows) {
+      const po = r.po && String(r.po).trim() ? String(r.po).trim() : null
+      const so = r.so && String(r.so).trim() ? String(r.so).trim() : null
+      if (!po && !so) continue
+      const k = po || `so:${so}`
+      const prev = byId.get(k)
+      byId.set(k, { po: po || prev?.po || null, so: so || prev?.so || null })
+    }
+    ids = [...byId.values()].sort((a, b) => String(a.po || a.so).localeCompare(String(b.po || b.so)))
   }
-  if (max && pos.length > max) pos = pos.slice(0, max)
-  if (!pos.length) return []
+  if (max && ids.length > max) ids = ids.slice(0, max)
+  if (!ids.length) return []
 
   // Two facts the per-PO evidence query does not carry, fetched once for the batch.
   //
@@ -4067,23 +4087,31 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null } = 
   // ⚠️ `trading_partner` is the counterparty named ON the 856/810 itself, and it is the
   // only name available for 184 of 235 candidates — those POs join to no order row and
   // no routing shipment, so without it every one of them is unclassifiable.
-  const { rows: facts } = await pool.query(
-    `SELECT c.po AS po_number,
-            EXISTS (SELECT 1 FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
-                     WHERE p.po_number = c.po AND (e.type LIKE '856%' OR e.type LIKE '810%')) AS has_edi_docs,
-            (SELECT string_agg(DISTINCT e.trading_partner, ' / ')
-               FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
-              WHERE p.po_number = c.po AND e.trading_partner IS NOT NULL) AS trading_partner
-       FROM unnest($1::text[]) AS c(po)`, [pos])
-  const factFor = new Map(facts.map((r) => [r.po_number, r]))
+  const pos = ids.map((i) => i.po).filter(Boolean)
+  const factFor = new Map()
+  if (pos.length) {
+    const { rows: facts } = await pool.query(
+      `SELECT c.po AS po_number,
+              EXISTS (SELECT 1 FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+                       WHERE p.po_number = c.po AND (e.type LIKE '856%' OR e.type LIKE '810%')) AS has_edi_docs,
+              (SELECT string_agg(DISTINCT e.trading_partner, ' / ')
+                 FROM edi_document_po_refs p JOIN edi_transactions e ON e.id = p.transaction_id
+                WHERE p.po_number = c.po AND e.trading_partner IS NOT NULL) AS trading_partner
+         FROM unnest($1::text[]) AS c(po)`, [pos])
+    for (const r of facts) factFor.set(r.po_number, r)
+  }
 
   const out = []
-  for (const po of pos) {
-    const f = factFor.get(po) || {}
+  for (const { po, so } of ids) {
+    const f = (po && factFor.get(po)) || {}
     try {
-      const e = await getShipmentEvidence(po)
+      const e = await getShipmentEvidence(po, { so })
       out.push({
         po,
+        // ⚠️ Carried so the event can be keyed by SO when there is no PO, and so the
+        // two calendars agree on one id per shipment — that identity is what makes a
+        // move from the warehouse calendar detectable rather than guessed.
+        so: e.so || so || null,
         // ⚠️ routing_shipment.partner still WINS where it exists — it is what Drive
         // filed the paperwork under, and getShipmentEvidence already searched Drive
         // with it. trading_partner is a fallback for naming the event, never a
@@ -4098,41 +4126,10 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null } = 
       // ⚠️ Recorded, never dropped. A PO that vanishes from the candidate list because
       // its lookup threw looks identical to one with nothing to publish, and the plan
       // would under-report by exactly the POs most likely to be broken.
-      out.push({ po, loadError: err.message })
+      out.push({ po, so, loadError: err.message })
     }
   }
   return out
-}
-
-async function rememberDriveFiles(uploaded = [], { partner, filename } = {}) {
-  let n = 0
-  for (const u of uploaded) {
-    if (!u?.po || !u?.link) continue
-    try {
-      await addDocLink({
-        aType: 'PO', aNumber: String(u.po),
-        // ⚠️ b_number is the Drive FILE ID, not the URL — docLinkUrl.js records why:
-        // the same file arrives under different share URLs, and the id is what makes
-        // the UNIQUE constraint fire on a re-file instead of duplicating the row.
-        bType: 'DRIVE', bNumber: u.id,
-        label: filename || 'filed document', url: u.link,
-      })
-      n++
-    } catch { /* the file is filed; the link is a convenience */ }
-  }
-  return n
-}
-
-export async function fileShipmentToDrive(id) {
-  const shipment = await withLineItems(await fetchRoutingShipmentById(id))
-  if (!shipment) throw new Error('shipment not found')
-  const buffer = await buildBolPdf(shipment)
-  const filename = `BOL_${shipment.bolNumber || 'draft'}_${shipment.dc}.pdf`
-  const res = await uploadBolPdf({
-    partner: shipment.partner, pos: shipment.memberPos || [], filename, buffer,
-  })
-  const linked = res.ok ? await rememberDriveFiles(res.uploaded, { partner: shipment.partner, filename }) : 0
-  return { ...res, linked }
 }
 
 /**
