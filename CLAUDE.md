@@ -43,6 +43,7 @@ npm run sync:tenders       # pull Nordstrom's Manhattan TMS "Tender Accepted" em
 npm run check:tenders      # does the accepted pickup date/carrier match our routing cards?
 npm run check:slack        # is the Slack lane live? names the exact missing token/scopes
 npm run sync:calendar      # shipped POs -> 3 Google calendars (EDI / Boutique / warehouse). DRY unless --write
+                           #   the hourly cron runs the INCREMENTAL leg; this is the full backfill
 
 ```
 
@@ -312,6 +313,7 @@ src/model/shipmentCalendarPlan.js  which calendar, what changed — the sync's r
 src/model/heldShipment.js  a shipment still on our floor; dated TODAY because ship_date is fabricated
 src/ingest/googleCalendarWrite.js  the WRITE half of Google Calendar (googleCalendar.js reads)
 src/ingest/shipmentCalendarSync.js  plan + publish; candidates are an INPUT (src never imports server)
+src/ingest/shipmentCalendarCron.js  the hourly leg: held always, shipped only what CHANGED
 src/ingest/manhattanTender.js pull + persist tenders; reconcile vs routing_shipment
 src/model/slackCatchUp.js  Slack as a catch-up lane; lanes are addressing FACTS, never a score
 src/ingest/slack.js       reads the 7 chosen channels + all DMs (needs a USER token, xoxp-)
