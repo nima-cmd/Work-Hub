@@ -1733,6 +1733,53 @@ CREATE TABLE IF NOT EXISTS weaver_sync_run (
   error             TEXT
 );
 
+-- ── NetSuite item identity (Nima, 2026-08-27) ────────────────────────────────
+-- sku + display name, straight from NetSuite. The hang tag needs a product name,
+-- and weaver_product only has one for 1,332 of 2,942 active items while NetSuite
+-- has 2,980 of 3,005 — so the label sources it here.
+--
+-- ⚠️ THIS IS NOT A DUPLICATE OF weaver_netsuite_item. That table is populated by
+-- the Weaver sync and exists to REMEMBER STYLE-NUMBER DRIFT; this one is a plain
+-- current-state mirror written by Work-Hub's own sync, so a label never depends on
+-- another project having run. They agree on internal_id, which is why both are
+-- keyed on it.
+CREATE TABLE IF NOT EXISTS ns_item (
+  internal_id   TEXT PRIMARY KEY,
+  sku           TEXT,
+  display_name  TEXT,
+  observed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ns_item_sku ON ns_item(sku);
+
+-- ── NetSuite item prices (Nima, 2026-08-27) ──────────────────────────────────
+-- The price list, per item per level. Needed for the Munbyn hang tags (Retail
+-- Price) and for checking an order line against what it SHOULD bill (Wholesale).
+--
+-- ⚠️ item.baseprice IS EMPTY. It queries successfully and returns nothing, which
+-- reads as "this item has no price" rather than "wrong question". The `pricing`
+-- sublist is the only real source: level 1 Wholesale, 2 Retail, 8 Order
+-- Confirmation (4,237 / 4,230 / 4,072 items measured 2026-08-27).
+--
+-- ⚠️ KEYED ON INTERNAL ID, NOT SKU — the same rule weaver_netsuite_item records
+-- below, and for the same reason: a sku MOVES when a weave code changes
+-- (SN030xx -> SN130xx) and nothing else remembers the old one. The sku is stored
+-- for humans and joins of convenience; it is not the identity.
+--
+-- ⚠️ Prices of 0 and -100 are really in there. This table stores what NetSuite
+-- says, faithfully; src/model/itemPrice.js is where a figure is judged fit to put
+-- in front of a customer. Filtering here would hide a data problem instead of
+-- reporting it.
+CREATE TABLE IF NOT EXISTS ns_item_price (
+  internal_id   TEXT NOT NULL,
+  price_level   TEXT NOT NULL,
+  level_name    TEXT,
+  unit_price    NUMERIC,
+  sku           TEXT,
+  observed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (internal_id, price_level)
+);
+CREATE INDEX IF NOT EXISTS idx_ns_item_price_sku ON ns_item_price(sku);
+
 -- NetSuite item state as observed. Keyed on internal id, which is stable;
 -- sku is NOT a key here because it moves when a weave code changes. That
 -- movement is exactly what Weaver cannot remember: the 17 MISMATCH rows are all
