@@ -34,8 +34,23 @@ export function transferStage({ ifNumber, ifStatus, toStatus } = {}) {
   return STAGE.PICKED
 }
 
-/** The one thing to do next. ⚠️ Names the DESTINATION, because that is the shipment. */
-export function transferNextAction({ ifNumber, ifStatus, toStatus, destination } = {}) {
+/**
+ * The one thing to do next. ⚠️ Names the DESTINATION, because that is the shipment.
+ *
+ * ⚠️ A TRANSFER IS NEVER INVOICED AND NEVER PAID (Nima, 2026-08-27: "no payment
+ * invoice needed for transfer orders so once they have a label they can ship"). It
+ * moves our own goods between our own locations — there is nobody to bill.
+ *
+ * That is not a detail of wording. A sales order at PACKED is told to "Invoice /
+ * progress it" and then to "Follow up on payment", and a transfer inheriting those
+ * would put two steps in front of Nima that DO NOT EXIST for this document — work
+ * invented by a shared enum. Its life is:
+ *
+ *     pick → pack → label → ship → confirm receipt
+ *
+ * with INVOICED and APPROVED_FOR_SHIPPING skipped entirely.
+ */
+export function transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking = [] } = {}) {
   const stage = transferStage({ ifNumber, ifStatus, toStatus })
   if (stage === STAGE.OPEN) return `Pick it — transfer to ${destination || 'an unnamed location'}`
   if (stage === STAGE.SHIPPED && !isReceived(toStatus)) {
@@ -44,7 +59,14 @@ export function transferNextAction({ ifNumber, ifStatus, toStatus, destination }
     // wanted these tracked.
     return 'Sent — chase the receipt at the far end'
   }
-  return NEXT_ACTION[stage]
+  if (stage === STAGE.SHIPPED) return NEXT_ACTION[STAGE.SHIPPED]
+  // ⚠️ PICKED and PACKED both lead to the label, never to an invoice. The label is the
+  // ONLY thing standing between a packed transfer and the door.
+  const labelled = (tracking || []).filter(Boolean).length > 0
+  if (stage === STAGE.PACKED) {
+    return labelled ? 'Ship it out — no invoice needed' : 'Make the label — then it can ship'
+  }
+  return NEXT_ACTION[STAGE.PICKED]   // 'Pack it'
 }
 
 /**
@@ -71,12 +93,15 @@ export function transferCard(t = {}) {
     location: null,
     poNumber: null,
     source: 'transfer',
+    // ⚠️ Carried so a surface can say WHY a packed transfer is waiting. There is no
+    // invoice to wait on, so the label is the only possible answer.
+    labelled: (tracking || []).filter(Boolean).length > 0,
     stage,
     stageLabel: stage === STAGE.OPEN
       ? `Transfer — pick for ${destination || 'an unnamed location'}`
       : STAGE_LABEL[stage],
     stageRank: STAGE_RANK[stage],
-    nextAction: transferNextAction({ ifNumber, ifStatus, toStatus, destination }),
+    nextAction: transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking }),
     toStatus: toStatus || null,
     received: isReceived(toStatus),
     fulfillments: ifNumber
