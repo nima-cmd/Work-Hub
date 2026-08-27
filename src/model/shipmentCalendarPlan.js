@@ -11,8 +11,9 @@
 import { deriveSource } from './source.js'
 import { shipmentEvent } from './shipmentCalendar.js'
 import { heldEvent } from './heldShipment.js'
+import { transferEvent } from './transferCalendar.js'
 
-export const LANE = { EDI: 'edi', BOUTIQUE: 'boutique', HELD: 'held' }
+export const LANE = { EDI: 'edi', BOUTIQUE: 'boutique', HELD: 'held', TRANSFER: 'transfer' }
 
 // Two calendars rather than one with colours, because Nima asked for TOGGLEABLE
 // LAYERS — and in Google the unit you can switch off is a calendar, not a colour.
@@ -24,6 +25,10 @@ export const CALENDAR_NAME = {
   // predicted date. Named so a reader glancing at three toggled layers cannot mistake
   // it for a shipping record.
   [LANE.HELD]: 'Naghedi Shipping — In the warehouse',
+  // ⚠️ ITS OWN LANE, not folded into Boutique. A transfer to the Office or to
+  // Consignment is freight that left, but it has no customer and no invoice — putting
+  // it on the Boutique calendar would make a shared surface misstate what it is.
+  [LANE.TRANSFER]: 'Naghedi Shipping — Transfers',
 }
 
 export const ACTION = { CREATE: 'create', UPDATE: 'update', UNCHANGED: 'unchanged', SKIP: 'skip', REMOVE: 'remove' }
@@ -260,6 +265,54 @@ export function summarizeHeld(entries = []) {
     if (e.action === ACTION.REMOVE || e.action === ACTION.SKIP) continue
     out.byReason[e.reason] = (out.byReason[e.reason] || 0) + 1
     if (e.daysHeld != null && (out.oldest === null || e.daysHeld > out.oldest)) out.oldest = e.daysHeld
+  }
+  return out
+}
+
+
+/**
+ * The transfers calendar. One lane covering a transfer's whole life — unshipped ones
+ * sit on today and roll forward, shipped ones settle on the day they went.
+ */
+export function planTransferCalendar({ transfers = [], existing = new Map(), todayIso } = {}) {
+  const entries = []
+  const live = new Set()
+
+  for (const t of transfers) {
+    const ev = transferEvent({ ...t, todayIso })
+    if (!ev) { entries.push({ toNumber: t.toNumber, action: ACTION.SKIP, reason: 'no-date' }); continue }
+    live.add(ev.key)
+    const desired = {
+      id: ev.key, summary: ev.summary, description: ev.description,
+      start: { date: ev.date }, end: { date: nextDay(ev.date) }, transparency: 'transparent',
+    }
+    const here = existing.get?.(ev.key) || null
+    entries.push({
+      toNumber: t.toNumber, key: ev.key, date: ev.date, state: ev.state,
+      summary: ev.summary, daysWaiting: ev.daysWaiting, event: desired,
+      action: !here ? ACTION.CREATE : eventDiffers(here, desired) ? ACTION.UPDATE : ACTION.UNCHANGED,
+    })
+  }
+
+  // ⚠️ A transfer that stops being tracked — a destination removed from the list, or
+  // the document deleted — must not leave an entry asserting freight that no longer
+  // exists on a calendar other people read.
+  for (const [key] of existing) {
+    if (live.has(key)) continue
+    if (entries.some((e) => e.key === key)) continue
+    entries.push({ key, action: ACTION.REMOVE, reason: 'no-longer-tracked' })
+  }
+
+  return { entries, summary: summarizeTransfers(entries) }
+}
+
+export function summarizeTransfers(entries = []) {
+  const out = { total: entries.length, create: 0, update: 0, unchanged: 0, remove: 0, skip: 0, byState: {}, longestWait: null }
+  for (const e of entries) {
+    out[e.action] = (out[e.action] || 0) + 1
+    if (e.action === ACTION.REMOVE || e.action === ACTION.SKIP) continue
+    out.byState[e.state] = (out.byState[e.state] || 0) + 1
+    if (e.daysWaiting != null && (out.longestWait === null || e.daysWaiting > out.longestWait)) out.longestWait = e.daysWaiting
   }
   return out
 }

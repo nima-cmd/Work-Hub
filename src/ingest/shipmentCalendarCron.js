@@ -35,7 +35,7 @@ const FIRST_RUN_HOURS = 24
 const OVERLAP_MS = 10 * 60 * 1000
 
 export async function syncCalendarIncremental({
-  loadCalendarCandidates, loadHeldCandidates, getSyncMeta, setSyncMeta,
+  loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getSyncMeta, setSyncMeta,
   now = new Date(), sync = syncShipmentCalendar, isConfigured = configured,
 } = {}) {
   if (!isConfigured()) return { configured: false, skipped: 'google-not-configured' }
@@ -49,15 +49,20 @@ export async function syncCalendarIncremental({
   const previous = firstRun ? new Date(startedAt.getTime() - FIRST_RUN_HOURS * 3600 * 1000) : new Date(raw)
   const since = new Date(previous.getTime() - OVERLAP_MS)
 
-  const [changed, held] = await Promise.all([
+  // ⚠️ Transfers are read in FULL every run, like the warehouse calendar and unlike the
+  // shipped lanes. There are 14 of them — one cheap query — and their entries move
+  // between "not shipped", "in transit" and "received" without any 856/810 or
+  // order_event to notice, so an incremental window would never see the change.
+  const [changed, held, transfers] = await Promise.all([
     loadCalendarCandidates({ since }),
     loadHeldCandidates(),
+    loadTransferCandidates ? loadTransferCandidates() : Promise.resolve(null),
   ])
 
   const todayIso = startedAt.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
   const result = await sync({
     candidates: changed.filter((c) => !c.loadError),
-    held, todayIso, dryRun: false,
+    held, transfers, todayIso, dryRun: false,
   })
 
   // ⚠️ ADVANCED ONLY ON A CLEAN RUN. Moving the watermark past a window whose writes
@@ -75,10 +80,12 @@ export async function syncCalendarIncremental({
     changedShipments: changed.length,
     loadErrors: changed.filter((c) => c.loadError).length,
     heldCount: held.length,
+    transferCount: transfers?.length ?? 0,
     wrote: result.wrote,
     failed: result.failed,
     shipped: result.plan?.summary || null,
     heldPlan: result.held?.summary || null,
+    transferPlan: result.transfers?.summary || null,
   }
 }
 

@@ -11,7 +11,7 @@
 // before it leaves. A dry run does not even CREATE the two calendars.
 
 import { pool } from '../src/db.js'
-import { loadCalendarCandidates, loadHeldCandidates } from '../server/queries.js'
+import { loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates } from '../server/queries.js'
 import { syncShipmentCalendar, configured } from '../src/ingest/shipmentCalendarSync.js'
 import { ACTION, SKIP_LABEL, CALENDAR_NAME, LANE } from '../src/model/shipmentCalendarPlan.js'
 import { REASON_LABEL } from '../src/model/heldShipment.js'
@@ -24,6 +24,7 @@ const max = Number(arg('max')) || null
 const poNumbers = (arg('po') || '').split(',').map((s) => s.trim()).filter(Boolean)
 const laneArg = arg('lane')
 const noHeld = argv.includes('--no-held')
+const noTransfers = argv.includes('--no-transfers')
 const lanes = laneArg ? [laneArg] : [LANE.EDI, LANE.BOUTIQUE]
 
 if (laneArg && !Object.values(LANE).includes(laneArg)) {
@@ -52,15 +53,16 @@ console.log(`  ${candidates.length} candidate PO(s) loaded`
 // through a run that spans midnight.
 const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
 const held = noHeld ? null : await loadHeldCandidates()
+const transfers = noTransfers ? null : await loadTransferCandidates()
 const r = await syncShipmentCalendar({
-  candidates: candidates.filter((c) => !c.loadError), held, todayIso, dryRun: !write, lanes,
+  candidates: candidates.filter((c) => !c.loadError), held, transfers, todayIso, dryRun: !write, lanes,
 })
 const s = r.plan.summary
 
 console.log('')
 // ⚠️ The held calendar is listed too when it is in play — a calendar whose id and URL
 // are never printed is one nobody can share, which is the entire point of publishing.
-for (const lane of [...lanes, ...(r.held ? [LANE.HELD] : [])]) {
+for (const lane of [...lanes, ...(r.held ? [LANE.HELD] : []), ...(r.transfers ? [LANE.TRANSFER] : [])]) {
   const c = r.calendars[lane]
   if (!c) continue
   // ⚠️ "--write would create it" printed during an actual --write run, which read as a
@@ -106,6 +108,22 @@ if (r.held) {
     if (e.action === ACTION.REMOVE) { console.log(`    remove    ${String(e.key).padEnd(14)} ${e.reason}`); continue }
     if (e.action === ACTION.SKIP) continue
     console.log(`    ${e.action.padEnd(9)} ${String(e.so ?? e.key).padEnd(14)} ${String(e.daysHeld ?? '?').padStart(3)}d  ${e.summary}`)
+  }
+}
+
+if (r.transfers) {
+  const t = r.transfers.summary
+  console.log('')
+  console.log(`  ${CALENDAR_NAME[LANE.TRANSFER]}   (Office + Consignment)`)
+  console.log(`  create ${t.create}   ·   update ${t.update}   ·   unchanged ${t.unchanged}   ·   remove ${t.remove}`)
+  const st = Object.entries(t.byState).map(([k, n]) => `${n} ${k}`).join('  ·  ')
+  if (st) console.log(`  ${st}`)
+  // ⚠️ The number Nima asked for: how long something has been out with no confirmation.
+  if (t.longestWait != null) console.log(`  longest unconfirmed: ${t.longestWait} day(s) since it went`)
+  if (verbose) for (const e of r.transfers.entries) {
+    if (e.action === ACTION.REMOVE) { console.log(`    remove    ${String(e.key).padEnd(10)} ${e.reason}`); continue }
+    if (e.action === ACTION.SKIP) { console.log(`    skip      ${String(e.toNumber).padEnd(10)} ${e.reason}`); continue }
+    console.log(`    ${e.action.padEnd(9)} ${String(e.toNumber).padEnd(8)} ${e.date}  ${e.summary}`)
   }
 }
 
