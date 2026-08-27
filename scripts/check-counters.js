@@ -108,6 +108,21 @@ const floor = (name, value, existsCount, detail) => {
   if (Number(bleed[0].n) === 0) ok('no transfer order has leaked into `orders`', '0 rows')
   else bad('no transfer order has leaked into `orders`', `${bleed[0].n} TO-numbered row(s) in orders`)
 
+  // ⚠️ A TRANSFER MUST NEVER APPEAR AS HELD STOCK. `fulfillments` is shared between
+  // sales orders and transfers, and loadHeldCandidates reads it without joining
+  // `orders` — so ingesting transfers put 8 of them on the warehouse calendar's
+  // candidate list, five of them already Shipped. Keeping them out of `orders` was not
+  // enough; this asserts the other half.
+  const { rows: heldLeak } = await pool.query(
+    `SELECT count(*) AS n FROM fulfillments f
+      WHERE f.actual_ship_date IS NULL
+        AND EXISTS (SELECT 1 FROM transfer_order t WHERE t.to_number = f.so_number)
+        AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.so_number = f.so_number)`)
+  const held = await Q.loadHeldCandidates()
+  const leaked = held.filter((h) => String(h.so || '').startsWith('TO')).length
+  if (leaked === 0) ok('no transfer is counted as held stock', `${held.length} held, ${heldLeak[0].n} transfer(s) correctly excluded`)
+  else bad('no transfer is counted as held stock', `${leaked} transfer(s) on the warehouse calendar's candidate list`)
+
   // ⚠️ Only the destinations Nima named are loaded. If an untracked one appears here,
   // something started ingesting work nobody asked to see.
   const { rows: dest } = await pool.query(

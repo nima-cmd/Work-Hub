@@ -12,7 +12,7 @@
 // a write. This publishes to a calendar the warehouse reads.
 
 import { getAccessToken, ensureCalendar, fetchOwnedEvents, upsertEvent, deleteEvent, calendarUrl } from './googleCalendarWrite.js'
-import { planShipmentCalendar, planHeldCalendar, summarize, CALENDAR_NAME, LANE, ACTION } from '../model/shipmentCalendarPlan.js'
+import { planShipmentCalendar, planHeldCalendar, planTransferCalendar, summarize, CALENDAR_NAME, LANE, ACTION } from '../model/shipmentCalendarPlan.js'
 
 export const configured = () =>
   !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN)
@@ -26,6 +26,7 @@ export const configured = () =>
 export async function syncShipmentCalendar({
   candidates = [],
   held = null,          // loadHeldCandidates() output; null = do not touch that calendar
+  transfers = null,     // loadTransferCandidates() output; null = do not touch that calendar
   todayIso = null,      // the day held entries sit on — an INPUT, never Date.now() here
   dryRun = true,
   lanes = [LANE.EDI, LANE.BOUTIQUE],
@@ -45,7 +46,8 @@ export async function syncShipmentCalendar({
   // with create:false — even under --write. The plan then printed "create 23" and the
   // publish loop dropped every one of them because the calendar had no id. A run that
   // reports a plan and silently executes none of it is worse than one that fails.
-  const writeLanes = new Set([...lanes, ...(held ? [LANE.HELD] : [])])
+  const writeLanes = new Set([...lanes,
+    ...(held ? [LANE.HELD] : []), ...(transfers ? [LANE.TRANSFER] : [])])
 
   // ⚠️ RESOLVED FOR BOTH LANES EVEN WHEN ONLY ONE IS BEING WRITTEN, because the
   // stale-twin check below is a question about the OTHER calendar. Reading only the
@@ -57,7 +59,8 @@ export async function syncShipmentCalendar({
   // is realistic" would make --dry leave two permanent artefacts in his account — a
   // dry run with a side effect is not a dry run. Nor does a --lane=edi run create the
   // Boutique calendar it only reads.
-  const ALL_LANES = held ? [LANE.EDI, LANE.BOUTIQUE, LANE.HELD] : [LANE.EDI, LANE.BOUTIQUE]
+  const ALL_LANES = [LANE.EDI, LANE.BOUTIQUE,
+    ...(held ? [LANE.HELD] : []), ...(transfers ? [LANE.TRANSFER] : [])]
   const calendars = {}
   for (const lane of ALL_LANES) {
     calendars[lane] = await g.ensureCalendar(token, CALENDAR_NAME[lane], { create: writeLanes.has(lane) && !dryRun })
@@ -126,10 +129,39 @@ export async function syncShipmentCalendar({
     }
   }
 
+  // ── the transfers calendar ────────────────────────────────────────────────
+  let transferPlan = null
+  if (transfers) {
+    transferPlan = planTransferCalendar({
+      transfers, existing: existing[LANE.TRANSFER] || new Map(), todayIso,
+    })
+    if (!dryRun) {
+      const calId = calendars[LANE.TRANSFER]?.id
+      if (!calId) {
+        results.push({ lane: LANE.TRANSFER, ok: false, error:
+          `${CALENDAR_NAME[LANE.TRANSFER]} could not be resolved or created — ${transferPlan.entries.length} entr(ies) were NOT written.` })
+      }
+      for (const e of calId ? transferPlan.entries : []) {
+        try {
+          if (e.action === ACTION.REMOVE) {
+            await g.deleteEvent(token, calId, e.key)
+            results.push({ so: e.toNumber, lane: LANE.TRANSFER, key: e.key, ok: true, mode: 'remove' })
+          } else if (e.action === ACTION.CREATE || e.action === ACTION.UPDATE) {
+            const r = await g.upsertEvent(token, calId, e.event, { update: e.action === ACTION.UPDATE })
+            results.push({ so: e.toNumber, lane: LANE.TRANSFER, key: e.key, ok: true, mode: r.mode })
+          }
+        } catch (err) {
+          results.push({ so: e.toNumber, lane: LANE.TRANSFER, key: e.key, ok: false, error: err.message })
+        }
+      }
+    }
+  }
+
   return {
     configured: true,
     dryRun,
     held: heldPlan,
+    transfers: transferPlan,
     calendars: Object.fromEntries(Object.entries(calendars).map(([l, c]) => [l, { ...c, url: c?.id ? calendarUrl(c.id) : null }])),
     plan,
     results,

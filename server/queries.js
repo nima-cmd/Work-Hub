@@ -4206,6 +4206,26 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null, sin
   return out
 }
 
+/**
+ * The transfers that belong on the Transfers calendar.
+ *
+ * ⚠️ Reads transfer_order, so it can only ever return destinations we track — the
+ * ingest already refused the other 173.
+ */
+export async function loadTransferCandidates() {
+  const { rows } = await pool.query(
+    `SELECT t.to_number, t.destination, t.status AS to_status,
+            f.if_number, f.status AS if_status, f.if_date, f.tracking_numbers
+       FROM transfer_order t
+       LEFT JOIN fulfillments f ON f.so_number = t.to_number
+      ORDER BY t.trandate DESC NULLS LAST`)
+  return rows.map((r) => ({
+    toNumber: r.to_number, destination: r.destination, toStatus: r.to_status,
+    ifNumber: r.if_number, ifStatus: r.if_status, ifDate: r.if_date,
+    tracking: r.tracking_numbers || [],
+  }))
+}
+
 /** A watermark in sync_meta — facts about coverage only the sync knows. */
 export async function getSyncMeta(key) {
   const { rows } = await pool.query('SELECT value FROM sync_meta WHERE key = $1', [key])
@@ -4247,6 +4267,17 @@ export async function loadHeldCandidates({ today = null } = {}) {
        FROM fulfillments f
        LEFT JOIN orders o ON o.so_number = f.so_number
       WHERE f.actual_ship_date IS NULL
+        -- TRANSFERS ARE NOT HELD STOCK, and this exclusion is the second half of
+        -- keeping them out of the orders table. fulfillments is shared between both
+        -- document types, so the moment transfers were ingested 8 of them appeared
+        -- here -- five marked Shipped -- sitting on the warehouse calendar as "in our
+        -- possession", because a transfer IF carries no actual_ship_date to filter it
+        -- out. Caught before anything published; check:counters asserts it stays true.
+        -- They are not merely excluded, they are OWNED ELSEWHERE: the transfer lane
+        -- covers a transfer's whole life, including before it has shipped.
+        -- (No backticks in here: this is inside a JS template literal, and one
+        --  backtick in a SQL comment ends the string and breaks the whole module.)
+        AND NOT EXISTS (SELECT 1 FROM transfer_order t WHERE t.to_number = f.so_number)
       ORDER BY f.if_number`)
 
   return rows
