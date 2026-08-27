@@ -167,3 +167,81 @@ test('"held 0 days" is said the way a person would say it', () => {
   const observed = heldEvent({ so: 'SO1', events: { packedAt: TODAY }, todayIso: TODAY })
   assert.match(observed.summary, /first seen today/, 'and it still admits it was only observed')
 })
+
+// ── the warehouse calendar must actually be CREATED ─────────────────────────
+import { syncShipmentCalendar } from '../src/ingest/shipmentCalendarSync.js'
+
+function fakeG({ calendars = {}, events = {} } = {}) {
+  const calls = { ensure: [], upsert: [], del: [] }
+  return {
+    calls,
+    deps: {
+      getAccessToken: async () => 'tok',
+      ensureCalendar: async (_t, name, { create } = {}) => {
+        calls.ensure.push({ name, create })
+        const id = calendars[name]
+        if (!id && !create) return { id: null, name, missing: true, created: false }
+        if (!id) { calendars[name] = `made-${name}`; return { id: calendars[name], name, created: true } }
+        return { id, name, created: false }
+      },
+      fetchOwnedEvents: async (_t, id) => events[id] || new Map(),
+      upsertEvent: async (_t, id, ev, { update } = {}) => {
+        calls.upsert.push({ calendarId: id, id: ev.id, update })
+        return { mode: update ? 'update' : 'create', event: ev }
+      },
+      deleteEvent: async (_t, id, eid) => { calls.del.push({ calendarId: id, id: eid }); return { deleted: true } },
+    },
+  }
+}
+
+const withEnv = async (fn) => {
+  const keep = { ...process.env }
+  Object.assign(process.env, { GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b', GOOGLE_REFRESH_TOKEN: 'c' })
+  try { return await fn() } finally { process.env = keep }
+}
+
+const heldCand = [{ so: 'SO1', po: null, customer: 'X', events: { custodyInAt: '2026-08-20', invoiced: true, paid: false } }]
+
+test('--write CREATES the warehouse calendar — the bug that wrote 0 of 23', () => withEnv(async () => {
+  // ⚠️ THE REGRESSION. `lanes` defaults to the two SHIPPED lanes and creation was gated
+  // on it, so HELD always resolved create:false — even under --write. The plan printed
+  // "create 23" and the publish loop dropped all of them, reporting "wrote 19", which
+  // matched the shipped lanes exactly and looked correct.
+  const g = fakeG()
+  const r = await syncShipmentCalendar({
+    candidates: [], held: heldCand, todayIso: '2026-08-26', dryRun: false, deps: g.deps,
+  })
+  const heldEnsure = g.calls.ensure.find((c) => /warehouse/i.test(c.name))
+  assert.ok(heldEnsure, 'the warehouse calendar must be resolved at all')
+  assert.equal(heldEnsure.create, true, 'and it must be AUTHORISED to be created on a write')
+  assert.equal(g.calls.upsert.length, 1, 'the held entry is actually written')
+  assert.equal(r.failed, 0)
+}))
+
+test('a dry run still creates nothing, warehouse calendar included', () => withEnv(async () => {
+  const g = fakeG()
+  await syncShipmentCalendar({ candidates: [], held: heldCand, todayIso: '2026-08-26', dryRun: true, deps: g.deps })
+  assert.deepEqual([...new Set(g.calls.ensure.map((c) => c.create))], [false])
+  assert.equal(g.calls.upsert.length, 0)
+}))
+
+test('an unresolvable warehouse calendar is REPORTED, never silently dropped', () => withEnv(async () => {
+  // ⚠️ The second half of the same bug: `if (!calId) break` discarded the whole plan
+  // without a word. A run that prints a plan and executes none of it must say so.
+  const g = fakeG()
+  g.deps.ensureCalendar = async (_t, name) => /warehouse/i.test(name)
+    ? { id: null, name, missing: true } : { id: `cal-${name}`, name }
+  const r = await syncShipmentCalendar({
+    candidates: [], held: heldCand, todayIso: '2026-08-26', dryRun: false, deps: g.deps,
+  })
+  assert.equal(r.failed, 1)
+  assert.match(r.results.find((x) => !x.ok).error, /NOT written/)
+}))
+
+test('held entries are omitted entirely when `held` is not passed', () => withEnv(async () => {
+  const g = fakeG()
+  const r = await syncShipmentCalendar({ candidates: [], dryRun: false, deps: g.deps })
+  assert.equal(r.held, null)
+  assert.equal(g.calls.ensure.some((c) => /warehouse/i.test(c.name)), false,
+    'a caller that never asked for it must not have a calendar made in their account')
+}))

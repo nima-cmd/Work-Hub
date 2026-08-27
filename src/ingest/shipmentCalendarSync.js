@@ -39,6 +39,13 @@ export async function syncShipmentCalendar({
   const token = await g.getAccessToken()
 
   const inLanes = new Set(lanes)
+  // ⚠️ THE HELD LANE IS AUTHORISED BY `held`, NOT BY `lanes`, and conflating the two
+  // meant the warehouse calendar could never be created. `lanes` defaults to the two
+  // SHIPPED lanes, creation was gated on `inLanes.has(lane)`, so HELD always resolved
+  // with create:false — even under --write. The plan then printed "create 23" and the
+  // publish loop dropped every one of them because the calendar had no id. A run that
+  // reports a plan and silently executes none of it is worse than one that fails.
+  const writeLanes = new Set([...lanes, ...(held ? [LANE.HELD] : [])])
 
   // ⚠️ RESOLVED FOR BOTH LANES EVEN WHEN ONLY ONE IS BEING WRITTEN, because the
   // stale-twin check below is a question about the OTHER calendar. Reading only the
@@ -53,7 +60,7 @@ export async function syncShipmentCalendar({
   const ALL_LANES = held ? [LANE.EDI, LANE.BOUTIQUE, LANE.HELD] : [LANE.EDI, LANE.BOUTIQUE]
   const calendars = {}
   for (const lane of ALL_LANES) {
-    calendars[lane] = await g.ensureCalendar(token, CALENDAR_NAME[lane], { create: inLanes.has(lane) && !dryRun })
+    calendars[lane] = await g.ensureCalendar(token, CALENDAR_NAME[lane], { create: writeLanes.has(lane) && !dryRun })
   }
 
   // What each calendar already holds. A calendar that does not exist yet holds nothing.
@@ -97,8 +104,13 @@ export async function syncShipmentCalendar({
     })
     if (!dryRun) {
       const calId = calendars[LANE.HELD]?.id
-      for (const e of heldPlan.entries) {
-        if (!calId) break
+      // ⚠️ SAID OUT LOUD, NEVER `break`. Losing the whole plan because the calendar has
+      // no id is precisely the failure above, and a bare break made it invisible.
+      if (!calId) {
+        results.push({ lane: LANE.HELD, ok: false, error:
+          `${CALENDAR_NAME[LANE.HELD]} could not be resolved or created — ${heldPlan.entries.length} held entr(ies) were NOT written.` })
+      }
+      for (const e of calId ? heldPlan.entries : []) {
         try {
           if (e.action === ACTION.REMOVE) {
             await g.deleteEvent(token, calId, e.key)

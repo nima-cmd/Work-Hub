@@ -63,7 +63,9 @@ console.log('')
 for (const lane of [...lanes, ...(r.held ? [LANE.HELD] : [])]) {
   const c = r.calendars[lane]
   if (!c) continue
-  const state = c?.missing ? 'does not exist yet — --write would create it'
+  // ⚠️ "--write would create it" printed during an actual --write run, which read as a
+  // dry-run notice while the run was in fact failing to create anything.
+  const state = c?.missing ? (write ? '⚠️ MISSING — it was NOT created; see the errors below' : 'does not exist yet — --write would create it')
     : c?.created ? `created  ${c.id}` : `${c.id}`
   console.log(`  ${CALENDAR_NAME[lane].padEnd(30)} ${state}`)
   if (c?.url && !c?.missing) console.log(`  ${' '.repeat(30)} ${c.url}`)
@@ -132,7 +134,20 @@ if (driveErrors.length) {
 }
 
 if (write) {
+  // ⚠️ BROKEN DOWN BY CALENDAR. A single "wrote 19" hid that 23 planned held entries
+  // wrote nothing at all — the total matched the shipped lanes exactly and looked right.
+  const per = {}
+  for (const x of r.results.filter((x) => x.ok)) per[x.lane] = (per[x.lane] || 0) + 1
   console.log(`\n  wrote ${r.wrote} event(s)` + (r.failed ? `, ⚠️ ${r.failed} failed` : ''))
+  for (const lane of Object.keys(CALENDAR_NAME)) {
+    const planned = lane === LANE.HELD
+      ? (r.held?.entries.filter((e) => e.action !== ACTION.UNCHANGED && e.action !== ACTION.SKIP).length ?? 0)
+      : r.plan.entries.filter((e) => e.lane === lane && (e.action === ACTION.CREATE || e.action === ACTION.UPDATE)).length
+    if (!planned && !per[lane]) continue
+    const got = per[lane] || 0
+    console.log(`    ${CALENDAR_NAME[lane].padEnd(36)} ${String(got).padStart(4)} written of ${planned} planned`
+      + (got < planned ? '   ⚠️ SHORT' : ''))
+  }
   for (const f of r.results.filter((x) => !x.ok).slice(0, 10)) console.log(`       ${f.po}  ${f.error}`)
 } else {
   console.log('\n  Nothing was written. Re-run with --write to publish this plan.')
