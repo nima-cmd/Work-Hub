@@ -2661,6 +2661,77 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
     }
   }
 
+  // ── transfers: Office and Consignment ─────────────────────────────────────
+  //
+  // Nima, 2026-08-27: he cannot make these labels in NetSuite, so ShipStation is the
+  // only route. Structurally this is the boutique push with one join changed — the
+  // address comes from the SAME place (transaction.shippingaddress →
+  // transactionShippingAddress), which is why this needed far less new code than the
+  // design I first proposed.
+  //
+  // ⚠️ AND THAT FIRST DESIGN WAS WRONG. I was going to read location.mainaddress,
+  // reasoning that a transfer inherits its destination's address. TO217 proves
+  // otherwise: its shippingaddress is 2574142 (20 W 22nd St), NOT the Office default
+  // 4 (88 Lexington Ave). Older transfers DO use the default, which is exactly why the
+  // difference was easy to miss — and building on the location would have shipped this
+  // one to the wrong New York address.
+  if (scope === 'transfer') {
+    const { rows } = await pool.query(
+      `SELECT f.if_number AS "ifNumber", t.to_number AS "soNumber", t.destination,
+              t.status AS "toStatus", f.status,
+              f.tracking_numbers AS "nsTracking",
+              ${SHIPSTATION_TRACKING_SQL} AS "ssTracking",
+              ${DEAD_LABEL_SQL} AS "deadTracking"
+         FROM fulfillments f JOIN transfer_order t ON t.to_number = f.so_number
+        WHERE f.actual_ship_date IS NULL
+        ORDER BY f.if_number`)
+
+    const pushable = rows.filter((r) => !only || only.has(String(r.ifNumber).toUpperCase()))
+    const [addrs, methods] = await Promise.all([
+      fetchBoutiqueAddresses(pushable.map((r) => r.ifNumber), { runSuiteQL }),
+      fetchBoutiqueShipMethods(pushable.map((r) => r.ifNumber), { runSuiteQL }),
+    ])
+
+    const { orders, skipped, records } = boutiqueOrdersFor(
+      pushable.map((r) => ({
+        // The DESTINATION stands in for the customer — that is what this shipment is
+        // to, and a ShipStation order with no name is unfindable in their UI.
+        order: { ...r, customer: r.destination || 'Transfer', poNumber: null, location: null },
+        fulfilment: { ifNumber: r.ifNumber, status: r.status },
+        address: addrs.get(r.ifNumber),
+        labelCount: labelCount({ nsTracking: r.nsTracking, ssTracking: r.ssTracking, deadTracking: r.deadTracking }),
+        deadLabelCount: (r.deadTracking || []).length,
+        carrier: methods.get(r.ifNumber)?.carrier ?? null,
+        shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
+        // ⚠️ NO REST DETAIL LOOKUP, and `readFailed: false` is therefore honest rather
+        // than assumed. fetchBoutiqueShipDetails reads the SALES ORDER record; a
+        // transfer has none, so calling it would fail and every transfer would be held
+        // as SHIP_DETAIL_UNREADABLE — a hold whose reason ("could not read the
+        // billing") would be a lie about why.
+        //
+        // ⚠️ AND THIRD-PARTY BILLING CANNOT EXIST HERE. It is resolved from the
+        // customer's account, and a transfer HAS NO CUSTOMER — NetSuite's entity is
+        // null. So the freight is ours by construction, not by default. That is the
+        // one thing this repo will not let a caller be vague about (upsRates.js), and
+        // it is answered by the document type rather than left unset.
+        shipMethodName: null,
+        thirdPartyAcct: null,
+        thirdPartyZip: null,
+        readFailed: false,
+      })),
+      { storeId },
+    )
+    const res = await pushOrders(orders, { dryRun })
+    const recorded = await rememberPush(records, res, dryRun)
+    return {
+      ...res, scope, skipped: skipped || [],
+      candidates: pushable.length,
+      seen: pushable.length,
+      inScope: rows.length,
+      recorded, forced: force || undefined,
+    }
+  }
+
   const routing = await getRouting()
   const list = Array.isArray(routing) ? routing : (routing.shipments || [])
   // Parcel only: freight moves on a BOL and FOB is collected abroad, both of which
