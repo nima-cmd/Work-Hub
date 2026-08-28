@@ -15,6 +15,28 @@ export async function fetchTransfers() {
   return res.json()
 }
 
+// A transfer's arrival, entered by hand. ⚠️ NetSuite's "Received" is the far end
+// confirming and that often never happens; "Closed" cannot be read either way. So a
+// person answers, and the answer lands in its own app-owned table.
+export async function markTransferReceipt({ toNumber, outcome, receivedOn, note }) {
+  const res = await fetch('/api/transfers/receipt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toNumber, outcome, receivedOn, note }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
+// Reversible — an answer entered in error must be removable from the board itself.
+export async function clearTransferReceipt(toNumber) {
+  const res = await fetch(`/api/transfers/receipt?toNumber=${encodeURIComponent(toNumber)}`, { method: 'DELETE' })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
 export async function fetchFreshness() {
   const res = await fetch('/api/freshness')
   if (!res.ok) throw new Error(`API ${res.status}`)

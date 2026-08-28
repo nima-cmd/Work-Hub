@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { matchesQuery, describeMatch } from '../../../src/model/cardSearch.js'
 import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate, NsLink, SourceBadge, taskToCard, LabelButtons, GroupLabelButtons, DcTagButtons, DcBreakdown, CustodyBadge, cardCustody, ShipWindow, NEEDS_OPTIONS, URGENCY_OPTIONS, NETSUITE_DOC_TYPES, ChannelTag, CustomerName, ShipstationPushButton, ConfirmDepartedButton, CustomsButton } from '../lib.jsx'
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
-import { createTasksBulk, fetchPoDcs, fetchRouting } from '../api.js'
+import { createTasksBulk, fetchPoDcs, fetchRouting, markTransferReceipt, clearTransferReceipt } from '../api.js'
 import { isParcelLane, showsParcelPushButton } from '../../../src/model/parcelLane.js'
 import {
   TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK, PC_COLOR,
@@ -11,6 +11,7 @@ import {
 import { isDepartureConfirmed } from '../../../src/model/netDeparture.js'
 import { allDcTagsScanned } from '../../../src/model/custody.js'
 import { transferColumns, transferWorkCount, transferSettledCount, TCOL } from '../../../src/model/transferBoard.js'
+import { OUTCOME } from '../../../src/model/transferReceipt.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -496,6 +497,96 @@ function TransferCard({ o, colKey, onRefresh }) {
         (o.fulfillments || []).filter((f) => f.ifNumber && !/shipped/i.test(f.status || '')).map((f) => (
           <ShipstationPushButton key={'ss' + f.ifNumber} ifNumber={f.ifNumber} scope="transfer" onDone={onRefresh} />
         ))}
+      {/* The answer only a person has. Offered on the chase list, and on the two
+          finished columns as an undo. */}
+      {(colKey === TCOL.RECEIPT || colKey === TCOL.RECEIVED || colKey === TCOL.NOT_COMING) && (
+        <TransferReceiptControl o={o} colKey={colKey} onDone={onRefresh} />
+      )}
+    </div>
+  )
+}
+
+// Marking a transfer's arrival by hand.
+//
+// ⚠️ THIS EXISTS BECAUSE NOTHING OBSERVES IT. ShipStation's delivery API is behind a
+// plan upgrade, NetSuite's "Received" needs the far end to act (Nima: "sometimes they
+// dont receive on their end"), and "Closed" is ambiguous — he said it "can be abandoned
+// it could also be partially shippedd and the rest of the units abandoned". No field
+// answers this, so a person does, and the answer is stored where it can never be
+// mistaken for something NetSuite said.
+//
+// ⚠️ TWO OUTCOMES, NOT ONE. Without "nothing coming", an abandoned transfer would sit on
+// the chase list forever — a column that can be looked at and never cleared, which is
+// the defect this whole feature was built to remove.
+function TransferReceiptControl({ o, colKey, onDone }) {
+  const done = colKey === TCOL.RECEIVED || colKey === TCOL.NOT_COMING
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  // ⚠️ Defaults to today but stays editable: the far end often confirms days late, and
+  // back-dating is the honest record rather than the day someone got round to typing it.
+  const [on, setOn] = useState(() => new Date().toISOString().slice(0, 10))
+  const [note, setNote] = useState('')
+
+  const run = async (outcome) => {
+    setBusy(true); setErr(null)
+    try {
+      await markTransferReceipt({ toNumber: o.soNumber, outcome, receivedOn: on, note: note.trim() || null })
+      setOpen(false); setNote('')
+      onDone?.()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const undo = async () => {
+    setBusy(true); setErr(null)
+    try { await clearTransferReceipt(o.soNumber); onDone?.() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  // Already answered → show what was entered, and offer to take it back.
+  if (done) {
+    // ⚠️ Only an ENTERED answer is undoable. A NetSuite "Received" is not ours to
+    // retract, and offering a button that cannot work is the dead-button shape.
+    if (!o.receipt) return <div className="hint" style={{ margin: '2px 0 0' }}>confirmed in NetSuite</div>
+    return (
+      <div className="hint" style={{ margin: '2px 0 0' }}>
+        {o.receipt.outcome === OUTCOME.RECEIVED ? 'received' : 'written off'} {o.receipt.receivedOn}
+        {o.receipt.note ? ` · ${o.receipt.note}` : ''}{' '}
+        <button className="linkBtn" onClick={undo} disabled={busy}>undo</button>
+        {err && <span className="questMsg"> {err}</span>}
+      </div>
+    )
+  }
+
+  if (!open) {
+    return (
+      <div>
+        <button className="btnGhost" onClick={() => setOpen(true)}>✓ Mark received…</button>
+        {err && <span className="questMsg"> {err}</span>}
+      </div>
+    )
+  }
+  return (
+    <div className="questComposer" style={{ padding: 6, gap: 6 }}>
+      <label className="composerField" style={{ fontSize: 11 }}>Date
+        <input className="qtyInput" type="date" value={on} onChange={(e) => setOn(e.target.value)} />
+      </label>
+      <label className="composerField" style={{ fontSize: 11 }}>How you know (optional)
+        <input className="qtyInput" placeholder="e.g. Maria confirmed by text" value={note}
+               onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <div className="composerActions">
+        <button className="btn" disabled={busy} onClick={() => run(OUTCOME.RECEIVED)}>
+          {busy ? 'Saving…' : 'It arrived'}
+        </button>
+        {/* ⚠️ Says NOTHING CAME, never "received" — the goods did not arrive, and this is
+            the one record that exists to catch stock that never turned up. */}
+        <button className="btnGhost" disabled={busy} onClick={() => run(OUTCOME.NOT_COMING)}
+                title="Closed out or abandoned — stop chasing it. This does NOT record an arrival.">
+          Nothing coming
+        </button>
+        <button type="button" className="btnGhost" onClick={() => { setOpen(false); setErr(null) }}>Cancel</button>
+      </div>
+      {err && <span className="questMsg">{err}</span>}
     </div>
   )
 }

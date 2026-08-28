@@ -40,6 +40,7 @@ import {
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
   loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
+  markTransferReceived, unmarkTransferReceipt,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -420,6 +421,29 @@ app.get('/api/transfers', async (_req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// A transfer's arrival, entered by hand. ⚠️ NetSuite's "Received" is the far end
+// confirming and Nima says that often never happens; "Closed" cannot be read either way
+// (it may be an abandoned remainder of a partial shipment). So a person answers, and the
+// answer is stored where it can never be mistaken for something NetSuite said.
+app.post('/api/transfers/receipt', async (req, res) => {
+  try {
+    res.json(await markTransferReceived(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// Reversible — an answer entered in error must be removable without a database console.
+app.delete('/api/transfers/receipt', async (req, res) => {
+  try {
+    res.json(await unmarkTransferReceipt({ toNumber: req.query.toNumber || (req.body || {}).toNumber }))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 
