@@ -4,8 +4,6 @@ import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestA
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
-import CommandCenter from './views/CommandCenter.jsx'
-import FlightDeck from './views/FlightDeck.jsx'
 import FlightPlan from './views/FlightPlan.jsx'
 import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
@@ -140,14 +138,22 @@ const VIEWS = [
   // usage panel treats whatever is first as the default, its opens are reported as
   // "incl. loads" rather than ranked against views someone chose (viewUsage.js).
   { key: 'base', label: 'Base', C: Base },
-  { key: 'command', label: 'Command', C: CommandCenter },
+  // ⚠️ COMMAND CENTER AND FLIGHT DECK ARE GONE FROM HERE (2026-08-28), and their files
+  // stay on disk exactly as views/LaunchBay.jsx did when the holotable replaced it.
+  //
+  // They were the two dashboards the Base was built to replace, and keeping them listed
+  // meant every glance at the menu offered a way back out of the base — the thing Nima
+  // asked to stop: "the top menu in fact distract from the base one so that we sometiems
+  // go out of the base ecosystem which we want to stay in."
+  //
+  // ⚠️ MEASURED FIRST, NOT ASSUMED. Over the 7 days the counters have run: Command 22
+  // minutes over 9 opens, Flight Deck 4 minutes over 4 — against Base's 3,018. He
+  // confirmed it in his own words: "no i haven't used them almost at all ever." Nothing
+  // imports them now, so they cost nothing; restoring one is a two-line change.
   // The daily "flight route" (Nima, 2026-07-28) — the top need: everything to
   // do today laid across the day with times, ordered by deadline, so nothing
-  // gets ignored. Sits front-and-centre right after Command.
+  // gets ignored.
   { key: 'plan', label: "Today's Plan", C: FlightPlan },
-  // Second, switchable HUD (Nima, 2026-07-21) — the Falcon-cockpit hub.
-  // Command stays untouched; the two coexist as separate tabs.
-  { key: 'flight', label: 'Flight Deck', C: FlightDeck },
   { key: 'kanban', label: 'Mission Quests', C: Kanban },
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
@@ -436,17 +442,7 @@ export default function App() {
           <span className="logo">◆</span> NAGHEDI
           <span className="sub">Warehouse Tracker</span>
         </div>
-        <nav className="tabs">
-          {VIEWS.map((v) => (
-            <button
-              key={v.key}
-              className={v.key === view ? 'tab active' : 'tab'}
-              onClick={() => setView(v.key)}
-            >
-              {v.label}
-            </button>
-          ))}
-        </nav>
+        <ViewMenu views={VIEWS} view={view} onPick={setView} />
         <div className="topmeta">
           {/* Scan a tag from ANY view and open that record in NetSuite. Lives in the
               top bar because the whole point is that it is reachable without
@@ -504,5 +500,79 @@ export default function App() {
       </main>
     </div>
     </TraceDrawerProvider>
+  )
+}
+
+// The top menu, collapsed.
+//
+// Nima, 2026-08-28: "We want the base view to be the main one we use… anything thats not
+// in the base view to be there everything else can be collapsed in a drop down menu. the
+// top menu in fact distract from the base one so that we sometiems go out of the base
+// ecosystem which we want to stay in."
+//
+// ⚠️ THE MENU WAS NOT MERELY UNTIDY, IT WAS AN EXIT. Twenty-one buttons wrapped to SIX
+// rows at 1280px, and every one of them was an invitation to leave the screen he wants to
+// stay on. So this is a behaviour fix, not a tidying: the ways out are still all there,
+// they just stop competing with the map for attention.
+//
+// ⚠️ AND IT LANDS AFTER THE BUILDINGS, DELIBERATELY. Collapsing the menu while a lane had
+// no building would have trapped him away from work with no route back — which is why the
+// Catalogue building shipped first.
+//
+// ⚠️ THE TRIGGER NAMES THE CURRENT VIEW, and that is the whole of what collapsing costs.
+// A flat row of tabs shows where you are for free; a dropdown hides it. Reading "Views"
+// while sitting in Routing would be a menu that has forgotten where it is, so the button
+// says "Routing".
+function ViewMenu({ views, view, onPick }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef(null)
+  const here = views.find((v) => v.key === view) || null
+  const isBase = view === 'base'
+
+  // Close on Escape and on any click outside. ⚠️ Both, not one: a menu that only closes
+  // on Escape strands anyone using a mouse, and one that only closes on outside-click
+  // strands anyone using a keyboard.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const onDown = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [open])
+
+  const pick = (key) => { onPick(key); setOpen(false) }
+
+  return (
+    <nav className="tabs" ref={box}>
+      {/* Home stays one click away from everywhere. It is the view this whole change
+          exists to keep him inside, so it is never behind the dropdown. */}
+      <button className={isBase ? 'tab active' : 'tab'} onClick={() => pick('base')}>Base</button>
+      <div className="viewMenu">
+        <button
+          className={'tab viewMenuBtn' + (open ? ' active' : '')}
+          aria-haspopup="menu" aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {isBase ? 'Views' : (here?.label || 'Views')} <span aria-hidden="true">▾</span>
+        </button>
+        {open && (
+          <div className="viewMenuPanel" role="menu">
+            {views.filter((v) => v.key !== 'base').map((v) => (
+              <button
+                key={v.key} role="menuitem"
+                className={'viewMenuItem' + (v.key === view ? ' current' : '')}
+                onClick={() => pick(v.key)}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </nav>
   )
 }
