@@ -4,6 +4,7 @@ import { STAGE_ORDER, STAGE_SHORT, docRef, sevClass, Flags, DocRefLinks, docDate
 import { groupOrdersByPo } from '../../../src/model/poGroups.js'
 import { createTasksBulk, fetchPoDcs, fetchRouting, markTransferReceipt, clearTransferReceipt } from '../api.js'
 import { isParcelLane, showsParcelPushButton } from '../../../src/model/parcelLane.js'
+import { neverLabelledHere } from '../../../src/model/labelSource.js'
 import {
   TAB, TAB_LABEL, PC_ORDER, PC_LABEL, PC_IS_WORK, PC_COLOR,
   missionTab, postCustodyState, routingForPo, fulfilledNeverScanned, PC,
@@ -167,7 +168,11 @@ export default function Kanban({ orders, transfers = [], tasks = [], events = []
     const gap = onTab(TAB.FULFILMENT)
       .filter((c) => {
         const dcScanned = allDcTagsScanned(c.o, events, poDcs[c.o.poNumber])
-        return (c.o.fulfillments || []).some((f) => fulfilledNeverScanned(f, { dcScanned }))
+        // ⚠️ FOB China is never scanned out because it is never dispatched by us — see
+        // fulfilledNeverScanned. Without this, the two live China fulfilments sat in an
+        // accusation column for a scan that could never happen.
+        const neverDispatched = neverLabelledHere(c.o.location)
+        return (c.o.fulfillments || []).some((f) => fulfilledNeverScanned(f, { dcScanned, neverDispatched }))
       })
       .map((c) => c.o).sort(bySev)
     const nestor = onTab(TAB.FULFILMENT)

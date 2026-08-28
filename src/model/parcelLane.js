@@ -1,3 +1,5 @@
+import { neverLabelledHere } from './labelSource.js'
+
 // src/model/parcelLane.js — which EDI partners ship SMALL PARCEL, not freight.
 //
 // ⚠️ THE GAP THIS EXISTS TO CLOSE (Nima, 2026-08-11): "we never need to generate
@@ -80,6 +82,17 @@ export function isParcelLane({ customer, location } = {}) {
  *     parcel label.
  */
 export function showsParcelPushButton(order = {}) {
+  // ⚠️ A LOCATION WHOSE LABEL IS NEVER MADE GETS NO BUTTON (2026-08-28). Measured that
+  // day: IF7603 and IF7604 — both FOB China — each carried a live-looking "Push to
+  // ShipStation" that could only ever refuse. The server blocks China, and the UI does
+  // not offer `force` for it (the offer is keyed on the reason mentioning NetSuite),
+  // so the click had nowhere to go.
+  //
+  // ⚠️ THE WAREHOUSE BLOCK IS NOT THIS, and must keep its button. There the block is a
+  // conflict — NetSuite labels the box — and forcing past it is the documented
+  // break-glass Nima used for IF7610 when NetSuite's label was wrong. Suppressing that
+  // too would remove the only route to a label on the orders that need one most.
+  if (neverLabelledHere(order.location)) return false
   const parcel = isParcelLane(order)
   const isEdi = String(order.source || '').toLowerCase() === 'edi'
   if (isEdi) return parcel              // grouped or not — the lane decides
