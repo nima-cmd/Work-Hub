@@ -40,7 +40,18 @@ export const BUILDINGS = [
     key: 'ops', label: 'Ops centre', sprite: 'bldg-01', tone: 'go',
     // The stepped terrace block, tallest on the sheet. The desk.
     x: 32, y: 2, w: 11, h: 15,
-    of: 'open on the day plan', view: 'plan',
+    // ⚠️ THIS SAID "open on the day plan" AND COUNTED SOMETHING ELSE (fixed 2026-08-28).
+    // It counts open quest_tasks. Measured the day it was found: 15 open tasks against
+    // a day plan holding 23 items — 9 EDI routings, 8 ships, 5 email replies and 1
+    // invoice, NONE of them tasks. Two different piles, one label.
+    //
+    // The number is not wrong, the sentence was: open tasks are real and worth counting.
+    // ⚠️ It is relabelled rather than recomputed ON PURPOSE — buildRouteItems needs
+    // `ediWork` and `labelGaps`, which this view is not given, so counting "the day
+    // plan" here would silently undercount it. Trading a wrong label for a wrong number
+    // is not a fix. If the day-plan figure is the one wanted, those inputs have to
+    // reach the Base first.
+    of: 'open tasks', view: 'plan',
   },
   {
     key: 'calendar', label: 'Almanac', sprite: 'bldg-09', tone: 'arrive',
@@ -101,6 +112,25 @@ export const BUILDINGS = [
     x: 58, y: 67, w: 11, h: 15,
     of: 'freight waiting to be routed', view: 'routing',
   },
+  {
+    key: 'catalogue', label: 'Catalogue', sprite: 'bldg-03', tone: 'accent', flip: true,
+    // ⚠️ THE STOCK DEPOT'S SPRITE, MIRRORED, AND DELIBERATELY SO — the catalogue is the
+    // product master for the goods in those silos, so it reads as their twin. The
+    // sprite+flip pair is what has to be unique (see the scan bay).
+    //
+    // Nima, 2026-08-28: the Base is the app and he keeps being pulled out of it; this
+    // was the building he named as missing. It is also where the coming UPC label work
+    // lands — ⚠️ NOT a new "tools" home, which was my own first instinct and wrong:
+    // Catalogue.jsx ALREADY imports the GTIN/UPC master, so UPC labels are the next
+    // step in a surface that exists rather than a tool needing somewhere to live.
+    x: 74, y: 66, w: 12, h: 16,
+    // ⚠️ NOT COUNTABLE, for the Archive's reason. The catalogue's real number is "SKUs
+    // not yet uploaded", and that lives behind an import this view is given no feed
+    // for. `buildingStates` is built from what App already passes so the always-open
+    // screen adds no query load to a one-vCPU deploy — and an INVENTED number sitting
+    // among real ones is worse than none at all.
+    of: 'UPC and product master', view: 'catalogue', countable: false,
+  },
 ]
 
 export const BUILDING = Object.fromEntries(BUILDINGS.map((b) => [b.key, b]))
@@ -130,6 +160,10 @@ export const ROADS = [
   { key: 'pack-edi', from: 'pack', to: 'edi' },
   { key: 'edi-routing', from: 'edi', to: 'routing' },
   { key: 'routing-launch', from: 'routing', to: 'launch' },
+  // The catalogue sits at the east end of the supply row, between the partner lane and
+  // the door — the two things that ask what a SKU actually is.
+  { key: 'routing-catalogue', from: 'routing', to: 'catalogue' },
+  { key: 'catalogue-launch', from: 'catalogue', to: 'launch' },
   // The north road: the desk, and the surfaces you read rather than work.
   { key: 'comms-ops', from: 'comms', to: 'ops' },
   { key: 'comms-pack', from: 'comms', to: 'pack' },
@@ -289,6 +323,8 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
     // here would have to be invented, and an invented number on a base of real ones is
     // worse than none. The view renders its label instead.
     datapad: state(0, [], 'none', () => null),
+    // ⚠️ NOT COUNTABLE either — see the building. The view renders its label instead.
+    catalogue: state(0, [], 'none', () => null),
     comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
     ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }
