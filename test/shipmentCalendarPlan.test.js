@@ -334,3 +334,27 @@ test('neither a PO nor an SO is still no event', () => {
   })
   assert.equal(p.entries[0].action, ACTION.SKIP)
 })
+
+// ── the Datapad's paperwork section ─────────────────────────────────────────
+import { buildTrace } from '../src/model/trace.js'
+
+test('buildTrace carries `filed`, and counts it', () => {
+  // ⚠️ THE BUG THIS PINS: buildTrace destructures a FIXED set of keys, so passing
+  // `filed` through simply vanished. The Drive lookup found the file, the trace
+  // returned nothing, and the panel said "no paperwork" — indistinguishable from a
+  // document that genuinely has none. Exactly the silent-zero shape the Drive work
+  // kept producing all day.
+  const t = buildTrace({
+    subject: { docType: 'SO', docNumber: 'SO12393' },
+    filed: [{ id: 'abc', name: 'IF7441.pdf', url: 'https://drive.google.com/file/d/abc/view' }],
+  })
+  assert.equal(t.filed.length, 1)
+  assert.equal(t.filed[0].name, 'IF7441.pdf')
+  assert.equal(t.counts.filed, 1)
+})
+
+test('a trace with no paperwork says zero rather than undefined', () => {
+  const t = buildTrace({ subject: { docType: 'IF', docNumber: 'IF7610' } })
+  assert.deepEqual(t.filed, [])
+  assert.equal(t.counts.filed, 0)
+})

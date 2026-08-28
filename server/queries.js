@@ -12,10 +12,12 @@ import { mergePushReports } from '../src/model/pushReport.js'
 import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidence.js'
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
+import { transferCard } from '../src/model/transferCard.js'
+import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
-import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled } from '../src/model/netDeparture.js'
+import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled, isDepartureConfirmed } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
 import { TASK_DONE } from '../src/model/orderEvents.js'
 import { PREPPED, PREP_CLEARED } from '../src/model/prepped.js'
@@ -1257,6 +1259,67 @@ async function traceNotes(docType, docNumber) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 }
 
+/**
+ * The scanned paperwork filed for a document, for the Datapad's record panel.
+ *
+ * ⚠️ READ LIVE FROM DRIVE, not from doc_links. That table exists and is EMPTY — only
+ * the generated-BOL path ever wrote to it, and the SCAN path (the one actually used)
+ * never has. Reading it would show "no paperwork" for every document Nima has filed.
+ * Drive is the system of record here; a cached link is a convenience this app has not
+ * earned yet.
+ *
+ * ⚠️ It resolves the folder the SAME way the calendar does, so a boutique slip filed
+ * under its SO, an EDI BOL under its PO, and a transfer under Naghedi/Consignment are
+ * all found — the three conventions this codebase learned the hard way today.
+ */
+async function filedDocumentsFor(soNumber, poNumber, toNumber) {
+  const out = []
+  const seen = new Set()
+  const add = (files) => {
+    for (const f of files || []) {
+      if (!f?.id || seen.has(f.id)) continue
+      seen.add(f.id)
+      out.push({ name: f.name, url: f.url, id: f.id })
+    }
+  }
+  try {
+    // A transfer files under the folder its destination maps to.
+    if (toNumber) {
+      const { rows } = await pool.query('SELECT destination FROM transfer_order WHERE to_number = $1', [toNumber])
+      const folder = transferFilingFolder(rows[0]?.destination)
+      if (folder) {
+        const r = await listFiledDocuments({ partner: folder, po: toNumber, root: DRIVE_ROOT_SLIPS })
+        if (!r.failure) add(r.files)
+      }
+      return out
+    }
+    // Otherwise the partner/customer decides the tree, and both keys are tried —
+    // BOLs are PO-named, boutique slips SO-named.
+    const { rows } = await pool.query(
+      `SELECT DISTINCT o.customer,
+              (SELECT partner FROM routing_shipment rs
+                WHERE $2 <> '' AND $2 = ANY(rs.member_pos) AND rs.partner IS NOT NULL LIMIT 1) AS partner
+         FROM orders o WHERE o.so_number = $1`, [soNumber || '', poNumber || ''])
+    const name = rows[0]?.partner || rows[0]?.customer
+    if (!name) return out
+    const pf = await Promise.all([
+      listPartnerFolders({ root: DRIVE_ROOT_BOLS }),
+      listPartnerFolders({ root: DRIVE_ROOT_SLIPS }),
+    ])
+    for (const [i, root] of [DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS].entries()) {
+      const folder = resolveDriveFolder(name, pf[i].folders || [])
+      if (!folder) continue
+      const keys = folderKeysFor(root === DRIVE_ROOT_SLIPS ? TREE.SLIPS : TREE.BOLS, { po: poNumber, so: soNumber })
+      for (const key of keys) {
+        const r = await listFiledDocuments({ partner: folder, po: key, root })
+        if (r.failure) break
+        if (r.files?.length) { add(r.files); break }
+      }
+    }
+  } catch { /* ⚠️ Drive being unreachable must not turn a trace into an error page. */ }
+  return out
+}
+
 export async function getTrace(docType, docNumber) {
   const ref = normalizeRef(docType, docNumber)
   const [linkRows, mailRows, notes] = await Promise.all([
@@ -1269,7 +1332,30 @@ export async function getTrace(docType, docNumber) {
   if (ref.docType === 'EMAIL') return buildTrace({ ...common, ...(await emailTrace(ref)) })
   if (ref.docType === 'TASK') return buildTrace({ ...common, ...(await taskTrace(ref)) })
   if (ref.docType === 'OC') return buildTrace({ ...common, ...(await ocTrace(ref)) })
-  return buildTrace({ ...common, ...(await orderSideTrace(ref)) })
+  const side = await orderSideTrace(ref)
+  // ⚠️ Its own key, not folded into `related`. A filed PDF is a DOCUMENT WE HOLD, not
+  // another transaction the trace inferred — and this repo's rule is that a reference
+  // is not a record. Keeping them apart is what lets the panel say "here is the paper"
+  // rather than listing a scan beside an invoice as though they were the same kind.
+  //
+  // ⚠️ The identifiers are resolved HERE rather than read off orderSideTrace's result.
+  // I first read `side.soNumber`, which that function does not return — so every
+  // lookup silently found nothing and reported "no paperwork" for documents that
+  // demonstrably have some. Reading a shape you assumed is the same mistake as
+  // trusting a field you assumed.
+  const so = await soNumberFor(ref)
+  let poNumber = null
+  let toNumber = null
+  if (so) {
+    const { rows } = await pool.query('SELECT po_number FROM orders WHERE so_number = $1', [so])
+    poNumber = rows[0]?.po_number || null
+    if (!rows.length) {
+      const { rows: t } = await pool.query('SELECT to_number FROM transfer_order WHERE to_number = $1', [so])
+      toNumber = t[0]?.to_number || null
+    }
+  }
+  const filed = await filedDocumentsFor(so, poNumber, toNumber)
+  return buildTrace({ ...common, ...side, filed })
 }
 
 // SO · IF · INV — all three hang off one sales order, so they share one fetch and
@@ -2658,6 +2744,77 @@ export async function pushToShipstation({ scope = 'edi', dryRun = false, force =
       inScope: rows.length,
       locationHeld: locationHeld.length, recorded,
       forced: force || undefined,
+    }
+  }
+
+  // ── transfers: Office and Consignment ─────────────────────────────────────
+  //
+  // Nima, 2026-08-27: he cannot make these labels in NetSuite, so ShipStation is the
+  // only route. Structurally this is the boutique push with one join changed — the
+  // address comes from the SAME place (transaction.shippingaddress →
+  // transactionShippingAddress), which is why this needed far less new code than the
+  // design I first proposed.
+  //
+  // ⚠️ AND THAT FIRST DESIGN WAS WRONG. I was going to read location.mainaddress,
+  // reasoning that a transfer inherits its destination's address. TO217 proves
+  // otherwise: its shippingaddress is 2574142 (20 W 22nd St), NOT the Office default
+  // 4 (88 Lexington Ave). Older transfers DO use the default, which is exactly why the
+  // difference was easy to miss — and building on the location would have shipped this
+  // one to the wrong New York address.
+  if (scope === 'transfer') {
+    const { rows } = await pool.query(
+      `SELECT f.if_number AS "ifNumber", t.to_number AS "soNumber", t.destination,
+              t.status AS "toStatus", f.status,
+              f.tracking_numbers AS "nsTracking",
+              ${SHIPSTATION_TRACKING_SQL} AS "ssTracking",
+              ${DEAD_LABEL_SQL} AS "deadTracking"
+         FROM fulfillments f JOIN transfer_order t ON t.to_number = f.so_number
+        WHERE f.actual_ship_date IS NULL
+        ORDER BY f.if_number`)
+
+    const pushable = rows.filter((r) => !only || only.has(String(r.ifNumber).toUpperCase()))
+    const [addrs, methods] = await Promise.all([
+      fetchBoutiqueAddresses(pushable.map((r) => r.ifNumber), { runSuiteQL }),
+      fetchBoutiqueShipMethods(pushable.map((r) => r.ifNumber), { runSuiteQL }),
+    ])
+
+    const { orders, skipped, records } = boutiqueOrdersFor(
+      pushable.map((r) => ({
+        // The DESTINATION stands in for the customer — that is what this shipment is
+        // to, and a ShipStation order with no name is unfindable in their UI.
+        order: { ...r, customer: r.destination || 'Transfer', poNumber: null, location: null },
+        fulfilment: { ifNumber: r.ifNumber, status: r.status },
+        address: addrs.get(r.ifNumber),
+        labelCount: labelCount({ nsTracking: r.nsTracking, ssTracking: r.ssTracking, deadTracking: r.deadTracking }),
+        deadLabelCount: (r.deadTracking || []).length,
+        carrier: methods.get(r.ifNumber)?.carrier ?? null,
+        shipMethod: methods.get(r.ifNumber)?.shipMethod ?? null,
+        // ⚠️ NO REST DETAIL LOOKUP, and `readFailed: false` is therefore honest rather
+        // than assumed. fetchBoutiqueShipDetails reads the SALES ORDER record; a
+        // transfer has none, so calling it would fail and every transfer would be held
+        // as SHIP_DETAIL_UNREADABLE — a hold whose reason ("could not read the
+        // billing") would be a lie about why.
+        //
+        // ⚠️ AND THIRD-PARTY BILLING CANNOT EXIST HERE. It is resolved from the
+        // customer's account, and a transfer HAS NO CUSTOMER — NetSuite's entity is
+        // null. So the freight is ours by construction, not by default. That is the
+        // one thing this repo will not let a caller be vague about (upsRates.js), and
+        // it is answered by the document type rather than left unset.
+        shipMethodName: null,
+        thirdPartyAcct: null,
+        thirdPartyZip: null,
+        readFailed: false,
+      })),
+      { storeId },
+    )
+    const res = await pushOrders(orders, { dryRun })
+    const recorded = await rememberPush(records, res, dryRun)
+    return {
+      ...res, scope, skipped: skipped || [],
+      candidates: pushable.length,
+      seen: pushable.length,
+      inScope: rows.length,
+      recorded, forced: force || undefined,
     }
   }
 
@@ -4207,23 +4364,95 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null, sin
 }
 
 /**
+ * Transfers as board cards — the same shape getOrders returns, so the Kanban renders
+ * them without a second code path.
+ *
+ * ⚠️ Deliberately a SEPARATE call from getOrders. Transfers are not in `orders` and
+ * must not start arriving through it: 63 places read that function's table, and the
+ * whole reason transfers live elsewhere is that none of them should silently change
+ * meaning. The board asks for both and merges them where it wants them.
+ */
+export async function getTransferCards() {
+  const rows = await loadTransferCandidates()
+  return rows.map(transferCard).filter(Boolean)
+}
+
+/**
  * The transfers that belong on the Transfers calendar.
  *
  * ⚠️ Reads transfer_order, so it can only ever return destinations we track — the
  * ingest already refused the other 173.
  */
 export async function loadTransferCandidates() {
+  // ⚠️ A LABEL LIVES IN THREE PLACES AND THIS READ ONE. fulfillments.tracking_numbers
+  // is NetSuite's copy; a label bought in ShipStation lands in shipstation_order and
+  // reaches NetSuite only when someone types it there. TO217 proved it within hours:
+  // the label was bought (1ZC6J6100325130658, $32.33) and the calendar still showed a
+  // shipment with no tracking, warning it "cannot be traced".
+  //
+  // labelEvidence.labelTracking already merges the three sources — NetSuite,
+  // ShipStation, minus any a human has marked dead — and it is what the push gate and
+  // labelGap read. Using anything narrower is the exact defect that module exists for,
+  // recorded in [[shipstation-label-lanes]]. I wrote it again anyway.
   const { rows } = await pool.query(
     `SELECT t.to_number, t.destination, t.status AS to_status,
-            f.if_number, f.status AS if_status, f.if_date, f.tracking_numbers
+            f.if_number, f.status AS if_status, f.if_date,
+            f.tracking_numbers AS ns_tracking,
+            ${SHIPSTATION_TRACKING_SQL} AS ss_tracking,
+            ${DEAD_LABEL_SQL} AS dead_tracking,
+            -- ⚠️ The SAME manual marker the Net-terms flow uses (netDeparture.js).
+            -- A transfer's Shipped status is set when the LABEL is made, so only a
+            -- person saying "yes, it left" is departure evidence. setFulfillmentDeparted
+            -- already accepts transfers — it keys on the IF number.
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number
+                AND e.event_type = 'DEPARTURE_CONFIRMED') AS departure_confirmed_at,
+            (SELECT max(e.occurred_at) FROM order_events e
+              WHERE e.doc_type = 'IF' AND e.doc_number = f.if_number
+                AND e.event_type = 'DEPARTURE_UNCONFIRMED') AS departure_unconfirmed_at
        FROM transfer_order t
        LEFT JOIN fulfillments f ON f.so_number = t.to_number
       ORDER BY t.trandate DESC NULLS LAST`)
   return rows.map((r) => ({
     toNumber: r.to_number, destination: r.destination, toStatus: r.to_status,
     ifNumber: r.if_number, ifStatus: r.if_status, ifDate: r.if_date,
-    tracking: r.tracking_numbers || [],
+    tracking: labelTracking({
+      nsTracking: r.ns_tracking, ssTracking: r.ss_tracking, deadTracking: r.dead_tracking,
+    }),
+    // Latest-event-wins, exactly like the Net-terms flow: a marker that can only ever
+    // be set would make a mis-click permanent.
+    departureConfirmed: isDepartureConfirmed({
+      departureConfirmedAt: r.departure_confirmed_at,
+      departureUnconfirmedAt: r.departure_unconfirmed_at,
+    }),
+    departureConfirmedAt: r.departure_confirmed_at,
   }))
+}
+
+/**
+ * The same list, with each transfer's filed paperwork looked up in Drive.
+ *
+ * ⚠️ SEPARATE from loadTransferCandidates, because Drive is a network round trip per
+ * transfer and the board does not need it. The calendar does — a filed transfer order
+ * is the evidence Nima scans in, and an entry that cannot link it is the reason the
+ * shipment calendar was rebuilt in #174.
+ */
+export async function loadTransferCandidatesWithScans() {
+  const rows = await loadTransferCandidates()
+  const out = []
+  for (const t of rows) {
+    const folder = transferFilingFolder(t.destination)
+    if (!folder) { out.push({ ...t, scans: [], scansChecked: false }); continue }
+    try {
+      const r = await listFiledDocuments({ partner: folder, po: t.toNumber, root: DRIVE_ROOT_SLIPS })
+      if (r.failure) { out.push({ ...t, scans: [], scansChecked: false }); continue }
+      out.push({ ...t, scans: (r.files || []).map((f) => ({ name: f.name, url: f.url })), scansChecked: true })
+    } catch {
+      // ⚠️ A Drive failure is "not checked", never "none filed".
+      out.push({ ...t, scans: [], scansChecked: false })
+    }
+  }
+  return out
 }
 
 /** A watermark in sync_meta — facts about coverage only the sync knows. */

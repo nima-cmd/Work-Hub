@@ -81,3 +81,30 @@ export function transferHeadline({ toNumber, destination, status } = {}) {
     ? `${toNumber} → ${where} · received`
     : `${toNumber} → ${where} · not confirmed received`
 }
+
+
+// ── Where a transfer's scanned paperwork is filed ───────────────────────────
+//
+// Nima, 2026-08-27: "its fine to go under boutiques as Naghedi for Office and
+// Consignment for Consignment."
+//
+// ⚠️ AN ENTERED MAPPING, not a derivation. The destination is a NetSuite location name
+// and the folder is what a person expects to find in Drive; "Office" would read as
+// someone else's boutique sitting among 37 real ones, so he named it Naghedi — our own
+// goods, under our own name. Nothing computes that, and nothing should try.
+const FILING_FOLDER = {
+  office: 'Naghedi',
+  consignment: 'Consignment',
+}
+
+/**
+ * The Boutiques/<folder>/ a transfer's paperwork belongs under.
+ *
+ * ⚠️ Returns null for anything unmapped, and the caller must SKIP rather than invent a
+ * folder. scanFiling.js already holds that line for boutique slips — "a slip in the
+ * wrong place is harder to find than one that was never filed and said so" — and a
+ * transfer to a new destination is exactly when that matters.
+ */
+export function transferFilingFolder(destination) {
+  return FILING_FOLDER[norm(destination)] || null
+}

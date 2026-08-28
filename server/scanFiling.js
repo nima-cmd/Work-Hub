@@ -9,6 +9,7 @@
 
 import { pool } from '../src/db.js'
 import { parseDcToken, partnerForDc } from '../src/model/dc.js'
+import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { uploadScannedPdf, DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS } from '../src/ingest/googleDrive.js'
 import { scanFilename, findFilingCollisions } from '../src/model/scanSegments.js'
 import { filingTarget, filingNote, FILED_EVENT } from '../src/model/filing.js'
@@ -71,16 +72,30 @@ async function classify(qr, knownPos) {
     const edi = await resolveFulfilment(ifNumber)
     if (edi) return edi
     // Known fulfilment, no EDI mapping → boutique. Named, not just "unknown QR".
+    //
+    // ⚠️ A TRANSFER'S PARENT IS NOT IN `orders`, so `customer` comes back null and the
+    // filing guard below skips it — correctly, but uselessly. A transfer has a
+    // DESTINATION instead, and Nima named where each one files:
+    // Office → Boutiques/Naghedi, Consignment → Boutiques/Consignment.
     const { rows } = await pool.query(
-      `SELECT f.so_number, o.customer, o.po_number
-         FROM fulfillments f LEFT JOIN orders o ON o.so_number = f.so_number
+      `SELECT f.so_number, o.customer, o.po_number, t.destination
+         FROM fulfillments f
+         LEFT JOIN orders o ON o.so_number = f.so_number
+         LEFT JOIN transfer_order t ON t.to_number = f.so_number
         WHERE f.if_number = $1`, [ifNumber])
+    const destination = rows[0]?.destination || null
     return {
       kind: 'boutique', raw: s, po: null, dc: null, partner: null,
       ifNumber,
       soNumber: rows[0]?.so_number || null,
       customer: rows[0]?.customer || null,
       customerPo: rows[0]?.po_number || null,
+      // ⚠️ NOT written into `customer`. Naming a place as the customer is the kind of
+      // field-that-lies this repo keeps paying for — the filing folder is its own
+      // field, and null when the destination is one nobody has mapped.
+      isTransfer: !!destination,
+      destination,
+      filingFolder: destination ? transferFilingFolder(destination) : null,
       known: rows.length > 0,
     }
   }
@@ -130,12 +145,16 @@ export async function planScanFiling(segments = []) {
       // Filed only when we can NAME both levels. Anything else stays skipped
       // rather than inventing a folder — a slip in the wrong place is harder to
       // find than one that was never filed and said so.
-      if (c.ifNumber && c.customer && c.soNumber) {
+      // A transfer files under the folder Nima named for its destination; everything
+      // else under its customer. Both land in Boutiques/<folder>/<order>/.
+      const folder = c.filingFolder || c.customer
+      if (c.ifNumber && folder && c.soNumber) {
         documents.push({
           kind: 'slip', root: DRIVE_ROOT_SLIPS,
-          partner: safeFolder(c.customer), pos: [c.soNumber],
+          partner: safeFolder(folder), pos: [c.soNumber],
           filename: `${c.ifNumber}.pdf`,
           customer: c.customer, soNumber: c.soNumber, ifNumber: c.ifNumber,
+          isTransfer: !!c.isTransfer, destination: c.destination || null,
           customerPo: c.customerPo || null, pageNums: seg.pageNums, qr: seg.qr,
         })
         continue
@@ -143,7 +162,11 @@ export async function planScanFiling(segments = []) {
       if (c.ifNumber) {
         warnings.push(
           c.known
-            ? `${c.ifNumber} — couldn't resolve ${!c.customer ? 'the customer' : 'its sales order'}, so it was skipped rather than filed somewhere wrong.`
+            ? (c.isTransfer
+              // ⚠️ Names the real reason. "Couldn't resolve the customer" is nonsense
+              // for a transfer — it has none — and would send someone hunting for one.
+              ? `${c.ifNumber} — transfer to ${c.destination}, which has no filing folder mapped. Add it to transferFilingFolder rather than filing it somewhere wrong.`
+              : `${c.ifNumber} — couldn't resolve ${!c.customer ? 'the customer' : 'its sales order'}, so it was skipped rather than filed somewhere wrong.`)
             : `${c.ifNumber} isn't in the app yet — if you just created it, press ↻ Refresh NetSuite and re-scan; otherwise check the number.`,
         )
       } else {

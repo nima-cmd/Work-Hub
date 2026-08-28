@@ -26,7 +26,7 @@ export const configured = () =>
 export async function syncShipmentCalendar({
   candidates = [],
   held = null,          // loadHeldCandidates() output; null = do not touch that calendar
-  transfers = null,     // loadTransferCandidates() output; null = do not touch that calendar
+  transfers = null,     // loadTransferCandidatesWithScans() output; null = skip that calendar
   todayIso = null,      // the day held entries sit on — an INPUT, never Date.now() here
   dryRun = true,
   lanes = [LANE.EDI, LANE.BOUTIQUE],

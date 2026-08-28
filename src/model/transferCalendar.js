@@ -25,12 +25,33 @@ import { isReceived } from './transferOrder.js'
 import { isoPlainDay } from './shipmentCalendar.js'
 import { daysBetween } from './heldShipment.js'
 
-export const STATE = { NOT_SHIPPED: 'not-shipped', IN_TRANSIT: 'in-transit', RECEIVED: 'received' }
+export const STATE = {
+  NOT_SHIPPED: 'not-shipped',
+  // ⚠️ MARKED SHIPPED IS NOT GONE. Nima, 2026-08-27: "these are marked as shipped when
+  // the label is created normally so we dont forget." Measured the same day: 11
+  // transfers read Shipped, THREE have a label and ZERO have an actual_ship_date. So
+  // the status is a bookkeeping mark and eight of them were marked before a label even
+  // existed. Calling that "sent" asserts a departure nobody witnessed — the same error
+  // netDeparture.js was written for in August, which I then made again here.
+  MARKED_SHIPPED: 'marked-shipped',
+  IN_TRANSIT: 'in-transit',
+  RECEIVED: 'received',
+}
 
-/** ⚠️ Keyed on the IF's own status, not the transfer's — the fulfilment is what ships. */
-export function transferState({ ifStatus, toStatus } = {}) {
+/**
+ * ⚠️ ONLY A HUMAN SAYING SO MOVES IT PAST "MARKED SHIPPED".
+ *
+ * The fulfilment's status cannot answer this: it is set when the label is made, before
+ * anything moves. `departureConfirmed` is the same manual marker the Net-terms flow
+ * already uses (netDeparture.js, DEPARTURE_CONFIRMED) — transfers join that mechanism
+ * rather than getting a parallel one, and setFulfillmentDeparted already accepts them
+ * because it keys on the IF number.
+ */
+export function transferState({ ifStatus, toStatus, departureConfirmed = false } = {}) {
   if (isReceived(toStatus)) return STATE.RECEIVED
-  return /shipped/i.test(String(ifStatus || '')) ? STATE.IN_TRANSIT : STATE.NOT_SHIPPED
+  const marked = /shipped/i.test(String(ifStatus || ''))
+  if (!marked) return STATE.NOT_SHIPPED
+  return departureConfirmed ? STATE.IN_TRANSIT : STATE.MARKED_SHIPPED
 }
 
 /**
@@ -50,13 +71,20 @@ export function transferKey(toNumber) {
  * @param todayIso the day an unshipped transfer sits on — an INPUT, never a clock here
  */
 export function transferEvent({
-  toNumber, destination, toStatus, ifNumber, ifStatus, ifDate, tracking = [], todayIso,
+  toNumber, destination, toStatus, ifNumber, ifStatus, ifDate, tracking = [],
+  departureConfirmed = false, departureConfirmedAt = null, scans = [], scansChecked = null,
+  todayIso,
 } = {}) {
   const key = transferKey(toNumber)
   if (!key) return null
-  const state = transferState({ ifStatus, toStatus })
-  const shipped = state !== STATE.NOT_SHIPPED
-  const day = shipped ? isoPlainDay(ifDate) : todayIso
+  const state = transferState({ ifStatus, toStatus, departureConfirmed })
+  // ⚠️ ONLY A CONFIRMED DEPARTURE EARNS A PAST DATE. A transfer merely marked shipped
+  // is, as far as anyone actually knows, still on the floor — so it sits on TODAY and
+  // rolls forward like the warehouse calendar, which is exactly what it is until
+  // somebody says otherwise. Dating it on if_date would put it on the day the
+  // FULFILMENT WAS CREATED and call that a departure.
+  const gone = state === STATE.IN_TRANSIT || state === STATE.RECEIVED
+  const day = gone ? (isoPlainDay(departureConfirmedAt) || isoPlainDay(ifDate)) : todayIso
 
   // ⚠️ NO DATE, NO EVENT — the same rule as every other calendar here. A shipped
   // transfer with no if_date has nothing to sit on, and inventing one would put freight
@@ -69,6 +97,8 @@ export function transferEvent({
   let verb
   if (state === STATE.RECEIVED) verb = 'received'
   else if (state === STATE.IN_TRANSIT) verb = 'sent — not confirmed received'
+  // ⚠️ "Marked shipped", never "sent". The distinction is the whole point.
+  else if (state === STATE.MARKED_SHIPPED) verb = 'marked shipped — not confirmed it left'
   else verb = 'not yet shipped'
 
   const waiting = state === STATE.IN_TRANSIT && day ? daysBetween(day, todayIso) : null
@@ -83,7 +113,10 @@ export function transferEvent({
   if (nums.length) {
     lines.push(`Tracking (${nums.length}):`)
     for (const t of nums) lines.push(`  ${t}`)
-  } else if (shipped) {
+  } else if (state !== STATE.NOT_SHIPPED) {
+    // ⚠️ Warned for anything past "not shipped", INCLUDING merely marked — eight of the
+    // eleven marked-shipped transfers have no label at all, which is precisely when you
+    // want to know there is nothing to chase.
     // ⚠️ Said out loud. A shipment that left with no tracking number cannot be chased
     // at all, and that is worth knowing BEFORE the far end says it never arrived.
     lines.push('⚠ No tracking number recorded — this cannot be traced.')
@@ -92,6 +125,10 @@ export function transferEvent({
 
   if (state === STATE.RECEIVED) {
     lines.push('Confirmed received in NetSuite.')
+  } else if (state === STATE.MARKED_SHIPPED) {
+    lines.push('⚠ Marked shipped in NetSuite, which happens when the LABEL is made —')
+    lines.push('  not when the goods move. Nobody has confirmed this left the building.')
+    lines.push('  Confirm it on the board once it has, and this settles on that day.')
   } else if (state === STATE.IN_TRANSIT) {
     lines.push('⚠ NOT confirmed received. That is the far end’s confirmation, which')
     lines.push('  does not always happen — it may well have arrived.')
@@ -102,8 +139,31 @@ export function transferEvent({
       : '  There is no tracking to check — this one has to be chased by asking.')
   } else {
     lines.push('This has NOT shipped. The entry moves to today until it does, then')
-    lines.push('settles on the day it went.')
+    lines.push('settles on the day it left.')
   }
 
-  return { key, date: day, state, shipped, summary, description: lines.join('\n').trim(), daysWaiting: waiting }
+  // ── the scanned paperwork ────────────────────────────────────────────────
+  // Filed under Boutiques/<folder>/<TO>/ — Naghedi for the Office, Consignment for
+  // Consignment (Nima's mapping, transferOrder.transferFilingFolder).
+  lines.push('')
+  const filed = (scans || []).filter(Boolean)
+  if (filed.length) {
+    lines.push('Signed paperwork:')
+    for (const f of filed) lines.push(`  ${f.name}\n    ${f.url}`)
+  } else if (scansChecked === false) {
+    // ⚠️ NOT "none filed" — WE NEVER LOOKED. The same distinction the shipment
+    // calendar had to learn: an absence we did not check for is not a finding.
+    lines.push('Signed paperwork: not checked.')
+  } else {
+    lines.push('No signed paperwork filed for this transfer.')
+  }
+
+  return {
+    key, date: day, state, summary,
+    // `gone` means a human CONFIRMED it left — never merely that NetSuite says Shipped.
+    gone,
+    markedShipped: state === STATE.MARKED_SHIPPED,
+    description: lines.join('\n').trim(),
+    daysWaiting: waiting,
+  }
 }

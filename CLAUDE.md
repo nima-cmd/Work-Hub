@@ -316,6 +316,7 @@ src/model/heldShipment.js  a shipment still on our floor; dated TODAY because sh
 src/model/itemPrice.js     which price level means what; a price of 0 is NOT a price
 src/model/transferOrder.js  which transfers are work; the tracked destinations are an ENTERED list
 src/model/transferCalendar.js  a transfer as a calendar entry; unreceived is NOT undelivered
+src/model/transferCard.js  a transfer as a BOARD card; the TO's own status cannot say if it is picked
 src/ingest/netsuiteItemPrices.js  the `pricing` sublist (item.baseprice is EMPTY) + item display names
 src/ingest/googleCalendarWrite.js  the WRITE half of Google Calendar (googleCalendar.js reads)
 src/ingest/shipmentCalendarSync.js  plan + publish; candidates are an INPUT (src never imports server)

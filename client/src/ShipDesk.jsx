@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { markLabelDead as apiMarkLabelDead } from './api.js'
 import { STAGE } from '../../src/model/stages.js'
 import { getCharacterById } from '../../src/model/characters.js'
 import { courtLine, warehouseLine, COURT_VOICE_ID, WAREHOUSE_VOICE_ID } from '../../src/model/courtVoice.js'
@@ -328,6 +329,61 @@ function GapRow({ i, showTracking }) {
       <div className="gapCust">{i.customer || 'unknown customer'}</div>
       <ShipDate advice={i.advice} />
       {showTracking && <Tracking numbers={i.trackingNumbers} />}
+      {/* ⚠️ Offered HERE, on the row that says "it already went", because this is the
+          moment you notice the label is wrong. Nima has hit it twice — IF7486 in
+          August (NetSuite made a label it would not replace) and IF7610 today (made
+          for one box when the shipment is two). Both times the only way to say so was
+          a database console. */}
+      {showTracking && <DeadLabelButton ifNumber={i.ifNumber} numbers={i.trackingNumbers} />}
+    </div>
+  )
+}
+
+// The void button NetSuite lacks.
+//
+// ⚠️ IT ASKS FOR A REASON AND WILL NOT PROCEED WITHOUT ONE. The server requires it and
+// so does this — an unexplained dead label reads as a mistake later, and the row is
+// what gets produced in a chargeback argument. A confirm() would be one click; this is
+// deliberately one click plus a sentence.
+//
+// ⚠️ And it names the TRACKING NUMBER, never just the IF. A multi-box shipment has
+// several, and killing the wrong one leaves a live label counting as evidence while a
+// dead one does not.
+function DeadLabelButton({ ifNumber, numbers = [] }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const live = (numbers || []).filter(Boolean)
+  if (!live.length) return null
+
+  async function kill(tracking) {
+    const reason = window.prompt(
+      `Why can't ${tracking} be used?\n\nThis is recorded against ${ifNumber} and is what gets produced if the charge is ever queried.`,
+    )
+    // ⚠️ Cancel and an empty reason are the SAME answer here: do nothing. Falling
+    // through on an empty string would write an unexplained death.
+    if (!reason || !reason.trim()) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await apiMarkLabelDead({ ifNumber, trackingNumber: tracking, reason: reason.trim() })
+      // The board reads label evidence from one place, so a refetch is the honest way
+      // to show the change rather than patching this row's own copy.
+      window.location.reload()
+    } catch (e) {
+      setErr(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="gapDead">
+      {live.map((t) => (
+        <button key={t} className="deadBtn" disabled={busy} onClick={() => kill(t)}
+                title={`Mark ${t} unusable — it stops counting as a label anywhere, and a new one can be made.`}>
+          {busy ? 'recording…' : `✗ ${live.length > 1 ? t.slice(-6) + ' is' : 'this label is'} wrong`}
+        </button>
+      ))}
+      {err && <div className="banner error">⚠ {err}</div>}
     </div>
   )
 }
