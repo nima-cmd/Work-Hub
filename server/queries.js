@@ -13,6 +13,7 @@ import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidenc
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
 import { transferCard } from '../src/model/transferCard.js'
+import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -1258,6 +1259,67 @@ async function traceNotes(docType, docNumber) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 }
 
+/**
+ * The scanned paperwork filed for a document, for the Datapad's record panel.
+ *
+ * ⚠️ READ LIVE FROM DRIVE, not from doc_links. That table exists and is EMPTY — only
+ * the generated-BOL path ever wrote to it, and the SCAN path (the one actually used)
+ * never has. Reading it would show "no paperwork" for every document Nima has filed.
+ * Drive is the system of record here; a cached link is a convenience this app has not
+ * earned yet.
+ *
+ * ⚠️ It resolves the folder the SAME way the calendar does, so a boutique slip filed
+ * under its SO, an EDI BOL under its PO, and a transfer under Naghedi/Consignment are
+ * all found — the three conventions this codebase learned the hard way today.
+ */
+async function filedDocumentsFor(soNumber, poNumber, toNumber) {
+  const out = []
+  const seen = new Set()
+  const add = (files) => {
+    for (const f of files || []) {
+      if (!f?.id || seen.has(f.id)) continue
+      seen.add(f.id)
+      out.push({ name: f.name, url: f.url, id: f.id })
+    }
+  }
+  try {
+    // A transfer files under the folder its destination maps to.
+    if (toNumber) {
+      const { rows } = await pool.query('SELECT destination FROM transfer_order WHERE to_number = $1', [toNumber])
+      const folder = transferFilingFolder(rows[0]?.destination)
+      if (folder) {
+        const r = await listFiledDocuments({ partner: folder, po: toNumber, root: DRIVE_ROOT_SLIPS })
+        if (!r.failure) add(r.files)
+      }
+      return out
+    }
+    // Otherwise the partner/customer decides the tree, and both keys are tried —
+    // BOLs are PO-named, boutique slips SO-named.
+    const { rows } = await pool.query(
+      `SELECT DISTINCT o.customer,
+              (SELECT partner FROM routing_shipment rs
+                WHERE $2 <> '' AND $2 = ANY(rs.member_pos) AND rs.partner IS NOT NULL LIMIT 1) AS partner
+         FROM orders o WHERE o.so_number = $1`, [soNumber || '', poNumber || ''])
+    const name = rows[0]?.partner || rows[0]?.customer
+    if (!name) return out
+    const pf = await Promise.all([
+      listPartnerFolders({ root: DRIVE_ROOT_BOLS }),
+      listPartnerFolders({ root: DRIVE_ROOT_SLIPS }),
+    ])
+    for (const [i, root] of [DRIVE_ROOT_BOLS, DRIVE_ROOT_SLIPS].entries()) {
+      const folder = resolveDriveFolder(name, pf[i].folders || [])
+      if (!folder) continue
+      const keys = folderKeysFor(root === DRIVE_ROOT_SLIPS ? TREE.SLIPS : TREE.BOLS, { po: poNumber, so: soNumber })
+      for (const key of keys) {
+        const r = await listFiledDocuments({ partner: folder, po: key, root })
+        if (r.failure) break
+        if (r.files?.length) { add(r.files); break }
+      }
+    }
+  } catch { /* ⚠️ Drive being unreachable must not turn a trace into an error page. */ }
+  return out
+}
+
 export async function getTrace(docType, docNumber) {
   const ref = normalizeRef(docType, docNumber)
   const [linkRows, mailRows, notes] = await Promise.all([
@@ -1270,7 +1332,30 @@ export async function getTrace(docType, docNumber) {
   if (ref.docType === 'EMAIL') return buildTrace({ ...common, ...(await emailTrace(ref)) })
   if (ref.docType === 'TASK') return buildTrace({ ...common, ...(await taskTrace(ref)) })
   if (ref.docType === 'OC') return buildTrace({ ...common, ...(await ocTrace(ref)) })
-  return buildTrace({ ...common, ...(await orderSideTrace(ref)) })
+  const side = await orderSideTrace(ref)
+  // ⚠️ Its own key, not folded into `related`. A filed PDF is a DOCUMENT WE HOLD, not
+  // another transaction the trace inferred — and this repo's rule is that a reference
+  // is not a record. Keeping them apart is what lets the panel say "here is the paper"
+  // rather than listing a scan beside an invoice as though they were the same kind.
+  //
+  // ⚠️ The identifiers are resolved HERE rather than read off orderSideTrace's result.
+  // I first read `side.soNumber`, which that function does not return — so every
+  // lookup silently found nothing and reported "no paperwork" for documents that
+  // demonstrably have some. Reading a shape you assumed is the same mistake as
+  // trusting a field you assumed.
+  const so = await soNumberFor(ref)
+  let poNumber = null
+  let toNumber = null
+  if (so) {
+    const { rows } = await pool.query('SELECT po_number FROM orders WHERE so_number = $1', [so])
+    poNumber = rows[0]?.po_number || null
+    if (!rows.length) {
+      const { rows: t } = await pool.query('SELECT to_number FROM transfer_order WHERE to_number = $1', [so])
+      toNumber = t[0]?.to_number || null
+    }
+  }
+  const filed = await filedDocumentsFor(so, poNumber, toNumber)
+  return buildTrace({ ...common, ...side, filed })
 }
 
 // SO · IF · INV — all three hang off one sales order, so they share one fetch and
@@ -4342,6 +4427,32 @@ export async function loadTransferCandidates() {
     }),
     departureConfirmedAt: r.departure_confirmed_at,
   }))
+}
+
+/**
+ * The same list, with each transfer's filed paperwork looked up in Drive.
+ *
+ * ⚠️ SEPARATE from loadTransferCandidates, because Drive is a network round trip per
+ * transfer and the board does not need it. The calendar does — a filed transfer order
+ * is the evidence Nima scans in, and an entry that cannot link it is the reason the
+ * shipment calendar was rebuilt in #174.
+ */
+export async function loadTransferCandidatesWithScans() {
+  const rows = await loadTransferCandidates()
+  const out = []
+  for (const t of rows) {
+    const folder = transferFilingFolder(t.destination)
+    if (!folder) { out.push({ ...t, scans: [], scansChecked: false }); continue }
+    try {
+      const r = await listFiledDocuments({ partner: folder, po: t.toNumber, root: DRIVE_ROOT_SLIPS })
+      if (r.failure) { out.push({ ...t, scans: [], scansChecked: false }); continue }
+      out.push({ ...t, scans: (r.files || []).map((f) => ({ name: f.name, url: f.url })), scansChecked: true })
+    } catch {
+      // ⚠️ A Drive failure is "not checked", never "none filed".
+      out.push({ ...t, scans: [], scansChecked: false })
+    }
+  }
+  return out
 }
 
 /** A watermark in sync_meta — facts about coverage only the sync knows. */

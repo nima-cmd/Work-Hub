@@ -261,6 +261,29 @@ export default function TraceView({ subject, trail = [], onHop, onNavigate, comp
           ))}
         </div>
 
+        {/* ⚠️ ITS OWN SECTION, between Related and Linked, because it is neither. A
+            filed PDF is not a transaction the trace inferred (Related) and nobody
+            attached it by hand (Linked) — it is the PAPER ITSELF, read live from
+            Drive. Folding it into either would make the panel say it is a kind of
+            thing it is not. */}
+        <div className="traceSection">
+          <div className="traceSectionTitle">
+            Paperwork <span className="traceSectionHint">scanned into Drive</span>
+          </div>
+          {!(trace.filed || []).length && (
+            <div className="empty">No scanned paperwork filed for this one.</div>
+          )}
+          <div className="traceLinks">
+            {(trace.filed || []).map((f) => (
+              // Opens Drive in a new tab — the same ↗ convention the NetSuite links
+              // use, so a click never loses the trace you are reading.
+              <a key={f.id} className="traceFiled" href={f.url} target="_blank" rel="noreferrer">
+                📄 {f.name} <span className="traceSectionHint">↗</span>
+              </a>
+            ))}
+          </div>
+        </div>
+
         <div className="traceSection">
           <div className="traceSectionTitle">Linked <span className="traceSectionHint">added by hand</span></div>
           {!trace.linked.length && <div className="empty">Nothing attached by hand.</div>}

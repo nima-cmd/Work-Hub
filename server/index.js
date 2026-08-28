@@ -39,7 +39,7 @@ import {
   getDayPlan, reorderDayPlan, resetDayPlan, setPlanItemDone,
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
-  loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getTransferCards, getSyncMeta, setSyncMeta,
+  loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -1746,7 +1746,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     let calendar = null
     try {
       calendar = startCalendarIncremental({
-        loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, getTransferCards, getSyncMeta, setSyncMeta,
+        loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
       })
     } catch (e) {
       console.error('shipment calendar sync could not start (recurring tasks still checked):', e.message)

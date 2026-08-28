@@ -254,7 +254,7 @@ export function pushTrail(trail = [], ref) {
 // ⚠️ `history` arrives already ordered and labelled by the ledger's own decorate/
 // timeline helpers — this does not re-sort it. Two sorts on one list is how a
 // timeline starts disagreeing with the view it came from.
-export function buildTrace({ subject, history = [], related = [], linked = {}, notes = [] }) {
+export function buildTrace({ subject, history = [], related = [], linked = {}, notes = [], filed = [] }) {
   return {
     subject: {
       ...subject,
@@ -266,11 +266,17 @@ export function buildTrace({ subject, history = [], related = [], linked = {}, n
     history,
     related: dedupeCards(related).filter((c) => !isSelf(c, subject)),
     linked: linkedEntries(linked),
+    // ⚠️ ITS OWN KEY, not folded into `related`. A filed PDF is a DOCUMENT WE HOLD,
+    // not another transaction the trace inferred — this repo's rule that a reference
+    // is not a record, applied to paper. Listing a scan beside an invoice would say
+    // they are the same kind of thing.
+    filed,
     notes,
     counts: {
       history: history.length,
       related: dedupeCards(related).filter((c) => !isSelf(c, subject)).length,
       linked: linkedEntries(linked).length,
+      filed: filed.length,
       notes: notes.length,
     },
   }

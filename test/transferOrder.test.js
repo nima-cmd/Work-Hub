@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   TRACKED_DESTINATIONS, isTrackedDestination, trackedTransfers, untrackedDestinations,
-  isReceived, transferHeadline, RECEIVED,
+  isReceived, transferHeadline, RECEIVED, transferFilingFolder,
 } from '../src/model/transferOrder.js'
 
 // The live population, measured 2026-08-27.
@@ -82,4 +82,24 @@ test('the headline names the destination, because that IS the shipment', () => {
   assert.match(transferHeadline({ toNumber: 'TO217', destination: 'Office' }), /TO217 → Office/)
   // A transfer with no destination still gets an honest line rather than "→ null".
   assert.match(transferHeadline({ toNumber: 'TO9' }), /an unnamed location/)
+})
+
+test('where a transfer\'s paperwork files — an ENTERED mapping', () => {
+  // Nima, 2026-08-27: "its fine to go under boutiques as Naghedi for Office and
+  // Consignment for Consignment." The destination is a NetSuite location name; the
+  // folder is what a person expects to find in Drive. "Office" among 37 real boutiques
+  // would read as somebody else's shop, so our own goods go under our own name.
+  assert.equal(transferFilingFolder('Office'), 'Naghedi')
+  assert.equal(transferFilingFolder('office'), 'Naghedi')
+  assert.equal(transferFilingFolder('  Consignment '), 'Consignment')
+})
+
+test('⚠️ an unmapped destination files NOWHERE, and that is the safe answer', () => {
+  // scanFiling already holds this line for boutique slips — "a slip in the wrong place
+  // is harder to find than one that was never filed and said so". A transfer to a new
+  // destination is exactly when that matters.
+  assert.equal(transferFilingFolder('Warehouse'), null)
+  assert.equal(transferFilingFolder('Somewhere New'), null)
+  assert.equal(transferFilingFolder(null), null)
+  assert.equal(transferFilingFolder(''), null)
 })

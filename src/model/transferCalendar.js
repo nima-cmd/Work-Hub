@@ -72,7 +72,8 @@ export function transferKey(toNumber) {
  */
 export function transferEvent({
   toNumber, destination, toStatus, ifNumber, ifStatus, ifDate, tracking = [],
-  departureConfirmed = false, departureConfirmedAt = null, todayIso,
+  departureConfirmed = false, departureConfirmedAt = null, scans = [], scansChecked = null,
+  todayIso,
 } = {}) {
   const key = transferKey(toNumber)
   if (!key) return null
@@ -139,6 +140,22 @@ export function transferEvent({
   } else {
     lines.push('This has NOT shipped. The entry moves to today until it does, then')
     lines.push('settles on the day it left.')
+  }
+
+  // ── the scanned paperwork ────────────────────────────────────────────────
+  // Filed under Boutiques/<folder>/<TO>/ — Naghedi for the Office, Consignment for
+  // Consignment (Nima's mapping, transferOrder.transferFilingFolder).
+  lines.push('')
+  const filed = (scans || []).filter(Boolean)
+  if (filed.length) {
+    lines.push('Signed paperwork:')
+    for (const f of filed) lines.push(`  ${f.name}\n    ${f.url}`)
+  } else if (scansChecked === false) {
+    // ⚠️ NOT "none filed" — WE NEVER LOOKED. The same distinction the shipment
+    // calendar had to learn: an absence we did not check for is not a finding.
+    lines.push('Signed paperwork: not checked.')
+  } else {
+    lines.push('No signed paperwork filed for this transfer.')
   }
 
   return {

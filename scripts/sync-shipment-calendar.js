@@ -11,7 +11,7 @@
 // before it leaves. A dry run does not even CREATE the two calendars.
 
 import { pool } from '../src/db.js'
-import { loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates } from '../server/queries.js'
+import { loadCalendarCandidates, loadHeldCandidates, loadTransferCandidatesWithScans } from '../server/queries.js'
 import { syncShipmentCalendar, configured } from '../src/ingest/shipmentCalendarSync.js'
 import { ACTION, SKIP_LABEL, CALENDAR_NAME, LANE } from '../src/model/shipmentCalendarPlan.js'
 import { REASON_LABEL } from '../src/model/heldShipment.js'
@@ -53,7 +53,7 @@ console.log(`  ${candidates.length} candidate PO(s) loaded`
 // through a run that spans midnight.
 const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
 const held = noHeld ? null : await loadHeldCandidates()
-const transfers = noTransfers ? null : await loadTransferCandidates()
+const transfers = noTransfers ? null : await loadTransferCandidatesWithScans()
 const r = await syncShipmentCalendar({
   candidates: candidates.filter((c) => !c.loadError), held, transfers, todayIso, dryRun: !write, lanes,
 })
