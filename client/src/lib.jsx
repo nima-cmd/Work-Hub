@@ -478,14 +478,21 @@ export function LabelButtons({ info }) {
 // box already carries a label — there is no force, because a second live label is
 // a double charge and a wrong tracking number on the ASN. See
 // src/model/shipstationEligible.js (labelCount) and labelSource.js (location).
-export function ShipstationPushButton({ ifNumber, onDone }) {
+// ⚠️ `scope` IS A PROP BECAUSE THE PUSH HAS TWO SCOPES AND THEY QUERY DIFFERENT TABLES.
+// The boutique scope joins `orders`; the transfer scope joins `transfer_order`
+// (server/queries.js). A transfer pushed under 'boutique' is not in that scope at all,
+// so the button would come back "not in the push scope" every time — a button that
+// looks live, is reachable, and can never succeed. Nima cannot make transfer labels in
+// NetSuite at all, so ShipStation is the ONLY route for them and a dead button here
+// would block the work entirely.
+export function ShipstationPushButton({ ifNumber, onDone, scope = 'boutique' }) {
   const [state, setState] = useState(null) // { busy, msg, held, canForce }
   if (!ifNumber) return null
 
   const run = async (force) => {
     setState({ busy: true })
     try {
-      const r = await pushToShipstation({ scope: 'boutique', ifNumbers: [ifNumber], force })
+      const r = await pushToShipstation({ scope, ifNumbers: [ifNumber], force })
       if (r.pushed > 0) {
         // The order NUMBER, so he can find it in ShipStation's own search. We hold the
         // numeric orderId too, but ShipStation's deep-link format is not something this

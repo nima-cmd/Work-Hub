@@ -10,6 +10,7 @@ import {
 } from '../../../src/model/postCustody.js'
 import { isDepartureConfirmed } from '../../../src/model/netDeparture.js'
 import { allDcTagsScanned } from '../../../src/model/custody.js'
+import { transferColumns, transferWorkCount, transferSettledCount, TCOL } from '../../../src/model/transferBoard.js'
 
 // Pipeline as columns: Open → Picked → Packed → Invoiced → Approved → Shipped,
 // plus a trailing Tasks column for open quest_tasks (Gmail/Slack
@@ -21,7 +22,7 @@ import { allDcTagsScanned } from '../../../src/model/custody.js'
 // consolidated by PO number first (groupOrdersByPo) — one card per PO — and any
 // card (group or single) can be selected and turned into a task, in bulk, with
 // the same completion-requirement + doc-number options the task editor uses.
-export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
+export default function Kanban({ orders, transfers = [], tasks = [], events = [], onRefresh }) {
   const [selected, setSelected] = useState(() => new Set()) // keyed by soNumber (groups use poNumber as soNumber)
   const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState({ needsType: 'none', netsuiteDocType: 'SO', netsuiteDocNumber: '', urgency: '' })
@@ -90,7 +91,10 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   })
   // Hidden, not discarded — the toggle below brings them back. A board that silently
   // drops rows is indistinguishable from a board that lost them.
-  const settledCount = cards.filter((c) => c.settled).length
+  // ⚠️ Counts the RECEIVED transfers too, because the toggle below hides those as well.
+  // A toggle that says "7 finished, hidden" while hiding 14 is the same dishonest
+  // counter as a tab badge that undercounts its own cards.
+  const settledCount = cards.filter((c) => c.settled).length + transferSettledCount(transfers)
   const afterSettled = showSettled ? cards : cards.filter((c) => !c.settled)
   // ⚠️ SEARCH IGNORES THE FINISHED FILTER, and getting this wrong first taught me why.
   // The first cut searched only what was already visible, so typing IF7511 — a real
@@ -105,10 +109,21 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
   const hits = searching ? cards.filter((c) => matchesQuery(c.o, query)) : null
   const visible = searching ? hits : afterSettled
   const finishedHits = searching ? hits.filter((c) => c.settled).length : 0
-  const matchLine = describeMatch({ shown: visible.length, total: cards.length, query })
+  // ⚠️ TRANSFERS OBEY THE SAME SEARCH AS THE CARDS BESIDE THEM. Typing TO217 has to
+  // find TO217, for the same reason searching ignores the finished filter: an explicit
+  // identifier is an explicit request to find THAT thing, and answering "no such
+  // record" sends someone hunting in NetSuite for something the app is holding.
+  const visibleTransfers = searching ? transfers.filter((t) => matchesQuery(t, query)) : transfers
+  const transfersSettled = transferSettledCount(transfers)
+  const matchLine = describeMatch({ shown: visible.length + (searching ? visibleTransfers.length : 0), total: cards.length + transfers.length, query })
   const onTab = (t) => visible.filter((c) => c.tab === t)
+  // The Orders tab's badge counts the transfers drawn on it — a tab that says 4 and
+  // shows 7 cards is the counts-something-other-than-its-label shape this repo keeps
+  // finding (npm run check:counters). Received transfers are excluded unless they are
+  // being shown, because that is exactly what the columns do.
+  const shownTransfers = showSettled || searching ? visibleTransfers.length : visibleTransfers.length - transfersSettled
   const tabCounts = {
-    [TAB.ORDERS]: onTab(TAB.ORDERS).length,
+    [TAB.ORDERS]: onTab(TAB.ORDERS).length + Math.max(0, shownTransfers),
     [TAB.FULFILMENT]: onTab(TAB.FULFILMENT).length,
     [TAB.ACTION]: onTab(TAB.ACTION).length,
   }
@@ -129,6 +144,16 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
     const named = new Set(['ON_HOLD_APPROVAL', 'OPEN_NEEDS_FULFILLMENT'])
     const rest = onTab(TAB.ORDERS).filter((c) => !named.has(c.o.stage)).map((c) => c.o).sort(bySev)
     if (rest.length) columns.push({ key: 'other_orders', label: 'Other', items: rest })
+    // ── transfers, BESIDE the sales orders ───────────────────────────────────
+    // Nima, 2026-08-27: "everything done by me." One person, one queue — so the
+    // transfers get their own columns on THIS tab rather than a tab of their own.
+    //
+    // ⚠️ They do NOT go through missionTab, and src/model/transferBoard.js holds the
+    // measured reason: every live transfer has a fulfilment, so missionTab would have
+    // put ZERO of them on the tab Nima asked for them on, and the three picked ones
+    // would have landed in "Fulfilled — never scanned out" — a column that is false
+    // for a document that is never custody-scanned at all.
+    columns.push(...transferColumns(visibleTransfers, { showSettled }))
   } else if (tab === TAB.FULFILMENT) {
     // His words: "if something fullfilled with no scan out we need to be aware
     // since it should be happening one after another." That gap gets its own
@@ -316,6 +341,17 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
             {items.map((o) => {
               const key = cardKey(o)
               const sel = selected.has(key)
+              // ⚠️ A TRANSFER GETS ITS OWN CARD BODY, and that is not cosmetic. The
+              // shared body prints `customer`, and a transfer HAS NO CUSTOMER — its
+              // counterpart is a PLACE (Office, Consignment). transferCard.js
+              // deliberately leaves `customer` null so nothing can read a location as a
+              // company, and the card has to honour that: a transfer sitting
+              // anonymously among customer orders is how one gets shipped to a
+              // customer address.
+              //
+              // It also skips CustodyBadge and ShipWindow, which have no meaning here —
+              // a transfer is never custody-scanned and carries no partner ship window.
+              if (o.isTransfer) return <TransferCard key={key} o={o} colKey={colKey} onRefresh={onRefresh} />
               return (
                 <div key={key} className={'kcard ' + sevClass(o.severity) + (sel ? ' selected' : '')}>
                   <div className="krow">
@@ -407,6 +443,59 @@ export default function Kanban({ orders, tasks = [], events = [], onRefresh }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// A transfer as a card. Separate from the sales-order body above because the two
+// documents genuinely differ, not because the styling does:
+//
+//   · NO CUSTOMER — the counterpart is a place. transferCard.js leaves `customer` null
+//     on purpose and this prints `destination` instead, labelled "to", so nobody reads
+//     a location as a company.
+//   · NO CUSTODY — a transfer is never scanned out to Nestor; Nima packs it himself.
+//   · NO INVOICE AND NO PAYMENT — it moves our own goods between our own locations, so
+//     there is nobody to bill (Nima, 2026-08-27: "no payment invoice needed for
+//     transfer orders so once they have a label they can ship").
+//
+// ⚠️ The ShipStation push passes scope="transfer". Under the default 'boutique' scope
+// the server joins `orders` and a transfer is not in it, so the button would answer
+// "not in the push scope" every single time. Nima cannot make these labels in NetSuite
+// at all, which makes this button the only route to a transfer label.
+function TransferCard({ o, colKey, onRefresh }) {
+  const tracking = (o.fulfillments || []).flatMap((f) => f.trackingNumbers || []).filter(Boolean)
+  return (
+    <div className={'kcard ' + sevClass(o.severity) + ' kcard-transfer'}>
+      <div className="krow">
+        <span className="so"><NsLink doc={o.soNumber} /></span>
+        <span className="badge transfer" title="A transfer between our own locations — no customer, no invoice, no payment.">Transfer</span>
+      </div>
+      {/* The destination stands in for the customer and SAYS SO. */}
+      <div className="cust">
+        <span className="hint" style={{ margin: 0 }}>to </span>
+        <strong>{o.destination || 'an unnamed location'}</strong>
+      </div>
+      {/* What to do next — the same sentence the column heading is derived from. */}
+      {o.nextAction && <div className={'pcWaiting' + (colKey !== TCOL.RECEIPT && colKey !== TCOL.RECEIVED ? ' pcWork' : '')}>{o.nextAction}</div>}
+      {/* The fulfilment and its label, when there is one. */}
+      {(o.fulfillments || []).filter((f) => f.ifNumber).map((f) => (
+        <div className="ifs" key={f.ifNumber}>
+          <NsLink doc={f.ifNumber} />{f.status ? ` · ${f.status}` : ''}
+        </div>
+      ))}
+      {/* ⚠️ The tracking number is shown because for a transfer it IS the evidence the
+          label exists — there is no invoice to look at instead. */}
+      {tracking.length > 0 && <div className="ifs" title="The label exists — this is a transfer's only proof of one.">📦 {tracking.join(', ')}</div>}
+      {/* ⚠️ NetSuite leaves a transfer at "Pending Fulfillment" until the far end
+          receives it, so this status can NEVER say whether it has been picked. Shown as
+          reference only, never as the basis of a column. */}
+      {o.toStatus && <div className="hint" style={{ margin: '2px 0 0' }}>{o.toStatus}</div>}
+      {/* The label route. Offered while the transfer still needs one — never once it
+          has shipped or been received. */}
+      {(colKey === TCOL.PACK || colKey === TCOL.LABEL) &&
+        (o.fulfillments || []).filter((f) => f.ifNumber && !/shipped/i.test(f.status || '')).map((f) => (
+          <ShipstationPushButton key={'ss' + f.ifNumber} ifNumber={f.ifNumber} scope="transfer" onDone={onRefresh} />
+        ))}
     </div>
   )
 }

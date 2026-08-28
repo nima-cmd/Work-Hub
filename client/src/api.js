@@ -6,6 +6,15 @@ export async function fetchOrders() {
   return res.json()
 }
 
+// Transfers as board cards. ⚠️ A SEPARATE CALL, not folded into fetchOrders — the
+// board merges them for display, and `orders` stays exactly what it has always been
+// (server/index.js keeps the same separation for the same reason).
+export async function fetchTransfers() {
+  const res = await fetch('/api/transfers')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 export async function fetchFreshness() {
   const res = await fetch('/api/freshness')
   if (!res.ok) throw new Error(`API ${res.status}`)

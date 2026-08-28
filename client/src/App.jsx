@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , recordViewVisit } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , fetchTransfers, recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -243,9 +243,15 @@ export default function App() {
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
   const [custody, setCustody] = useState(null)
   const [bay, setBay] = useState(null)
+  // Transfer orders as board cards. Its own call, not folded into fetchOrders —
+  // the board merges them for display and `orders` stays what it has always been.
+  const [transfers, setTransfers] = useState([])
 
   function refresh() {
     fetchOrders().then(setOrders).catch((e) => setErr(e.message))
+    // Best-effort, like every other secondary feed: if transfers fail to load the
+    // board still draws its sales orders rather than showing nothing.
+    fetchTransfers().then(setTransfers).catch(() => {})
     fetchCredits().then(setCredits).catch(() => {})
     // New-850 arrival alerts (the cron pulls Orderful and flags fresh POs) —
     // best-effort; the banner just doesn't show if it can't load.
@@ -401,7 +407,7 @@ export default function App() {
   // identical props from one place. Two prop lists would drift, and the embedded
   // copy would quietly lose a feature the tab kept.
   const viewProps = {
-    orders, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
+    orders, transfers, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
     labelGaps, custody, bay,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     onNavigate: navigate, onRefresh: refresh,
