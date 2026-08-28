@@ -205,6 +205,12 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 .badge { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 5px; vertical-align: middle; }
 .badge.edi { background: rgba(217,164,65,0.18); color: var(--accent); border: 1px solid rgba(217,164,65,0.5); }
 .badge.transmission { background: rgba(59,130,246,0.18); color: var(--lo); border: 1px solid rgba(59,130,246,0.5); }
+/* A transfer is our own goods moving between our own locations — no customer, no
+   invoice, no payment. Teal keeps it distinct from the EDI gold and the transmission
+   blue, and the badge always carries the WORD "Transfer" as well, so the colour
+   reinforces the label rather than being the only way to tell. */
+.badge.transfer { background: rgba(45,212,191,0.16); color: #5eead4; border: 1px solid rgba(45,212,191,0.45); }
+.kcard-transfer { border-left: 3px solid rgba(45,212,191,0.55); }
 .krow { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 
 /* Gmail label chips on a transmission */
