@@ -3267,3 +3267,12 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .traceFiled { display: block; padding: 6px 8px; border: 1px solid var(--line, #2a323d);
   border-radius: 4px; margin-bottom: 6px; text-decoration: none; color: inherit; }
 .traceFiled:hover { border-color: #4fd1ff; }
+
+/* The void button NetSuite lacks. Deliberately quiet — it is the rare action on a
+   row whose normal outcome is "mark it shipped", and a loud one invites mis-clicks
+   on a marker that stops a label counting as evidence anywhere. */
+.gapDead { margin-top: 6px; }
+.deadBtn { font-size: 11px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line, #2a323d); color: #b9838a; }
+.deadBtn:hover:not(:disabled) { border-color: #f85149; color: #f85149; }
+.deadBtn:disabled { opacity: 0.6; cursor: default; }

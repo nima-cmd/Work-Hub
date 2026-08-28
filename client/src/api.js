@@ -554,6 +554,31 @@ export async function fetchCalendarEvents() {
   return res.json()
 }
 
+// ── Dead labels — the void button NetSuite lacks ────────────────────────────
+// ⚠️ A reason is REQUIRED by the server, and that is not validation for its own
+// sake: this row is what gets produced in a chargeback argument.
+export async function markLabelDead({ ifNumber, trackingNumber, reason }) {
+  const res = await fetch('/api/labels/dead', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ifNumber, trackingNumber, reason }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `API ${res.status}`)
+  return res.json()
+}
+
+// Reversible on purpose — a label wrongly declared dead must be revivable without
+// a database console.
+export async function reviveLabel({ ifNumber, trackingNumber }) {
+  const res = await fetch('/api/labels/dead', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ifNumber, trackingNumber }),
+  })
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `API ${res.status}`)
+  return res.json()
+}
+
 // Where a document is right now — READ ONLY, writes nothing.
 export async function fetchCustodyState(doc) {
   const res = await fetch(`/api/custody/state?doc=${encodeURIComponent(doc)}`)
