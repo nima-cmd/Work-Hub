@@ -34,6 +34,10 @@ export const TCOL = {
   SHIP: 'transfer_ship',
   RECEIPT: 'transfer_receipt',
   RECEIVED: 'transfer_received',
+  // ⚠️ Written off, NOT arrived. Its own column rather than folded into RECEIVED,
+  // because "nothing came" and "it got here" are opposite facts and a board that
+  // renders them identically loses the one that matters for missing stock.
+  NOT_COMING: 'transfer_not_coming',
 }
 
 // ⚠️ Every label says "Transfer" out loud. A transfer sitting anonymously among
@@ -46,10 +50,11 @@ export const TCOL_LABEL = {
   [TCOL.SHIP]: 'Transfer — ready to ship',
   [TCOL.RECEIPT]: 'Transfer — chase the receipt',
   [TCOL.RECEIVED]: 'Transfer — received',
+  [TCOL.NOT_COMING]: 'Transfer — nothing coming',
 }
 
 // Flow order, so the columns read left to right as the work actually happens.
-export const TCOL_ORDER = [TCOL.PICK, TCOL.PACK, TCOL.LABEL, TCOL.SHIP, TCOL.RECEIPT, TCOL.RECEIVED]
+export const TCOL_ORDER = [TCOL.PICK, TCOL.PACK, TCOL.LABEL, TCOL.SHIP, TCOL.RECEIPT, TCOL.RECEIVED, TCOL.NOT_COMING]
 
 // Which columns are MINE to move now. The receipt chase is a watch — the far end has
 // to act, and Nima says that is exactly the step that gets forgotten, so it is shown
@@ -61,6 +66,7 @@ export const TCOL_IS_WORK = {
   [TCOL.SHIP]: true,
   [TCOL.RECEIPT]: false,
   [TCOL.RECEIVED]: false,
+  [TCOL.NOT_COMING]: false,
 }
 
 /**
@@ -77,6 +83,10 @@ export const TCOL_IS_WORK = {
 export function transferColumn(card = {}) {
   if (!card || !card.soNumber) return null
   if (card.received) return TCOL.RECEIVED
+  // ⚠️ Settled WITHOUT being received = written off by hand. Checked after `received`
+  // so a real arrival always wins, and before the stage checks so it leaves the chase
+  // list — there is nothing left to chase.
+  if (card.settled) return TCOL.NOT_COMING
   if (card.stage === STAGE.SHIPPED) return TCOL.RECEIPT
   if (card.stage === STAGE.OPEN) return TCOL.PICK
   if (card.stage === STAGE.PACKED) return card.labelled ? TCOL.SHIP : TCOL.LABEL
@@ -99,7 +109,7 @@ export function transferColumns(cards = [], { showSettled = false } = {}) {
   for (const c of cards) {
     const k = transferColumn(c)
     if (!k) continue
-    if (k === TCOL.RECEIVED && !showSettled) continue
+    if ((k === TCOL.RECEIVED || k === TCOL.NOT_COMING) && !showSettled) continue
     if (!byCol.has(k)) byCol.set(k, [])
     byCol.get(k).push(c)
   }
@@ -123,5 +133,13 @@ function bySoNumber(a, b) {
 export const transferWorkCount = (cards = []) =>
   cards.filter((c) => TCOL_IS_WORK[transferColumn(c)]).length
 
-/** A received transfer is finished; counted so the board can say how many it is hiding. */
-export const transferSettledCount = (cards = []) => cards.filter((c) => c.received).length
+/**
+ * A finished transfer — arrived, or written off. Counted so the board can say how many
+ * it is hiding.
+ *
+ * ⚠️ Counts SETTLED, not `received`. A written-off transfer is hidden by the same
+ * toggle, and a count that says 7 while 8 are hidden is the counts-something-other-
+ * than-its-label shape. `?? c.received` keeps a card built before `settled` existed
+ * counting correctly rather than silently reading undefined as false.
+ */
+export const transferSettledCount = (cards = []) => cards.filter((c) => c.settled ?? c.received).length

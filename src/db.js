@@ -353,7 +353,7 @@ export const APP_OWNED_TABLES = [
   'bol_registry', 'dead_label', 'fulfillment_boxes', 'quest_tasks', 'quest_task_activity',
   'recurring_task_templates', 'notes', 'doc_links', 'email_links', 'oc_po_links',
   'edi_manual_links', 'edi_manual_orders', 'edi_po_resolutions', 'shipstation_order',
-  'day_plan_item', 'email_character_prefs', 'doc_seasons',
+  'day_plan_item', 'email_character_prefs', 'doc_seasons', 'transfer_receipt',
 ]
 
 // ⚠️ CLIENTS TOO, and this was a real hole. The meter originally wrapped only

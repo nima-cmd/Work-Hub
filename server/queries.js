@@ -14,6 +14,7 @@ import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
 import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
+import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -85,6 +86,7 @@ import {
   fetchShipmentEdiLineage, fetchShipmentEdiSnapshots, saveShipmentEdiLineage,
   fetchFulfilmentPack, fetchFulfillmentDc,
   recordShipstationOrders, applyShipstationTracking, fetchShipstationOrders,
+  recordTransferReceipt, clearTransferReceipt, fetchTransferReceipts,
 } from '../src/ingest/loadToDb.js'
 import { checkGroupPack } from '../src/model/packCheck.js'
 import { groupDepartures } from '../src/model/departures.js'
@@ -4373,8 +4375,15 @@ export async function loadCalendarCandidates({ max = null, poNumbers = null, sin
  * meaning. The board asks for both and merges them where it wants them.
  */
 export async function getTransferCards() {
-  const rows = await loadTransferCandidates()
-  return rows.map(transferCard).filter(Boolean)
+  const [rows, receipts] = await Promise.all([loadTransferCandidates(), fetchTransferReceipts()])
+  // ⚠️ Entered receipts joined on HERE, not inside loadTransferCandidates: that function
+  // reads NetSuite's mirror, and mixing an app-owned answer into it is how an entered
+  // value starts looking like an observed one. They stay two sources until the card
+  // is built.
+  const byTo = receiptsByTransfer(receipts)
+  return rows
+    .map((r) => transferCard({ ...r, receipt: byTo.get(String(r.toNumber || '').trim().toUpperCase()) || null }))
+    .filter(Boolean)
 }
 
 /**
@@ -6015,4 +6024,14 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
   } catch (e) {
     return busyFrom(e?.message) ? { busy: true, reason: 'celigo' } : { error: e?.message || String(e) }
   }
+}
+
+// ── Entered transfer receipts ───────────────────────────────────────────────
+// Thin pass-throughs so server/index.js imports from one place, as every other
+// write on this surface does.
+export async function markTransferReceived(body = {}) {
+  return recordTransferReceipt(body)
+}
+export async function unmarkTransferReceipt(body = {}) {
+  return clearTransferReceipt(body)
 }

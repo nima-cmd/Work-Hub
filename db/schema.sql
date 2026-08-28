@@ -1674,6 +1674,44 @@ CREATE TABLE IF NOT EXISTS dead_label (
   PRIMARY KEY (if_number, tracking_number)
 );
 
+-- ── A transfer's arrival at the far end, ENTERED (2026-08-28) ───────────────
+--
+-- Nima, 2026-08-27: "sometimes they dont receive on their end" — which is the whole
+-- reason transfers are tracked at all. NetSuite's "Received" is the far end confirming,
+-- and when it never happens the transfer sits open forever with nothing to say whether
+-- the goods actually arrived.
+--
+-- ⚠️ ITS OWN TABLE BECAUSE `transfer_order` IS A NETSUITE MIRROR. That table's `status`
+-- is overwritten on every sync, so an entered value living there would be destroyed by
+-- the next run AND would be indistinguishable from something NetSuite observed. An
+-- entered value must be schema-distinguishable from an observed one — this table IS
+-- that distinction, and it is in APP_OWNED_TABLES so db:mirror will not discard it.
+--
+-- ⚠️ `outcome` EXISTS BECAUSE "Closed" IS AMBIGUOUS AND NIMA SAID SO. Asked whether
+-- NetSuite's "Transfer Order : Closed" means arrived, he said: "im not fully sure closed
+-- can be abandoned it could also be partially shippedd and the rest of the units
+-- abandoned". So a Closed transfer may hold goods that really did ship and still need
+-- confirming, or may hold nothing at all — the status cannot tell them apart, and
+-- deriving EITHER answer from it would be wrong in the other case. Only a human knows,
+-- so both outcomes are entered:
+--
+--   'received'   — it arrived. `received_on` is when.
+--   'not_coming' — nothing is arriving; stop chasing it. Closed-out or abandoned.
+--
+-- Without the second one, an abandoned transfer would sit on the chase list forever —
+-- a column that can be looked at and never cleared.
+CREATE TABLE IF NOT EXISTS transfer_receipt (
+  to_number    TEXT PRIMARY KEY,
+  outcome      TEXT NOT NULL CHECK (outcome IN ('received', 'not_coming')),
+  -- When it arrived, or when it was written off. Defaults to entry day but is
+  -- editable: the far end often confirms days late, and back-dating it is the
+  -- honest record rather than the day someone got round to typing it.
+  received_on  DATE NOT NULL,
+  -- How you know. Optional, but this is the reason an entered value carries.
+  note         TEXT,
+  recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ── Transfer metering (2026-08-14) ──────────────────────────────────────────
 -- Neon's Free plan allows 5 GB/month of public network transfer and SUSPENDS the
 -- compute when it runs out. We learned we were at 84% from an email, on the 14th.

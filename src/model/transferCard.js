@@ -19,6 +19,7 @@
 
 import { STAGE, STAGE_LABEL, STAGE_RANK, NEXT_ACTION } from './stages.js'
 import { isReceived } from './transferOrder.js'
+import { receiptState } from './transferReceipt.js'
 
 /**
  * Which stage a transfer is at, by the same evidence a sales order is judged on.
@@ -26,8 +27,12 @@ import { isReceived } from './transferOrder.js'
  * ⚠️ Deliberately DOES NOT use the transfer's own status except for RECEIVED, which is
  * the one thing it genuinely knows and we cannot see any other way.
  */
-export function transferStage({ ifNumber, ifStatus, toStatus } = {}) {
+export function transferStage({ ifNumber, ifStatus, toStatus, receipt = null } = {}) {
   if (!ifNumber) return STAGE.OPEN          // nothing picked yet — this is the pick signal
+  // ⚠️ An ENTERED receipt counts here exactly as NetSuite's does. The far end often
+  // never confirms (Nima: "sometimes they dont receive on their end"), and a transfer
+  // a human has confirmed arrived is not still in flight.
+  if (receiptState({ toStatus, receipt }).settled) return STAGE.SHIPPED
   if (isReceived(toStatus)) return STAGE.SHIPPED
   if (/shipped/i.test(String(ifStatus || ''))) return STAGE.SHIPPED
   if (/packed/i.test(String(ifStatus || ''))) return STAGE.PACKED
@@ -50,9 +55,12 @@ export function transferStage({ ifNumber, ifStatus, toStatus } = {}) {
  *
  * with INVOICED and APPROVED_FOR_SHIPPING skipped entirely.
  */
-export function transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking = [] } = {}) {
-  const stage = transferStage({ ifNumber, ifStatus, toStatus })
+export function transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking = [], receipt = null } = {}) {
+  const stage = transferStage({ ifNumber, ifStatus, toStatus, receipt })
   if (stage === STAGE.OPEN) return `Pick it — transfer to ${destination || 'an unnamed location'}`
+  // ⚠️ Once a human has answered, stop asking. A card still saying "chase the receipt"
+  // after he entered the receipt is the board arguing with the person using it.
+  if (receiptState({ toStatus, receipt }).settled) return NEXT_ACTION[STAGE.SHIPPED]
   if (stage === STAGE.SHIPPED && !isReceived(toStatus)) {
     // ⚠️ Shipped is not finished for a transfer. The far end confirming is a separate
     // event that Nima says does not always happen, and it is the whole reason he
@@ -79,9 +87,11 @@ export function transferNextAction({ ifNumber, ifStatus, toStatus, destination, 
  * place — the separation has to survive being rendered.
  */
 export function transferCard(t = {}) {
-  const { toNumber, destination, toStatus, ifNumber, ifStatus, ifDate, tracking = [] } = t
+  const { toNumber, destination, toStatus, ifNumber, ifStatus, ifDate, tracking = [], receipt = null } = t
   if (!toNumber) return null
-  const stage = transferStage({ ifNumber, ifStatus, toStatus })
+  const stage = transferStage({ ifNumber, ifStatus, toStatus, receipt })
+  // What is known about its arrival, from NetSuite AND from anything entered by hand.
+  const arrival = receiptState({ toStatus, receipt })
   return {
     isTransfer: true,
     soNumber: toNumber,
@@ -101,11 +111,18 @@ export function transferCard(t = {}) {
       ? `Transfer — pick for ${destination || 'an unnamed location'}`
       : STAGE_LABEL[stage],
     stageRank: STAGE_RANK[stage],
-    nextAction: transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking }),
+    nextAction: transferNextAction({ ifNumber, ifStatus, toStatus, destination, tracking, receipt }),
     toStatus: toStatus || null,
-    received: isReceived(toStatus),
+    // ⚠️ `received` MEANS THE GOODS ARE THERE. A written-off transfer is settled and
+    // NOT received — saying otherwise would be a lie in the one record that exists to
+    // catch stock that never arrived.
+    received: arrival.received,
+    settled: arrival.settled,
+    receipt: arrival.entered
+      ? { outcome: receipt.outcome, receivedOn: arrival.on, note: arrival.note }
+      : null,
     fulfillments: ifNumber
-      ? [{ ifNumber, status: ifStatus || null, ifDate: ifDate || null, trackingNumbers: tracking || [], settled: isReceived(toStatus) }]
+      ? [{ ifNumber, status: ifStatus || null, ifDate: ifDate || null, trackingNumbers: tracking || [], settled: arrival.settled }]
       : [],
   }
 }

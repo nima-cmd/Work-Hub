@@ -7,6 +7,7 @@ import { pool } from '../db.js'
 import { resolveCharacterForSender } from '../model/characters.js'
 import { deriveEvents, pendingEvents, summarize, DERIVED_TYPES, ifRemovalEvent } from '../model/orderEvents.js'
 import { dcTagDeparture } from '../model/custody.js'
+import { validateReceipt } from '../model/transferReceipt.js'
 import { foldInvoiceRows, invoiceUpsertSql, invoiceWindowUpsertSql } from './invoiceUpsert.js'
 
 // Orders — one row per SO. `last_movement` only bumps when the stage changes,
@@ -1188,6 +1189,56 @@ export async function markLabelDead({ ifNumber, trackingNumber, reason }, db = p
     [ifn, track, why],
   )
   return { ifNumber: ifn, trackingNumber: track, reason: why }
+}
+
+// ── A transfer's arrival, ENTERED BY HAND ───────────────────────────────────
+//
+// ⚠️ Its own table, never `transfer_order.status`: that table is a NetSuite mirror and
+// the next sync would overwrite the answer, besides making an entered value look like
+// an observed one. See db/schema.sql and src/model/transferReceipt.js.
+export async function recordTransferReceipt({ toNumber, outcome, receivedOn, note }, db = pool) {
+  const to = String(toNumber || '').trim().toUpperCase()
+  // ⚠️ The MODEL validates, not this function — one implementation of the rule, so the
+  // API and any future CLI cannot drift apart (the two-copies shape this repo keeps
+  // getting bitten by).
+  const why = validateReceipt(
+    { toNumber: to, outcome, receivedOn, note },
+    { today: new Date().toISOString().slice(0, 10) },
+  )
+  if (why) throw new Error(why)
+  // ⚠️ Refuses a transfer we do not hold. A receipt entered against a typo answers for
+  // nothing and can never be found again.
+  const { rowCount: known } = await db.query('SELECT 1 FROM transfer_order WHERE to_number = $1', [to])
+  if (!known) throw new Error(`${to} is not a transfer we track`)
+  await db.query(
+    `INSERT INTO transfer_receipt (to_number, outcome, received_on, note)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (to_number)
+     DO UPDATE SET outcome = EXCLUDED.outcome, received_on = EXCLUDED.received_on,
+                   note = EXCLUDED.note, recorded_at = now()`,
+    [to, outcome, receivedOn, note ? String(note).trim() || null : null],
+  )
+  return { toNumber: to, outcome, receivedOn, note: note || null }
+}
+
+// Reversible, for the same reason reviveLabel is: an answer entered in error must be
+// removable without a database console.
+export async function clearTransferReceipt({ toNumber }, db = pool) {
+  const to = String(toNumber || '').trim().toUpperCase()
+  if (!to) throw new Error('a transfer number is required')
+  const { rowCount } = await db.query('DELETE FROM transfer_receipt WHERE to_number = $1', [to])
+  return { toNumber: to, cleared: rowCount }
+}
+
+// ⚠️ `to_char` rather than the raw DATE: node-pg parses a DATE into a JS Date at
+// midnight LOCAL time, so a receipt entered on the 20th reads back as the 19th west of
+// UTC. The same timezone trap db:copy's md5 verification exists to catch.
+export async function fetchTransferReceipts(db = pool) {
+  const { rows } = await db.query(
+    `SELECT to_number AS "toNumber", outcome,
+            to_char(received_on, 'YYYY-MM-DD') AS "receivedOn", note
+       FROM transfer_receipt`)
+  return rows
 }
 
 // Reversible on purpose — a label wrongly declared dead must be revivable without
