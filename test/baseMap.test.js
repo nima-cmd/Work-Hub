@@ -389,12 +389,55 @@ test('the Archive declares itself uncountable rather than inventing a number', (
   assert.equal(s.datapad.count, 0)
 })
 
-test('every building still has a state after growing to eleven', () => {
+test('every building still has a state after growing to twelve', () => {
   const s = buildingStates({ orders: [so()] })
-  assert.equal(BUILDINGS.length, 11)
+  // ⚠️ A DELIBERATE CANARY: adding a building must trip this and make someone check
+  // that it has a state, a road and a real sprite. Bump it knowingly, never reflexively.
+  assert.equal(BUILDINGS.length, 12)
   for (const b of BUILDINGS) {
     assert.ok(s[b.key], `${b.key} has no state`)
     assert.ok(Array.isArray(s[b.key].items))
     assert.ok(Array.isArray(s[b.key].alerts))
   }
+})
+
+// ── The Catalogue building (2026-08-28) ─────────────────────────────────────
+
+test('the catalogue is a building, because Nima kept being pulled out of the Base to reach it', () => {
+  // Nima, 2026-08-28: the Base is the app, the top menu "distract from the base one so
+  // that we sometiems go out of the base ecosystem which we want to stay in", and
+  // Catalogue was the building he named as missing.
+  const cat = BUILDINGS.find((b) => b.key === 'catalogue')
+  assert.ok(cat, 'the catalogue has a building')
+  assert.equal(cat.view, 'catalogue')
+})
+
+test('⚠️ the catalogue is NOT COUNTABLE — its real number has no feed here', () => {
+  // Same rule as the Archive. The honest figure is "SKUs not yet uploaded", which lives
+  // behind an import this view is given no data for, and buildingStates is built only
+  // from what App already passes. An invented number among real ones is worse than none.
+  const cat = BUILDINGS.find((b) => b.key === 'catalogue')
+  assert.equal(cat.countable, false)
+  const s = buildingStates({ orders: [so()] })
+  assert.equal(s.catalogue.count, 0)
+  assert.deepEqual(s.catalogue.items, [])
+})
+
+test('the catalogue is on the road network, not stranded', () => {
+  // A building nothing connects to cannot be reached by a mover and reads as a mistake.
+  assert.ok(roadFor('routing', 'catalogue'), 'joined to the routing yard')
+  assert.ok(roadFor('catalogue', 'launch'), 'joined to the launch pad')
+})
+
+test('⚠️ the OPS CENTRE label now says what it counts', () => {
+  // It read "open on the day plan" and counted open quest_tasks. Measured 2026-08-28:
+  // 15 open tasks against a day plan holding 23 items — 9 EDI routings, 8 ships, 5 email
+  // replies, 1 invoice, none of them tasks. Two piles, one label: the
+  // counts-something-other-than-its-label shape, on the building he looks at all day.
+  const ops = BUILDINGS.find((b) => b.key === 'ops')
+  assert.doesNotMatch(ops.of, /day plan/i, 'no longer claims to count the day plan')
+  assert.match(ops.of, /task/i, 'says it counts tasks, which is what it counts')
+  // And it still counts exactly that.
+  const s = buildingStates({ orders: [], tasks: [{ status: 'open' }, { status: 'open' }, { status: 'done' }] })
+  assert.equal(s.ops.count, 2)
 })
