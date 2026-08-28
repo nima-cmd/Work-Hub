@@ -178,8 +178,19 @@ export function missionTab({ fulfilments = [], custodyState = null, departed = f
 // reported 0 never-handed-over all along while the board showed 43 cards — two surfaces
 // disagreeing about the same cartons. `dcScanned` comes from `hasDcCustodyScan` in
 // src/model/custody.js so there is now one implementation of the tokens.
-export function fulfilledNeverScanned({ custodyOut, custodyIn, status } = {}, { dcScanned = false } = {}) {
+// ⚠️ `neverDispatched` IS THE THIRD EXCUSE, and it is the same lesson a third time
+// (2026-08-28). This column accuses a fulfilment of a scan that should have happened.
+// For FOB China it never should: the goods are in China awaiting collection, we never
+// take custody of them and never hand them to a carrier, so there is no scan to miss.
+// Measured the day it was found: IF7603 and IF7604, both China, both accused — 2 of 2
+// false, the same 100%-one-lane signature as the 28 Nordstrom cargo-tag false positives
+// above and the 28 in PR #74. A finding that is entirely one lane is a lane bug.
+export function fulfilledNeverScanned(
+  { custodyOut, custodyIn, status } = {},
+  { dcScanned = false, neverDispatched = false } = {},
+) {
   if (/shipped/i.test(status || '')) return false
+  if (neverDispatched) return false
   if (dcScanned) return false
   return !custodyOut && !custodyIn
 }

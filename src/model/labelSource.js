@@ -78,6 +78,23 @@ export function pushBlockedForLocation(location) {
   return null
 }
 
+/**
+ * Is a label NEVER made here, whatever anyone clicks?
+ *
+ * ⚠️ THIS IS A DIFFERENT KIND OF NO FROM THE WAREHOUSE ONE, and conflating them is what
+ * put a dead button on the board. The Warehouse block says "NetSuite labels this one" —
+ * a conflict, which `force` deliberately overrides when NetSuite's label is unusable
+ * (IF7610, IF7486). China is not a conflict: the goods are in China awaiting collection,
+ * the China warehouse confirms it, WE NEVER DISPATCH THEM, and so we never make the
+ * label at all. Nima's rule, 2026-08-04, and 0 of 12 such orders has ever had one.
+ *
+ * Nothing should offer to do a thing that is never done: a button that is reachable,
+ * looks live and can only refuse teaches you to distrust the buttons that work.
+ */
+export function neverLabelledHere(location) {
+  return /china/i.test(String(location ?? '').trim())
+}
+
 // `force` is the explicit escape hatch: a caller that has read the reason and means it.
 // `location` opts an order into the off-Warehouse unblock above. A caller that
 // passes no location gets the old global behaviour, so nothing silently widens.
