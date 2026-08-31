@@ -15,6 +15,8 @@ import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartn
 import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
+import { bulkPick, parsePoInput } from '../src/model/bulkPick.js'
+import { fetchBulkPickLines } from '../src/ingest/bulkPickFetch.js'
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
@@ -6035,6 +6037,20 @@ export async function markTransferReceived(body = {}) {
 }
 export async function unmarkTransferReceipt(body = {}) {
   return clearTransferReceipt(body)
+}
+
+// ── The bulk pick ticket ────────────────────────────────────────────────────
+//
+// ⚠️ LIVE FROM NETSUITE, not from our own tables — see src/ingest/bulkPickFetch.js for
+// why a document someone walks the floor with must not come from an hourly mirror.
+export async function getBulkPick(poText) {
+  const pos = parsePoInput(poText)
+  if (!pos.length) throw new Error('enter at least one PO number')
+  // ⚠️ Bounded. A paste of the whole PO book would be one enormous SuiteQL IN list and a
+  // pick ticket nobody could use; 40 is well past any real multi-store pull.
+  if (pos.length > 40) throw new Error(`${pos.length} PO numbers — enter 40 or fewer`)
+  const lines = await fetchBulkPickLines(pos)
+  return { ...bulkPick(lines, pos), asked: pos, fetchedAt: new Date().toISOString() }
 }
 
 // ── Hang tags ───────────────────────────────────────────────────────────────
