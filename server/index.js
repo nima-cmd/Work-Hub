@@ -40,7 +40,7 @@ import {
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
   loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
-  markTransferReceived, unmarkTransferReceipt, getBulkPick,
+  markTransferReceived, unmarkTransferReceipt, getBulkPick, getHangTags, hangTagsFor,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -48,7 +48,7 @@ import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
-import { printCargoTag, availableSizes, makeTagSheet, printTagSheet } from './printLabel.js'
+import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -453,6 +453,41 @@ app.delete('/api/transfers/receipt', async (req, res) => {
 app.post('/api/bulk-pick', async (req, res) => {
   try {
     res.json(await getBulkPick((req.body || {}).pos || ''))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// ── Hang tags ───────────────────────────────────────────────────────────────
+// Nima, 2026-08-31, on the size: "we need it to fit on the label pritner per what we have
+// for qr codeds" — so these print on the SAME 2.25x1.25 roll as the QR cargo tags.
+app.get('/api/hang-tags', async (_req, res) => {
+  try {
+    res.json(await getHangTags())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// A PDF to LOOK at, printing nothing. ⚠️ Deliberately separate from the print route: a
+// physical label is worth checking on screen before it goes to a roll.
+app.post('/api/hang-tags/pdf', async (req, res) => {
+  try {
+    const tags = await hangTagsFor((req.body || {}).items || [])
+    const { path } = await makeHangTagSheet(tags, (req.body || {}).size || '2.25x1.25')
+    res.download(path, 'hang-tags.pdf')
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/hang-tags/print', async (req, res) => {
+  try {
+    const tags = await hangTagsFor((req.body || {}).items || [])
+    res.json(await printHangTags(tags, (req.body || {}).size || '2.25x1.25'))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
