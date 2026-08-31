@@ -13,6 +13,7 @@
 // stays clean white.
 import PDFDocument from 'pdfkit'
 import qrcode from 'qrcode-generator'
+import { upcBars } from '../src/model/upcBarcode.js'
 import { execFile } from 'node:child_process'
 import { mkdtempSync, createWriteStream } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -285,4 +286,148 @@ export async function printCargoTag(info, size = '2.25x1.25') {
       resolve({ ok: true, size, printer: cfg.queue, detail: stdout.trim() })
     })
   })
+}
+
+// ── The hang tag ────────────────────────────────────────────────────────────
+//
+// ⚠️ THE PHOTO WAS THE INFORMATION, NOT THE SIZE — Nima, 2026-08-31: "we need it to fit
+// on the label pritner per what we have for qr codeds that was a picture to show you
+// information on the tags." My first cut invented a 2.25in SQUARE stock from the shape of
+// the tag in the photograph. It prints on the SAME 2.25x1.25 roll as the QR cargo tags.
+//
+// Five fields, in the order the photographed tag carries them: product name, style
+// number, colour, the UPC-A symbol with its human-readable digits, then the retail
+// price. src/model/hangTag.js holds which database column each comes from.
+//
+// ── ⚠️ WHAT FITTING 1.25in HIGH ACTUALLY COSTS ──────────────────────────────
+//
+// WIDTH IS FINE. A nominal UPC-A is 1.469in including its quiet zones, against 2.11in of
+// usable width — so the symbol prints at full nominal size (X-dimension 0.013in, dead
+// centre of the 0.0104–0.0260 GS1 range) and is centred with room to spare.
+//
+// HEIGHT IS THE COMPROMISE, and it is worth saying out loud. A nominal UPC-A is 0.816in
+// tall. Four lines of text plus bars do not fit in 1.25in at that height, so the bars are
+// TRUNCATED to about 0.47in — roughly 58% of nominal. Truncation is normal on small
+// retail tags and scans fine on a handheld at the till, but it is formally out of GS1
+// height spec and it degrades OMNIDIRECTIONAL scanning (the kind a fixed slot scanner
+// does). If a partner ever rejects the tag on height, the fix is a taller label, not a
+// change here.
+
+/** GS1 nominal X-dimension for UPC-A, in points. 0.013in x 72. */
+const UPC_X_PT = 0.013 * PT
+
+/**
+ * Draw a UPC-A symbol, centred in the width given.
+ *
+ * ⚠️ BAR WIDTHS ARE NOT ROUNDED. Rounding each of 95 modules to a whole point
+ * independently makes the symbol drift narrower than its guard spacing implies, and
+ * scanners read the RATIOS between bars, not their absolute widths. The module width
+ * stays fractional and every bar is placed from its module offset.
+ *
+ * ⚠️ Quiet zones are inside the returned block width. A barcode butted against text or
+ * the label edge is the commonest reason a correctly-encoded tag will not read.
+ *
+ * Returns the geometry (so the caller can put the lead and check digits in the quiet
+ * zones where a UPC prints them), or false for a UPC that fails its own check digit —
+ * upcBars refuses those, and a tag with a gap where the bars go still gets attached to a
+ * bag.
+ */
+function drawUpc(doc, upc, { cx, y, h, maxW }) {
+  const geo = upcBars(upc)
+  if (!geo) return false
+  // Nominal size, shrunk only if the label is too narrow for it.
+  const mod = Math.min(UPC_X_PT, maxW / geo.totalModules)
+  const blockW = geo.totalModules * mod
+  const x0 = cx - blockW / 2
+  const barsLeft = x0 + geo.quiet * mod
+  const shortH = h * 0.82   // the guards descend past the data bars
+  for (const b of geo.bars) {
+    doc.rect(barsLeft + b.at * mod, y, b.width * mod, b.tall ? h : shortH).fill('#000')
+  }
+  return { mod, x0, blockW, barsLeft, quietW: geo.quiet * mod, symbolW: geo.modules * mod }
+}
+
+function drawHangTag(doc, cfg, tag) {
+  const pad = 5
+  const innerW = cfg.w - pad * 2
+  const cx = cfg.w / 2
+  let y = pad
+
+  doc.fillColor('#000')
+  // 1. Product name. ⚠️ height:8 clips rather than wrapping onto a second line — a long
+  // name pushing the barcode down would break the layout silently, and a clipped name is
+  // still identifiable next to the style number underneath it.
+  doc.font('Helvetica').fontSize(7)
+  doc.text(tag.name, pad, y, { width: innerW, align: 'center', height: 8, ellipsis: true, lineBreak: false })
+  y += 8
+
+  // 2. Style number — the thing Nima reads first.
+  doc.font('Helvetica-Bold').fontSize(8)
+  doc.text(tag.style, pad, y, { width: innerW, align: 'center', lineBreak: false })
+  y += 9
+
+  // 3. Colour.
+  doc.font('Helvetica').fontSize(7)
+  doc.text(tag.color, pad, y, { width: innerW, align: 'center', height: 8, ellipsis: true, lineBreak: false })
+  y += 10
+
+  // 4. The symbol, then its digits.
+  const barH = 32
+  const g = drawUpc(doc, tag.upc, { cx, y, h: barH, maxW: innerW })
+  if (!g) return false
+  y += barH + 0.5
+
+  const h = tag.human
+  doc.font('Helvetica').fontSize(6)
+  // ⚠️ The lead and check digits sit OUTSIDE the bars, in the quiet zones — that is where
+  // a UPC prints them, and putting all twelve under the bars would read as an EAN-13.
+  doc.text(h.lead, g.x0, y, { width: g.quietW, align: 'center', lineBreak: false })
+  doc.text(h.check, g.x0 + g.blockW - g.quietW, y, { width: g.quietW, align: 'center', lineBreak: false })
+  doc.text(`${h.left}    ${h.right}`, g.barsLeft, y, { width: g.symbolW, align: 'center', lineBreak: false })
+  y += 8
+
+  // 5. The retail price.
+  doc.font('Helvetica-Bold').fontSize(10)
+  doc.text(tag.price, pad, y, { width: innerW, align: 'center', lineBreak: false })
+  return true
+}
+
+/** One tag per page, so a run feeds as individual labels off the roll. */
+export async function buildHangTagPdf(path, cfg, tags = []) {
+  const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0, autoFirstPage: false })
+  const stream = createWriteStream(path)
+  doc.pipe(stream)
+  const drawn = []
+  for (const t of tags) {
+    doc.addPage({ size: [cfg.w, cfg.h], margin: 0 })
+    if (drawHangTag(doc, cfg, t)) drawn.push(t.upc)
+  }
+  doc.end()
+  await new Promise((res, rej) => { stream.on('finish', res); stream.on('error', rej) })
+  return { path, drawn }
+}
+
+/** ⚠️ Defaults to the SAME stock as the QR cargo tags — Nima's constraint, not a guess. */
+export async function makeHangTagSheet(tags = [], size = '2.25x1.25') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size ${size}`)
+  if (!tags.length) throw new Error('no tags to print')
+  const dir = mkdtempSync(join(tmpdir(), 'hangtag-'))
+  const { path, drawn } = await buildHangTagPdf(join(dir, `hang-tags-${tags.length}.pdf`), cfg, tags)
+  return { path, drawn }
+}
+
+export async function printHangTags(tags = [], size = '2.25x1.25') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size ${size}`)
+  const { path, drawn } = await makeHangTagSheet(tags, size)
+  if (!(await queueExists(cfg.queue))) {
+    // ⚠️ Names the queue: "printing failed" sends someone hunting.
+    throw new Error(`printer queue ${cfg.queue} is not available on this host`)
+  }
+  await new Promise((res, rej) => execFile(
+    'lp', ['-d', cfg.queue, '-o', cfg.media, path],
+    (err, out) => (err ? rej(err) : res(out)),
+  ))
+  return { path, printed: drawn.length, queue: cfg.queue }
 }
