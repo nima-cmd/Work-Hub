@@ -15,11 +15,17 @@ import {
 // 850s: 299-only POs exist, 23 never mention it, and NONE mix it with real stores.
 
 test('store codes come out of the SDQ segment', () => {
-  const msg = { x: [
+  // ⚠️ THE FIXTURE NOW USES THE REAL SEGMENT KEY (2026-08-31). It used to sit under a
+  // made-up `x`, which passed only because the old implementation text-scanned the whole
+  // message for a qualifier-92 pattern wherever it appeared. The parser now walks actual
+  // `destinationQuantity` segments, which is what a live 850 contains — anchoring it to
+  // the real structure is the point, and a fixture that could never occur was hiding that
+  // the reader was not reading SDQ at all.
+  const msg = { destinationQuantity: [
     { identificationCodeQualifier: '92', identificationCode: '0005189002' },  // the BUYER, 10 digits
     { identificationCodeQualifier: '92', identificationCode: '0299', quantity: '25' },
     { identificationCodeQualifier: '92', identificationCode: '0221', quantity: '10' },
-    { identificationCodeQualifier: '99', identificationCode: '9999' },        // wrong qualifier
+    { identificationCodeQualifier: '99', identificationCode: '9999', quantity: '1' },  // wrong qualifier
   ] }
   // ⚠️ Four digits IS the store rule: qualifier 92 tags the buying party too, and live
   // Nordstrom 850s put the buyer at 10 digits (0005189002) and every store at 4.

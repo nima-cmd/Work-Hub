@@ -5,7 +5,7 @@
 // cursor-based, newest first, 100 per page (see List Transactions docs).
 
 import { pool } from '../db.js'
-import { extractStoreCodes } from '../model/ediPoDiff.js'
+import { extractStoreQuantities, extractShipTo } from '../model/ediPoDiff.js'
 import { extractPoDates, extractPoLines, summarizePoLines } from './orderfulDates.js'
 
 export { extractPoDates, extractPoLines } from './orderfulDates.js'
@@ -111,26 +111,42 @@ export async function fetchOrderfulMessage(apiKey, id) {
 // two dates still gets fetched once (Nordstrom cancel-only, Shopbop start-only
 // — the old "both NULL" gate skipped those), AND 850s stored before line
 // parsing existed get back-filled exactly once. Mirrors po_refs_checked.
+// ⚠️ BUMP THIS WHENEVER THE 850 PARSE LEARNS A NEW FIELD, and every row parsed by an
+// older version is re-read exactly once. See db/schema.sql for the outage this replaces:
+// the old gate was `po_lines_checked = false`, so rows stamped before a field existed
+// were never revisited and that field stayed NULL forever, looking like a real absence.
+//   1 — dates + line items + store codes
+//   2 — full SDQ (all repeats, with quantities) + the N1 ship-to  (2026-08-31)
+export const PO_PARSE_VERSION = 2
+
 export async function backfillPo850Details(apiKey, db = pool) {
   const { rows } = await db.query(
     `SELECT id FROM edi_transactions
-     WHERE type = '850_PURCHASE_ORDER' AND (po_dates_checked = false OR po_lines_checked = false)`,
+      WHERE type = '850_PURCHASE_ORDER'
+        AND (po_dates_checked = false OR po_lines_checked = false
+             OR COALESCE(po_parse_version, 0) < $1)`,
+    [PO_PARSE_VERSION],
   )
   let n = 0
   for (const { id } of rows) {
     const message = await fetchOrderfulMessage(apiKey, id)
     const { shipNotBefore, cancelAfter } = extractPoDates(message)
     const lineItems = extractPoLines(message)
-    const storeCodes = extractStoreCodes(message)
+    const storeQuantities = extractStoreQuantities(message)
+    const storeCodes = storeQuantities.map((s) => s.store)
+    const shipTo = extractShipTo(message)
     const { totalUnits, lineCount } = summarizePoLines(lineItems)
-    // Stamp both checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched forever.
+    // Stamp checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched
+    // forever — the VERSION is what allows a deliberate second look later.
     await db.query(
       `UPDATE edi_transactions
        SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true,
            line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true,
-           store_codes = $7
+           store_codes = $7, ship_to_codes = $8, store_quantities = $9::jsonb,
+           po_parse_version = $10
        WHERE id = $1`,
-      [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount, storeCodes],
+      [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount,
+       storeCodes, shipTo, JSON.stringify(storeQuantities), PO_PARSE_VERSION],
     )
     if (shipNotBefore || cancelAfter || lineItems.length) n++
   }
