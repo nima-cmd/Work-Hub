@@ -15,6 +15,7 @@ import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartn
 import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
+import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
@@ -6034,4 +6035,56 @@ export async function markTransferReceived(body = {}) {
 }
 export async function unmarkTransferReceipt(body = {}) {
   return clearTransferReceipt(body)
+}
+
+// ── Hang tags ───────────────────────────────────────────────────────────────
+//
+// ⚠️ THE JOIN IS ON sku_key WITH ITS SEPARATOR SWAPPED, NEVER ON THE STYLE. `ns_item_price.sku`
+// is per COLOUR (`SN03012LD-ADOBE`); `catalogue_skus.sku_key` is `SN03012LD|ADOBE`. Joining
+// on `product_id` matched 0 of 77 rows — and had it worked it would have been worse than
+// failing: SN03012LD is $240 in Adobe and $285 in Ash, so every tag for the style would
+// have carried one colour's price onto a physical tag. `tagJoinKey` owns the transform;
+// this SQL mirrors it and the test asserts they agree.
+const HANG_TAG_SQL = `
+  SELECT c.sku_key AS "skuKey", c.description, c.product_id AS "productId", c.color, c.upc,
+         p.unit_price AS retail
+    FROM catalogue_skus c
+    LEFT JOIN ns_item_price p
+      ON upper(p.sku) = upper(replace(c.sku_key,'|','-')) AND p.level_name = 'Retail Price'
+   ORDER BY c.product_id, c.color`
+
+/**
+ * Every catalogue SKU that can be hang-tagged, and every one that cannot with the reason.
+ *
+ * ⚠️ THE BLOCKED ROWS ARE RETURNED. 5 of 77 have no Retail Price in NetSuite. A surface
+ * that quietly lists 72 is how a bag ends up on a shelf untagged with nobody knowing why.
+ */
+export async function getHangTags() {
+  const { rows } = await pool.query(HANG_TAG_SQL)
+  const { tags, blocked } = hangTags(rows)
+  return { tags, blocked, total: rows.length }
+}
+
+/** The tags for a specific set of sku_keys, expanded by copy count. */
+export async function hangTagsFor(items = []) {
+  const wanted = new Map()
+  for (const it of items) {
+    const k = String(it?.skuKey ?? '').trim().toUpperCase()
+    if (!k) continue
+    // ⚠️ Clamped, and it says so. A typo'd qty should not send 10,000 labels to a roll.
+    const qty = Math.max(1, Math.min(50, Number(it.qty) || 1))
+    wanted.set(k, qty)
+  }
+  if (!wanted.size) throw new Error('no SKUs given')
+  const { rows } = await pool.query(HANG_TAG_SQL)
+  const { tags, blocked } = hangTags(rows.filter((r) => wanted.has(String(r.skuKey).toUpperCase())))
+  // ⚠️ A blocked SKU is an ERROR here, not a silent omission: someone asked for it by
+  // name, and printing the rest of the batch while dropping one is the failure mode this
+  // whole model exists to avoid.
+  if (blocked.length) {
+    throw new Error(blocked.map((b) => `${b.skuKey}: ${b.reason}`).join(' · '))
+  }
+  const out = []
+  for (const t of tags) for (let i = 0; i < (wanted.get(String(t.skuKey).toUpperCase()) || 1); i++) out.push(t)
+  return out
 }

@@ -37,6 +37,37 @@ export async function clearTransferReceipt(toNumber) {
   return body
 }
 
+// Hang tags. ⚠️ Three calls on purpose: read what CAN be tagged, get a PDF to LOOK at,
+// and print. A physical label is worth checking on screen before it goes to a roll.
+export async function fetchHangTags() {
+  const res = await fetch('/api/hang-tags')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function printHangTags(items, size) {
+  const res = await fetch('/api/hang-tags/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, size }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
+// Returns a blob so the browser can open the PDF without a round trip through a link.
+export async function hangTagPdf(items, size) {
+  const res = await fetch('/api/hang-tags/pdf', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, size }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `API ${res.status}`)
+  }
+  return res.blob()
+}
+
 export async function fetchFreshness() {
   const res = await fetch('/api/freshness')
   if (!res.ok) throw new Error(`API ${res.status}`)
