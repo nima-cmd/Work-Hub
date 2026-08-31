@@ -40,7 +40,7 @@ import {
   ensureRecurringTasks, recordCustodyScan, getOrderEventsFeed, getDepartures, getSyncHealth, getHealth, getPulse,
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
   loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
-  markTransferReceived, unmarkTransferReceipt,
+  markTransferReceived, unmarkTransferReceipt, getBulkPick,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -441,6 +441,18 @@ app.post('/api/transfers/receipt', async (req, res) => {
 app.delete('/api/transfers/receipt', async (req, res) => {
   try {
     res.json(await unmarkTransferReceipt({ toNumber: req.query.toNumber || (req.body || {}).toNumber }))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// The bulk pick ticket — replaces the NetSuite "Bulk Pick & Ship Manifest" Suitelet.
+// ⚠️ POST, not GET: PO numbers are pasted free text and can be long, and a pick ticket is
+// not something to cache in a URL.
+app.post('/api/bulk-pick', async (req, res) => {
+  try {
+    res.json(await getBulkPick((req.body || {}).pos || ''))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

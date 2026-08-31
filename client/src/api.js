@@ -37,6 +37,19 @@ export async function clearTransferReceipt(toNumber) {
   return body
 }
 
+// The bulk pick ticket. ⚠️ Reads NetSuite LIVE — a document someone walks the floor with
+// must not come from an hourly mirror, so this can be slow and can fail, and both are
+// better than a confidently stale pick sheet.
+export async function fetchBulkPick(pos) {
+  const res = await fetch('/api/bulk-pick', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pos }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
 export async function fetchFreshness() {
   const res = await fetch('/api/freshness')
   if (!res.ok) throw new Error(`API ${res.status}`)
