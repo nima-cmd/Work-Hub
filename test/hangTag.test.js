@@ -118,3 +118,27 @@ test('⚠️ THE SQL JOIN AND tagJoinKey CANNOT DRIFT APART', () => {
   // one colour's price onto every tag for the style.
   assert.doesNotMatch(join, /upper\(p\.sku\)\s*=\s*upper\(c\.product_id\)/)
 })
+
+test('⚠️ HANG TAGS TRANSMIT EXACTLY AS THE QR CARGO TAGS DO', () => {
+  // Nima, 2026-08-31: "i dont know if the pritner will print correctly if not transmitted
+  // like the QR ones are." He was right to ask — the first cut omitted
+  // `-o print-scaling=none`, which the QR path has always passed.
+  //
+  // That flag is not cosmetic for a linear barcode. Without it CUPS may scale the PDF to
+  // fit the page, and scaling a UPC-A changes its X-DIMENSION: below 0.0104in it stops
+  // reading, and enlarged it no longer matches the quiet zones it was laid out with. A QR
+  // code survives scaling. A UPC does not.
+  const src = readFileSync(new URL('../server/printLabel.js', import.meta.url), 'utf8')
+  const lpCalls = [...src.matchAll(/execFile\(\s*\n?\s*'lp',\s*\[([^\]]+)\]/g)].map((m) =>
+    m[1].replace(/\s+/g, ' ').trim())
+  // Three printers on this surface: the tag sheet, the single cargo tag, and hang tags.
+  assert.equal(lpCalls.length, 3, 'every lp invocation must be accounted for')
+  for (const call of lpCalls) {
+    assert.match(call, /'-d', cfg\.queue/, 'names the queue explicitly')
+    assert.match(call, /'-o', cfg\.media/, 'sets the page size explicitly')
+    assert.match(call, /'-o', 'print-scaling=none'/, 'refuses CUPS scaling')
+  }
+  // And they are all the SAME argument list, so none can drift from the others.
+  const normalised = new Set(lpCalls.map((c) => c.replace(/,\s*path\s*$/, '')))
+  assert.equal(normalised.size, 1, `lp flags differ between printers: ${[...normalised].join(' || ')}`)
+})

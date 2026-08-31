@@ -425,9 +425,19 @@ export async function printHangTags(tags = [], size = '2.25x1.25') {
     // ⚠️ Names the queue: "printing failed" sends someone hunting.
     throw new Error(`printer queue ${cfg.queue} is not available on this host`)
   }
+  // ⚠️ THE SAME lp FLAGS AS THE QR CARGO TAG, print-scaling=none INCLUDED — and that flag
+  // is not cosmetic here (Nima, 2026-08-31: "i dont know if the pritner will print
+  // correctly if not transmitted like the QR ones are"). He was right to ask. Without it
+  // CUPS may scale the PDF to fit the page, and scaling a UPC-A changes its X-DIMENSION,
+  // which is the one measurement a scanner depends on: a symbol shrunk below 0.0104in
+  // stops reading, and one silently enlarged no longer matches the quiet zones it was
+  // laid out with. A QR code survives being scaled; a linear barcode does not.
+  //
+  // A test asserts these flags stay identical to printTagSheet's, because the day they
+  // differ is the day tags come off the roll unreadable for a reason nobody looks for.
   await new Promise((res, rej) => execFile(
-    'lp', ['-d', cfg.queue, '-o', cfg.media, path],
-    (err, out) => (err ? rej(err) : res(out)),
+    'lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path],
+    (err, out, stderr) => (err ? rej(new Error(stderr || err.message)) : res(out)),
   ))
-  return { path, printed: drawn.length, queue: cfg.queue }
+  return { path, printed: drawn.length, queue: cfg.queue, size }
 }
