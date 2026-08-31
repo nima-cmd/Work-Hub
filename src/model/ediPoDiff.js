@@ -51,20 +51,135 @@ export function poVersions(order) {
 // store. Measured on live Nordstrom 850s: the buyer code is 10 digits (0005189002) and
 // every store is 4 (0299, 0004, 0221, 0568…). So four digits IS the store rule — stated
 // here as the assumption it is, with the evidence, rather than left implicit.
+//
+// ── ⚠️ THE ORIGINAL REGEX READ ONE STORE PER SEGMENT AND DROPPED THE REST ────
+//
+// An SDQ segment repeats up to ten store/quantity pairs, and the repeats are suffixed:
+// `identificationCode`, `identificationCode1`, `identificationCode2` … each with a
+// matching `quantity`, `quantity1`, `quantity2`. The regex only matched the UNSUFFIXED
+// one, so it returned the first store of each segment and silently lost the others.
+//
+// Measured on PO 50220600 (2026-08-31): it reported 3 stores — 0167, 7742, 7760 — where
+// the 850 actually names TEN (0167 0351 0363 0370 0371 0372 0378 7742 7760 7768). Seven
+// stores' worth of freight, invisible.
+//
+// ⚠️ AND THE QUANTITIES WERE THROWN AWAY. They are in the same segment, they are what a
+// per-store pick needs, and on both POs checked they reconcile exactly against the line
+// totals (95 = 95, 1033 = 1033) — which makes them a free correctness check on the parse.
+
+/** One SDQ segment → its store/quantity pairs, repeats included. */
+export function sdqPairs(segment = {}) {
+  const out = []
+  // ⚠️ THE QUALIFIER GATES THE WHOLE SEGMENT. '92' is "assigned by buyer"; codes under
+  // any other qualifier are not Nordstrom store numbers and must not be read as such.
+  // Kept when the SDQ walk replaced the old text-scanning regex — dropping it would have
+  // silently widened what counts as a store.
+  if (segment.identificationCodeQualifier !== undefined
+      && segment.identificationCodeQualifier !== '92') return out
+  for (const key of Object.keys(segment)) {
+    const m = key.match(/^identificationCode(\d*)$/)
+    if (!m) continue
+    const store = String(segment[key] ?? '').trim()
+    const qty = Number(segment[`quantity${m[1]}`])
+    // ⚠️ Four digits IS the store rule (see above) — it is also what keeps the 10-digit
+    // buyer code out of the store list.
+    if (!/^\d{4}$/.test(store) || !Number.isFinite(qty)) continue
+    out.push({ store, qty })
+  }
+  return out
+}
+
+/** Every SDQ segment on the message, from any depth. */
+function sdqSegments(message) {
+  const out = []
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk)
+    if (!node || typeof node !== 'object') return
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'destinationQuantity' && Array.isArray(v)) out.push(...v)
+      else walk(v)
+    }
+  }
+  walk(message)
+  return out
+}
+
+/** Store → total units across the whole 850. The per-store pick, straight from the SDQ. */
+export function extractStoreQuantities(message) {
+  const totals = new Map()
+  for (const seg of sdqSegments(message)) {
+    for (const { store, qty } of sdqPairs(seg)) totals.set(store, (totals.get(store) || 0) + qty)
+  }
+  return [...totals.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([store, units]) => ({ store, units }))
+}
+
 export function extractStoreCodes(message) {
-  const text = JSON.stringify(message || {})
-  const codes = [...text.matchAll(/"identificationCodeQualifier":"92","identificationCode":"([^"]+)"/g)]
-    .map((m) => m[1])
-    .filter((c) => /^\d{4}$/.test(c))
-  return [...new Set(codes)].sort()
+  return extractStoreQuantities(message).map((s) => s.store)
+}
+
+// ── ⚠️ WHERE THE FREIGHT ACTUALLY GOES — and nothing read this until 2026-08-31 ──
+//
+// SDQ is MARK FOR, not ship to. The dock is in an N1 segment on each line:
+//
+//     { entityIdentifierCode: "ST", name: "0299" }
+//
+// ⚠️ IT CARRIES NO `identificationCodeQualifier`, which is why the qualifier-92 regex
+// above never saw it. The app has therefore never known a Rack PO's destination — it
+// only ever learned a DC from `custentity_dc_location` on a NetSuite customer, which is
+// exactly what a PO with no sales order does not have.
+//
+// Measured 2026-08-31:
+//   PO 50203208 — mark for 0297 (CS Rack Warehouse) → ship to 0299 (Central States DC)
+//   PO 50220600 — mark for seven CA stores → ship to 0399 · three FL stores → 0799
+//
+// So you never ship to a store: you ship to its DC and the store code is the carton
+// label. That is also why NOT ONE of the 115 Nordstrom customers in NetSuite carries an
+// address — the model never needed one.
+export function extractShipTo(message) {
+  const out = new Set()
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk)
+    if (!node || typeof node !== 'object') return
+    if (node.entityIdentifierCode === 'ST') {
+      const code = String(node.name ?? node.identificationCode ?? '').trim()
+      if (/^\d{4}$/.test(code)) out.add(code)
+    }
+    for (const v of Object.values(node)) walk(v)
+  }
+  walk(message)
+  return [...out].sort()
 }
 
 export const HOLD_STORE = '0299'
 
-/** Every line parked on the hold store = the partner has not allocated it yet. */
-export function looksUnallocated(storeCodes = []) {
-  const real = (storeCodes || []).filter(Boolean)
-  return real.length === 1 && real[0] === HOLD_STORE
+/**
+ * Has the partner not allocated this PO yet?
+ *
+ * ⚠️ NORDSTROM'S OWN RULE, quoted from the supplier store-DC sheet: *"Pre-Allocation
+ * Stores will appear with THE SAME VALUE, THE DC LOCATION, in the Mark For and in the
+ * Ship To location. These are not valid stores; they are a unit placeholder prior to
+ * store allocation … never ship until the PO has been store allocated."*
+ *
+ * ⚠️ SO THE TEST IS MARK-FOR == SHIP-TO, not "is it 0299". That distinction is the whole
+ * point and it is worth a real example: PO 50203208 marks for 0297 and ships to 0299.
+ * Two different values, so it is ALLOCATED and shippable — 0297 is the CS Rack Warehouse,
+ * a named destination in the Rack store list, confirmed in writing by Nordstrom's own
+ * merchandise analyst. Reading "there is a 299 on it" as unallocated would have held
+ * 1,033 units of shoes that were cleared to go.
+ *
+ * The single-argument form is kept for callers that only have store codes; without a
+ * ship-to it can only fall back to the old 0299-alone heuristic, and says so.
+ */
+export function looksUnallocated(storeCodes = [], shipTo = null) {
+  const marks = (storeCodes || []).filter(Boolean)
+  if (!marks.length) return false
+  if (shipTo && shipTo.length) {
+    const ship = new Set(shipTo)
+    // Every mark-for is also the dock → placeholder units, do not ship.
+    return marks.every((m) => ship.has(m))
+  }
+  return marks.length === 1 && marks[0] === HOLD_STORE
 }
 
 export function diffPoVersions(prev, next) {

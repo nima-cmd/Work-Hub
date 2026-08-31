@@ -1762,6 +1762,22 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS window_end   DATE;
 -- changes from {0299} to real stores — a difference the version diff can see even when
 -- quantities are identical.
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS store_codes TEXT[];
+-- Where the freight actually goes. SDQ is MARK FOR; the dock is an N1 'ST' segment on
+-- each line, and nothing read it until 2026-08-31 — so the app never knew a Rack PO's
+-- destination, because it only ever learned a DC from a NetSuite customer and those POs
+-- have no sales order. See extractShipTo in src/model/ediPoDiff.js.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS ship_to_codes TEXT[];
+-- Store → units, from the SDQ. The per-store pick, straight off the 850 and available
+-- for orders that never reach NetSuite at all.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS store_quantities JSONB;
+-- ⚠️ WHY A VERSION AND NOT ANOTHER BOOLEAN. backfillPo850Details re-read only rows where
+-- `po_lines_checked = false`. When store-code extraction was added on 2026-08-17 every
+-- older row already had that flag TRUE, so it was never re-read and its store_codes
+-- stayed NULL forever — indistinguishable from a PO that genuinely has no stores.
+-- Measured: PO 50203208 held null while the extractor returns 0297 for it on demand.
+-- A boolean cannot express "parsed, but by an older parser". This can: bump
+-- PO_PARSE_VERSION and every row below it is re-read exactly once.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_parse_version INTEGER NOT NULL DEFAULT 0;
 
 -- ── The OC an order came from (Nima, 2026-08-20) ─────────────────────────────
 --
