@@ -24,7 +24,8 @@
 // See src/model/shipstationOrder.js for the field rules.
 
 import { buildEdiOrder, buildBoutiqueOrder } from '../model/shipstationOrder.js'
-import { partitionForShipstation } from '../model/shipstationEligible.js'
+import { partitionForShipstation, HOLD } from '../model/shipstationEligible.js'
+import { labelTracking } from '../model/labelEvidence.js'
 
 const BASE = 'https://ssapi.shipstation.com'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -145,7 +146,19 @@ export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) 
     readFailed: r.readFailed,
   }))
   for (const h of held) {
-    skipped.push({ ifNumber: h.row.fulfilment?.ifNumber, hold: h.hold, reason: h.reason })
+    // ⚠️ ALREADY_LABELLED CARRIES THE LIVE TRACKING NUMBERS, and no other hold does.
+    // It is the only refusal a person can act on from the board — the way through is to
+    // declare those labels unusable — and the numbers are right here, in the same
+    // computation that decided the hold. Sending them back means the client needs no
+    // second call and, more importantly, cannot disagree with the gate about WHICH
+    // labels are counting.
+    //
+    // ⚠️ Deliberately NOT added to /api/orders instead: that payload carries `labelled`
+    // as a boolean on purpose ("the board never shows them and the tracking list is
+    // long"), and every card would pay for a list only this refusal needs.
+    const entry = { ifNumber: h.row.fulfilment?.ifNumber, hold: h.hold, reason: h.reason }
+    if (h.hold === HOLD.ALREADY_LABELLED) entry.tracking = liveTracking(h.row)
+    skipped.push(entry)
   }
   for (const { row: r, serviceCode, billTo } of push) {
     // ⚠️ The resolved third party overrides whatever the row carried. buildBoutiqueOrder
@@ -203,6 +216,20 @@ export function boutiqueOrdersFor(rows = [], { storeId, upsAccount, now } = {}) 
 // `shipmethod` resolves to an opaque ID: `shipitem` and every sibling table return
 // empty on the bot role. src/model/shipstationEligible.js maps the IDs we can name
 // and holds the rest rather than guessing a service level.
+// The labels that are actually counting against this fulfilment.
+//
+// ⚠️ USES labelTracking, the SAME function the gate used to reach its verdict, rather
+// than re-deriving from the row. A dead label must not be offered for killing twice, and
+// a voided ShipStation label is not evidence — both rules live in labelEvidence.js and
+// there is no reason for a second opinion here.
+export function liveTracking(row = {}) {
+  return labelTracking({
+    nsTracking: row.order?.nsTracking ?? row.nsTracking,
+    ssTracking: row.order?.ssTracking ?? row.ssTracking,
+    deadTracking: row.order?.deadTracking ?? row.deadTracking,
+  })
+}
+
 export async function fetchBoutiqueShipMethods(ifNumbers = [], { runSuiteQL } = {}) {
   const out = new Map()
   if (!ifNumbers.length || !runSuiteQL) return out

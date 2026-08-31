@@ -1,7 +1,8 @@
 // Shared bits used across all three views.
 import { useEffect, useState } from 'react'
-import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation, confirmDeparted } from './api.js'
+import { fetchLabelSizes, printCargoTag, fetchNotesFor, addNote, deleteNote, fetchLinksFor, addDocLink, deleteDocLink, fetchDocNumbers, completeQuestTask, createManualTask, pushToShipstation, confirmDeparted, markLabelDead } from './api.js'
 import { parseDocUrl, linkKey, KIND_LABEL } from '../../src/model/docLinkUrl.js'
+import { pushRemedy, REMEDY, KILLED_MESSAGE } from '../../src/model/pushRemedy.js'
 import { NETSUITE_DOC_TYPES, normalizeDocNumber } from '../../src/model/netsuiteDocs.js'
 import { isDocNumber } from '../../src/model/netsuiteLinks.js'
 import { traceTypeFor } from '../../src/model/trace.js'
@@ -486,32 +487,63 @@ export function LabelButtons({ info }) {
 // NetSuite at all, so ShipStation is the ONLY route for them and a dead button here
 // would block the work entirely.
 export function ShipstationPushButton({ ifNumber, onDone, scope = 'boutique' }) {
-  const [state, setState] = useState(null) // { busy, msg, held, canForce }
+  const [state, setState] = useState(null) // { busy, msg, held, remedy, killable }
   if (!ifNumber) return null
 
   const run = async (force) => {
     setState({ busy: true })
     try {
       const r = await pushToShipstation({ scope, ifNumbers: [ifNumber], force })
-      if (r.pushed > 0) {
+      // ⚠️ THE DECISION LIVES IN src/model/pushRemedy.js, not here. It used to be a REGEX
+      // OVER PROSE — /NetSuite/i.test(reason) && !/already has/i.test(reason) — so a
+      // reworded server message would have silently changed which button the operator is
+      // offered. It now keys on the HOLD KEY, and it is tested.
+      const rem = pushRemedy(r, { forced: force })
+      if (rem.ok) {
         // The order NUMBER, so he can find it in ShipStation's own search. We hold the
         // numeric orderId too, but ShipStation's deep-link format is not something this
         // repo has ever verified — a link that 404s is worse than a number to paste.
-        const num = r.results?.[0]?.orderNumber || r.records?.[0]?.orderNumber || null
-        setState({ msg: num ? `✓ pushed as ${num} — buy the label in ShipStation` : '✓ pushed — buy the label in ShipStation' })
+        setState({ msg: rem.orderNumber ? `✓ pushed as ${rem.orderNumber} — buy the label in ShipStation` : '✓ pushed — buy the label in ShipStation' })
         onDone?.(r)
         return
       }
-      const held = (r.skipped || [])[0]
-      const reason = held?.reason || (r.seen === 0
-        ? 'not in the push scope — only unshipped, non-China fulfilments are'
-        : 'held, with no reason given')
-      // Only a LOCATION block is forceable; everything else is a fact about the
-      // box or the data, and forcing it would just push something broken.
-      const canForce = !force && /NetSuite/i.test(reason) && !/already has/i.test(reason)
-      setState({ msg: reason, held: true, canForce })
+      setState({ msg: rem.reason, held: true, remedy: rem.remedy, killable: rem.killable })
     } catch (e) {
       setState({ msg: e.message, held: true })
+    }
+  }
+
+  // ⚠️ THE REMEDY FOR "already has N labels" IS OFFERED RIGHT HERE, and that is the whole
+  // point of this change. The dead-label button existed only on one column of the Ship
+  // Desk, so 13 labelled IFs held for payment had no route to it at all — Nima hit the
+  // refusal on a card and had nowhere to go (2026-08-31: "how can i mark them dead in the
+  // app manually so it lets me push to shipstation"). PR #100 put that control "on the
+  // row where you notice"; this is the row where he now notices.
+  //
+  // ⚠️ A REASON IS REQUIRED, exactly as on the Ship Desk. The server demands one and so
+  // does this: an unexplained dead label reads as a mistake later, and the record is what
+  // gets produced if the charge is ever queried. Cancel and an empty reason are the SAME
+  // answer — do nothing.
+  const kill = async (tracking) => {
+    const reason = window.prompt(
+      `Why can't ${tracking} be used?\n\nThis is recorded against ${ifNumber} and is what gets produced if the charge is ever queried.`,
+    )
+    if (!reason || !reason.trim()) return
+    setState((s) => ({ ...s, busy: true }))
+    try {
+      await markLabelDead({ ifNumber, trackingNumber: tracking, reason: reason.trim() })
+      const left = (state?.killable || []).filter((t) => t !== tracking)
+      setState({
+        msg: left.length ? `${tracking.slice(-6)} marked unusable — ${left.length} label${left.length === 1 ? '' : 's'} still live.` : KILLED_MESSAGE((state?.killable || []).length),
+        held: true,
+        // Only when every live label is gone does pushing become possible, so the list
+        // shrinks and the remedy disappears with it rather than misleading.
+        remedy: left.length ? REMEDY.KILL_LABELS : REMEDY.NONE,
+        killable: left,
+      })
+      onDone?.()
+    } catch (e) {
+      setState((s) => ({ ...s, busy: false, msg: e.message, held: true }))
     }
   }
 
@@ -525,11 +557,20 @@ export function ShipstationPushButton({ ifNumber, onDone, scope = 'boutique' }) 
         {state?.busy ? 'pushing…' : '⇪ Push to ShipStation'}
       </button>
       {state?.msg && <span className={state.held ? 'muted' : 'good'}> {state.msg}</span>}
-      {state?.canForce && (
+      {state?.remedy === REMEDY.FORCE && (
         <button className="linkBtn" onClick={() => {
           if (window.confirm(`${ifNumber}: NetSuite normally labels this one.\n\nPush it to ShipStation anyway? Only do this if NetSuite's label creator is not working — otherwise you risk two labels on one box.`)) run(true)
         }}>push anyway</button>
       )}
+      {/* ⚠️ ONE BUTTON PER TRACKING NUMBER, never one for the whole IF. A multi-box
+          shipment has several and killing the wrong one leaves a live label counting as
+          evidence while a dead one does not — the same rule the Ship Desk follows. */}
+      {state?.remedy === REMEDY.KILL_LABELS && (state.killable || []).map((t) => (
+        <button key={t} className="linkBtn" disabled={state?.busy} onClick={() => kill(t)}
+                title={`Mark ${t} unusable. It stops counting as a label anywhere in the app, so a new one can be made — NetSuite is not touched, because it cannot void or edit its own tracking.`}>
+          ✗ {state.killable.length > 1 ? `${t.slice(-6)} is wrong` : 'this label is wrong'}
+        </button>
+      ))}
     </span>
   )
 }
