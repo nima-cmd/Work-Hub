@@ -67,21 +67,37 @@ const CONST = {
 // The six DCs: internal id to parent with, and the address block every store on that DC
 // carries. Read live from NetSuite 2026-09-01, not transcribed from the workbook.
 //
-// ⚠️ `fullname` IS THE PARENT REFERENCE, NOT THE INTERNAL ID. The first real import
-// attempt (2026-09-01, 11 rows) failed every row with `Invalid parent reference key
-// "2068"`: the mapping resolves a parent BY NAME by default, so the internal id was
-// looked up as if it were a customer's name. NetSuite's own form is the full
-// hierarchical path — top-level "294 Nordstrom", then the DC — with each level written
-// as "<entityid> <companyname>". Read straight out of `customer.fullname` rather than
-// assembled here, because assembling it is how the space, the colon or the entityid
-// prefix goes wrong silently.
+// ⚠️ THE PARENT REFERENCE IS `<parent entityid> <hierarchical company names>`, AND IT
+// TOOK THREE ATTEMPTS AND A CONTROLLED EXPERIMENT TO ESTABLISH THAT.
+//
+//     399 Nordstrom : Nordstrom - DC 399 - S California DC
+//
+// NetSuite renders the same customer three different ways and only one of them matches
+// on import. Both wrong guesses failed EVERY row, which is the useful part — a parent
+// reference either resolves or the row dies, so there is no half-imported state:
+//
+//   internal id  `2068`                                              — FAILED (11/11).
+//       The field resolves by NAME unless a person changes its reference type in the
+//       mapping UI, so the id was searched for as a customer's name.
+//   `fullname`   `294 Nordstrom : 399 Nordstrom - DC 399 - S Cal…`   — FAILED (11/11).
+//       fullname prefixes the entityid at EVERY level; the picklist prefixes it once.
+//   `entitytitle`/BUILTIN.DF `399 Nordstrom - DC 399 - S Cal…`       — FAILED (probe).
+//       No hierarchy at all, so it is not a path.
+//   picklist form (below)                                            — WORKS.
+//       Proven by a 3-row probe carrying one format each: store 167 imported as
+//       customer 18779 with the right parent; 351 and 363 were rejected. Verified
+//       afterwards field by field against the template.
+//
+// It is `entityid + ' ' + altname`, where altname is the " : "-joined path of
+// COMPANY NAMES. Both halves are read out of NetSuite, never assembled from parts —
+// getting the space, the colon or the prefix wrong fails silently at import time.
 export const DCS = {
-  '089': { parentId: 2067, fullname: '294 Nordstrom : 089 Nordstrom - DC 089 - Portland DC', addressee: 'Portland DC', line1: '5703 N Marine Dr', city: 'Portland', state: 'OR', zip: '97203' },
-  '299': { parentId: 2068, fullname: '294 Nordstrom : 299 Nordstrom - DC 299 - Central States DC', addressee: 'Central States DC', line1: '5050 Chavenelle Rd', city: 'Dubuque', state: 'IA', zip: '52002' },
-  '399': { parentId: 2069, fullname: '294 Nordstrom : 399 Nordstrom - DC 399 - S California DC', addressee: 'S California DC', line1: '1600 S Milliken Ave', city: 'Ontario', state: 'CA', zip: '91761' },
-  '499': { parentId: 2070, fullname: '294 Nordstrom : 499 Nordstrom - DC 499 - N California DC', addressee: 'N California DC', line1: '37599 Filbert St', city: 'Newark', state: 'CA', zip: '94560' },
-  '699': { parentId: 2075, fullname: '294 Nordstrom : 699 Nordstrom - DC 699 - Marlboro DC', addressee: 'Marlboro DC', line1: '839 Commerce Dr', city: 'Upper Marlboro', state: 'MD', zip: '20774' },
-  '799': { parentId: 2076, fullname: '294 Nordstrom : 799 Nordstrom - DC 799 - Gainesville DC', addressee: 'Gainesville DC', line1: '5497 NE 49th Terrace', city: 'Gainesville', state: 'FL', zip: '32609' },
+  '089': { parentId: 2067, parentRef: '089 Nordstrom : Nordstrom - DC 089 - Portland DC', addressee: 'Portland DC', line1: '5703 N Marine Dr', city: 'Portland', state: 'OR', zip: '97203' },
+  '299': { parentId: 2068, parentRef: '299 Nordstrom : Nordstrom - DC 299 - Central States DC', addressee: 'Central States DC', line1: '5050 Chavenelle Rd', city: 'Dubuque', state: 'IA', zip: '52002' },
+  '399': { parentId: 2069, parentRef: '399 Nordstrom : Nordstrom - DC 399 - S California DC', addressee: 'S California DC', line1: '1600 S Milliken Ave', city: 'Ontario', state: 'CA', zip: '91761' },
+  '499': { parentId: 2070, parentRef: '499 Nordstrom : Nordstrom - DC 499 - N California DC', addressee: 'N California DC', line1: '37599 Filbert St', city: 'Newark', state: 'CA', zip: '94560' },
+  '699': { parentId: 2075, parentRef: '699 Nordstrom : Nordstrom - DC 699 - Marlboro DC', addressee: 'Marlboro DC', line1: '839 Commerce Dr', city: 'Upper Marlboro', state: 'MD', zip: '20774' },
+  '799': { parentId: 2076, parentRef: '799 Nordstrom : Nordstrom - DC 799 - Gainesville DC', addressee: 'Gainesville DC', line1: '5497 NE 49th Terrace', city: 'Gainesville', state: 'FL', zip: '32609' },
 }
 
 // The workbook writes DC 89; NetSuite stores 089 on 101 of 102 records (one stray "89"
@@ -113,7 +129,7 @@ export function importRow({ store, dc, name }) {
     // ⚠️ THE NAME, because that is what the importer resolves by default — see DCS.
     // The internal id rides in the next column for anyone who does switch the field's
     // reference type, and so a human can check the row landed on the right DC.
-    'Parent Company': d.fullname,
+    'Parent Company': d.parentRef,
     'Parent Company Internal ID (reference only)': d.parentId,
     'Store Name': name,
     'Store Number': storeNumber(store),
