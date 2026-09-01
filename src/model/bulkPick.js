@@ -88,6 +88,10 @@ export function bulkPick(lines = [], asked = []) {
   // PO gets its own banner; it does not get to inflate the pick.
   const pickedSos = new Set()
   const pickedStores = new Set()
+  // ⚠️ The locations the PICKED lines sit in — not every location on every asked PO. A
+  // fully-cancelled PO must not add a column to the stock table for a location nothing
+  // is being pulled from (the same counts-what-it-says rule as `pickedSos`).
+  const orderLocations = new Map()
   for (const l of rows) {
     const st = statFor(l.po)
     if (l.tranid) st.salesOrders.add(norm(l.tranid))
@@ -104,8 +108,14 @@ export function bulkPick(lines = [], asked = []) {
     if (l.tranid) pickedSos.add(norm(l.tranid))
     const store = storeOf(l.customer)
     if (store) pickedStores.add(store)
-    if (!bySku.has(sku)) bySku.set(sku, { sku, total: 0, byPo: {} })
+    if (norm(l.locationId)) {
+      orderLocations.set(norm(l.locationId), { id: norm(l.locationId), name: norm(l.locationName) || norm(l.locationId) })
+    }
+    if (!bySku.has(sku)) bySku.set(sku, { sku, itemId: norm(l.itemId) || null, total: 0, byPo: {} })
     const g = bySku.get(sku)
+    // A SKU reached by more than one line keeps the first item id it was given; they are
+    // the same item by definition, since the id is what NetSuite resolved the name from.
+    if (!g.itemId && norm(l.itemId)) g.itemId = norm(l.itemId)
     g.total += qty
     g.byPo[norm(l.po)] = (g.byPo[norm(l.po)] || 0) + qty
   }
@@ -141,6 +151,11 @@ export function bulkPick(lines = [], asked = []) {
     stores: pickedStores.size,
     missing: pos.filter((p) => p.verdict === 'missing').map((p) => p.po),
     allClosed: pos.filter((p) => p.verdict === 'allClosed'),
+    // ⚠️ NOT "Warehouse". Measured live 2026-09-01: a multi-store partner PO's lines sit
+    // in `Warehouse Bulk : Bloomingdale's` / `Warehouse Bulk : Nordstrom`, buckets that
+    // held ZERO units of every SKU on the order. Naming the order's own location is the
+    // difference between "you have none" and "you have none HERE".
+    orderLocations: [...orderLocations.values()].sort((a, b) => a.name.localeCompare(b.name)),
   }
 }
 

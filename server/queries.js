@@ -16,7 +16,8 @@ import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput } from '../src/model/bulkPick.js'
-import { fetchBulkPickLines } from '../src/ingest/bulkPickFetch.js'
+import { withStock, stockLocationIds } from '../src/model/pickStock.js'
+import { fetchBulkPickLines, fetchPickStock, STOCK_LOCATIONS } from '../src/ingest/bulkPickFetch.js'
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
@@ -6050,7 +6051,15 @@ export async function getBulkPick(poText) {
   // pick ticket nobody could use; 40 is well past any real multi-store pull.
   if (pos.length > 40) throw new Error(`${pos.length} PO numbers — enter 40 or fewer`)
   const lines = await fetchBulkPickLines(pos)
-  return { ...bulkPick(lines, pos), asked: pos, fetchedAt: new Date().toISOString() }
+  const ticket = bulkPick(lines, pos)
+  // ⚠️ A SECOND LIVE TRIP, AND IT IS ALLOWED TO FAIL. The pick ticket is the deliverable;
+  // on-hand is the annotation that says whether the pull is short. If the stock lookup
+  // dies the sheet still prints and says the column is unknown — see pickStock.js.
+  const itemIds = ticket.skus.map((s) => s.itemId).filter(Boolean)
+  const locIds = stockLocationIds(ticket.orderLocations, STOCK_LOCATIONS)
+  const stock = itemIds.length ? await fetchPickStock(itemIds, locIds) : { rows: [], ok: true }
+  const withQty = withStock(ticket, stock.rows, { locations: STOCK_LOCATIONS, ok: stock.ok, error: stock.error })
+  return { ...withQty, asked: pos, fetchedAt: new Date().toISOString() }
 }
 
 // ── Hang tags ───────────────────────────────────────────────────────────────

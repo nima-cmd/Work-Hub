@@ -49,6 +49,7 @@ import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
+import { renderPickTicketTo } from './pickTicketPdf.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -453,6 +454,25 @@ app.delete('/api/transfers/receipt', async (req, res) => {
 app.post('/api/bulk-pick', async (req, res) => {
   try {
     res.json(await getBulkPick((req.body || {}).pos || ''))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// The same ticket as a PDF. ⚠️ A SECOND BUILD, NOT A RENDER OF WHAT THE SCREEN HOLDS —
+// the client sends the PO numbers again rather than its ticket object, so nothing a
+// browser is holding can decide what a printed document says. It costs one more live
+// read, which is the right price for a sheet someone acts on.
+// ⚠️ GET AS WELL AS POST, and the GET is the one the button uses. Opening a PDF from a
+// fetch means creating a blob URL and calling window.open() after an await — which
+// browsers treat as an unrequested popup and block, which would have reproduced the
+// exact complaint this change exists to fix ("the print doesn't generate any document").
+// A plain link opened in the click itself is never blocked, and the tab can be reloaded.
+app.all('/api/bulk-pick/pdf', async (req, res) => {
+  try {
+    const pos = (req.body || {}).pos || req.query.pos || ''
+    await renderPickTicketTo(res, await getBulkPick(pos))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

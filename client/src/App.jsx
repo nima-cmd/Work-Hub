@@ -206,6 +206,13 @@ export default function App() {
   // Held here rather than inside Datapad because a view is REMOUNTED on every tab
   // switch, so state that has to survive the switch cannot live in the view.
   const [handoffTrace, setHandoffTrace] = useState(null)
+  // ⚠️ ITS OWN STATE, NOT handoffTrace. That one carries a {docType, docNumber} for the
+  // Datapad; stuffing a PO string into it would be a field that no longer means what its
+  // name says — the register's own bug class, and the two handoffs would fight the day
+  // both were in flight.
+  const [handoffPo, setHandoffPo] = useState(null)
+  // A PO on a Kanban card → the bulk pick ticket for it, already built.
+  const openBulkPick = (po) => { setHandoffPo(String(po)); setView('pick') }
   // onNavigate everywhere: setView, plus an optional subject to hand over with it.
   const navigate = (key, subject = null) => { setView(key); if (subject) setHandoffTrace(subject) }
 
@@ -420,6 +427,7 @@ export default function App() {
     orders, transfers, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
     labelGaps, custody, bay,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
+    handoffPo, onHandoffPoTaken: () => setHandoffPo(null), onOpenBulkPick: openBulkPick,
     onNavigate: navigate, onRefresh: refresh,
   }
 

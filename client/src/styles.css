@@ -2250,6 +2250,22 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .cat-table .mono, .cat-table .num { font-variant-numeric: tabular-nums; }
 .cat-table .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 
+/* Bulk pick: a SKU there is not enough on-hand stock for. ⚠️ The row is tinted AND the
+   gap is printed in the Short column — colour alone is not a signal, on screen or on the
+   photocopy of the ticket someone carries. */
+.cat-table tr.rowShort td { background: rgba(248, 81, 73, 0.08); }
+.cat-table tr.rowShort td:first-child { box-shadow: inset 2px 0 0 var(--hi); }
+.cat-table .shortQty { color: var(--hi); }
+
+/* The PO on a Kanban group card, as the way into its pick ticket. Looks like the text it
+   replaced until you point at it — a card header full of buttons is a card you cannot
+   read at a glance. */
+.poPickLink {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  cursor: pointer; border-bottom: 1px dashed transparent;
+}
+.poPickLink:hover, .poPickLink:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* ── Daily Flight Plan (Nima, 2026-07-28) ───────────────────────────────── */
 .fpView { max-width: 860px; margin: 0 auto; padding: 14px 16px 60px; }
 .fpHead { position: sticky; top: 0; z-index: 5; background: var(--bg);

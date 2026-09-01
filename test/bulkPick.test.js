@@ -83,9 +83,12 @@ test('one row per SKU, totalled across every PO, with a column per PO', () => {
     line({ po: 'B', sku: 'SN01', quantity: -2, tranid: 'SO2' }),
     line({ po: 'B', sku: 'SN02', quantity: -5, tranid: 'SO2' }),
   ], ['A', 'B'])
+  // `itemId` rides along for the stock lookup to join on — null here because these
+  // fixtures predate it, and null is honest: the sheet then shows no stock rather than
+  // matching the wrong item.
   assert.deepEqual(t.skus, [
-    { sku: 'SN01', total: 5, byPo: { A: 3, B: 2 } },
-    { sku: 'SN02', total: 5, byPo: { B: 5 } },
+    { sku: 'SN01', itemId: null, total: 5, byPo: { A: 3, B: 2 } },
+    { sku: 'SN02', itemId: null, total: 5, byPo: { B: 5 } },
   ])
   assert.deepEqual(t.poColumns, ['A', 'B'])
   assert.equal(t.totalUnits, 10)
