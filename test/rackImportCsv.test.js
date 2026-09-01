@@ -6,17 +6,23 @@ import {
   HEADERS, DCS, WAREHOUSE_297, PO_50220600_STORES,
 } from '../scripts/rack-import-csv.js'
 
-test('⚠️ TWO PADDINGS, AND THEY DIFFER ON PURPOSE — id 3, store number 4', () => {
-  // The 850 for PO 50220600 sends every store code padded to four (0167, 0378). The 102
-  // existing NetSuite records use a 3-padded entityid and are NAMED from it. Both are
-  // honoured rather than one being bent to the other.
-  assert.equal(customerId('3'), '003')
-  assert.equal(storeNumber('3'), '0003')
-  assert.equal(customerId('167'), '167')
-  assert.equal(storeNumber('167'), '0167')
-  // A genuinely 4-digit store is untouched by either.
-  assert.equal(customerId('7742'), '7742')
+test('⚠️ STORE NUMBER IS 3-PADDED, BECAUSE THAT IS WHAT CELIGO SEARCHES FOR', () => {
+  // The 850 sends four (0378). Celigo strips the leading zero and looks NetSuite up by
+  // what is left — its own failure named the term: custentity_store_number is "378".
+  // A 4-padded "0378" would not have been found, on all 326, silently.
+  assert.equal(customerId('378'), '378')
+  assert.equal(storeNumber('378'), '378')
+  assert.equal(storeNumber('3'), '003')
+  assert.equal(storeNumber('167'), '167')
+  // A genuinely 4-digit store is untouched.
   assert.equal(storeNumber('7742'), '7742')
+})
+
+test('⚠️ the store number and the customer id are the SAME value', () => {
+  // They diverged for one commit and that divergence was the bug.
+  for (const s of ['3', '36', '167', '297', '2281', '7742']) {
+    assert.equal(storeNumber(s), customerId(s), `store ${s}`)
+  }
 })
 
 test('⚠️ the parent is the FULL hierarchical name — an internal id fails every row', () => {
@@ -34,7 +40,7 @@ test('the record is named from the 3-digit id, like every existing Nordstrom sto
   const r = importRow({ store: '167', dc: '399', name: 'Cerritos Plaza Rack' })
   assert.equal(r['Company Name'], 'Nordstrom - 167 - Cerritos Plaza Rack')
   assert.equal(r['Customer ID'], '167')
-  assert.equal(r['Store Number'], '0167')
+  assert.equal(r['Store Number'], '167')
 })
 
 test('⚠️ the workbook writes DC 89, NetSuite stores 089 — normalised, or the row orphans', () => {
@@ -75,7 +81,7 @@ test('297 is the CS Rack Warehouse and it hangs off DC 299', () => {
   // Nordstrom in writing (Stephanie Inzunza, 2026-08-25): "297 is our warehouse".
   const r = importRow(WAREHOUSE_297)
   assert.equal(r['Customer ID'], '297')
-  assert.equal(r['Store Number'], '0297')
+  assert.equal(r['Store Number'], '297')
   assert.equal(r['Parent Company'], '299 Nordstrom : Nordstrom - DC 299 - Central States DC')
   assert.equal(r['Parent Company Internal ID (reference only)'], 2068)
   assert.equal(r['DC Location'], '299')

@@ -13,19 +13,29 @@
 // 102 existing Nordstrom store records in NetSuite, which were checked as a group and
 // are genuinely uniform — one GROUP BY over all 102 returns a single row.
 //
-// ⚠️ STORE NUMBER IS FOUR DIGITS, ZERO-PADDED, AND THE 850 IS THE AUTHORITY.
-// Nima, 2026-09-01, asked to settle this from "the edi for 50220600" rather than from
-// the full-line records. Read live: every SDQ code on that 850 is a real Rack store
-// number padded to four — 0167 Cerritos Plaza, 0351 Beverly Connection, 0363 Plaza
-// Bonita, 0370 South Bay, 0371 Summerlin, 0372 Esplanade, 0378 Mission Valley — and
-// each PO1 line's N1-ST ship-to is that store's DC, also padded to four (0399, 0799).
-// The two agree on every line, so the padding is the partner's convention, not noise.
+// ⚠️ STORE NUMBER IS THREE, NOT FOUR — AND I HAD IT WRONG UNTIL CELIGO SAID SO.
 //
-// ⚠️ CUSTOMER ID STAYS AT THREE, and that is deliberate divergence, not an oversight.
-// All 102 existing records use a 3-padded entityid ("001", "220") and are NAMED from it
-// ("Nordstrom - 220 - Michigan Avenue"). Padding the id to four would make Rack the only
-// Nordstrom customer whose record name did not match its siblings. The 850's four-digit
-// code lands in Store Number, where a machine reads it; the id stays human-consistent.
+// The 850 for PO 50220600 sends every store code padded to four (0167 Cerritos Plaza,
+// 0378 Mission Valley), and that is real — but it is the WIRE format, not the stored
+// one. Celigo strips the leading zero and then searches NetSuite for what is left. Its
+// own error, 2026-09-01, is the proof:
+//
+//     VALUE_LOOKUP_FAILED — could not find a match for
+//     [["parent","anyof","1161"],"AND",["custentity_store_number","is","378"]]
+//
+// It looks for "378". A record holding "0378" would not be found, so a 4-padded import
+// would have failed EVERY Rack lookup even after importing cleanly — a silent break, on
+// all 326, discoverable only when an order failed to land.
+//
+// So `custentity_store_number` = the 3-padded value, identical to the entityid, exactly
+// as all 102 existing records already had it. ⚠️ I read the wire format and stored it
+// verbatim; what NetSuite must hold is what the middleware searches for AFTER stripping.
+// Reading the 850 answered a different question than the one being asked.
+//
+// ⚠️ THE PARENT IS STILL THE DC, and that half was never wrong. `parent anyof 1161`
+// resolves the whole subtree: the only direct children of 1161 are the nine DC records
+// (each with store_no "DC"), and every full-line store hangs off a DC and is found by
+// this same lookup today.
 //
 // ⚠️ EDI STORE NUMBER IS LEFT EMPTY ON PURPOSE. The field exists and is populated on 26
 // of the 102 full-line records — with values that are NOT that store's number. Store 220
@@ -104,9 +114,10 @@ export const DCS = {
 // is an existing typo). ⚠️ Normalised to the NetSuite form, so the new rows join.
 export const dcKey = (raw) => String(raw ?? '').trim().padStart(3, '0')
 
-// ⚠️ THE TWO PADDINGS ARE DIFFERENT AND BOTH ARE DELIBERATE — see the header.
+// ⚠️ ONE PADDING, THREE CHARACTERS, FOR BOTH — see the header. They were briefly
+// different (id 3, store number 4) and that would have broken Celigo's lookup on all 326.
 export const customerId = (store) => String(store).trim().padStart(3, '0')
-export const storeNumber = (store) => String(store).trim().padStart(4, '0')
+export const storeNumber = customerId
 export const externalId = (store) => `NORDRACK-${customerId(store)}`
 
 const csvCell = (v) => {
