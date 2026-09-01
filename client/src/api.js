@@ -50,6 +50,11 @@ export async function fetchBulkPick(pos) {
   return body
 }
 
+// The pick ticket as a PDF. ⚠️ A URL, NOT A FETCH — the button opens this directly in the
+// click, because fetching the bytes and calling window.open() afterwards is what browsers
+// block as a popup. See the route in server/index.js.
+export const bulkPickPdfUrl = (pos) => `/api/bulk-pick/pdf?pos=${encodeURIComponent(pos)}`
+
 // Hang tags. ⚠️ Three calls on purpose: read what CAN be tagged, get a PDF to LOOK at,
 // and print. A physical label is worth checking on screen before it goes to a roll.
 export async function fetchHangTags() {

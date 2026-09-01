@@ -24,7 +24,7 @@ import { OUTCOME } from '../../../src/model/transferReceipt.js'
 // consolidated by PO number first (groupOrdersByPo) — one card per PO — and any
 // card (group or single) can be selected and turned into a task, in bulk, with
 // the same completion-requirement + doc-number options the task editor uses.
-export default function Kanban({ orders, transfers = [], tasks = [], events = [], onRefresh }) {
+export default function Kanban({ orders, transfers = [], tasks = [], events = [], onRefresh, onOpenBulkPick }) {
   const [selected, setSelected] = useState(() => new Set()) // keyed by soNumber (groups use poNumber as soNumber)
   const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState({ needsType: 'none', netsuiteDocType: 'SO', netsuiteDocNumber: '', urgency: '' })
@@ -370,7 +370,23 @@ export default function Kanban({ orders, transfers = [], tasks = [], events = []
                         second copy of the state. Absent on the stage-based tabs, where
                         colKey is not a post-custody state, which is correct. */}
                     <span className={'so' + (PC_COLOR[colKey] ? ' so-' + PC_COLOR[colKey] : '')}>
-                      {o.isGroup ? `PO ${o.poNumber}` : <NsLink doc={o.soNumber} />}
+                      {/* ⚠️ THE PO NUMBER IS THE WAY INTO THE PICK TICKET (Nima, 2026-09-01):
+                          "in the kanban… when we have the PO listed if we could click [it]
+                          to go to the bulk". A group card IS a partner PO split across
+                          stores, which is precisely what a bulk pull is for — so the number
+                          already on the card becomes the button, rather than adding one.
+                          ⚠️ A <button>, not the <span> with an onClick that a first pass
+                          would reach for: a span is not focusable and not reachable from a
+                          keyboard, and this sits inside a card that is itself clickable. */}
+                      {o.isGroup
+                        ? (onOpenBulkPick
+                            ? <button type="button" className="poPickLink"
+                                      title={`Bulk pick ticket for PO ${o.poNumber}`}
+                                      onClick={(e) => { e.stopPropagation(); onOpenBulkPick(o.poNumber) }}>
+                                PO {o.poNumber}
+                              </button>
+                            : `PO ${o.poNumber}`)
+                        : <NsLink doc={o.soNumber} />}
                     </span>
                     <SourceBadge source={o.source} />
                     {o.isGroup && <span className="badge edi">{o.memberCount} SO{o.memberCount === 1 ? '' : 's'}</span>}
