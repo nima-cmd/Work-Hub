@@ -66,13 +66,22 @@ const CONST = {
 
 // The six DCs: internal id to parent with, and the address block every store on that DC
 // carries. Read live from NetSuite 2026-09-01, not transcribed from the workbook.
+//
+// ⚠️ `fullname` IS THE PARENT REFERENCE, NOT THE INTERNAL ID. The first real import
+// attempt (2026-09-01, 11 rows) failed every row with `Invalid parent reference key
+// "2068"`: the mapping resolves a parent BY NAME by default, so the internal id was
+// looked up as if it were a customer's name. NetSuite's own form is the full
+// hierarchical path — top-level "294 Nordstrom", then the DC — with each level written
+// as "<entityid> <companyname>". Read straight out of `customer.fullname` rather than
+// assembled here, because assembling it is how the space, the colon or the entityid
+// prefix goes wrong silently.
 export const DCS = {
-  '089': { parentId: 2067, addressee: 'Portland DC', line1: '5703 N Marine Dr', city: 'Portland', state: 'OR', zip: '97203' },
-  '299': { parentId: 2068, addressee: 'Central States DC', line1: '5050 Chavenelle Rd', city: 'Dubuque', state: 'IA', zip: '52002' },
-  '399': { parentId: 2069, addressee: 'S California DC', line1: '1600 S Milliken Ave', city: 'Ontario', state: 'CA', zip: '91761' },
-  '499': { parentId: 2070, addressee: 'N California DC', line1: '37599 Filbert St', city: 'Newark', state: 'CA', zip: '94560' },
-  '699': { parentId: 2075, addressee: 'Marlboro DC', line1: '839 Commerce Dr', city: 'Upper Marlboro', state: 'MD', zip: '20774' },
-  '799': { parentId: 2076, addressee: 'Gainesville DC', line1: '5497 NE 49th Terrace', city: 'Gainesville', state: 'FL', zip: '32609' },
+  '089': { parentId: 2067, fullname: '294 Nordstrom : 089 Nordstrom - DC 089 - Portland DC', addressee: 'Portland DC', line1: '5703 N Marine Dr', city: 'Portland', state: 'OR', zip: '97203' },
+  '299': { parentId: 2068, fullname: '294 Nordstrom : 299 Nordstrom - DC 299 - Central States DC', addressee: 'Central States DC', line1: '5050 Chavenelle Rd', city: 'Dubuque', state: 'IA', zip: '52002' },
+  '399': { parentId: 2069, fullname: '294 Nordstrom : 399 Nordstrom - DC 399 - S California DC', addressee: 'S California DC', line1: '1600 S Milliken Ave', city: 'Ontario', state: 'CA', zip: '91761' },
+  '499': { parentId: 2070, fullname: '294 Nordstrom : 499 Nordstrom - DC 499 - N California DC', addressee: 'N California DC', line1: '37599 Filbert St', city: 'Newark', state: 'CA', zip: '94560' },
+  '699': { parentId: 2075, fullname: '294 Nordstrom : 699 Nordstrom - DC 699 - Marlboro DC', addressee: 'Marlboro DC', line1: '839 Commerce Dr', city: 'Upper Marlboro', state: 'MD', zip: '20774' },
+  '799': { parentId: 2076, fullname: '294 Nordstrom : 799 Nordstrom - DC 799 - Gainesville DC', addressee: 'Gainesville DC', line1: '5497 NE 49th Terrace', city: 'Gainesville', state: 'FL', zip: '32609' },
 }
 
 // The workbook writes DC 89; NetSuite stores 089 on 101 of 102 records (one stray "89"
@@ -101,12 +110,11 @@ export function importRow({ store, dc, name }) {
     'External ID': externalId(store),
     'Customer ID': id,
     'Company Name': `Nordstrom - ${id} - ${name}`,
-    // ⚠️ BOTH FORMS. NetSuite's import maps a parent either by name or by internal id,
-    // and the hierarchical name of these DCs is awkward ("294 Nordstrom : 299 Nordstrom
-    // - DC 299 - …"). Map the internal-id column and set that field's reference type to
-    // Internal ID; the name column is there to check the mapping landed on the right DC.
-    'Parent Company': d.parentId,
-    'Parent Company Name (reference only)': `Nordstrom - DC ${key} - ${d.addressee}`,
+    // ⚠️ THE NAME, because that is what the importer resolves by default — see DCS.
+    // The internal id rides in the next column for anyone who does switch the field's
+    // reference type, and so a human can check the row landed on the right DC.
+    'Parent Company': d.fullname,
+    'Parent Company Internal ID (reference only)': d.parentId,
     'Store Name': name,
     'Store Number': storeNumber(store),
     'EDI Store Number': '',

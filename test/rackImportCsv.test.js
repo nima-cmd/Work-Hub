@@ -19,6 +19,15 @@ test('⚠️ TWO PADDINGS, AND THEY DIFFER ON PURPOSE — id 3, store number 4',
   assert.equal(storeNumber('7742'), '7742')
 })
 
+test('⚠️ the parent is the FULL hierarchical name — an internal id fails every row', () => {
+  // The first real import (11 rows, 2026-09-01) died with `Invalid parent reference key
+  // "2068"` on all 11: the field resolves by NAME unless someone changes its reference
+  // type, so the id was searched for as a customer name.
+  const r = importRow({ store: '167', dc: '399', name: 'Cerritos Plaza Rack' })
+  assert.equal(r['Parent Company'], '294 Nordstrom : 399 Nordstrom - DC 399 - S California DC')
+  assert.match(r['Parent Company'], /^294 Nordstrom : /)
+})
+
 test('the record is named from the 3-digit id, like every existing Nordstrom store', () => {
   const r = importRow({ store: '167', dc: '399', name: 'Cerritos Plaza Rack' })
   assert.equal(r['Company Name'], 'Nordstrom - 167 - Cerritos Plaza Rack')
@@ -31,7 +40,7 @@ test('⚠️ the workbook writes DC 89, NetSuite stores 089 — normalised, or t
   assert.equal(dcKey('299'), '299')
   const r = importRow({ store: '3', dc: '89', name: 'Southcenter Square Rack' })
   assert.equal(r['DC Location'], '089')
-  assert.equal(r['Parent Company'], 2067)
+  assert.equal(r['Parent Company'], '294 Nordstrom : 089 Nordstrom - DC 089 - Portland DC')
 })
 
 test('every store carries its DC\'s address, not its own', () => {
@@ -65,7 +74,8 @@ test('297 is the CS Rack Warehouse and it hangs off DC 299', () => {
   const r = importRow(WAREHOUSE_297)
   assert.equal(r['Customer ID'], '297')
   assert.equal(r['Store Number'], '0297')
-  assert.equal(r['Parent Company'], 2068)
+  assert.equal(r['Parent Company'], '294 Nordstrom : 299 Nordstrom - DC 299 - Central States DC')
+  assert.equal(r['Parent Company Internal ID (reference only)'], 2068)
   assert.equal(r['DC Location'], '299')
   assert.equal(r['DC Address Line 1'], '5050 Chavenelle Rd')
 })
