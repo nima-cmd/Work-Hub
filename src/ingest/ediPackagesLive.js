@@ -34,16 +34,33 @@
 //     sum of per-carton CEILINGS. Both were checked against the search's own
 //     numbers on all six PO-DCs.
 import { runSuiteQL, netsuiteConfigured } from './netsuiteApi.js'
+import { resolveFulfilmentRows, missingIdentifier } from '../model/poDcIdentifier.js'
 
 // Fulfilments still in the routing pipeline: they carry a PO-DC identifier (only
 // EDI-routed fulfilments do, which is what scopes this to the EDI partners) and
 // have not shipped. Status C = Shipped; see netsuiteSync.js IF_STATUS.
+//
+// ⚠️ IT NO LONGER REQUIRES THE IDENTIFIER TO BE PRESENT, and that is the whole fix.
+// The old `custbody_po_cd_identifier IS NOT NULL` made an EMPTY FIELD INDISTINGUISHABLE
+// FROM NO WORK: on 2026-09-01 eleven Bloomingdale's fulfilments sat packed on the floor
+// — 13 cartons, 111 units — and the feed returned nothing at all, so Routing showed a
+// week-old snapshot and nobody could tell the difference. The two halves the identifier
+// is built from now ride along so `resolvePoDc` can fall back to them, and so a row
+// whose field is genuinely empty can be REPORTED rather than silently dropped.
+//
+// ⚠️ The SO join can return a fulfilment more than once; `resolveFulfilmentRows` folds
+// the duplicates and refuses to derive when two links disagree about the PO.
 export const ifSql = () => `
-  SELECT id, tranid, status, custbody_po_cd_identifier AS po_dc
-    FROM transaction
-   WHERE type='ItemShip'
-     AND custbody_po_cd_identifier IS NOT NULL
-     AND status <> 'C'`
+  SELECT t.id, t.tranid, t.status, t.custbody_po_cd_identifier AS po_dc,
+         so.otherrefnum AS so_po, c.custentity_dc_location AS cust_dc
+    FROM transaction t
+    LEFT JOIN nexttransactionlink ntl ON ntl.nextdoc = t.id
+    LEFT JOIN transaction so ON so.id = ntl.previousdoc AND so.type = 'SalesOrd'
+    LEFT JOIN customer c ON c.id = t.entity
+   WHERE t.type='ItemShip'
+     AND t.status <> 'C'
+     AND (t.custbody_po_cd_identifier IS NOT NULL
+          OR (so.otherrefnum IS NOT NULL AND c.custentity_dc_location IS NOT NULL))`
 
 // How many units the fulfilment itself says it is shipping — the other half of
 // the pack check (Nima, 2026-08-02).
@@ -185,10 +202,17 @@ export function mapEdiPackageRows({ ifs = [], packages = [], ifUnits = [] } = {}
 
 export async function fetchEdiPackagesLive() {
   if (!netsuiteConfigured()) return { ok: false, configured: false, rows: [] }
-  const ifs = await runSuiteQL(ifSql())
-  if (!ifs.ok) return { ok: false, error: `fulfilments: ${ifs.error || 'failed'}`, rows: [] }
+  const raw = await runSuiteQL(ifSql())
+  if (!raw.ok) return { ok: false, error: `fulfilments: ${raw.error || 'failed'}`, rows: [] }
+  // ⚠️ FOLD THE DUPLICATE SO LINKS AND RESOLVE THE IDENTIFIER BEFORE ANYTHING ELSE SEES
+  // THE ROWS. Everything downstream — the rollup, the pack check, the carton detail —
+  // reads `po_dc`, so resolving it once here is what keeps them from disagreeing.
+  const ifs = { ok: true, rows: resolveFulfilmentRows(raw.rows) }
+  // ⚠️ THE WARNING IS COMPUTED EVEN WHEN WE COULD FILL THE GAP OURSELVES. A derived
+  // value restores OUR view; the ASN is still built from the empty NetSuite field.
+  const missing = missingIdentifier(ifs.rows)
   const ids = ifs.rows.map((r) => r.id).filter(Boolean)
-  if (!ids.length) return { ok: true, rows: [], unparseableBoxes: [], orphanCartons: 0, ifCount: 0 }
+  if (!ids.length) return { ok: true, rows: [], unparseableBoxes: [], orphanCartons: 0, ifCount: 0, missingIdentifier: missing }
   // Deliberately SEQUENTIAL, not Promise.all (Nima, 2026-08-02). NetSuite
   // governs SuiteTalk by CONCURRENT requests, and that allowance is shared with
   // Celigo, whose integrations outrank this app. Running one query at a time
@@ -203,6 +227,7 @@ export async function fetchEdiPackagesLive() {
   return {
     ok: true, ...out, ifCount: ids.length, cartonCount: pk.rows.length,
     unitsError: un.ok ? null : (un.error || 'if-unit query failed'),
+    missingIdentifier: missing,
   }
 }
 
