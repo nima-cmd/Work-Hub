@@ -183,14 +183,28 @@ These were prerequisites — the Rack stores did not exist in NetSuite at all:
    Nothing in the EDI flow tests either record, so this cannot raise an error — it
    surfaces as money on an invoice.
 
-   ⚠️ **A file for this exists but has deliberately NOT been loaded.** It is a
-   tax-compliance record, not data entry. Two questions belong to whoever owns tax:
-   whether Nordstrom's blanket resale exemption covers the Rack stores at all, and
-   whether `1/1/2023` is a defensible valid-from for the **26 stores that do not open
-   until Fall 2026/2027**. Note that other customers on this record type carry real state
-   certificate numbers (`85-0727470`, `STS-16225339-05`) with real expiry dates;
-   Nordstrom's are an internal convention, which is what makes the shape replicable —
-   but replicable is not the same as correct.
+   **This has happened before, and the fix is known.** Every taxed full-line order is
+   dated **4/3/2026**; the certificates were created **4/7/2026**; no full-line order
+   since has carried tax. So the certificate is demonstrably what suppresses it — a
+   before/after in production, not an inference. In April nine of the ten taxed orders
+   were left `Closed` and never invoiced, so the tax never reached Nordstrom — **except
+   `SO11640` (store 584), which was `Billed` with `$1,505.46` of tax across 2 invoices
+   and should be checked.**
+
+   **A file for the 326 certificates is prepared.** It asserts no document: Nordstrom's
+   certificates are an internal label (`Nordstrom Exempt - <store>`), unlike other
+   customers on this record type who carry real state numbers (`85-0727470`,
+   `STS-16225339-05`) with real expiry dates. `1/1/2023` with no expiry is used to match
+   the existing 104 — and a wide window is the safer choice, since SuiteTax tests whether
+   the window covers the transaction date. Still needs a tax owner to confirm that
+   Nordstrom's blanket resale exemption extends to the Rack stores.
+
+   ⚠️ **This will recur for every new store.** 26 of the 326 do not open until Fall
+   2026/2027, and Nordstrom keeps opening them — this PO's own header reads
+   `RACK NEW STORE`. Nothing prompts the creation of a certificate and nothing errors
+   when one is missing, so the durable fix is a new-store checklist (customer → parent DC
+   → 3-digit store number → two addresses → tax registration → exemption certificate),
+   not this import. April was full-line; today was Rack. It is already the second time.
 
 2. **Does `HB - Orderful - 850` contain the same `slice(1, 4)`?** If it serves
    Bloomingdale's or ShopBop it needs the same guard. The guard is safe for their codes
