@@ -1,0 +1,877 @@
+{
+ "interchangeControlHeader": [
+  {
+   "authorizationInformationQualifier": "00",
+   "authorizationInformation": "          ",
+   "securityInformationQualifier": "00",
+   "securityInformation": "          ",
+   "interchangeIDQualifier": "01",
+   "interchangeSenderID": "007942915      ",
+   "interchangeIDQualifier1": "ZZ",
+   "interchangeReceiverID": "ODFLNAGHEDI    ",
+   "interchangeDate": "260829",
+   "interchangeTime": "0129",
+   "interchangeControlStandardsIdentifier": "U",
+   "interchangeControlVersionNumberCode": "00401",
+   "interchangeControlNumber": "000001702",
+   "acknowledgmentRequestedCode": "0",
+   "interchangeUsageIndicatorCode": "P",
+   "componentElementSeparator": ">"
+  }
+ ],
+ "functionalGroupHeader": [
+  {
+   "functionalIdentifierCode": "PO",
+   "applicationSendersCode": "007942915",
+   "applicationReceiversCode": "ODFLNAGHEDI",
+   "date": "20260829",
+   "time": "0129",
+   "groupControlNumber": "1702",
+   "responsibleAgencyCode": "X",
+   "versionReleaseIndustryIdentifierCode": "004010VICS"
+  }
+ ],
+ "transactionSets": [
+  {
+   "transactionSetHeader": [
+    {
+     "transactionSetIdentifierCode": "850",
+     "transactionSetControlNumber": "17020001"
+    }
+   ],
+   "beginningSegmentForPurchaseOrder": [
+    {
+     "transactionSetPurposeCode": "00",
+     "purchaseOrderTypeCode": "SA",
+     "purchaseOrderNumber": "50220600",
+     "date": "20260824"
+    }
+   ],
+   "currency": [
+    {
+     "entityIdentifierCode": "BY",
+     "currencyCode": "USD"
+    }
+   ],
+   "referenceInformation": [
+    {
+     "referenceIdentificationQualifier": "19",
+     "referenceIdentification": "RKST",
+     "description": "RACK STORES"
+    },
+    {
+     "referenceIdentificationQualifier": "DP",
+     "referenceIdentification": "0882"
+    },
+    {
+     "referenceIdentificationQualifier": "IA",
+     "referenceIdentification": "0005134548"
+    },
+    {
+     "referenceIdentificationQualifier": "PD",
+     "referenceIdentification": "RN",
+     "description": "RACK NEW STORE"
+    },
+    {
+     "referenceIdentificationQualifier": "TC",
+     "referenceIdentification": "00",
+     "description": "VENDOR PAYS NO FREIGHT"
+    },
+    {
+     "referenceIdentificationQualifier": "MR",
+     "referenceIdentification": "000"
+    },
+    {
+     "referenceIdentificationQualifier": "ZZ",
+     "description": "ALL NORDSTROM P.O.TERMS & CONDITIONS APPLY SEE WWW.NORDSTROMSUPPLIER.COM"
+    }
+   ],
+   "FOBRelatedInstructions": [
+    {
+     "shipmentMethodOfPaymentCode": "CC",
+     "locationQualifier": "OA",
+     "description": "US ORIGIN (AFTER LOADING ON EQUIPMENT)",
+     "locationQualifier1": "OA",
+     "description1": "US ORIGIN (AFTER LOADING ON EQUIPMENT)"
+    }
+   ],
+   "termsOfSaleDeferredTermsOfSale": [
+    {
+     "termsTypeCode": "05",
+     "termsBasisDateCode": "3",
+     "termsNetDays": "45",
+     "description": "NET 45 DAYS"
+    }
+   ],
+   "dateTimeReference": [
+    {
+     "dateTimeQualifier": "001",
+     "date": "20260904"
+    },
+    {
+     "dateTimeQualifier": "037",
+     "date": "20260828"
+    }
+   ],
+   "carrierDetailsRoutingSequenceTransitTime": [
+    {
+     "transportationMethodTypeCode": "M"
+    }
+   ],
+   "N1_loop": [
+    {
+     "partyIdentification": [
+      {
+       "entityIdentifierCode": "TO",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "0005189002"
+      }
+     ]
+    }
+   ],
+   "PO1_loop": [
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "1",
+       "quantity": "17",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "105",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470890424",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN06012LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "199.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "350"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "JET SETTER SMALL:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "0167",
+       "quantity": "3",
+       "identificationCode1": "0351",
+       "quantity1": "3",
+       "identificationCode2": "0371",
+       "quantity2": "3",
+       "identificationCode3": "0372",
+       "quantity3": "5",
+       "identificationCode4": "0378",
+       "quantity4": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0399"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "2",
+       "quantity": "9",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "105",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470890424",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN06012LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "199.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "350"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "JET SETTER SMALL:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "7742",
+       "quantity": "3",
+       "identificationCode1": "7760",
+       "quantity1": "3",
+       "identificationCode2": "7768",
+       "quantity2": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0799"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "3",
+       "quantity": "23",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "85.5",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470890431",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN04022LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "169.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "285"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "NOMAD SMALL HOBO:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "0167",
+       "quantity": "4",
+       "identificationCode1": "0351",
+       "quantity1": "3",
+       "identificationCode2": "0363",
+       "quantity2": "3",
+       "identificationCode3": "0370",
+       "quantity3": "4",
+       "identificationCode4": "0371",
+       "quantity4": "3",
+       "identificationCode5": "0372",
+       "quantity5": "3",
+       "identificationCode6": "0378",
+       "quantity6": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0399"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "4",
+       "quantity": "9",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "85.5",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470890431",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN04022LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "169.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "285"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "NOMAD SMALL HOBO:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "7742",
+       "quantity": "3",
+       "identificationCode1": "7760",
+       "quantity1": "3",
+       "identificationCode2": "7768",
+       "quantity2": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0799"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "5",
+       "quantity": "23",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "105",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470893500",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN03014LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "199.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "340"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "ST. BARTHS LARGE TOTE:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "0167",
+       "quantity": "3",
+       "identificationCode1": "0351",
+       "quantity1": "3",
+       "identificationCode2": "0363",
+       "quantity2": "5",
+       "identificationCode3": "0370",
+       "quantity3": "3",
+       "identificationCode4": "0371",
+       "quantity4": "2",
+       "identificationCode5": "0372",
+       "quantity5": "4",
+       "identificationCode6": "0378",
+       "quantity6": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0399"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "6",
+       "quantity": "9",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "105",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470893500",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN03014LD",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "199.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "340"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "ST. BARTHS LARGE TOTE:MOCHA:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "MOCHA"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "7742",
+       "quantity": "3",
+       "identificationCode1": "7760",
+       "quantity1": "3",
+       "identificationCode2": "7768",
+       "quantity2": "3"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0799"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "baselineItemData": [
+      {
+       "assignedIdentification": "7",
+       "quantity": "5",
+       "unitOrBasisForMeasurementCode": "EA",
+       "unitPrice": "90",
+       "basisOfUnitPriceCode": "PE",
+       "productServiceIDQualifier": "UP",
+       "productServiceID": "840470897829",
+       "productServiceIDQualifier1": "VA",
+       "productServiceID1": "SN03012FH",
+       "productServiceIDQualifier2": "IN",
+       "productServiceID2": "0"
+      }
+     ],
+     "CTP_loop": [
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "PRP",
+         "unitPrice": "179.97"
+        }
+       ]
+      },
+      {
+       "pricingInformation": [
+        {
+         "priceIdentifierCode": "RES",
+         "unitPrice": "300"
+        }
+       ]
+      }
+     ],
+     "PID_loop": [
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "08",
+         "agencyQualifierCode": "VI",
+         "description": "SMALL ST. BARTHS TOTE:TORTOISESHELL:ONE SIZE"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "73",
+         "agencyQualifierCode": "VI",
+         "description": "TORTOISESHELL"
+        }
+       ]
+      },
+      {
+       "productItemDescription": [
+        {
+         "itemDescriptionTypeCode": "F",
+         "productProcessCharacteristicCode": "74",
+         "agencyQualifierCode": "VI",
+         "description": "ONE SIZE"
+        }
+       ]
+      }
+     ],
+     "SAC_loop": [
+      {
+       "servicePromotionAllowanceOrChargeInformation": [
+        {
+         "allowanceOrChargeIndicatorCode": "N",
+         "agencyQualifierCode": "VI",
+         "agencyServicePromotionAllowanceOrChargeCode": "TC990101",
+         "referenceIdentification": "RH02"
+        }
+       ]
+      }
+     ],
+     "destinationQuantity": [
+      {
+       "unitOrBasisForMeasurementCode": "EA",
+       "identificationCodeQualifier": "92",
+       "identificationCode": "7760",
+       "quantity": "3",
+       "identificationCode1": "7768",
+       "quantity1": "2"
+      }
+     ],
+     "N1_loop": [
+      {
+       "partyIdentification": [
+        {
+         "entityIdentifierCode": "ST",
+         "name": "0799"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "CTT_loop": [
+    {
+     "transactionTotals": [
+      {
+       "numberOfLineItems": "7"
+      }
+     ]
+    }
+   ],
+   "transactionSetTrailer": [
+    {
+     "numberOfIncludedSegments": "81",
+     "transactionSetControlNumber": "17020001"
+    }
+   ]
+  }
+ ],
+ "href": "https://api.orderful.com/v3/transactions/1026744798/message"
+}
