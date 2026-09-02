@@ -53,16 +53,34 @@ turns out wrong.
 
 Ordered by how much they would matter if wrong.
 
-1. **⚠️ NONE OF THE 326 RACK CUSTOMERS HAS A TAX REGISTRATION. Every full-line store
-   does.** Measured: the 105 pre-existing Nordstrom store records carry **149** tax
-   registration rows; the 326 created today carry **0**. Store 730 Houston Galleria shows
-   `United States / Texas / Store / Exempt = Yes` — a resale exemption.
+1. **⚠️ THE 326 RACK CUSTOMERS HAVE NO TAX EXEMPTION CERTIFICATE. 104 of the 105
+   full-line stores do.** The exemption lives on a custom record,
+   **`STE Tax Exemption Certificate`** (`customrecord_ste_exemption_certificate`) — not
+   on the customer. Nordstrom's follow one uniform shape:
 
-   This was missed entirely: the store import replicated the primary fields, the address
-   sublist and the DC custom fields, but not this sublist. **Sales tax may therefore be
-   computed on invoices to Rack stores that should be exempt.** Nothing in the EDI flow
-   tests it, so it will not error — it will show up as money on an invoice. This is now
-   the most consequential open item and it is not fixed.
+   | | |
+   |---|---|
+   | Certificate Number | `Nordstrom Exempt - <3-digit store>` |
+   | State | the store's own state |
+   | Valid from | `1/1/2023` |
+   | Valid until | blank — no expiry |
+   | Blanket Exemption | `T` |
+
+   The `customerTaxRegistration` sublist is also empty on the Rack records (149 rows
+   across the 105 full-line stores, 0 across the 326).
+
+   ⚠️ **Sales tax may be computed on invoices to Rack stores that should be exempt.**
+   Nothing in the EDI flow tests either record, so this cannot raise an error — it
+   surfaces as money on an invoice.
+
+   ⚠️ **A file for this exists but has deliberately NOT been loaded.** It is a
+   tax-compliance record, not data entry. Two questions belong to whoever owns tax:
+   whether Nordstrom's blanket resale exemption covers the Rack stores at all, and
+   whether `1/1/2023` is a defensible valid-from for the **26 stores that do not open
+   until Fall 2026/2027**. Note that other customers on this record type carry real state
+   certificate numbers (`85-0727470`, `STS-16225339-05`) with real expiry dates;
+   Nordstrom's are an internal convention, which is what makes the shape replicable —
+   but replicable is not the same as correct.
 
 2. **The AP billing address copied from one record to 326 — now VERIFIED.**
    `Accounts Payable / Nordstrom / P.O. Box 870 / Seattle WA 98111` was read off store

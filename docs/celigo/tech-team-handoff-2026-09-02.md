@@ -163,16 +163,34 @@ These were prerequisites — the Rack stores did not exist in NetSuite at all:
 
 ## 8. Open items for the team
 
-1. **⚠️ THE 326 RACK CUSTOMERS HAVE NO TAX REGISTRATION; EVERY FULL-LINE STORE DOES.**
-   The 105 pre-existing Nordstrom store records carry **149** tax registration rows. The
-   326 created today carry **0**. Store 730 Houston Galleria shows
-   `United States / Texas / Store / Exempt = Yes` — a resale exemption.
+1. **⚠️ THE 326 RACK CUSTOMERS HAVE NO TAX EXEMPTION CERTIFICATE. 104 of the 105
+   full-line stores do.** The exemption lives on a custom record,
+   **`STE Tax Exemption Certificate`** (`customrecord_ste_exemption_certificate`) — not
+   on the customer. Nordstrom's follow one uniform shape:
 
-   The store import replicated the primary fields, the address sublist and the DC custom
-   fields, but not this sublist. **Sales tax may be computed on invoices to Rack stores
-   that should be exempt.** Nothing in the EDI flow tests it, so it will not raise an
-   error — it surfaces as money on an invoice. Needs someone who owns tax setup to decide
-   the correct registration per store and load it.
+   | | |
+   |---|---|
+   | Certificate Number | `Nordstrom Exempt - <3-digit store>` |
+   | State | the store's own state |
+   | Valid from | `1/1/2023` |
+   | Valid until | blank — no expiry |
+   | Blanket Exemption | `T` |
+
+   The `customerTaxRegistration` sublist is also empty on the Rack records (149 rows
+   across the 105 full-line stores, 0 across the 326).
+
+   ⚠️ **Sales tax may be computed on invoices to Rack stores that should be exempt.**
+   Nothing in the EDI flow tests either record, so this cannot raise an error — it
+   surfaces as money on an invoice.
+
+   ⚠️ **A file for this exists but has deliberately NOT been loaded.** It is a
+   tax-compliance record, not data entry. Two questions belong to whoever owns tax:
+   whether Nordstrom's blanket resale exemption covers the Rack stores at all, and
+   whether `1/1/2023` is a defensible valid-from for the **26 stores that do not open
+   until Fall 2026/2027**. Note that other customers on this record type carry real state
+   certificate numbers (`85-0727470`, `STS-16225339-05`) with real expiry dates;
+   Nordstrom's are an internal convention, which is what makes the shape replicable —
+   but replicable is not the same as correct.
 
 2. **Does `HB - Orderful - 850` contain the same `slice(1, 4)`?** If it serves
    Bloomingdale's or ShopBop it needs the same guard. The guard is safe for their codes
