@@ -1,0 +1,327 @@
+External ID,Addressee,Attention,Address 1,City,State,Zip,Country,Default Shipping,Default Billing
+NORDRACK-297,Nordstrom - 297 - CS Rack Warehouse,,5050 Chavenelle Rd,Dubuque,IA,52002,US,T,T
+NORDRACK-003,Nordstrom - 003 - Southcenter Square Rack,,"17200 Southcenter Pkwy, Ste 110",Tukwila,WA,98188,US,T,T
+NORDRACK-011,Nordstrom - 011 - Anchorage Rack,,680 E Northern Lights Blvd,Anchorage,AK,99503,US,T,T
+NORDRACK-014,Nordstrom - 014 - Factoria Square Rack,,3920 124th St SE,Bellevue,WA,98006,US,T,T
+NORDRACK-015,Nordstrom - 015 - Golde Creek Rack,,19500 Alderwood Mall Pkwy,Lynnwood,WA,98036,US,T,T
+NORDRACK-016,Nordstrom - 016 - Downtown Seattle Rack,,"400 Pine St, Ste 36",Seattle,WA,98101,US,T,T
+NORDRACK-017,Nordstrom - 017 - The Outlet Collection Rack,,"1101 Outlet Collection Dr SW,  Ste 1320",Auburn,WA,98001,US,T,T
+NORDRACK-022,Nordstrom - 022 - Clackamas Promenade Rack,,8930 SE Sunnyside Rd,Clackamas,OR,97015,US,T,T
+NORDRACK-027,Nordstrom - 027 - Tanasbourne Town Center Rack,,18100 NW Evergreen Pkwy,Beaverton,OR,97006,US,T,T
+NORDRACK-033,Nordstrom - 033 - Sugarhouse Rack,,2210 S 1300 E,Salt Lake City,UT,84106,US,T,T
+NORDRACK-036,Nordstrom - 036 - Park Meadows Rack,,8676 S Park Meadows Center Dr,Lone Tree,CO,80124,US,T,T
+NORDRACK-048,Nordstrom - 048 - Ward Village Shops Rack,,1170 Auahi St,Honolulu,HI,96814,US,T,T
+NORDRACK-071,Nordstrom - 071 - Comnons at South Towne Rack,,10379 S State St,Sandy,UT,84070,US,T,T
+NORDRACK-072,Nordstrom - 072 - Station Park Rack,,380 N Station Pkwy,Farmington,UT,84025,US,T,T
+NORDRACK-074,Nordstrom - 074 - University Crossing Rack,,360 E University Pkwy,Orem,UT,84058,US,T,T
+NORDRACK-109,Nordstrom - 109 - Spokane Valley Plaza Rack,,14018 E Indiana Ave,Spokane,WA,99216,US,T,T
+NORDRACK-110,Nordstrom - 110 - BelMar Rack,,393 S Vance St,Lakewood,CO,80226,US,T,T
+NORDRACK-111,Nordstrom - 111 - Northgate Rack,,"401 NE Northgate Way, Ste 304",Seattle,WA,98125,US,T,T
+NORDRACK-112,Nordstrom - 112 - Oakway Center Rack,,5 Oakway Center,Eugene,OR,97401,US,T,T
+NORDRACK-113,Nordstrom - 113 - Cascade Station Rack,,10159 NE Cascades Pkwy,Portland,OR,97220,US,T,T
+NORDRACK-120,Nordstrom - 120 - Tacoma Mall Rack,,"4502 S Steele St, Ste 1670",Tacoma,WA,98409,US,T,T
+NORDRACK-125,Nordstrom - 125 - Cascade Plaza Rack,,9175 SW Cascade Ave,Beaverton,OR,97008,US,T,T
+NORDRACK-130,Nordstrom - 130 - Boise Town Rack,,534 N Milwaukee St,Boise,ID,83704,US,T,T
+NORDRACK-135,Nordstrom - 135 - Twenty Ninth Street Rack,,"1601 29th St, Ste 1301",Boulder,CO,80301,US,T,T
+NORDRACK-136,Nordstrom - 136 - Cherry Creek Rack,,1505 S Colorado Blvd,Denver,CO,80222,US,T,T
+NORDRACK-137,Nordstrom - 137 - Chapel Hills East Rack,,7645 Academy Blvd N,Colorado Springs,CO,80920,US,T,T
+NORDRACK-138,Nordstrom - 138 - Lincoln Square Rack,,"500 Bellevue Way NE, Ste 145",Bellevue,WA,98004,US,T,T
+NORDRACK-139,Nordstrom - 139 - Totem Lake Rack,,12520 Totem Lake Blvd NE #120,Kirkland,WA,98034,US,T,T
+NORDRACK-140,Nordstrom - 140 - Foothills Mall Rack,,3050 S College Ave,Fort Collins,CO,80525,US,T,T
+NORDRACK-148,Nordstrom - 148 - The Orchard Rack,,14530 Delaware St,Westminster,CO,80023,US,T,T
+NORDRACK-150,Nordstrom - 150 - Tempe Marketplace Rack,,1900 E Rio Salado Pkwy,Tempe,AZ,85281,US,T,T
+NORDRACK-151,Nordstrom - 151 - Wilmot Plaza Rack,,6317 E Broadway Blvd,Tucson,AZ,85710,US,T,T
+NORDRACK-154,Nordstrom - 154 - San Tan Village Rack,,2090 E Williams Field Rd,Gilbert,AZ,85295,US,T,T
+NORDRACK-155,Nordstrom - 155 - Winrock Rack,,2100 Louisana Blvd NE,Albuquerque,NM,87110,US,T,T
+NORDRACK-160,Nordstrom - 160 - The Center at Rancho Niguel Rack,,27991 Greenfield Dr,Laguna Niguel,CA,92677,US,T,T
+NORDRACK-161,Nordstrom - 161 - Valencia Promenade Rack,,27095 McBean Pkwy,Santa Clarita,CA,91355,US,T,T
+NORDRACK-162,Nordstrom - 162 - El Segundo Plaza Rack,,720 S Pacific Coast Hwy,El Segundo,CA,90245,US,T,T
+NORDRACK-163,Nordstrom - 163 - Fig at 7th Rack,,"735 S Figueroa St, Ste 150",Los Angeles,CA,90017,US,T,T
+NORDRACK-164,Nordstrom - 164 - Porter Ranch Rack,,"20039 W Rinaldi St, Ste 120",Porter Ranch,CA,91326,US,T,T
+NORDRACK-165,Nordstrom - 165 - Marina Pacifica Mall Rack,,6274 E Pacific Coast Hwy,Long Beach,CA,90803,US,T,T
+NORDRACK-166,Nordstrom - 166 - The Shops at La Jolla Village Rack,,8875 Villa La Jolla Dr,La Jolla,CA,92037,US,T,T
+NORDRACK-167,Nordstrom - 167 - Cerritos Plaza Rack,,11111 183rd St,Cerritos,CA,90703,US,T,T
+NORDRACK-168,Nordstrom - 168 - The Market Place Rack,,2882 El Camino Real,Tustin,CA,92782,US,T,T
+NORDRACK-200,Nordstrom - 200 - Overland Crossing Rack,,12050 Metcalf Ave,Overland Park,KS,66213,US,T,T
+NORDRACK-217,Nordstrom - 217 - Southlands Rack,,"24101 E Orchard Rd, Unit A",Aurora,CO,80016,US,T,T
+NORDRACK-224,Nordstrom - 224 - Woodfield Rack,,1520 E Golf Rd,Schaumburg,IL,60173,US,T,T
+NORDRACK-229,Nordstrom - 229 - Village Square Rack,,199 Skokie Blvd,Northbrook,IL,60062,US,T,T
+NORDRACK-231,Nordstrom - 231 - Troy Market Place Rack,,822 E Big Beaver Rd,Troy,MI,48083,US,T,T
+NORDRACK-233,Nordstrom - 233 - Mall of America Rack,,324 W Market,Bloomington,MN,55425,US,T,T
+NORDRACK-241,Nordstrom - 241 - Legacy Village Rack,,25149 Cedar Rd,Lyndhurst,OH,44124,US,T,T
+NORDRACK-242,Nordstrom - 242 - Orland Park Place Rack,,140 Orland Park Place,Orland Park,IL,60462,US,T,T
+NORDRACK-243,Nordstrom - 243 - Rookwood Rack,,2692 Madison Rd,Cincinnati,OH,45208,US,T,T
+NORDRACK-244,Nordstrom - 244 - Shops at Orchard Place Rack,,9625 Skokie Blvd,Skokie,IL,60077,US,T,T
+NORDRACK-245,Nordstrom - 245 - Chicago Avenue Rack,,101 E Chicago Ave,Chicago,IL,60611,US,T,T
+NORDRACK-246,Nordstrom - 246 - Brentwood Square Rack,,1585 S Brentwood Blvd,St. Louis,MO,63144,US,T,T
+NORDRACK-247,Nordstrom - 247 - Rivers Edge Rack,,4036 E 82nd St,Indianapolis,IN,46250,US,T,T
+NORDRACK-248,Nordstrom - 248 - Orchard Corners Rack,,9540 Quivira Rd,Lenexa,KS,66215,US,T,T
+NORDRACK-249,Nordstrom - 249 - Manchester Highlands Rack,,100 Highlands Blvd Dr,Manchester,MO,63011,US,T,T
+NORDRACK-250,Nordstrom - 250 - Bradley Fair Wichita Rack,,"1800 N Rock Rd, Ste 130",Wichita,KS,67206,US,T,T
+NORDRACK-253,Nordstrom - 253 - Mellody Farm Rack,,"901 N Milwaukee Ave, Unit 600",Vernon Hills,IL,60061,US,T,T
+NORDRACK-256,Nordstrom - 256 - Woodbury Rack,,315 Radio Dr,Woodbury,MN,55125,US,T,T
+NORDRACK-264,Nordstrom - 264 - Harlem Irving Plaza Rack,,4250 N Harlem Ave,Norridge,IL,60706,US,T,T
+NORDRACK-265,Nordstrom - 265 - Shops on Main Rack,,185 US Hwy 41,Schererville,IN,46375,US,T,T
+NORDRACK-266,Nordstrom - 266 - Arborland Center Rack,,3547 Washtenaw Ave,Ann Arbor,MI,48104,US,T,T
+NORDRACK-267,Nordstrom - 267 - Great Lakes michigan Crossing Rack,,"4700 Baldwin Rd, Ste A102",Auburn Hills,MI,48326,US,T,T
+NORDRACK-268,Nordstrom - 268 - Lincoln Park Rack,,1551 N Sheffield Ave,Chicago,IL,60642,US,T,T
+NORDRACK-269,Nordstrom - 269 - Springbrook Prairie Rack,,2511 W 75th St,Naperville,IL,60540,US,T,T
+NORDRACK-270,Nordstrom - 270 - Oak Brook Place Rack,,2155 W 22nd St,Oak Brook,IL,60523,US,T,T
+NORDRACK-271,Nordstrom - 271 - Arbor Lakes Rack,,12745 Elm Creek Blvd,Maple Grove,MN,55369,US,T,T
+NORDRACK-272,Nordstrom - 272 - Mayfair Collection Rack,,11500 W Burleigh St,Wauwautosa,WI,53222,US,T,T
+NORDRACK-273,Nordstrom - 273 - Centerpointe Mall Rack,,3615 28th St SE,Grand Rapids,MI,49512,US,T,T
+NORDRACK-274,Nordstrom - 274 - The Shops at State and Washington Rack,,24 N State St,Chicago,IL,60602,US,T,T
+NORDRACK-275,Nordstrom - 275 - The Shoppes at Knollwood Rack,,8344 Highway 7,St. Louis Park,MN,55426,US,T,T
+NORDRACK-276,Nordstrom - 276 - Easton Market Rack,,3736 Eon Market,Columbus,OH,43219,US,T,T
+NORDRACK-277,Nordstrom - 277 - Crocker Park Rack,,30121 Detroit Rd,Westlake,OH,44145,US,T,T
+NORDRACK-278,Nordstrom - 278 - Sun Center Rack,,3702 W Dublin Granville Rd,Columbus,OH,43235,US,T,T
+NORDRACK-279,Nordstrom - 279 - The Greene Town Center Rack,,33 Greene Blvd,Beavercreek,OH,45440,US,T,T
+NORDRACK-280,Nordstrom - 280 - South Loop Rack,,1118 S Canal St,Chicago,IL,60607,US,T,T
+NORDRACK-281,Nordstrom - 281 - Shelbyville Road Plaza Rack,,"4600 Shelbyville Rd, Ste 620",Louisville,KY,40207,US,T,T
+NORDRACK-284,Nordstrom - 284 - The Plaza at Jordan Creek Rack,,320 S Jordan Creek Pkwy,West Des Moines,IA,50266,US,T,T
+NORDRACK-285,Nordstrom - 285 - Kildeer Village Square Rack,,"20393 N Rand Rd, Ste 104",Kildeer,IL,60074,US,T,T
+NORDRACK-286,Nordstrom - 286 - West Towne Crossing Rack,,7349 W Towne Way,Madison,WI,53719,US,T,T
+NORDRACK-288,Nordstrom - 288 - Novi West Oaks Rack,,43839 W Oaks Dr,Novi,MI,48377,US,T,T
+NORDRACK-289,Nordstrom - 289 - Fashion Outlet Rack,,"5220 Fashion Outlets Way, Ste 2325",Rosemont,IL,60018,US,T,T
+NORDRACK-328,Nordstrom - 328 - Chino Spectrum Towne Center Rack,,3849 Grand Ave,Chino,CA,91710,US,T,T
+NORDRACK-329,Nordstrom - 329 - Brea Union Plaza Rack,,2345 E Imperial Hwy,Brea,CA,92821,US,T,T
+NORDRACK-331,Nordstrom - 331 - Towne Center Rack,,44449 Town Center Way,Palm Desert,CA,92260,US,T,T
+NORDRACK-332,Nordstrom - 332 - Long Beach Exchange Rack,,4260 E Carons St,Long Beach,CA,90808,US,T,T
+NORDRACK-334,Nordstrom - 334 - Colonies Crossroads Rack,,1301 E 19th St,Upland,CA,91784,US,T,T
+NORDRACK-336,Nordstrom - 336 - Outlets at Orange Rack,,20 City Blvd W,Orange,CA,92868,US,T,T
+NORDRACK-337,Nordstrom - 337 - Laguna Hills Mall Rack,,23541 Calle De La Louisa,Laguna Hills,CA,92653,US,T,T
+NORDRACK-338,Nordstrom - 338 - Metro Pointe at South Coast Rack,,901 S Coast Dr,Costa Mesa,CA,92626,US,T,T
+NORDRACK-347,Nordstrom - 347 - Culver City Rack,,6000 Sepulveda Blvd,Culver City,CA,90230,US,T,T
+NORDRACK-350,Nordstrom - 350 - Glendale Fashion Center Rack,,227 N Glendale Ave,Glendale,CA,91206,US,T,T
+NORDRACK-351,Nordstrom - 351 - Beverly Connection Rack,,100 N La Cienega Blvd,Los Angeles,CA,90048,US,T,T
+NORDRACK-352,Nordstrom - 352 - Hastings Village Rack,,3363 E Foothill Blvd,Pasadena,CA,91109,US,T,T
+NORDRACK-354,Nordstrom - 354 - Burbank Empire Center Rack,,1601 N Victory Place,Burbank,CA,91504,US,T,T
+NORDRACK-356,Nordstrom - 356 - Edinger Plaza Rack,,7532 Edinger Ave,Huntington Beach,CA,92647,US,T,T
+NORDRACK-357,Nordstrom - 357 - Riverside Plaza Rack,,"3635 Riverside Plaza Dr, Ste 120",Riverside,CA,92506,US,T,T
+NORDRACK-358,Nordstrom - 358 - Topanga Rack,,21490 Victory Blvd,Woodland Hills,CA,91367,US,T,T
+NORDRACK-359,Nordstrom - 359 - West Covina Rack,,1415 Plaza Dr,West Covina,CA,91790,US,T,T
+NORDRACK-363,Nordstrom - 363 - Plaza Bonita Rack,,"3010 Plaza Bonita Rd, Ste 2036",National City,CA,91950,US,T,T
+NORDRACK-366,Nordstrom - 366 - The Shops at River Walk Rack,,"10650 Stockdale Hwy, Ste 300",Bakersfield,CA,93311,US,T,T
+NORDRACK-367,Nordstrom - 367 - The Shops at Town & Country Rack,,2073 E Camelback Rd,Phoenix,AZ,85016,US,T,T
+NORDRACK-368,Nordstrom - 368 - Commons at Temecula Rack,,40450 Winchester Rd,Temecula,CA,92591,US,T,T
+NORDRACK-369,Nordstrom - 369 - Carmel Mountain Plaza Rack,,"11940 Carmel Mtn Rd, Ste 100",San Diego,CA,92128,US,T,T
+NORDRACK-370,Nordstrom - 370 - South Bay Marketplace Rack,,1517 Hawthorne Blvd,Redondo Beach,CA,90278,US,T,T
+NORDRACK-371,Nordstrom - 371 - The Shops at Summerlin Rack,,2310 Park Center Dr,Las Vegas,NV,89135,US,T,T
+NORDRACK-372,Nordstrom - 372 - Esplanade Shopping Center Rack,,261 Esplanade Dr,Oxnard,CA,93033,US,T,T
+NORDRACK-373,Nordstrom - 373 - The Fountains at Farah Rack,,"8889 Gateway Blvd W, Ste 600",El Paso,TX,79925,US,T,T
+NORDRACK-374,Nordstrom - 374 - Ontario Mills Rack,,4750 E Mills Cir,Ontario,CA,91764,US,T,T
+NORDRACK-376,Nordstrom - 376 - Stephanie Street Rack,,"579 N Stephanie St, Ste A",Henderson,NV,89014,US,T,T
+NORDRACK-377,Nordstrom - 377 - Chandler Festival Rack,,2620 W Chandler Blvd,Chandler,AZ,85224,US,T,T
+NORDRACK-378,Nordstrom - 378 - Mission Valley Rack,,1640 Camino Del Rio N,San Diego,CA,92108,US,T,T
+NORDRACK-379,Nordstrom - 379 - Scottsdale Promenade Rack,,16245 N Scottsdale Rd,Scottsdale,AZ,85254,US,T,T
+NORDRACK-383,Nordstrom - 383 - Grand Plaza Rack,,173 S Las Posas Rd,San Marcos,CA,92069,US,T,T
+NORDRACK-388,Nordstrom - 388 - Arrowhead Crossing Rack,,7535 W Bell Rd,Peoria,AZ,85382,US,T,T
+NORDRACK-389,Nordstrom - 389 - The Corner Rack,,4320 N Oracle Rd,Tucson,AZ,85705,US,T,T
+NORDRACK-393,Nordstrom - 393 - Mountain Grove Rack,,27651 San Bernardino Ave,Redlands,CA,92374,US,T,T
+NORDRACK-396,Nordstrom - 396 - Janss Marketplace Rack,,145 W Hillcrest Dr,Thousand Oaks,CA,91360,US,T,T
+NORDRACK-400,Nordstrom - 400 - Sequoia Mall Rack,,"3501 S Mooney Blvd, Unit 110",Visalia,CA,93277,US,T,T
+NORDRACK-401,Nordstrom - 401 - Bridgepointe Shop Center Rack,,2280 Bridgepointe Pkwy,San Mateo,CA,94044,US,T,T
+NORDRACK-402,Nordstrom - 402 - Promenade at Sacramento Gateway Rack,,3561 N Freeway Blvd,Sacramento,CA,95834,US,T,T
+NORDRACK-403,Nordstrom - 403 - San Clemente Plaza Rack,,"550 Camino De Estrella, Ste B",San Clemente,CA,92672,US,T,T
+NORDRACK-405,Nordstrom - 405 - The Ridge Elk Grove Rack,,7430 Elk Grove Blvd,Elk Grove,CA,95757,US,T,T
+NORDRACK-411,Nordstrom - 411 - Canyon Springs Marketplace Rack,,2660 Canyon Springs Pkwy,Riverside,CA,92507,US,T,T
+NORDRACK-413,Nordstrom - 413 - NoHo West Rack,,"6150 Laurel Canyon Blvd, Ste 160",North Hollywood,CA,91606,US,T,T
+NORDRACK-414,Nordstrom - 414 - Anaheim Hills Festival Rack,,8140 E Santa Anna Canyon Rd,Anaheim,CA,92808,US,T,T
+NORDRACK-416,Nordstrom - 416 - Desert Ridge Marketplace Rack,,"21001 N Tatum Blvd, Ste 24",Desert Ridge,AZ,85050,US,T,T
+NORDRACK-428,Nordstrom - 428 - Daly City Rack,,152 Serramonte Center,Daly City,CA,94015,US,T,T
+NORDRACK-431,Nordstrom - 431 - San Leandro Rack,,1285 Marina Blvd,San Leandro,CA,94577,US,T,T
+NORDRACK-432,Nordstrom - 432 - Westgate Mall Rack,,1600 Saratoga Ave,San Jose,CA,95129,US,T,T
+NORDRACK-433,Nordstrom - 433 - Howe 'Bout Arden Center Rack,,"1600 Ethan Way, Ste 100",Sacramento,CA,95825,US,T,T
+NORDRACK-435,Nordstrom - 435 - East Bay Bridge Shopping Center Rack,,3839 Emery St,Emeryville,CA,94608,US,T,T
+NORDRACK-440,Nordstrom - 440 - Pinole Vista Crossing Rack,,1330 Fitzgerald Dr,Pinole,CA,94564,US,T,T
+NORDRACK-441,Nordstrom - 441 - Best in the West Rack,,2060 N Rainbow Blvd,Las Vegas,NV,89108,US,T,T
+NORDRACK-450,Nordstrom - 450 - Clovis Crossing Rack,,1085 Herndon Ave,Clovis,CA,93612,US,T,T
+NORDRACK-470,Nordstrom - 470 - Roseville Rack,,1196 Galleria Blvd,Roseville,CA,95678,US,T,T
+NORDRACK-471,Nordstrom - 471 - Fresno Rack,,7883 N Blackstone Ave,Fresno,CA,93720,US,T,T
+NORDRACK-472,Nordstrom - 472 - Ravenswood Rack,,1771 E Bayshore Ave,East Palo Alto,CA,94303,US,T,T
+NORDRACK-475,Nordstrom - 475 - Oakridge Rack,,925 Blossom Hill Rd,San Jose,CA,95123,US,T,T
+NORDRACK-476,Nordstrom - 476 - Persimmon Place Rack,,5300 Dublin Blvd,Dublin,CA,94568,US,T,T
+NORDRACK-477,Nordstrom - 477 - Redfield Promenade Rack,,4995 S Virginia St,Reno,NV,89502,US,T,T
+NORDRACK-478,Nordstrom - 478 - Pacific Commons Rack,,43706 Christy St,Fremont,CA,94538,US,T,T
+NORDRACK-479,Nordstrom - 479 - Sunvalley Shopping Center Rack,,703 Contra Costa Blvd,Pleasant Hill,CA,94523,US,T,T
+NORDRACK-481,Nordstrom - 481 - Palladio at Broadstone Rack,,440 Palladio Pkwy,Folsom,CA,95630,US,T,T
+NORDRACK-482,Nordstrom - 482 - Coddingtown Rack,,180 Coddingtown Center,Santa Rosa,CA,95401,US,T,T
+NORDRACK-483,Nordstrom - 483 - Vintage Oaks Rack,,212 Vintage Way,Novato,CA,94945,US,T,T
+NORDRACK-484,Nordstrom - 484 - Nut Tree Rack,,"1621 E Monte Vista Ave, Ste C",Vacaville,CA,95688,US,T,T
+NORDRACK-485,Nordstrom - 485 - Cooper Point Marketplace Rack,,"1200 Cooper Point Rd SW, Ste 102",Olympia,WA,98502,US,T,T
+NORDRACK-490,Nordstrom - 490 - Gilroy Crossing Rack,,6725 Camino Arroyo,Gilroy,CA,95020,US,T,T
+NORDRACK-491,Nordstrom - 491 - SLO Promenade Rack,,323 Madonna Rd,San Luis Obispo,CA,93405,US,T,T
+NORDRACK-497,Nordstrom - 497 - Valley Mall Union Gap Rack,,1740 E Washington Ave,Union Gap,WA,98903,US,T,T
+NORDRACK-509,Nordstrom - 509 - Rack at 31st & 6th,,865 Ave of the Americas,New York,NY,10001,US,T,T
+NORDRACK-515,Nordstrom - 515 - Union Square Rack,,60 E 14th St,New York,NY,10003,US,T,T
+NORDRACK-519,Nordstrom - 519 - City Center Rack,,3 City Place,White Plains,NY,10601,US,T,T
+NORDRACK-529,Nordstrom - 529 - The Gallery at Westbury Plaza Rack,,1040 Old Country Rd,Garden City,NY,11590,US,T,T
+NORDRACK-533,Nordstrom - 533 - Warwick Mall Rack,,400 Bald Hill Rd,Warwick,RI,02886,US,T,T
+NORDRACK-539,Nordstrom - 539 - Bergen Rack,,510 Bergen Town Center,Paramus,NJ,07652,US,T,T
+NORDRACK-541,Nordstrom - 541 - University Station Rack,,231 University Ave,Westwood,MA,02090,US,T,T
+NORDRACK-542,Nordstrom - 542 - Liberty Tree Rack,,50 Independence Way,Danvers,MA,01923,US,T,T
+NORDRACK-543,Nordstrom - 543 - Middlesex Commons Rack,,43 Middlesex Turnpike,Burlington,MA,01803,US,T,T
+NORDRACK-544,Nordstrom - 544 - Willow Grove Park Rack,,2500 W Moreland Rd,Willow Grove,PA,19090,US,T,T
+NORDRACK-545,Nordstrom - 545 - West Farm Shopping Center Rack,,1600 S E Rd,Farmington,CT,06032,US,T,T
+NORDRACK-546,Nordstrom - 546 - Shoppers World Rack,,1 Worcester Rd,Framingham,MA,01701,US,T,T
+NORDRACK-547,Nordstrom - 547 - Newbury Rack,,497 Boylston St,Boston,MA,02116,US,T,T
+NORDRACK-548,Nordstrom - 548 - Manhasset Center Rack,,1400 Northern Blvd,Manhasset,NY,11030,US,T,T
+NORDRACK-550,Nordstrom - 550 - The Shoppes at Blackstone Valley Rack,,70 Worcester Providence Turnpike,Millbury,MA,01527,US,T,T
+NORDRACK-551,Nordstrom - 551 - Chestnut Street Rack,,1700 Chestnut St,Philadelphia,PA,19103,US,T,T
+NORDRACK-552,Nordstrom - 552 - Maine Crossing Rack,,"200 Running Hill Rd, Ste 5",South Portland,ME,04106,US,T,T
+NORDRACK-553,Nordstrom - 553 - Braintree Rack,,"200 Grossman Dr, Ste 102",Braintree,MA,02184,US,T,T
+NORDRACK-554,Nordstrom - 554 - Boulevard Consumer Square Rack,,1579 Niagara Falls Blvd,Amherst,NY,14228,US,T,T
+NORDRACK-555,Nordstrom - 555 - Mercer Mall Rack,,3371 US Hwy 1,Lawrenceville,NJ,08648,US,T,T
+NORDRACK-610,Nordstrom - 610 - Presidential Markets Rack,,1905 Scenic Hwy N,Snellville,GA,30078,US,T,T
+NORDRACK-620,Nordstrom - 620 - Denton Crossing Rack,,"1800 S Loop 288, Ste 210",Denton,TX,76205,US,T,T
+NORDRACK-624,Nordstrom - 624 - Potomac Mills Rack,,2700 Potomac Mills Cir,Woodbridge,VA,22192,US,T,T
+NORDRACK-625,Nordstrom - 625 - Columbia Crossing Rack,,6141 Columbia Crossing Cir,Columbia,MD,21045,US,T,T
+NORDRACK-627,Nordstrom - 627 - Towson Rack,,700 Fairmount Ave,Towson,MD,21286,US,T,T
+NORDRACK-633,Nordstrom - 633 - Gaithersburg Rack,,15760 Shady Grove Rd,Gaithersburg,MD,20877,US,T,T
+NORDRACK-634,Nordstrom - 634 - King of Prussia Rack,,101 Town Square Pl,King of Prussia,PA,19406,US,T,T
+NORDRACK-640,Nordstrom - 640 - Fair Lakes Promenade Rack,,12199 Fair Lakes Promenade Dr,Fairfax,VA,22033,US,T,T
+NORDRACK-641,Nordstrom - 641 - Carolina Pavilion Rack,,9563 South Blvd,Charlotte,NC,28273,US,T,T
+NORDRACK-642,Nordstrom - 642 - Cherry Hill Garden State Park Rack,,"951 Haddonfield Rd, Ste A",Cherry Hill,NJ,08002,US,T,T
+NORDRACK-643,Nordstrom - 643 - Annapolis Harbour Center Rack,,2540 Solomons Island Rd,Annapolis,MD,21402,US,T,T
+NORDRACK-644,Nordstrom - 644 - Tysons Corner Rack,,"8027 Leesburg Pike, Ste 101",Vienna,VA,22182,US,T,T
+NORDRACK-645,Nordstrom - 645 - Christiana Fashion Center Rack,,2400 Fashion Center Blvd,Newark,DE,19702,US,T,T
+NORDRACK-646,Nordstrom - 646 - Livingston Center Rack,,530 W Mount Pleasant Ave,Livingston,NJ,07039,US,T,T
+NORDRACK-647,Nordstrom - 647 - Rockaway Commons Rack,,343 Mount Hope Ave,Rockaway,NJ,07801,US,T,T
+NORDRACK-648,Nordstrom - 648 - Hamilton Crossings Rack,,"750 N Krocks Rd, Ste 303",Allentown,PA,18106,US,T,T
+NORDRACK-649,Nordstrom - 649 - Wayne Town Center Rack,,141 State Route 23,Wayne,NJ,07470,US,T,T
+NORDRACK-650,Nordstrom - 650 - Crossroads at Eatontown Rack,,231 Highway 35,Eatontown,NJ,07724,US,T,T
+NORDRACK-651,Nordstrom - 651 - Chimney Rock Rack,,362 Chimney Rock Rd,Bound Brook,NJ,08805,US,T,T
+NORDRACK-652,Nordstrom - 652 - Shoppes at Belmont Rack,,1585 Fruitville Pike,Lancaster,PA,17601,US,T,T
+NORDRACK-656,Nordstrom - 656 - Lincoln Plaza Rack,,"2424 E Lincoln Hwy, Ste 500",Langhorne,PA,19047,US,T,T
+NORDRACK-658,Nordstrom - 658 - Terrace at Hamilton Place Rack,,"2220 Hamilton Place Blvd, Ste 126",Chattanooga,TN,37421,US,T,T
+NORDRACK-660,Nordstrom - 660 - Woodmore Towne Center Rack,,"2700 Campus Way N, Ste 100",Lanham,MD,20706,US,T,T
+NORDRACK-661,Nordstrom - 661 - Canton Crossing Rack,,3967 Boston St,Baltimore,MD,21224,US,T,T
+NORDRACK-670,Nordstrom - 670 - Dulles Town Crossing Rack,,45575 Dulles Eastern Plaza,Sterling,VA,20166,US,T,T
+NORDRACK-671,Nordstrom - 671 - Pentagon Center Rack,,"1201 S Hayes St, Ste A",Arlington,VA,22202,US,T,T
+NORDRACK-673,Nordstrom - 673 - Downtown DC Rack,,"1800 L St NW, Ste 102",Washington,DC,20036,US,T,T
+NORDRACK-674,Nordstrom - 674 - Springfield Town Center Rack,,6501 Springfield Mall,Springfield,VA,22150,US,T,T
+NORDRACK-675,Nordstrom - 675 - Metro Center Rack,,"555 12th St NW, Front 1",Washington,DC,20004,US,T,T
+NORDRACK-676,Nordstrom - 676 - The Block Northway Rack,,8031 McKnight Rd,Pittsburgh,PA,15237,US,T,T
+NORDRACK-677,Nordstrom - 677 - Pembroke Mall Rack,,4588 Virginia Beach Blvd,Virginia Beach,VA,23462,US,T,T
+NORDRACK-686,Nordstrom - 686 - Northwoods Rack,,18134 San Pedro Ave,San Antonio,TX,78232,US,T,T
+NORDRACK-688,Nordstrom - 688 - Bandera Pointe Rack,,11711 Bandera Rd,San Antonio,TX,78250,US,T,T
+NORDRACK-691,Nordstrom - 691 - The Village at Allen Rack,,"170 E Stacy Rd, Ste 2130",Allen,TX,75002,US,T,T
+NORDRACK-692,Nordstrom - 692 - Delray Beach Rack,,"1855 S Federal Hwy, Ste 514",Delray Beach,FL,33483,US,T,T
+NORDRACK-700,Nordstrom - 700 - Barrett Place Rack,,860 Cobb Place Blvd NW,Kennesaw,GA,30144,US,T,T
+NORDRACK-708,Nordstrom - 708 - Memphis Rack,,"4572 Poplar Ave, Ste 109",Memphis,TN,38117,US,T,T
+NORDRACK-709,Nordstrom - 709 - The Centre at Preston Ridge Rack,,"3241 Preston Rd, Ste 1402",Frisco,TX,75034,US,T,T
+NORDRACK-711,Nordstrom - 711 - Bowman Place Rack,,1110 Bowman Rd,Mt. Pleasant,SC,29464,US,T,T
+NORDRACK-712,Nordstrom - 712 - 1600 Commons Rack,,1540 N Federal Hwy,Ft. Lauderdale,FL,33304,US,T,T
+NORDRACK-713,Nordstrom - 713 - Portofino Shopping Center Rack,,"19075 Interstate 45 South, Ste 106",Shenandoah,TX,77385,US,T,T
+NORDRACK-714,Nordstrom - 714 - Winter Park Rack,,"1090 N Orlando Ave, Ste 101",Winter Park,FL,32609,US,T,T
+NORDRACK-715,Nordstrom - 715 - The Parke Rack,,"5001 Hwy 183A Toll Rd, Ste C1100",Cedar Park,TX,78613,US,T,T
+NORDRACK-716,Nordstrom - 716 - Riverwalk Rack,,"500 Port of New Orleans Place, Ste 245",New Orleans,LA,70130,US,T,T
+NORDRACK-717,Nordstrom - 717 - Ambassador Plaza Rack,,"111 Meadow Farm Rd, Ste 140",Lafayette,LA,70508,US,T,T
+NORDRACK-719,Nordstrom - 719 - Gallery on the Parkway Rack,,"13900 Dallas Pkwy, Ste 300",Dallas,TX,75240,US,T,T
+NORDRACK-721,Nordstrom - 721 - Baybrook Square Rack,,1211 W Bay Area Blvd,Webster,TX,77598,US,T,T
+NORDRACK-727,Nordstrom - 727 - Preston Shepard Place Rack,,1701 D-1 Preston Rd,Plano,TX,75093,US,T,T
+NORDRACK-734,Nordstrom - 734 - Rim Rack,,5823 Worth Pkwy,San Antonio,TX,78257,US,T,T
+NORDRACK-735,Nordstrom - 735 - The Shops at Southlake Rack,,1445 E Southlake Blvd,Southlake,TX,76092,US,T,T
+NORDRACK-736,Nordstrom - 736 - Gateway Rack,,"9607 Research Blvd, Ste 200",Austin,TX,78759,US,T,T
+NORDRACK-738,Nordstrom - 738 - Park Lane Rack,,8050 Park Lane,Dallas,TX,75231,US,T,T
+NORDRACK-739,Nordstrom - 739 - Parks at Arlington Rack,,"3865 S Cooper St, Ste 6001",Arlington,TX,76015,US,T,T
+NORDRACK-740,Nordstrom - 740 - Sunset Valley Rack,,"5601 Brodie Lane, Ste 700",Sunset Valley,TX,78745,US,T,T
+NORDRACK-741,Nordstrom - 741 - Centre at Post Oak Rack,,"5000 Wheimer Rd, Ste 500",Houston,TX,77056,US,T,T
+NORDRACK-743,Nordstrom - 743 - Promenade Shops Rack,,20669 Biscayne Blvd,Miami,FL,33180,US,T,T
+NORDRACK-744,Nordstrom - 744 - Market at Town Center Rack,,2665 Town Center Blvd N,Sugarland,TX,77479,US,T,T
+NORDRACK-745,Nordstrom - 745 - Alamo Quarry Rack,,255 E Basse Rd,San Antonio,TX,78209,US,T,T
+NORDRACK-747,Nordstrom - 747 - Willowbrook Mall Rack,,8000 Willowbrook Mall,Houston,TX,77070,US,T,T
+NORDRACK-748,Nordstrom - 748 - Village Plaza at Bunker Hill Rack,,9714 Katy Fwy,Houston,TX,77055,US,T,T
+NORDRACK-749,Nordstrom - 749 - Woodland Plaza Rack,,8722 E 71st St,Tulsa,OK,74133,US,T,T
+NORDRACK-754,Nordstrom - 754 - Renaissance Center Rack,,6807 Fayetteville Rd,Durham,NC,27713,US,T,T
+NORDRACK-755,Nordstrom - 755 - University Commons Rack,,1400 Glades Rd,Boca Raton,FL,33431,US,T,T
+NORDRACK-756,Nordstrom - 756 - The Markets at Town Center Rack,,4924 Big Island Dr,Jacksonville,FL,32246,US,T,T
+NORDRACK-757,Nordstrom - 757 - Mercato Rack,,9100 Strada Place,Naples,FL,34108,US,T,T
+NORDRACK-758,Nordstrom - 758 - Brentwood Place Shopping Center Rack,,330 Franklin Rd,Brentwood,TN,37027,US,T,T
+NORDRACK-764,Nordstrom - 764 - Mall of Georgia Crossing Rack,,3205 Woodward Crossing Blvd,Buford,GA,30519,US,T,T
+NORDRACK-771,Nordstrom - 771 - Sawgrass Mills Rack,,2604 Sawgrass Mills Cir,Sunrise,FL,33323,US,T,T
+NORDRACK-777,Nordstrom - 777 - Miracle Marketplace Rack,,3301 Coral Way,Miami,FL,33145,US,T,T
+NORDRACK-778,Nordstrom - 778 - Millenia Crossing Rack,,4036 Eastgate Dr,Orlando,FL,32839,US,T,T
+NORDRACK-779,Nordstrom - 779 - Kendall Town & Country Rack,,"8525 Mills Dr, Ste 306",Kendall,FL,33183,US,T,T
+NORDRACK-781,Nordstrom - 781 - Tampa Rack,,1702 N Dale Mabry Hwy,Tampa,FL,33607,US,T,T
+NORDRACK-782,Nordstrom - 782 - Buckhead Station Rack,,3495 Buckhead Loop NE,Atlanta,GA,30326,US,T,T
+NORDRACK-783,Nordstrom - 783 - North Point Market Center Rack,,6200 N Point Pkwy,Alpharetta,GA,30022,US,T,T
+NORDRACK-784,Nordstrom - 784 - Palm Beach Outlets Rack,,1865 Palm Beach Lakes Blvd,West Palm Beach,FL,33401,US,T,T
+NORDRACK-785,Nordstrom - 785 - Belle Isle Station Rack,,1741 Belle Isle Blvd,Oklahoma City,OK,73118,US,T,T
+NORDRACK-786,Nordstrom - 786 - Shoppes at University Town Center Rack,,8551 Cooper Creek Blvd,University Park,FL,34201,US,T,T
+NORDRACK-787,Nordstrom - 787 - River Ridge Shopping Center Rack,,339 Summit Blvd,Birmingham,AL,35242,US,T,T
+NORDRACK-788,Nordstrom - 788 - Perimeter Expo Rack,,1201 Hammond Dr NE,Dunwoody,GA,30346,US,T,T
+NORDRACK-791,Nordstrom - 791 - Harbison Court Rack,,278 Harbison Blvd,Columbia,SC,29212,US,T,T
+NORDRACK-792,Nordstrom - 792 - Magnolia Park Rack,,1025 Woodruff Rd,Greenville,SC,29607,US,T,T
+NORDRACK-793,Nordstrom - 793 - Countryside Mall Rack,,2435 State Rd 580,Clearwater,FL,33761,US,T,T
+NORDRACK-796,Nordstrom - 796 - Lake Brandon Plaza Rack,,11201 Causeway Blvd,Brandon,FL,33511,US,T,T
+NORDRACK-797,Nordstrom - 797 - The Shops at Midtown Miami Rack,,3201 N Miami Ave,Miami,FL,33127,US,T,T
+NORDRACK-798,Nordstrom - 798 - The Mall of Louisiana Rack,,9330 Mall of Louisiana Blvd,Baton Rouge,LA,70836,US,T,T
+NORDRACK-1003,Nordstrom - 1003 - The Village at Meridian Rack,,"2260 N Eagle Rd, Ste 120",Meridian,ID,83646,US,T,T
+NORDRACK-1015,Nordstrom - 1015 - Tri Citites Center Rack,,"7411 W Canal Dr, Ste K",Kennewick,WA,99336,US,T,T
+NORDRACK-1018,Nordstrom - 1018 - Northpointe Plaza Rack,,9612 N Newport Hwy,Spokane,WA,99218,US,T,T
+NORDRACK-2221,Nordstrom - 2221 - Danada Square East Rack,,71 Danada Square E,Wheaton,IL,60189,US,T,T
+NORDRACK-2223,Nordstrom - 2223 - Randal Square Rack,,1580 S Randall Rd,Geneva,IL,60134,US,T,T
+NORDRACK-2224,Nordstrom - 2224 - Bloomingdale Court Rack,,362 W Army Trail Rd #230,Bloomingdale,IL,60108,US,T,T
+NORDRACK-2235,Nordstrom - 2235 - Shoppes at Stadium Rack,,"201 N Stadium Blvd, Ste 105",Columbia,MO,65203,US,T,T
+NORDRACK-2242,Nordstrom - 2242 - Village Pointe Rack,,255 N 170th St,Omaha,NE,68118,US,T,T
+NORDRACK-2243,Nordstrom - 2243 - Fischer Marketplace Rack,,14910 Florance Trl,Apple Valley,MN,55124,US,T,T
+NORDRACK-2261,Nordstrom - 2261 - Macedonia Gateway Rack,,"500 E Aurora Rd, Unit 2",Macedonia,OH,44056,US,T,T
+NORDRACK-2262,Nordstrom - 2262 - Deerfield Towne Center Rack,,5800 Deerfield Blvd,Mason,OH,45040,US,T,T
+NORDRACK-2263,Nordstrom - 2263 - Hamilton Town Center Rack,,"14139 Town Center Blvd, Ste 800",Noblesville,IN,46060,US,T,T
+NORDRACK-2264,Nordstrom - 2264 - The Venue at Belden Rack,,3939 Everhard Rd NW,Canton,OH,44709,US,T,T
+NORDRACK-2265,Nordstrom - 2265 - Montrose Plaza Rack,,3977 Medina Rd,Akron,OH,44333,US,T,T
+NORDRACK-2281,"Nordstrom - 2281 - Hunter's Square Rack (Farmington Hills, MI)",,5050 Chavenelle Rd,Dubuque,IA,52002,US,T,T
+NORDRACK-3341,Nordstrom - 3341 - The Village Walk Rack,,"18700 W Ventura Blvd, Ste 190A",Tarzana,CA,91356,US,T,T
+NORDRACK-3361,Nordstrom - 3361 - Pacific Coast Plaza Rack,,2168 Vista Way,Oceanside,CA,92054,US,T,T
+NORDRACK-3362,Nordstrom - 3362 - Clairemont Town Square Rack,,4829 Clairemont Dr,San Diego,CA,92117,US,T,T
+NORDRACK-3363,Nordstrom - 3363 - El Camino Promenade Rack,,222 N El Camino Real,Encinitas,CA,92024,US,T,T
+NORDRACK-3716,Nordstrom - 3716 - Las Tiendas Shopping Center Rack,,"700 E Expwy 83, Ste 200",McAllen,TX,78503,US,T,T
+NORDRACK-3719,Nordstrom - 3719 - Highlands of Flower Mound Rack,,"6101 Long Prairie Rd, Ste 500",Flower Mound,TX,75028,US,T,T
+NORDRACK-3721,Nordstrom - 3721 - Meryerland Plaza Rack,,100 Meyerland Plaza Mall,Houston,TX,77096,US,T,T
+NORDRACK-3722,Nordstrom - 3722 - Westchase Shopping Center Rack,,10885 Westheimer Rd,Houston,TX,77042,US,T,T
+NORDRACK-3724,Nordstrom - 3724 - The Gates of Prosper Rack,,"1191 Gates Pkwy, Ste 200",Prosper,TX,75078,US,T,T
+NORDRACK-3726,Nordstrom - 3726 - West End Center Rack,,2624 W Loop 289,Lubbock,TX,79407,US,T,T
+NORDRACK-3729,Nordstrom - 3729 - Elmwood Shopping Center Rack,,"1002 S Clearview Pkwy, Ste B",Harahan,LA,70123,US,T,T
+NORDRACK-3731,Nordstrom - 3731 - Denver West Village Rack,,14357 W Colfax Ave,Lakewood,CO,80401,US,T,T
+NORDRACK-3732,Nordstrom - 3732 - Harvest Junction Rack,,"205 Ken Pratt Blvd, Ste 240",Longmont,CO,80501,US,T,T
+NORDRACK-3733,Nordstrom - 3733 - Junction Commons Rack,,"6699 N Landmark Dr, Ste E100",Park City,UT,84098,US,T,T
+NORDRACK-3735,Nordstrom - 3735 - Dillon Ridge Rack,,318 Dillon Ridge Rd,Dillon,CO,80435,US,T,T
+NORDRACK-3761,Nordstrom - 3761 - Queen Creek Marketplace Rack,,21258 S Ellsworth Loop Rd,Queen Creek,AZ,85142,US,T,T
+NORDRACK-3762,Nordstrom - 3762 - Prasada North Rack,,14067 N Prasada Pkwy,Surprise,AZ,85388,US,T,T
+NORDRACK-4421,Nordstrom - 4421 - The Davis Collection Rack,,"835 Russell Blvd, Ste 150",Davis,CA,95616,US,T,T
+NORDRACK-5501,Nordstrom - 5501 - The Shops at SunVet Rack,,"5801 Sunrise Hwy, Ste B8-700",Holbrook,NY,11741,US,T,T
+NORDRACK-5502,Nordstrom - 5502 - Smith Haven Plaza Rack,,2041 Smith Haven Plz,Lake Grove,NY,11755,US,T,T
+NORDRACK-5511,Nordstrom - 5511 - Gardiner Manor Mall Rack,,854 Sunrise Hwy,Bay Shore,NY,11706,US,T,T
+NORDRACK-5521,Nordstrom - 5521 - Manalapan Commons Rack,,"13 US-9, Space 1A",Manalapan Township,NJ,07726,US,T,T
+NORDRACK-5522,Nordstrom - 5522 - Deptford Town Center Rack,,1775 Deptford Center Rd,Deftford,NJ,08096,US,T,T
+NORDRACK-5523,Nordstrom - 5523 - Willow Ridge Rack,,"740 NJ Rte 73 S, Ste 740",Marlton,NJ,08053,US,T,T
+NORDRACK-5524,Nordstrom - 5524 - Brunswick Square Rack,,"755 State Rte 18, Ste N102",East Brunswick,NJ,08816,US,T,T
+NORDRACK-5525,Nordstrom - 5525 - Interstate Shopping Center Rack,,255 Interstate Shop Center,Ramsey,NJ,07446,US,T,T
+NORDRACK-5531,Nordstrom - 5531 - Royal Ridge Center Rack,,213 Daniel Webster Hwy,Nashua,NH,03060,US,T,T
+NORDRACK-5543,Nordstrom - 5543 - Mansfield Crossing Rack,,280 School St Ste I-100,Mansfield,MA,02048,US,T,T
+NORDRACK-5548,Nordstrom - 5548 - Colony Place Rack,,242 Colony Pl,Plymouth,MA,02360,US,T,T
+NORDRACK-5549,Nordstrom - 5549 - Landing at Hyannis Rack,,790 Lyannough Rd,Hyannis,MA,02601,US,T,T
+NORDRACK-6601,Nordstrom - 6601 - Settlers Market Rack,,"5225 Settlers Market Blvd, Ste 180",Williamsburg,VA,23188,US,T,T
+NORDRACK-6621,Nordstrom - 6621 - Main Street At Exton Rack,,"108 Bartlett Ave, Ste 100",Exton,PA,19341,US,T,T
+NORDRACK-6622,Nordstrom - 6622 - Promenade at Granite Run Rack,,"1103 W. Baltimore Pike, Ste E",Media,PA,19063,US,T,T
+NORDRACK-6626,Nordstrom - 6626 - Congressional Plaza Rack,,1683 Rockville Pike,Rockville,MD,20852,US,T,T
+NORDRACK-7742,Nordstrom - 7742 - The Plaza at Citrus Park Rack,,12601 Citrus Plaza Dr,Tampa,FL,33625,US,T,T
+NORDRACK-7751,Nordstrom - 7751 - Mooresville crossing Rack,,627 River Hwy,Mooresville,NC,28117,US,T,T
+NORDRACK-7752,Nordstrom - 7752 - Triangle Town Place Rack,,"3604 Sumner Blvd, Ste 104",Raleigh,NC,27616,US,T,T
+NORDRACK-7753,Nordstrom - 7753 - Cool Springs Market Rack,,2000 Mallory Ln,Franklin,TN,37067,US,T,T
+NORDRACK-7754,Nordstrom - 7754 - Sycamore Commons Rack,,"10530 NE Parkway, Ste K",Matthews,NC,28105,US,T,T
+NORDRACK-7755,Nordstrom - 7755 - Park West Village Rack,,3121 Market Center Dr,Morrisville,NC,27560,US,T,T
+NORDRACK-7756,Nordstrom - 7756 - Pinnacle at Turkey Creek Rack,,11417 Parkside Dr,Farragut,TN,37934,US,T,T
+NORDRACK-7760,Nordstrom - 7760 - Pompano Citi Centere Rack,,1440 NE 23rd St,Pompano Beach,FL,32609,US,T,T
+NORDRACK-7761,Nordstrom - 7761 - South Beach Regional Rack,,3818 3rd St S,Jacksonville Beach,FL,32250,US,T,T
+NORDRACK-7762,Nordstrom - 7762 - Bell Tower Shops Rack,,"13499 S Cleveland Ave, Ste 200",Ft. Meyers,FL,33907,US,T,T
+NORDRACK-7763,Nordstrom - 7763 - Pine Ridge Square Rack,,4631 N University Dr,Coral Springs,FL,33067,US,T,T
+NORDRACK-7764,Nordstrom - 7764 - The Avenue Viera Rack,,"2291 Town Center Ave, Ste 101",Melbourne,FL,32940,US,T,T
+NORDRACK-7766,Nordstrom - 7766 - Lakeside Village Rack,,1500 Town Center Dr,Lakeland,FL,33803,US,T,T
+NORDRACK-7767,Nordstrom - 7767 - Coconut Point Rack,,8020 Mediterranean Dr,Estero,FL,33928,US,T,T
+NORDRACK-7768,Nordstrom - 7768 - Lake Nona West Rack,,6015 Lake Nona Blvd,Orlando,FL,32827,US,T,T
+NORDRACK-7769,Nordstrom - 7769 - Sarasota Pavillion Rack,,6567 S Tamiami Trl,Sarasota,FL,34231,US,T,T
+NORDRACK-7771,Nordstrom - 7771 - Johns Creek Town Center Rack,,"3630 Peachtree Pkwy, Ste 100",Suwanee,GA,30024,US,T,T
+NORDRACK-7773,Nordstrom - 7773 - Atlantic Station Rack,,1374 Atlantic Dr NW,Atlanta,GA,30363,US,T,T
+NORDRACK-7785,Nordstrom - 7785 - New Towne Plaza Rack,,44740 Ford Rd,Canton,MI,48187,US,T,T
