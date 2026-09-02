@@ -153,31 +153,45 @@ These were prerequisites — the Rack stores did not exist in NetSuite at all:
   minimum), matching all 363 pre-existing Nordstrom stores.
 - **Two addresses each**: the store's own street address as **default shipping**, and
   Nordstrom AP (`Accounts Payable / Nordstrom / P.O. Box 870 / Seattle WA 98111`) as
-  **default billing** — copied from the pattern on store 220. Celigo's *Create Sales
-  Order* step requires both `isdefaultshipping` and `isdefaultbilling` to resolve.
+  **default billing**. Celigo's *Create Sales Order* step requires both
+  `isdefaultshipping` and `isdefaultbilling` to resolve. The AP address was read off store
+  220 and **verified identical on 425 Valley Fair (DC 499) and 730 Houston Galleria
+  (DC 799)** before being relied on.
+- ⚠️ **No tax registrations were created** — see item 1 below.
 - External ID convention (new; all 102 pre-existing Nordstrom records have it empty):
   `NORDRACK-<3-digit store>`.
 
 ## 8. Open items for the team
 
-1. **Does `HB - Orderful - 850` contain the same `slice(1, 4)`?** If it serves
+1. **⚠️ THE 326 RACK CUSTOMERS HAVE NO TAX REGISTRATION; EVERY FULL-LINE STORE DOES.**
+   The 105 pre-existing Nordstrom store records carry **149** tax registration rows. The
+   326 created today carry **0**. Store 730 Houston Galleria shows
+   `United States / Texas / Store / Exempt = Yes` — a resale exemption.
+
+   The store import replicated the primary fields, the address sublist and the DC custom
+   fields, but not this sublist. **Sales tax may be computed on invoices to Rack stores
+   that should be exempt.** Nothing in the EDI flow tests it, so it will not raise an
+   error — it surfaces as money on an invoice. Needs someone who owns tax setup to decide
+   the correct registration per store and load it.
+
+2. **Does `HB - Orderful - 850` contain the same `slice(1, 4)`?** If it serves
    Bloomingdale's or ShopBop it needs the same guard. The guard is safe for their codes
    (`SC` is 2 characters; `SDF4` does not start with `0`) — but the flow list should be
    checked rather than assumed. **This was not verified.**
-2. **Is `HB - EDI - Nordstrom's 850s` used by any flow other than this one?** Also not
+3. **Is `HB - EDI - Nordstrom's 850s` used by any flow other than this one?** Also not
    verified.
-3. **`custentity_hb_edi_store_number` is fed from the same `store` field** (mapping:
+4. **`custentity_hb_edi_store_number` is fed from the same `store` field** (mapping:
    `store` → *EDI Store Number*). If the truncation ran for eleven months, that field has
    been recording truncated codes throughout — which would explain records such as
    `Nordstrom - 220 - Michigan Avenue` holding `0334` (334 is Colonies Crossroads **Rack**,
    a different store). Worth deciding whether it should hold the raw transmitted code.
-4. **Historical exposure.** 30 of the 68 four-digit Rack stores truncate onto a customer
+5. **Historical exposure.** 30 of the 68 four-digit Rack stores truncate onto a customer
    that exists, so they never errored — they would have created orders against the wrong
    store, as 7760 did. The fix **prevents** this going forward; it does not repair past
    occurrences. Recent Rack orders are worth a scan for orders sitting on full-line
    stores. Examples of the collision: `7760`→`760` Perimeter Mall · `1003`→`003`
    Southcenter Square Rack · `5524`→`524` Roosevelt Field · `6601`→`601` Wexner Companies.
-5. **A more durable design:** point the customer lookup at `custentity_hb_edi_store_number`
+6. **A more durable design:** point the customer lookup at `custentity_hb_edi_store_number`
    holding the raw 4-character code, making it an exact match with no string manipulation
    anywhere. More work; the guard is sufficient in the meantime.
 

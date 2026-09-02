@@ -53,49 +53,61 @@ turns out wrong.
 
 Ordered by how much they would matter if wrong.
 
-1. **The AP billing address was copied from ONE record to 326.**
-   `Accounts Payable / Nordstrom / P.O. Box 870 / Seattle WA 98111` was read off store
-   220's address sublist and written to every Rack customer as default billing. Each
-   Nordstrom store holds its **own** copy of that address (the internal ids are all
-   distinct), so in principle they could differ store to store. Uniformity is the
-   reasonable reading for a corporate AP address, **but it is a reading, not a
-   verification.** If it is wrong, 326 records have the wrong billing address.
+1. **⚠️ NONE OF THE 326 RACK CUSTOMERS HAS A TAX REGISTRATION. Every full-line store
+   does.** Measured: the 105 pre-existing Nordstrom store records carry **149** tax
+   registration rows; the 326 created today carry **0**. Store 730 Houston Galleria shows
+   `United States / Texas / Store / Exempt = Yes` — a resale exemption.
 
-2. **30 of the 68 four-digit Rack stores were silently mis-routing before today.** The
+   This was missed entirely: the store import replicated the primary fields, the address
+   sublist and the DC custom fields, but not this sublist. **Sales tax may therefore be
+   computed on invoices to Rack stores that should be exempt.** Nothing in the EDI flow
+   tests it, so it will not error — it will show up as money on an invoice. This is now
+   the most consequential open item and it is not fixed.
+
+2. **The AP billing address copied from one record to 326 — now VERIFIED.**
+   `Accounts Payable / Nordstrom / P.O. Box 870 / Seattle WA 98111` was read off store
+   220 and written to every Rack customer as default billing. Each Nordstrom store holds
+   its own copy (the internal ids are all distinct), so it could in principle have
+   differed store to store. Checked against **425 Valley Fair** (DC 499) and **730
+   Houston Galleria** (DC 799) — both byte-identical to 220, across three different DCs.
+   Treated as confirmed rather than assumed.
+
+3. **30 of the 68 four-digit Rack stores were silently mis-routing before today.** The
    fix prevents it; it repairs nothing. See section 8 of the main notice.
 
-3. **A production sales order was deleted** — SO12563, created against
+4. **A production sales order was deleted** — SO12563, created against
    `Nordstrom - 760 - Perimeter Mall` for freight belonging to 7760 Pompano Citi Centere
    Rack. Deleted by Nima. It was Pending Fulfillment and nothing had shipped.
 
-4. **Store 167 exists because of an experiment.** It was created by the 3-row probe used
+5. **Store 167 exists because of an experiment.** It was created by the 3-row probe used
    to determine the parent-reference format. It is a store that was wanted anyway and its
    fields are now identical to the other 325, but it was created as a test rather than as
    part of the intended import.
 
-5. **The 26 Rack stores opening Fall 2026 / Fall 2027 were created ACTIVE** (Nima's
+6. **The 26 Rack stores opening Fall 2026 / Fall 2027 were created ACTIVE** (Nima's
    call, made explicitly). They cannot receive anything yet but appear in every customer
    lookup and report. `2281 Hunter's Square Rack` is the Fall 2027 one Nordstrom queried.
 
-6. **Store 675 Metro Center Rack** — Nordstrom writes its city as `Washington D.C.` with
+7. **Store 675 Metro Center Rack** — Nordstrom writes its city as `Washington D.C.` with
    no two-letter state. Handled as a named exception (`Washington` / `DC`) rather than by
    loosening the parsing rule, so any other malformed row would still have been rejected.
    Worth an eyeball.
 
-7. **Address 1's `Attention` / `Addressee`** were written by the first import as the
+8. **Address 1's `Attention` / `Addressee`** were written by the first import as the
    composed name (`Nordstrom - 003 - Southcenter Square Rack`) and corrected in the final
    pass to `Store # 003` / `Southcenter Square Rack`, matching store 220's pattern. These
    two lines print on a freight label, so worth confirming on a couple of records.
 
-8. **Rack records have TWO addresses; full-line stores have THREE.** The missing one is
-   labelled `Distribution Center` and carries no default flag. Nothing in this flow tests
-   it and the same DC address already lives in the `DC Address` custom fields on every
-   Rack record — but the records are not yet identical in shape to the 102 that work.
+9. **Rack records have TWO addresses; full-line stores have THREE.** Confirmed on 425:
+   `Billing` (default billing) / `Store` (default shipping) / `Distribution Center` (no
+   default flag). The Rack records lack the third. Nothing in this flow tests it and the
+   same DC address already lives in the `DC Address` custom fields on every Rack record —
+   but the records are not yet identical in shape to the ones that work.
 
-9. **Two NetSuite `Request Limit Exceeded` errors** appeared during the run and
+10. **Two NetSuite `Request Limit Exceeded` errors** appeared during the run and
    auto-resolved. Not caused by the change; noted in case the retry volume is relevant.
 
-10. **Two stale `09/01` error records** still carry pre-fix retry data (`742`, `768`) and
+11. **Two stale `09/01` error records** still carry pre-fix retry data (`742`, `768`) and
     are duplicates of SO12571 and SO12573. They should be resolved as superseded rather
     than retried — a retry replays the saved post-script payload, so the fix does not
     apply to them.
