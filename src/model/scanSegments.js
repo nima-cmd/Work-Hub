@@ -7,6 +7,9 @@
 // packing slip files as one document or several.
 //
 // The QR is BOTH delimiter and identifier. Two producers exist:
+//   • the BOL tag           `NB1731283`         — the BOL NUMBER itself, printed
+//                                                 into the BOL's own barcode space
+//                                                 (or stuck on retroactively)
 //   • EDI cargo tags        `DC:<po>:<abbrev>`  — one tag, stuck on the front page
 //   • the NetSuite slip     `IF7441`            — printed in the FOOTER, so it
 //                                                 repeats on EVERY page
@@ -32,6 +35,15 @@ export function classifyQr(raw, { knownPos } = {}) {
   if (!s) return { kind: 'empty', raw: s }
   const dc = /^DC:([^:]+):(.*)$/.exec(s)
   if (dc) return { kind: 'edi', po: dc[1].trim(), dc: (dc[2] || '').trim() || null, raw: s }
+  // ⚠️ A BOL IS ITS OWN KIND, and that is the whole point (Nima, 2026-09-03: "the
+  // cargo tag doesn't tell you its a bol though does it"). Stamping a carton tag's
+  // `DC:<po>:<dc>` onto a bill of lading would make the two documents
+  // indistinguishable to everything downstream. The BOL number IS the identity, so
+  // it is what the tag carries — which also makes the same code wedge-scannable
+  // straight into NetSuite's BOL field for the ASN.
+  // No PO or DC is parsed out of it: `bol_registry` holds both, and a lookup beats
+  // a parse. The server resolves them with database authority.
+  if (/^NB\d+$/i.test(s)) return { kind: 'bol', bolNumber: s.toUpperCase(), raw: s }
   if (/^IF\d+$/i.test(s)) return { kind: 'fulfilment', ifNumber: s.toUpperCase(), raw: s }
   if (knownPos ? knownPos.has(s) : /^\d{5,}$/.test(s)) return { kind: 'edi', po: s, dc: null, raw: s }
   return { kind: 'boutique', raw: s }
@@ -57,23 +69,57 @@ const sameQr = (a, b) => a != null && b != null && String(a).trim() === String(b
 // document. That's the right way to be wrong — a duplicate copy is rare and
 // harmless, whereas shredding a real multi-page slip is neither.
 //
-//   pageResults: [{ pageNum, qr }]  (qr = decoded string or null)
-// → { documents: [{ qr, classify, pageNums:[...] }], orphanPages:[...] }
+//   pageResults: [{ pageNum, qr, codes }]
+//     qr    = the decoded IDENTITY symbol (or null)
+//     codes = every other symbol found on the page, e.g. the carrier's PRO
+// → { documents: [{ qr, classify, pageNums:[...], proNumbers:[...] }], orphanPages }
+//
+// ⚠️ A NON-IDENTITY CODE NEVER OPENS OR CLOSES A DOCUMENT. The carrier staples its
+// own barcode onto our BOL (`CTEG 803868`), so a page can now carry two symbols.
+// Letting the carrier's sticker start a document would split a BOL wherever the
+// driver happened to place it — a boundary decided by a third party.
 export function segmentPages(pageResults, { knownPos } = {}) {
   const documents = []
   const orphanPages = []
   let current = null
-  for (const { pageNum, qr } of pageResults) {
+  for (const { pageNum, qr, codes } of pageResults) {
     if (qr && !sameQr(qr, current?.qr)) {
-      current = { qr, classify: classifyQr(qr, { knownPos }), pageNums: [pageNum] }
+      current = { qr, classify: classifyQr(qr, { knownPos }), pageNums: [pageNum], proNumbers: [] }
       documents.push(current)
     } else if (current) {
       current.pageNums.push(pageNum)
     } else {
       orphanPages.push(pageNum)
+      continue // a PRO before any identity belongs to no document
+    }
+    for (const pro of proNumbersIn(codes)) {
+      if (!current.proNumbers.includes(pro)) current.proNumbers.push(pro)
     }
   }
   return { documents, orphanPages }
+}
+
+// A carrier's own tracking barcode on our paper.
+//
+// ⚠️ MATCHED ON SHAPE, AND DELIBERATELY NOT ON A CARRIER LIST. CTE prints
+// `CTEG 803868`; the next LTL carrier prints something else, and a whitelist would
+// silently drop it. The rule is "letters then digits, and NOT one of our own
+// identifiers" — anything else is captured and shown for confirmation rather than
+// written as fact. Spaces are kept out of the stored value so `CTEG 803868` and
+// `CTEG803868` are one number.
+export function proNumbersIn(codes = []) {
+  const out = []
+  for (const c of codes) {
+    const s = String(c || '').trim()
+    if (!s) continue
+    if (/^NB\d+$/i.test(s)) continue          // our BOL
+    if (/^IF\d+$/i.test(s)) continue          // a fulfilment
+    if (/^DC:/i.test(s)) continue              // a cargo tag
+    if (!/^[A-Z][A-Z0-9]*[\s-]?\d{4,}$/i.test(s)) continue
+    const norm = s.replace(/[\s-]+/g, '').toUpperCase()
+    if (!out.includes(norm)) out.push(norm)
+  }
+  return out
 }
 
 // ── filing names ─────────────────────────────────────────────────────────────
@@ -89,9 +135,15 @@ export function segmentPages(pageResults, { knownPos } = {}) {
 // `<po>-<dc>-` as the prefix means a DC's slips still sort together in the
 // folder. A `DC:<po>:<dc>` cargo-tag QR carries no IF, so that form falls back
 // to the old name — one tag per shipment, so it doesn't collide with itself.
-export function scanFilename({ po, dc, ifNumber }) {
+// ⚠️ A BOL NEEDS ITS NUMBER IN THE NAME for the same reason a slip needs its IF.
+// A signed BOL and a cargo-tagged document for the same PO+DC would both land on
+// `<po>-<dc>.pdf`, and `putPdf` UPDATES a same-named file in place — so the second
+// would silently replace the first WHILE REPORTING SUCCESS. That is the exact data
+// loss the IF number was added to prevent, arriving by a different door.
+export function scanFilename({ po, dc, ifNumber, bolNumber }) {
   const stem = dc ? `${po}-${dc}` : `${po}`
-  return ifNumber ? `${stem}-${ifNumber}.pdf` : `${stem}.pdf`
+  const id = ifNumber || bolNumber
+  return id ? `${stem}-${id}.pdf` : `${stem}.pdf`
 }
 
 // Two documents in ONE scan that resolve to the same Drive path would overwrite

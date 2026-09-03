@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyQr, segmentPages, scanFilename, findFilingCollisions } from '../src/model/scanSegments.js'
+import { classifyQr, segmentPages, scanFilename, findFilingCollisions, proNumbersIn } from '../src/model/scanSegments.js'
 import { classifyDriveError } from '../src/ingest/googleDrive.js'
 
 const pages = (...qrs) => qrs.map((qr, i) => ({ pageNum: i + 1, qr }))
@@ -200,4 +200,67 @@ test('classifyDriveError: an unknown 403 reason errs toward re-auth, not a retry
   const v = classifyDriveError(403, '')
   assert.equal(v.retry, false)
   assert.equal(v.needsReauth, true)
+})
+
+// ── The BOL tag, and the carrier's barcode beside it ─────────────────────────
+test('⚠️ A BOL IS ITS OWN KIND — a cargo tag cannot say "bill of lading"', () => {
+  // Nima, 2026-09-03: "the cargo tag doesn't tell you its a bol though does it".
+  // Stamping DC:<po>:<dc> on a BOL makes it indistinguishable from a carton label.
+  assert.deepEqual(classifyQr('NB1731283'), { kind: 'bol', bolNumber: 'NB1731283', raw: 'NB1731283' })
+  assert.equal(classifyQr('nb1731283').bolNumber, 'NB1731283')
+})
+
+test('⚠️ no PO or DC is PARSED out of a BOL number — bol_registry holds both', () => {
+  const c = classifyQr('NB1731277')
+  assert.equal(c.po, undefined)
+  assert.equal(c.dc, undefined)
+})
+
+test('a BOL number is not mistaken for a bare PO', () => {
+  assert.equal(classifyQr('NB1731283', { knownPos: new Set(['50073678']) }).kind, 'bol')
+  assert.equal(classifyQr('50073678', { knownPos: new Set(['50073678']) }).kind, 'edi')
+})
+
+test('⚠️ the BOL number lands IN THE FILENAME, or a signed BOL overwrites a slip', () => {
+  // putPdf UPDATES a same-named file in place: without this both file to
+  // `50073678-799.pdf` and the second silently replaces the first.
+  assert.equal(scanFilename({ po: '50073678', dc: '799', bolNumber: 'NB1731273' }), '50073678-799-NB1731273.pdf')
+  assert.equal(scanFilename({ po: '50073678', dc: '799' }), '50073678-799.pdf')
+})
+
+test("⚠️ THE CARRIER'S BARCODE NEVER STARTS A DOCUMENT", () => {
+  // CTE staples its own sticker wherever it likes. Letting it open a document puts
+  // a boundary in our filing under a third party's control.
+  const { documents } = segmentPages([
+    { pageNum: 1, qr: 'NB1731277', codes: ['CTEG 803868'] },
+    { pageNum: 2, qr: null, codes: ['CTEG 803868'] },
+    { pageNum: 3, qr: 'NB1731279', codes: [] },
+  ])
+  assert.equal(documents.length, 2)
+  assert.deepEqual(documents[0].pageNums, [1, 2])
+  assert.deepEqual(documents[0].proNumbers, ['CTEG803868'])
+  assert.deepEqual(documents[1].proNumbers, [])
+})
+
+test('the same PRO read twice is one number, and spacing is not identity', () => {
+  assert.deepEqual(proNumbersIn(['CTEG 803868', 'CTEG803868', 'cteg-803868']), ['CTEG803868'])
+})
+
+test('⚠️ our own identifiers are never captured as a PRO', () => {
+  assert.deepEqual(proNumbersIn(['NB1731277', 'IF7644', 'DC:50073678:799']), [])
+})
+
+test('⚠️ a PRO found before any identity belongs to NO document', () => {
+  // It would otherwise attach to whichever document happened to open next.
+  const { documents, orphanPages } = segmentPages([
+    { pageNum: 1, qr: null, codes: ['CTEG 803868'] },
+    { pageNum: 2, qr: 'NB1731277', codes: [] },
+  ])
+  assert.deepEqual(orphanPages, [1])
+  assert.deepEqual(documents[0].proNumbers, [])
+})
+
+test('a page with no codes array still segments', () => {
+  const { documents } = segmentPages([{ pageNum: 1, qr: 'NB1731277' }])
+  assert.deepEqual(documents[0].proNumbers, [])
 })

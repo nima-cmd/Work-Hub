@@ -1028,6 +1028,14 @@ CREATE TABLE IF NOT EXISTS routing_shipment (
   ship_date        DATE,
   -- phase 3: generated BOL document
   bol_generated_at TIMESTAMPTZ,
+  -- The CARRIER's own tracking number, off the sticker they put on our BOL
+  -- (CTE prints `CTEG 803868`). Ours is `bol_number`; this one is theirs, and the
+  -- two must never be conflated — it is the number you quote to chase the freight.
+  -- NULL until a driver hands one over: a shipment with no PRO yet is the normal
+  -- state, not a fault, so there is no default. See [[default-is-not-an-answer]].
+  pro_number       TEXT,
+  pro_source       TEXT,        -- 'scan' | 'manual' — how we came to believe it
+  pro_captured_at  TIMESTAMPTZ,
   created_at       TIMESTAMPTZ DEFAULT now(),
   updated_at       TIMESTAMPTZ DEFAULT now()
 );

@@ -13,6 +13,7 @@
 // prepaid. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
 
 import PDFDocument from 'pdfkit'
+import qrcode from 'qrcode-generator'
 import { dcLabel } from '../src/model/dc.js'
 import { SHIP_FROM, COMMODITY, shipToFor, bolAuthLine } from '../src/model/bolAddresses.js'
 
@@ -135,7 +136,24 @@ function render(doc, shipment, kind) {
   boxOutline(doc, rX, y + 11, half, topH - 11)
   doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000').text('Bill of Lading Number:', rX + 4, y + 15)
   doc.font('Helvetica-Bold').fontSize(12).fillColor(RED).text(shipment.bolNumber || '—', rX + 4, y + 24)
-  doc.font('Helvetica-Bold').fontSize(9).fillColor('#ccc').text('B A R   C O D E   S P A C E', rX + 4, y + 46, { width: half - 8, align: 'center' })
+  // ⚠️ THE QR CARRIES THE BOL NUMBER AND NOTHING ELSE — the same payload as the
+  // stick-on BOL tag, so a scanned BOL and a tagged one are the same document to
+  // the filing pipeline. It is deliberately NOT `DC:<po>:<dc>`: that is a CARTON
+  // tag and would make a bill of lading indistinguishable from a carton label
+  // (Nima, 2026-09-03). PO and DC are resolved from `bol_registry` — a lookup, not
+  // a parse — and the number doubles as the value wedge-scanned into NetSuite's
+  // BOL field for the ASN, which is the re-typing this exists to remove.
+  //
+  // It sits in the VICS barcode space because that block is ours; the carrier
+  // brings its own adhesive label and puts it where it likes.
+  if (shipment.bolNumber) {
+    const qs = 44
+    drawQr(doc, String(shipment.bolNumber), rX + half - qs - 6, y + 16, qs)
+    doc.font('Helvetica').fontSize(5).fillColor('#888')
+      .text('SCAN TO FILE', rX + half - qs - 6, y + 16 + qs + 1, { width: qs, align: 'center' })
+  } else {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#ccc').text('B A R   C O D E   S P A C E', rX + 4, y + 46, { width: half - 8, align: 'center' })
+  }
   y += topH + 3
 
   // ── Ship To | Carrier block ─────────────────────────────────────────────
@@ -146,7 +164,7 @@ function render(doc, shipment, kind) {
   fob(doc, M + half - 42, y + midH - 12)
   doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
   boxOutline(doc, rX, y + 11, half, midH - 11)
-  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
+  const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', shipment.proNumber || ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
   let cy = y + 13
   for (const [lab, val, red] of carr) {
     doc.font('Helvetica').fontSize(6.5).fillColor('#000').text(lab, rX + 4, cy, { continued: true })
@@ -291,6 +309,24 @@ function render(doc, shipment, kind) {
 }
 
 // ── drawing helpers ───────────────────────────────────────────────────────
+// Same renderer as the cargo tags (server/printLabel.js): a QR drawn as filled
+// rectangles, so it needs no image encoder and stays crisp at any size.
+function drawQr(doc, text, x, y, size) {
+  const qr = qrcode(0, 'M')
+  qr.addData(String(text))
+  qr.make()
+  const n = qr.getModuleCount()
+  const cell = size / n
+  doc.fillColor('#fff').rect(x, y, size, size).fill()
+  doc.fillColor('#000')
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) doc.rect(x + c * cell, y + r * cell, cell, cell).fill()
+    }
+  }
+  doc.fillColor('#000')
+}
+
 function boxOutline(doc, x, y, w, h) { doc.lineWidth(0.8).rect(x, y, w, h).stroke('#000') }
 function blackBar(doc, x, y, w, title) {
   doc.save().rect(x, y, w, 11).fill('#111').restore()

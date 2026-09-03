@@ -56,11 +56,27 @@ export async function rasterizePages(pdfBytes, { dpi = 200, onProgress } = {}) {
 // on. A 50-page scan at 150 DPI is ~8MB of RGBA per page — holding them all
 // (as rasterizePages does) is ~400MB and thrashes the tab, so processScan
 // streams instead. Returns [{ pageNum, qr }].
+// Our own identifiers — the only things allowed to say what a document IS.
+// Kept in step with classifyQr's kinds in src/model/scanSegments.js.
+const isIdentityCode = (c) => /^NB\d+$/i.test(c) || /^IF\d+$/i.test(c) || /^DC:/i.test(c) || /^\d{5,}$/.test(c)
+
+/** Can this browser read 1D barcodes at all? Drives the UI's PRO-capture notice. */
+export const oneDimensional = () => 'BarcodeDetector' in window
+
 export async function decodePages(pdfBytes, { dpi = 200, onProgress } = {}) {
   const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice(0) })
   const pdf = await loadingTask.promise
   const scale = dpiToScale(dpi)
-  const detector = 'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null
+  // ⚠️ 1D IS READ TOO, AND ONLY BarcodeDetector CAN DO IT. The carrier staples its
+  // own tracking barcode onto our BOL (CTE prints `CTEG 803868` as Code 128), and
+  // reading it in the same pass is what saves re-keying the PRO by hand. Verified
+  // in the preview browser: `code_128` is in getSupportedFormats().
+  // jsQR is QR-ONLY, so where BarcodeDetector is absent (Safari) 1D silently
+  // yields nothing — `oneDimensional` says so rather than letting a missing PRO
+  // read as "the carrier didn't put one on".
+  const detector = 'BarcodeDetector' in window
+    ? new window.BarcodeDetector({ formats: ['qr_code', 'code_128'] })
+    : null
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   const results = []
@@ -76,13 +92,22 @@ export async function decodePages(pdfBytes, { dpi = 200, onProgress } = {}) {
     // QR-less continuation page as well roughly doubles the time for no gain.
     // jsQR is the fallback only where BarcodeDetector isn't available.
     let qr = null
+    let codes = []
     if (detector) {
-      try { qr = (await detector.detect(canvas))[0]?.rawValue || null } catch { /* skip page */ }
+      try {
+        const found = (await detector.detect(canvas)).map((b) => b.rawValue).filter(Boolean)
+        // ⚠️ THE IDENTITY SYMBOL IS CHOSEN BY SHAPE, NOT BY DETECTION ORDER. A page
+        // carries our QR and the carrier's barcode, and `[0]` is whichever the
+        // detector happened to find first — which would make the document's identity
+        // depend on where a driver stuck a sticker.
+        qr = found.find(isIdentityCode) || null
+        codes = found.filter((c) => c !== qr)
+      } catch { /* skip page */ }
     } else {
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
       qr = jsQR(img.data, img.width, img.height)?.data || null
     }
-    results.push({ pageNum: n, qr })
+    results.push({ pageNum: n, qr, codes })
     page.cleanup?.()
   }
   await loadingTask.destroy()

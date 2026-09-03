@@ -153,6 +153,60 @@ function buildDcPdf(path, cfg, { poNumber, dc, storeCount, customer }) {
   })
 }
 
+// ── The BOL tag ─────────────────────────────────────────────────────────────
+//
+// ⚠️ THE PAYLOAD IS THE BOL NUMBER AND NOTHING ELSE (Nima, 2026-09-03: "the cargo
+// tag doesn't tell you its a bol though does it"). Three jobs, one symbol:
+//   1. it SAYS the page is a bill of lading — a `DC:<po>:<dc>` cargo tag cannot
+//   2. the scan pipeline resolves PO/DC from `bol_registry`, a lookup not a parse
+//   3. it wedge-scans straight into NetSuite's BOL field for the ASN, which is the
+//      typing this was built to remove
+//
+// The PO and DC are still PRINTED, because a human holding the page needs them and
+// the number alone means nothing across a desk.
+function buildBolTagPdf(path, cfg, { bolNumber, poNumber, dc, partner }) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
+    const out = createWriteStream(path)
+    out.on('finish', resolve)
+    out.on('error', reject)
+    doc.pipe(out)
+    if (cfg.wash) doc.rect(0, 0, cfg.w, cfg.h).fill(cfg.wash)
+    doc.fillColor('black')
+
+    const BOL = String(bolNumber || '')
+    const PO = String(poNumber || '')
+
+    if (cfg.layout === 'compact') {
+      // ⚠️ THE QR IS DELIBERATELY SMALLER THAN THE LABEL IS TALL. At the obvious
+      // `h - 2*MARGIN` it left a 64pt text column, and `NB1731277` at 13pt needs
+      // ~70pt — so the number WRAPPED and its last digit landed on top of the PO
+      // line. A BOL tag whose BOL number is unreadable is worse than no tag. The
+      // payload is 9 characters (a 21-module symbol), so the smaller code still has
+      // ample module size on a 2.25in label; the text is what was starved.
+      const qrSize = cfg.h - MARGIN * 2 - 16
+      drawQr(doc, BOL, MARGIN, MARGIN + 8, qrSize)
+      const tx = MARGIN + qrSize + 7
+      const tw = cfg.w - tx - MARGIN + 4
+      doc.font('Helvetica-Bold').fontSize(5.5).text('BILL OF LADING', tx, MARGIN, { width: tw, characterSpacing: 1 })
+      if (partner) doc.font('Helvetica').fontSize(7).text(partner, tx, MARGIN + 8, { width: tw, lineBreak: false })
+      doc.font('Helvetica-Bold').fontSize(12).text(BOL, tx, MARGIN + 17, { width: tw, lineBreak: false })
+      doc.font('Helvetica').fontSize(7.5).text(`PO ${PO}`, tx, MARGIN + 32, { width: tw, lineBreak: false })
+      if (dc) doc.font('Helvetica-Bold').fontSize(9).text(`DC ${dc}`, tx, MARGIN + 42, { width: tw, lineBreak: false })
+    } else {
+      const cx = cfg.w / 2
+      doc.font('Helvetica-Bold').fontSize(18).text('BILL OF LADING', 0, 26, { width: cfg.w, align: 'center', characterSpacing: 2 })
+      if (partner) doc.font('Helvetica').fontSize(13).text(partner, 0, 50, { width: cfg.w, align: 'center' })
+      const qrSize = 168
+      drawQr(doc, BOL, cx - qrSize / 2, 72, qrSize)
+      doc.font('Helvetica-Bold').fontSize(30).text(BOL, 0, 252, { width: cfg.w, align: 'center' })
+      doc.font('Helvetica-Bold').fontSize(22).text(`PO ${PO}`, 0, 292, { width: cfg.w, align: 'center' })
+      if (dc) doc.font('Helvetica-Bold').fontSize(46).text(`DC ${dc}`, 0, 322, { width: cfg.w, align: 'center' })
+    }
+    doc.end()
+  })
+}
+
 function buildPdf(path, cfg, info) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: [cfg.w, cfg.h], margin: 0 })
@@ -266,19 +320,33 @@ export async function printTagSheet(items = [], size = '2.25x1.25') {
   })
 }
 
+// Build a BOL tag to a temp file WITHOUT printing — so it can be looked at before
+// it reaches a roll of adhesive labels that then go on freight paperwork.
+export async function makeBolTag(info, size = '2.25x1.25') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size: ${size}`)
+  if (!info?.bolNumber) throw new Error('bolNumber required')
+  const dir = mkdtempSync(join(tmpdir(), 'bol-tag-'))
+  const path = join(dir, `${String(info.bolNumber).replace(/[^\w-]/g, '_')}-${size}.pdf`)
+  await buildBolTagPdf(path, cfg, info)
+  return path
+}
+
 export async function printCargoTag(info, size = '2.25x1.25') {
   const cfg = LABELS[size]
   if (!cfg) throw new Error(`unknown label size: ${size}`)
-  const kind = info?.kind === 'edi' ? 'edi' : info?.kind === 'dc' ? 'dc' : 'if'
-  if (kind === 'if' ? !info?.ifNumber : !info?.poNumber) throw new Error(kind === 'if' ? 'ifNumber required' : 'poNumber required')
+  const kind = info?.kind === 'edi' ? 'edi' : info?.kind === 'dc' ? 'dc' : info?.kind === 'bol' ? 'bol' : 'if'
+  if (kind === 'bol' && !info?.bolNumber) throw new Error('bolNumber required')
+  if (kind !== 'bol' && (kind === 'if' ? !info?.ifNumber : !info?.poNumber)) throw new Error(kind === 'if' ? 'ifNumber required' : 'poNumber required')
   const dir = mkdtempSync(join(tmpdir(), 'cargo-tag-'))
   const stem = String(
     kind === 'edi' ? `edi-${info.poNumber}` :
     kind === 'dc' ? `dc-${info.poNumber}-${info.dc || 'all'}` :
+    kind === 'bol' ? `bol-${info.bolNumber}` :
     info.ifNumber,
   ).replace(/[^\w-]/g, '_')
   const path = join(dir, `${stem}-${size}.pdf`)
-  const builder = kind === 'edi' ? buildEdiPdf : kind === 'dc' ? buildDcPdf : buildPdf
+  const builder = kind === 'edi' ? buildEdiPdf : kind === 'dc' ? buildDcPdf : kind === 'bol' ? buildBolTagPdf : buildPdf
   await builder(path, cfg, info)
   return new Promise((resolve, reject) => {
     execFile('lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {

@@ -111,7 +111,7 @@ export default function ScanToDrive() {
       setBytesByPage(byPage)
 
       // The leading QR-less pages are the signed Master BOL (already split).
-      const segments = documents.map((d) => ({ qr: d.qr, pageNums: d.pageNums }))
+      const segments = documents.map((d) => ({ qr: d.qr, pageNums: d.pageNums, proNumbers: d.proNumbers || [] }))
       if (orphanPages.length) segments.unshift({ qr: null, pageNums: orphanPages, orphan: true })
       setMasterBytes(orphanBytes)
 

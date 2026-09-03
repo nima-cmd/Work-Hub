@@ -67,6 +67,27 @@ async function classify(qr, knownPos) {
   const dc = parseDcToken(s)
   if (dc) return { kind: 'edi', po: dc.poNumber, dc: dc.dc, partner: partnerForDc(dc.dc || '') }
   if (knownPos.has(s)) return { kind: 'edi', po: s, dc: null, partner: await partnerForPo(s) }
+  // ⚠️ A BOL RESOLVES BY LOOKUP, NEVER BY PARSE. The tag carries only the BOL
+  // number — deliberately, so the same code wedge-scans into NetSuite's BOL field
+  // for the ASN — and `bol_registry` is the authority on which partner, PO and DC
+  // that number was minted for. Parsing a PO out of the tag would re-create the
+  // very guess this lookup removes.
+  if (/^NB\d+$/i.test(s)) {
+    const bolNumber = s.toUpperCase()
+    const { rows } = await pool.query(
+      `SELECT partner, dc, member_pos FROM bol_registry WHERE bol_number = $1`, [bolNumber])
+    if (!rows.length) return { kind: 'bol', bolNumber, po: null, dc: null, partner: null, known: false }
+    // ⚠️ member_pos CAN HOLD SEVERAL POs — a DC's BOL consolidates them. The FIRST
+    // is the filing folder (that is how the digital BOL already files); the rest
+    // ride along so nothing is lost, and the UI can show what else is covered.
+    const memberPos = rows[0].member_pos || []
+    return {
+      kind: 'bol', bolNumber, known: true,
+      po: memberPos[0] || null, dc: rows[0].dc || null,
+      partner: rows[0].partner || (rows[0].dc ? partnerForDc(rows[0].dc) : null),
+      memberPos,
+    }
+  }
   if (/^IF\d+$/i.test(s)) {
     const ifNumber = s.toUpperCase()
     const edi = await resolveFulfilment(ifNumber)
@@ -176,6 +197,29 @@ export async function planScanFiling(segments = []) {
         kind: 'boutique', qr: seg.qr, raw: c.raw, pageNums: seg.pageNums, skip: true,
         ifNumber: c.ifNumber || null, soNumber: c.soNumber || null,
         customer: c.customer || null, customerPo: c.customerPo || null, known: c.known ?? null,
+      })
+      continue
+    }
+    if (c.kind === 'bol') {
+      // ⚠️ AN UNKNOWN BOL IS NEVER FILED ON THE STRENGTH OF ITS OWN TAG. `NB…` is a
+      // shape, not proof: a mis-keyed or hand-written number would otherwise mint a
+      // folder for a shipment that does not exist. The registry is the only thing
+      // that can say a BOL is ours.
+      if (!c.known || !c.po) {
+        warnings.push(`${c.bolNumber} isn't in the BOL registry — skipped rather than filed under a PO we'd be guessing at.`)
+        documents.push({ kind: 'bol', qr: seg.qr, bolNumber: c.bolNumber, pageNums: seg.pageNums, skip: true, known: false })
+        continue
+      }
+      if (!c.partner) warnings.push(`${c.bolNumber}: couldn't resolve partner — will file under _Unresolved.`)
+      documents.push({
+        kind: 'bol', bolNumber: c.bolNumber,
+        po: c.po, dc: c.dc, partner: c.partner || '_Unresolved', pos: [c.po],
+        filename: scanFilename({ po: c.po, dc: c.dc, bolNumber: c.bolNumber }),
+        root: DRIVE_ROOT_BOLS, memberPos: c.memberPos || [],
+        // The carrier's own tracking number, read off the same page. Carried to the
+        // UI for confirmation — never written as fact from a barcode alone.
+        proNumbers: seg.proNumbers || [],
+        pageNums: seg.pageNums, qr: seg.qr,
       })
       continue
     }
