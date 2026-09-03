@@ -750,7 +750,7 @@ ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS order_events (
   id          SERIAL PRIMARY KEY,
   event_type  TEXT NOT NULL,        -- see the vocabulary above
-  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC' | 'ASN'
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC' | 'ASN' | 'BOL'
   doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
   so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
   note        TEXT,

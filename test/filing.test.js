@@ -139,3 +139,18 @@ test('FILED is in the spine but is not derived', () => {
   assert.ok(SPINE.some((s) => s.key === 'FILED'))
   assert.ok(!DERIVED_TYPES.includes('FILED'))
 })
+
+test('⚠️ A BOL FILES AS ITSELF, NOT AS ITS DC', () => {
+  // Sharing `<po>:<dc>` with the cargo-tagged documents for the same shipment
+  // means the first one filed makes the second report "already filed" — a signed
+  // BOL and a stack of slips are different paper.
+  assert.deepEqual(
+    filingTarget({ bolNumber: 'NB1731277', po: '50073688', dc: '569' }),
+    { docType: 'BOL', docNumber: 'NB1731277', soNumber: null },
+  )
+  assert.equal(filingTarget({ po: '50073688', dc: '569' }).docType, 'DC')
+})
+
+test('an IF still wins over a BOL number, if a document somehow carries both', () => {
+  assert.equal(filingTarget({ ifNumber: 'IF7644', bolNumber: 'NB1731277' }).docType, 'IF')
+})
