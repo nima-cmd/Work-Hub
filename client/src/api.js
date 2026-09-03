@@ -1026,10 +1026,10 @@ export async function planScanFiling(segments) {
 // They ride along so the server can record the filing against the right
 // document — without them the upload succeeds and the ledger learns nothing,
 // which is the state step 7 was in until now.
-export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root, ifNumber, soNumber, po, dc }) {
+export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root, ifNumber, soNumber, po, dc, bolNumber, proNumbers }) {
   const res = await fetch('/api/scan/file-to-drive', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ partner, pos, filename, pdfBase64, root, ifNumber, soNumber, po, dc }),
+    body: JSON.stringify({ partner, pos, filename, pdfBase64, root, ifNumber, soNumber, po, dc, bolNumber, proNumbers }),
   })
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `API ${res.status}`)
   return res.json()

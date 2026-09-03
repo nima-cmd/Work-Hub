@@ -792,6 +792,16 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
               {s.shippedAt ? '↩ Un-ship' : '🚚 Mark shipped'}
             </button>
           )}
+          {/* The CARRIER's own tracking number, not ours. `bol_number` is what we
+              minted; this is what CTE (or whoever) put on their sticker, and it is
+              the number you quote to chase the freight — so it is shown next to the
+              BOL rather than buried. Read off the scan when the signed BOL is filed;
+              `proSource` says whether a person typed it or a barcode was read. */}
+          {s.proNumber && (
+            <span className="rt-pro" title={`Carrier tracking number${s.proSource === 'scan' ? ', read from the scanned BOL' : ', entered by hand'}`}>
+              PRO {s.proNumber}
+            </span>
+          )}
           {/* Evidence, not an action — the button above is still the only way
               a BOL closes. See src/model/closeReady.js. */}
           {s.closeReady?.ok && (

@@ -301,8 +301,46 @@ export async function fileScannedDoc({ partner, pos, filename, pdfBase64, root, 
   if (result?.ok) {
     const filed = await recordFiling({ ...doc, partner, pos, filename })
     if (filed) result.filed = filed
+    const pro = await recordProNumber(doc)
+    if (pro) result.pro = pro
   }
   return result
+}
+
+/**
+ * Attach the carrier's tracking number to the shipment its BOL belongs to.
+ *
+ * ⚠️ NEVER OVERWRITES ONE WE ALREADY HOLD. A PRO is the number you quote to chase
+ * freight; if the stored one and a freshly-read one disagree, a barcode read off a
+ * photocopy is not automatically the better answer. It fills a blank and otherwise
+ * reports the conflict, which is a person's call.
+ *
+ * ⚠️ Never throws, for the same reason recordFiling doesn't: the paper is already
+ * in Drive, and a bookkeeping miss must not turn a successful filing red.
+ */
+async function recordProNumber({ bolNumber, proNumbers } = {}) {
+  try {
+    const bol = String(bolNumber || '').trim().toUpperCase()
+    const pros = (proNumbers || []).map((p) => String(p || '').trim().toUpperCase()).filter(Boolean)
+    if (!bol || pros.length !== 1) {
+      // ⚠️ TWO CANDIDATES IS NOT A NUMBER. A page carrying two unknown barcodes
+      // gives no basis to prefer one, and guessing puts a wrong tracking number on
+      // a real shipment. Say nothing rather than pick.
+      return pros.length > 1 ? { bolNumber: bol, ambiguous: pros } : null
+    }
+    const { rows } = await pool.query(
+      `UPDATE routing_shipment
+          SET pro_number = $2, pro_source = 'scan', pro_captured_at = now(), updated_at = now()
+        WHERE bol_number = $1 AND pro_number IS NULL
+        RETURNING pro_number`, [bol, pros[0]])
+    if (rows.length) return { bolNumber: bol, proNumber: pros[0], stored: true }
+    const cur = await pool.query('SELECT pro_number FROM routing_shipment WHERE bol_number = $1', [bol])
+    if (!cur.rows.length) return null
+    const held = cur.rows[0].pro_number
+    return held === pros[0]
+      ? { bolNumber: bol, proNumber: held, stored: false }
+      : { bolNumber: bol, proNumber: held, conflict: pros[0] }
+  } catch { return null }
 }
 
 // Write the FILED event for one uploaded document.

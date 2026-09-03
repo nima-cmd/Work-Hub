@@ -829,6 +829,7 @@ export async function fetchRoutingShipments(db = pool) {
             bol_number AS "bolNumber", status,
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
+            pro_number AS "proNumber", pro_source AS "proSource",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
             fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
             ship_direct AS "shipDirect", consigned_to AS "consignedTo",
@@ -1025,6 +1026,7 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             bol_number AS "bolNumber", status,
             project_number AS "projectNumber", shipment_number AS "shipmentNumber",
             auth_number AS "authNumber", carrier, scac, ship_date AS "shipDate",
+            pro_number AS "proNumber", pro_source AS "proSource",
             merge_center AS "mergeCenter", trailer_number AS "trailerNumber", seal_number AS "sealNumber",
             fedex_pickup_number AS "fedexPickupNumber",
             -- ⚠️ These two were absent here while fetchRoutingShipments (the LIST
