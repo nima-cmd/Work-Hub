@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { processScan, bytesToBase64 } from '../lib/scanPipeline.js'
 import { planScanFiling, fileScannedDoc, fetchUnfiledPaper } from '../api.js'
+import { oneDimensional } from '../lib/scanPipeline.js'
 
 // Scan → Drive (Nima, 2026-07-29). Takes ONE multi-page scan (signed Master BOL
 // + all the IFs, one Brother pass), segments it by the QR tags, and files each
@@ -111,7 +112,7 @@ export default function ScanToDrive() {
       setBytesByPage(byPage)
 
       // The leading QR-less pages are the signed Master BOL (already split).
-      const segments = documents.map((d) => ({ qr: d.qr, pageNums: d.pageNums }))
+      const segments = documents.map((d) => ({ qr: d.qr, pageNums: d.pageNums, proNumbers: d.proNumbers || [] }))
       if (orphanPages.length) segments.unshift({ qr: null, pageNums: orphanPages, orphan: true })
       setMasterBytes(orphanBytes)
 
@@ -136,14 +137,20 @@ export default function ScanToDrive() {
           // don't recognise at all.
           push({
             name: d.collision
-              ? `${d.ifNumber || d.qr || 'document'} → ${d.collision}`
+              ? `${d.ifNumber || d.bolNumber || d.qr || 'document'} → ${d.collision}`
+              : d.bolNumber ? `${d.bolNumber} (BOL)`
               : d.ifNumber ? `${d.ifNumber}${d.customer ? ` · ${d.customer}` : ''}` : `${d.raw} (unrecognised)`,
             status: 'skipped',
             note: d.collision
               ? `another document in this scan already files as ${d.collision} — held instead of overwriting it`
-              : d.ifNumber && d.known === false
-                ? 'not in the app yet — press ↻ Refresh NetSuite and re-scan'
-                : 'couldn’t resolve its customer and order — not filed rather than filed wrong',
+              : d.bolNumber
+                // ⚠️ NAMES THE ACTUAL REASON. "Couldn't resolve its customer" is
+                // nonsense for a BOL — it has a partner and a PO the moment the
+                // registry knows the number. What is wrong is the number itself.
+                ? 'not in the BOL registry — check the number rather than filing it under a guessed PO'
+                : d.ifNumber && d.known === false
+                  ? 'not in the app yet — press ↻ Refresh NetSuite and re-scan'
+                  : 'couldn’t resolve its customer and order — not filed rather than filed wrong',
           })
           continue
         }
@@ -159,6 +166,7 @@ export default function ScanToDrive() {
             partner: d.partner, pos: d.pos, filename: d.filename,
             pdfBase64: bytesToBase64(bytes), root: d.root,
             ifNumber: d.ifNumber, soNumber: d.soNumber, po: d.po, dc: d.dc,
+            bolNumber: d.bolNumber, proNumbers: d.proNumbers,
           })
           push(mapResult(d.filename, `${d.partner}/${d.pos[0]}`, r))
         } catch (err) {
@@ -209,6 +217,7 @@ export default function ScanToDrive() {
     }
   }
 
+  const bols = plan?.documents?.filter((d) => d.kind === 'bol') || []
   const edi = plan?.documents?.filter((d) => d.kind === 'edi') || []
   const slips = plan?.documents?.filter((d) => d.kind === 'slip') || []
   const boutique = plan?.documents?.filter((d) => d.kind === 'boutique') || []
@@ -221,6 +230,17 @@ export default function ScanToDrive() {
           Scan the whole stack (signed Master BOL on top, then each DC’s IFs behind its QR tag) in one Brother pass,
           then drop the PDF here. It splits by QR and files to Google Drive — nothing is kept on the server.
         </p>
+        {/* ⚠️ SAYS WHEN A CAPABILITY IS ABSENT, rather than letting its absence look
+            like an absent fact. The carrier's PRO barcode is Code 128, and only
+            BarcodeDetector (Chromium) reads 1D — jsQR, the Safari fallback, is
+            QR-only. Without this the BOLs still file perfectly and the PRO column
+            is simply empty, which reads as "the carrier didn't give us one". */}
+        {!oneDimensional() && (
+          <p className="hint s2dWarn">
+            ⚠ This browser can’t read 1D barcodes, so the carrier’s PRO number won’t be
+            captured — BOLs still file correctly. Use Chrome to pick up the PRO.
+          </p>
+        )}
       </div>
 
       <UnfiledPanel unfiled={unfiled} open={showBacklog} onToggle={() => setShowBacklog((o) => !o)} />
@@ -255,6 +275,31 @@ export default function ScanToDrive() {
             </div>
           )}
 
+          {/* Bills of lading are listed SEPARATELY from the cargo-tagged EDI
+              documents, because that separation is the whole point of the BOL tag:
+              a stack where you cannot tell a bill of lading from a carton label is
+              the state this replaced. The PRO column is what the carrier's own
+              barcode gave us on the same page — blank is normal (no sticker yet). */}
+          {bols.length > 0 && (
+            <>
+              <div className="s2dRowHead">{bols.length} bill(s) of lading</div>
+              <table className="s2dTable">
+                <thead><tr><th>BOL</th><th>Partner / PO / DC</th><th>Carrier PRO</th><th>Pages</th></tr></thead>
+                <tbody>
+                  {bols.map((d, i) => (
+                    <tr key={i} className={d.skip ? 'skip' : undefined}>
+                      <td>{d.bolNumber}</td>
+                      <td>{d.skip
+                        ? <span className="cust">not in the BOL registry — will not be filed</span>
+                        : <>{d.partner} · {d.po}{d.dc ? ` · ${d.dc}` : ''}</>}</td>
+                      <td>{(d.proNumbers || []).join(', ') || <span className="cust">—</span>}</td>
+                      <td>{d.pageNums.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
           <div className="s2dRowHead">{edi.length} EDI document(s)</div>
           <table className="s2dTable">
             <thead><tr><th>File</th><th>Partner / PO</th><th>Pages</th></tr></thead>
@@ -302,7 +347,7 @@ export default function ScanToDrive() {
           )}
 
           <button className="importBtn big" onClick={upload} disabled={phase === 'uploading'}>
-            {phase === 'uploading' ? 'Filing to Drive…' : `⬆ File ${edi.length + slips.length + (plan.master ? 1 : 0)} document(s) to Drive`}
+            {phase === 'uploading' ? 'Filing to Drive…' : `⬆ File ${bols.filter((d) => !d.skip).length + edi.length + slips.length + (plan.master ? 1 : 0)} document(s) to Drive`}
           </button>
         </div>
       )}

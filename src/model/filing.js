@@ -75,6 +75,15 @@ export function filingTarget(doc = {}) {
   if (doc.ifNumber) {
     return { docType: 'IF', docNumber: String(doc.ifNumber).toUpperCase(), soNumber: doc.soNumber || null }
   }
+  // ⚠️ A BOL IS FILED AS ITSELF, NOT AS ITS DC (2026-09-03). It would otherwise
+  // fall through to the DC branch and share `<po>:<dc>` with the cargo-tagged
+  // documents for the same shipment — and since a FILED event is recorded once per
+  // document ever, whichever was filed first would make the OTHER report "already
+  // filed". A signed bill of lading and a stack of packing slips are different
+  // paper; collapsing them is the same conflation the BOL tag exists to end.
+  if (doc.bolNumber) {
+    return { docType: 'BOL', docNumber: String(doc.bolNumber).toUpperCase(), soNumber: null }
+  }
   if (doc.po) {
     return { docType: 'DC', docNumber: `${doc.po}:${doc.dc || ''}`, soNumber: null }
   }

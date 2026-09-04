@@ -2855,6 +2855,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-closeReady { font-size: 11px; color: var(--good, #4fd18a); border: 1px solid rgba(79,209,138,0.4);
   background: rgba(79,209,138,0.08); border-radius: 6px; padding: 2px 7px; margin-left: 6px; }
 .rt-shipBtn.ready { border-color: rgba(79,209,138,0.55); color: var(--good, #4fd18a); }
+/* The carrier's PRO. Deliberately NOT styled like our own BOL number — they are
+   two different tracking numbers and confusing them sends someone chasing the
+   wrong one with the wrong carrier. */
+.rt-pro { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--dim, #9aa4b2);
+  border: 1px dashed rgba(154,164,178,0.45); border-radius: 6px; padding: 2px 7px; margin-left: 6px; }
 
 /* Post-custody: what a card in our possession is waiting on (Mission Quests
    tab ③). The sentence is rendered from the same derivation as its column, so a
@@ -3319,3 +3324,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   background: transparent; border: 1px solid var(--line, #2a323d); color: #b9838a; }
 .deadBtn:hover:not(:disabled) { border-color: #f85149; color: #f85149; }
 .deadBtn:disabled { opacity: 0.6; cursor: default; }
+
+/* Scan → Drive: a capability this browser lacks, stated rather than implied. */
+.s2dWarn { color: var(--warn, #e8b44a); }

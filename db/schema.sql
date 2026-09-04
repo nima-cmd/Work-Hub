@@ -750,7 +750,7 @@ ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS order_events (
   id          SERIAL PRIMARY KEY,
   event_type  TEXT NOT NULL,        -- see the vocabulary above
-  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC' | 'ASN'
+  doc_type    TEXT NOT NULL,        -- 'IF' | 'SO' | 'INV' | 'PO' | 'DC' | 'ASN' | 'BOL'
   doc_number  TEXT NOT NULL,        -- normalized, e.g. 'IF12345'
   so_number   TEXT,                 -- denormalized spine ref (loose — no FK; events must survive doc churn)
   note        TEXT,
@@ -1028,6 +1028,14 @@ CREATE TABLE IF NOT EXISTS routing_shipment (
   ship_date        DATE,
   -- phase 3: generated BOL document
   bol_generated_at TIMESTAMPTZ,
+  -- The CARRIER's own tracking number, off the sticker they put on our BOL
+  -- (CTE prints `CTEG 803868`). Ours is `bol_number`; this one is theirs, and the
+  -- two must never be conflated — it is the number you quote to chase the freight.
+  -- NULL until a driver hands one over: a shipment with no PRO yet is the normal
+  -- state, not a fault, so there is no default. See [[default-is-not-an-answer]].
+  pro_number       TEXT,
+  pro_source       TEXT,        -- 'scan' | 'manual' — how we came to believe it
+  pro_captured_at  TIMESTAMPTZ,
   created_at       TIMESTAMPTZ DEFAULT now(),
   updated_at       TIMESTAMPTZ DEFAULT now()
 );
