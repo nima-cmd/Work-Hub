@@ -1787,6 +1787,19 @@ ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS store_quantities JSONB;
 -- PO_PARSE_VERSION and every row below it is re-read exactly once.
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_parse_version INTEGER NOT NULL DEFAULT 0;
 
+-- ⚠️ WHAT THE 850 SAYS IT IS — BEG01, the transaction set purpose code (2026-09-08).
+-- Nordstrom CANCELLED PO 50073678 fourteen days after we shipped and invoiced it. The
+-- cancellation arrived, stored, and was invisible: a cancel references its lines rather
+-- than restating them, so it parsed to `0 units, 1 line` and every surface read it as an
+-- empty order. The document had said `01` all along, in the first element of its first
+-- segment, and nothing in this schema had a place to put it.
+-- The same unread field also explained the five "mystery" re-sends of that PO — all
+-- purpose `07`, Duplicate, sent deliberately.
+-- ⚠️ NEVER DEFAULTED TO '00'. A missing purpose code means a parse we do not understand;
+-- asserting "Original" would manufacture the reassurance this column exists to remove.
+-- Filled by PO_PARSE_VERSION 3, which re-reads every 850 already stored.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS po_purpose_code TEXT;
+
 -- ── The OC an order came from (Nima, 2026-08-20) ─────────────────────────────
 --
 -- He gave the grouping model: an order is one of four shapes, and two of them start
