@@ -110,7 +110,12 @@ export function segmentPages(pageResults, { knownPos } = {}) {
 export function proNumbersIn(codes = []) {
   const out = []
   for (const c of codes) {
-    const s = String(c || '').trim()
+    // ⚠️ CODE 39 HANDS BACK ITS FRAMING CHARACTERS. The live scan of NB1731282
+    // decoded as `/$%CTEG812357` — `/`, `$` and `%` are real Code 39 symbols (its
+    // Full ASCII shifts), and CTE's label carries them ahead of the data. My
+    // original filter required `^[A-Z]`, so it REJECTED the very number it was
+    // written for. Strip non-alphanumerics from both ends before judging.
+    const s = String(c || '').trim().replace(/^[^A-Z0-9]+/i, '').replace(/[^A-Z0-9]+$/i, '')
     if (!s) continue
     if (/^NB\d+$/i.test(s)) continue          // our BOL
     if (/^IF\d+$/i.test(s)) continue          // a fulfilment

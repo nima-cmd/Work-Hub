@@ -6,9 +6,9 @@
 
 import { pool } from '../db.js'
 import { extractStoreQuantities, extractShipTo } from '../model/ediPoDiff.js'
-import { extractPoDates, extractPoLines, summarizePoLines } from './orderfulDates.js'
+import { extractPoDates, extractPoLines, summarizePoLines, extractPoPurpose } from './orderfulDates.js'
 
-export { extractPoDates, extractPoLines } from './orderfulDates.js'
+export { extractPoDates, extractPoLines, extractPoPurpose } from './orderfulDates.js'
 
 const API_BASE = 'https://api.orderful.com/v3/transactions'
 
@@ -117,7 +117,11 @@ export async function fetchOrderfulMessage(apiKey, id) {
 // were never revisited and that field stayed NULL forever, looking like a real absence.
 //   1 — dates + line items + store codes
 //   2 — full SDQ (all repeats, with quantities) + the N1 ship-to  (2026-08-31)
-export const PO_PARSE_VERSION = 2
+//   3 — BEG01 transaction set purpose code (2026-09-08). ⚠️ THE BUMP IS THE POINT:
+//       every 850 already stored is re-read once, so the cancellation of PO
+//       50073678 — and every past cancel/change nobody was told about — gets its
+//       code filled in rather than staying NULL and looking like an absence.
+export const PO_PARSE_VERSION = 3
 
 export async function backfillPo850Details(apiKey, db = pool) {
   const { rows } = await db.query(
@@ -136,6 +140,7 @@ export async function backfillPo850Details(apiKey, db = pool) {
     const storeCodes = storeQuantities.map((s) => s.store)
     const shipTo = extractShipTo(message)
     const { totalUnits, lineCount } = summarizePoLines(lineItems)
+    const purposeCode = extractPoPurpose(message)
     // Stamp checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched
     // forever — the VERSION is what allows a deliberate second look later.
     await db.query(
@@ -143,12 +148,15 @@ export async function backfillPo850Details(apiKey, db = pool) {
        SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true,
            line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true,
            store_codes = $7, ship_to_codes = $8, store_quantities = $9::jsonb,
-           po_parse_version = $10
+           po_purpose_code = $10, po_parse_version = $11
        WHERE id = $1`,
       [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount,
-       storeCodes, shipTo, JSON.stringify(storeQuantities), PO_PARSE_VERSION],
+       storeCodes, shipTo, JSON.stringify(storeQuantities), purposeCode, PO_PARSE_VERSION],
     )
-    if (shipNotBefore || cancelAfter || lineItems.length) n++
+    // ⚠️ A PURPOSE CODE ALONE COUNTS AS HAVING LEARNED SOMETHING. A cancellation
+    // carries no dates and no line detail by design, so the old condition scored
+    // the single most important document type as "nothing updated".
+    if (shipNotBefore || cancelAfter || lineItems.length || purposeCode) n++
   }
   return { checked: rows.length, updated: n }
 }

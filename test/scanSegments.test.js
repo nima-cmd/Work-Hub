@@ -264,3 +264,32 @@ test('a page with no codes array still segments', () => {
   const { documents } = segmentPages([{ pageNum: 1, qr: 'NB1731277' }])
   assert.deepEqual(documents[0].proNumbers, [])
 })
+
+test("⚠️ THE REAL CTE LABEL DECODES AS CODE 39 WITH FRAMING CHARACTERS", () => {
+  // Measured on the live scan of NB1731282/NB1731283 (2026-09-08). I had assumed
+  // Code 128 and a clean `CTEG 803868`, tested against that assumption, and
+  // shipped a feature that captured nothing: the detector was never asked for
+  // code_39, AND this filter required ^[A-Z] so it would have rejected the value
+  // even with the right format. Two bugs, both from testing the assumption.
+  assert.deepEqual(proNumbersIn(['/$%CTEG812357']), ['CTEG812357'])
+  assert.deepEqual(proNumbersIn(['/$%CTEG812358']), ['CTEG812358'])
+})
+
+test('the clean forms still work, and are the same number', () => {
+  assert.deepEqual(proNumbersIn(['CTEG 803868', '/$%CTEG803868', 'cteg-803868']), ['CTEG803868'])
+})
+
+test('⚠️ stripping framing does not let junk through', () => {
+  // The strip is only at the ends; the shape rule still has to pass.
+  assert.deepEqual(proNumbersIn(['/$%', '///', '$$$1234', '/$%NB1731282', '/$%IF7644']), [])
+})
+
+test('a real page carrying both our QR and the carrier label yields only the PRO', () => {
+  const { documents } = segmentPages([
+    { pageNum: 1, qr: 'NB1731282', codes: ['/$%CTEG812357'] },
+    { pageNum: 2, qr: 'NB1731283', codes: ['/$%CTEG812358'] },
+  ])
+  assert.equal(documents.length, 2)
+  assert.deepEqual(documents[0].proNumbers, ['CTEG812357'])
+  assert.deepEqual(documents[1].proNumbers, ['CTEG812358'])
+})

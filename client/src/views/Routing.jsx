@@ -1135,6 +1135,7 @@ function RefEditor({ s, auths, busy, onSave }) {
     trackingNumbers: (s.trackingNumbers || []).join(', '),
     routingRequestNumber: s.routingRequestNumber || '',
     routingRequestLine: s.routingRequestLine || '',
+    proNumber: s.proNumber || '',
   })
   const isBloomies = s.partner === "Bloomingdale's"
   const isNordstrom = s.partner === 'Nordstrom'
@@ -1226,6 +1227,16 @@ function RefEditor({ s, auths, busy, onSave }) {
         <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>
       </div>
       <label>FedEx pickup #<input value={d.fedexPickupNumber} onChange={set('fedexPickupNumber')} placeholder="pickup confirmation #" /></label>
+      {/* ⚠️ THE CARRIER'S PRO, TYPEABLE. The scan reads it off the sticker when it
+          can, but I shipped the capture with no way to enter one by hand and no
+          hint on the card when it was empty — so a shipment with a PRO on paper
+          and none in the app looked identical to one the carrier never gave us
+          (Nima, 2026-09-08: "we also noticed thre no place on teh card to store
+          this"). Says where the stored value came from, per the entered-vs-derived
+          rule. */}
+      <label>Carrier PRO #{s.proSource ? <span className="cust"> · {s.proSource === 'scan' ? 'read from the scan' : 'entered by hand'}</span> : null}
+        <input value={d.proNumber} onChange={set('proNumber')} placeholder="e.g. CTEG812357 — off the carrier's label" />
+      </label>
       {/* One number per carton is normal on a DC-direct parcel shipment, so this
           takes a list; commas, spaces or a pasted column all split correctly. */}
       <label>Tracking #s

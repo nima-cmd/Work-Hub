@@ -40,6 +40,20 @@ export function extractPoDates(message) {
 // We key each line by the VENDOR STYLE (VA) when present, else the UPC — that's
 // the identity that stays stable across a re-send, so a diff lines up SKUs
 // rather than reshuffling by array position. Pure: no DB, no network.
+/**
+ * The 850's own statement of what it is — BEG01 / transactionSetPurposeCode.
+ *
+ * ⚠️ IT LIVES IN THE FIRST ELEMENT OF THE FIRST SEGMENT and was never read until
+ * a cancellation went unnoticed for a month. See src/model/ediPoPurpose.js for the
+ * incident. Returns the RAW string; naming it is the model's job, because an
+ * unrecognised code must survive the trip rather than be normalised away.
+ */
+export function extractPoPurpose(message) {
+  const beg = message?.transactionSets?.[0]?.beginningSegmentForPurchaseOrder?.[0]
+  const code = beg?.transactionSetPurposeCode
+  return code == null || code === '' ? null : String(code).trim()
+}
+
 function productIds(baseline) {
   // Collect every (qualifier, id) pair regardless of the numeric suffix Orderful
   // appends (productServiceIDQualifier, ...Qualifier1, ...Qualifier2, …).
