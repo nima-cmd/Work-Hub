@@ -1118,6 +1118,10 @@ const SHIPMENT_REF_COLS = {
   // Nordstrom's portal references (Nima, 2026-08-05) — see db/schema.sql.
   routingRequestNumber: 'routing_request_number',
   routingRequestLine: 'routing_request_line',
+  // The CARRIER's tracking number, off the sticker they put on our BOL. Typed
+  // here when the scan could not read it — which is the normal case for any
+  // carrier whose label we have not met yet.
+  proNumber: 'pro_number',
 }
 
 // tracking_numbers is TEXT[]; everything else here is scalar. A shipment is many
@@ -1139,6 +1143,16 @@ export async function updateShipmentRefs(id, fields = {}, db = pool) {
       else vals.push(fields[k] === '' ? null : fields[k])
       sets.push(`${col} = $${vals.length}`)
     }
+  }
+  // ⚠️ A HAND-TYPED PRO IS STAMPED AS HAND-TYPED. `pro_source` exists so the card
+  // can say whether a number was read off a barcode or entered by a person, and
+  // the scan path already writes 'scan'. Writing the value without the source
+  // would leave the two indistinguishable — the standing entered-vs-derived rule.
+  if ('proNumber' in fields) {
+    const typed = fields.proNumber !== '' && fields.proNumber != null
+    vals.push(typed ? 'manual' : null)
+    sets.push(`pro_source = $${vals.length}`)
+    sets.push(typed ? 'pro_captured_at = now()' : 'pro_captured_at = NULL')
   }
   if (!sets.length) return null
   vals.push(id)

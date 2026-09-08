@@ -68,14 +68,24 @@ export async function decodePages(pdfBytes, { dpi = 200, onProgress } = {}) {
   const pdf = await loadingTask.promise
   const scale = dpiToScale(dpi)
   // ⚠️ 1D IS READ TOO, AND ONLY BarcodeDetector CAN DO IT. The carrier staples its
-  // own tracking barcode onto our BOL (CTE prints `CTEG 803868` as Code 128), and
-  // reading it in the same pass is what saves re-keying the PRO by hand. Verified
-  // in the preview browser: `code_128` is in getSupportedFormats().
+  // own tracking barcode onto our BOL, and reading it in the same pass is what
+  // saves re-keying the PRO by hand.
+  //
+  // ⚠️ CTE PRINTS CODE 39, NOT CODE 128 — and I shipped `['qr_code','code_128']`
+  // on an assumption (2026-09-08). The first real scan filed both BOLs perfectly
+  // and captured no PRO at all, because the detector was never asked for the
+  // format on the sticker. Measured on the live scan of NB1731282/NB1731283:
+  //   code_39 : "/$%CTEG812357"   ← the actual label
+  //   qr_code : "NB1731282"       ← our tag
+  // So the list is now every 1D symbology a freight label plausibly uses. Adding a
+  // format costs a little detect time; omitting the right one costs the feature.
+  // Verified decodable down to 150 DPI, so the pipeline's 200 is ample.
+  //
   // jsQR is QR-ONLY, so where BarcodeDetector is absent (Safari) 1D silently
   // yields nothing — `oneDimensional` says so rather than letting a missing PRO
   // read as "the carrier didn't put one on".
   const detector = 'BarcodeDetector' in window
-    ? new window.BarcodeDetector({ formats: ['qr_code', 'code_128'] })
+    ? new window.BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39', 'code_93', 'itf'] })
     : null
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
