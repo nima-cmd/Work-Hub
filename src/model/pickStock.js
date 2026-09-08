@@ -44,7 +44,13 @@ export function stockColumns(orderLocations = [], stockLocations = []) {
     const key = id(l.id)
     if (!key || seen.has(key)) continue
     seen.add(key)
-    out.push({ id: key, name: id(l.name) || key, isOrderLocation: orderLocations.some((o) => id(o.id) === key) })
+    out.push({
+      id: key,
+      name: id(l.name) || key,
+      isOrderLocation: orderLocations.some((o) => id(o.id) === key),
+      // Carried through so the shortfall can exclude it and the sheet can label it.
+      offsite: !!l.offsite,
+    })
   }
   return out
 }
@@ -88,6 +94,7 @@ export function withStock(ticket, rows = [], { locations = [], ok = true, error 
     const found = byItem.get(id(s.itemId)) || {}
     const onHand = {}
     let total = 0
+    let offsite = 0
     for (const c of columns) {
       const q = num(found[c.id])
       // ⚠️ A NEGATIVE ON-HAND IS SHOWN BUT NEVER SUBTRACTED FROM THE TOTAL. An oversold
@@ -95,12 +102,26 @@ export function withStock(ticket, rows = [], { locations = [], ok = true, error 
       // not "minus four units". Summing it raw makes a need of 5 against -4 elsewhere
       // report a shortfall of 9, sending someone to find four units that no order wants.
       onHand[c.id] = q
-      total += Math.max(0, q)
+      // ⚠️ OFFSITE IS COUNTED SEPARATELY, NOT INTO THE LOCAL TOTAL. Nima, 2026-09-08:
+      // "we wont always pull from offsite we may want to pick where we can pick from".
+      // Folding it in would make a pull that needs a van read exactly like one that
+      // needs a walk — and the whole point of this sheet is telling those apart.
+      if (c.offsite) offsite += Math.max(0, q)
+      else total += Math.max(0, q)
     }
     const short = Math.max(0, s.total - total)
-    // `onHandTotal` is what can actually be PULLED — the sum of the positive cells, so
-    // it can exceed the sum of what is printed when a location is oversold.
-    return { ...s, onHand, onHandTotal: total, short }
+    // `onHandTotal` is what can actually be PULLED ON THE FLOOR — the sum of the
+    // positive local cells, so it can exceed the sum of what is printed when a
+    // location is oversold. `offsiteTotal` is the same measure for the offsite
+    // buildings, and `offsiteCovers` is how much of the local gap it would close.
+    return {
+      ...s,
+      onHand,
+      onHandTotal: total,
+      offsiteTotal: offsite,
+      short,
+      offsiteCovers: Math.min(short, offsite),
+    }
   })
 
   return {
@@ -109,6 +130,27 @@ export function withStock(ticket, rows = [], { locations = [], ok = true, error 
     stockColumns: columns,
     stockKnown: true,
     stockError: null,
-    shortSkus: skus.filter((s) => s.short > 0).map((s) => ({ sku: s.sku, need: s.total, have: s.onHandTotal, short: s.short })),
+    // ⚠️ SHORT STILL MEANS SHORT ON THE FLOOR. A SKU that offsite could cover stays on
+    // this list, because it IS a decision someone has to make — but it says so, so
+    // "short 419 units" never reads as "we do not own them". Measured on SO12578: 419
+    // of 1,027 units sit only at Offsite Storage.
+    shortSkus: skus.filter((s) => s.short > 0).map((s) => ({
+      sku: s.sku, need: s.total, have: s.onHandTotal, short: s.short,
+      offsite: s.offsiteTotal, offsiteCovers: s.offsiteCovers,
+      // A gap offsite closes completely is a transfer; one it cannot is a real shortage.
+      coveredByOffsite: s.offsiteCovers >= s.short,
+    })),
   }
 }
+
+/**
+ * The SKUs whose only stock is offsite — the transfer list.
+ *
+ * ⚠️ THIS IS THE LIST THE OLD SHEET COULD NOT PRODUCE, and its absence is what made
+ * a fillable order look unfillable. Separate from `shortSkus` on purpose: one asks
+ * "can we pick this today", the other asks "what has to come over first".
+ */
+export const offsiteOnly = (ticket = {}) =>
+  (ticket.skus || [])
+    .filter((s) => s.offsiteTotal > 0 && s.onHandTotal <= 0)
+    .map((s) => ({ sku: s.sku, need: s.total, offsite: s.offsiteTotal }))

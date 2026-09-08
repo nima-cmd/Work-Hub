@@ -21,14 +21,15 @@ test("⚠️ the order's own location is a column, and it is NOT Warehouse", () 
   const t = bulkPick([line()], ['P1'])
   assert.deepEqual(t.orderLocations, [{ id: '7', name: "Warehouse Bulk : Bloomingdale's" }])
   const cols = stockColumns(t.orderLocations, STOCK_LOCATIONS)
-  assert.deepEqual(cols.map((c) => c.name), ["Warehouse Bulk : Bloomingdale's", 'Warehouse', 'Virtual Warehouse'])
-  assert.deepEqual(cols.map((c) => c.isOrderLocation), [true, false, false])
+  assert.deepEqual(cols.map((c) => c.name), ["Warehouse Bulk : Bloomingdale's", 'Warehouse', 'Virtual Warehouse', 'Offsite Storage'])
+  assert.deepEqual(cols.map((c) => c.isOrderLocation), [true, false, false, false])
+  assert.deepEqual(cols.map((c) => c.offsite), [false, false, false, true])
 })
 
 test('⚠️ a boutique order already IN Warehouse does not get the column twice', () => {
   const t = bulkPick([line({ locationId: '2', locationName: 'Warehouse' })], ['P1'])
   const cols = stockColumns(t.orderLocations, STOCK_LOCATIONS)
-  assert.deepEqual(cols.map((c) => c.name), ['Warehouse', 'Virtual Warehouse'])
+  assert.deepEqual(cols.map((c) => c.name), ['Warehouse', 'Virtual Warehouse', 'Offsite Storage'])
   assert.equal(cols[0].isOrderLocation, true)
 })
 
@@ -46,7 +47,10 @@ test('⚠️ SHORT IS ON HAND vs UNITS NEEDED — not availability (Nima, 2026-0
 test('short is named with need, have and the gap', () => {
   const t = bulkPick([line({ quantity: -40 })], ['P1'])
   const s = withStock(t, [stock('101', '7', 0), stock('101', '2', 12), stock('101', '3', 5)], opts)
-  assert.deepEqual(s.shortSkus, [{ sku: 'SN01', need: 40, have: 17, short: 23 }])
+  assert.deepEqual(s.shortSkus, [{
+    sku: 'SN01', need: 40, have: 17, short: 23,
+    offsite: 0, offsiteCovers: 0, coveredByOffsite: false,
+  }])
 })
 
 test('⚠️ the shortfall is measured across ALL columns, never one location', () => {
@@ -64,7 +68,7 @@ test('⚠️ a NULL on-hand reads as 0 but never removes the location', () => {
   const t = bulkPick([line({ quantity: -1 })], ['P1'])
   const s = withStock(t, [stock('101', '3', null)], opts)
   assert.equal(s.skus[0].onHand['3'], 0)
-  assert.equal(Object.keys(s.skus[0].onHand).length, 3)
+  assert.equal(Object.keys(s.skus[0].onHand).length, 4)
 })
 
 test('⚠️ negative on-hand is SHOWN, and only the shortfall is clamped', () => {
@@ -119,13 +123,54 @@ test('⚠️ stock rows are read case-insensitively, like every other SuiteQL al
   assert.deepEqual(r, { itemId: 101, locationId: 2, locationName: 'Warehouse', onHand: 29 })
 })
 
-test('the live query is scoped to the order location plus the two Glendale buckets', () => {
+test('the live query is scoped to the order location, the Glendale buckets AND offsite', () => {
   const t = bulkPick([line()], ['P1'])
-  assert.deepEqual(stockLocationIds(t.orderLocations, STOCK_LOCATIONS), ['7', '2', '3'])
+  assert.deepEqual(stockLocationIds(t.orderLocations, STOCK_LOCATIONS), ['7', '2', '3', '19'])
 })
 
 test('⚠️ a fully-cancelled PO adds no location column', () => {
   // Same rule as the headline counts: the table describes what is being PICKED.
   const t = bulkPick([line({ isclosed: 'T', locationId: '9', locationName: 'Warehouse Bulk : Tuckernuck' })], ['P1'])
   assert.deepEqual(t.orderLocations, [])
+})
+
+// ── Offsite Storage ─────────────────────────────────────────────────────────
+import { offsiteOnly } from '../src/model/pickStock.js'
+
+test('⚠️ OFFSITE IS SHOWN BUT NOT COUNTED AS LOCAL — Nima, 2026-09-08', () => {
+  // "we wont always pull from offsite we may want to pick where we can pick from".
+  // Folding it into the total makes a pull needing a van read like one needing a
+  // walk, and telling those apart is the whole job of this sheet.
+  const t = bulkPick([line({ quantity: -30 })], ['P1'])
+  const s = withStock(t, [stock('101', '2', 4), stock('101', '19', 26)], opts)
+  assert.equal(s.skus[0].onHandTotal, 4, 'local only')
+  assert.equal(s.skus[0].offsiteTotal, 26)
+  assert.equal(s.skus[0].short, 26, 'short ON THE FLOOR')
+  assert.equal(s.skus[0].offsiteCovers, 26)
+  assert.equal(s.shortSkus[0].coveredByOffsite, true, 'a transfer, not a shortage')
+})
+
+test('⚠️ A GAP OFFSITE CANNOT CLOSE IS STILL A REAL SHORTAGE', () => {
+  const t = bulkPick([line({ quantity: -30 })], ['P1'])
+  const s = withStock(t, [stock('101', '2', 4), stock('101', '19', 10)], opts)
+  assert.equal(s.skus[0].short, 26)
+  assert.equal(s.skus[0].offsiteCovers, 10)
+  assert.equal(s.shortSkus[0].coveredByOffsite, false)
+})
+
+test('⚠️ THE REAL SO12578 CASE — 419 units that read as missing', () => {
+  // PO 50203208, Nordstrom Rack closeout. The whole NS04120* family exists ONLY at
+  // Offsite Storage, so the two-bucket sheet called a fillable order 419 short.
+  const t = bulkPick([line({ sku: 'NS04120LD-ONYX-370', itemId: '900', quantity: -31 })], ['P1'])
+  const s = withStock(t, [stock('900', '19', 31)], opts)
+  assert.equal(s.skus[0].onHandTotal, 0, 'nothing on the Glendale floor')
+  assert.equal(s.skus[0].offsiteTotal, 31)
+  assert.equal(s.shortSkus[0].coveredByOffsite, true)
+  assert.deepEqual(offsiteOnly(s), [{ sku: 'NS04120LD-ONYX-370', need: 31, offsite: 31 }])
+})
+
+test('the transfer list excludes anything pickable on the floor', () => {
+  const t = bulkPick([line({ quantity: -10 })], ['P1'])
+  const s = withStock(t, [stock('101', '2', 3), stock('101', '19', 20)], opts)
+  assert.deepEqual(offsiteOnly(s), [], 'partly local means it is not offsite-only')
 })

@@ -113,3 +113,24 @@ test('it renders an empty ticket rather than throwing', async () => {
   const buf = await buildPickTicketPdf({ asked: ['X'], skus: [], pos: [{ po: 'X', verdict: 'missing' }], totalUnits: 0 })
   assert.equal(buf.subarray(0, 5).toString(), '%PDF-')
 })
+
+test('⚠️ A TRANSFER IS NOT A SHORTAGE ON THE PAGE', () => {
+  // PO 50203208 printed "419 units short" on stock we own, because Offsite Storage
+  // was not a column. A red short line must only ever mean "we do not have these".
+  const t = ticket({
+    stockColumns: [
+      { id: '2', name: 'Warehouse', isOrderLocation: false },
+      { id: '19', name: 'Offsite Storage', isOrderLocation: false, offsite: true },
+    ],
+    shortSkus: [
+      { sku: 'NS04120LD-ONYX-370', need: 31, have: 0, short: 31, offsite: 31, offsiteCovers: 31, coveredByOffsite: true },
+      { sku: 'SN03011NG-LAVENDER', need: 82, have: 4, short: 78, offsite: 0, offsiteCovers: 0, coveredByOffsite: false },
+    ],
+  })
+  const cols = columnPlan(t, 540).map((c) => c.key)
+  assert.ok(cols.includes('loc:19'), 'offsite gets its own column')
+  // The renderer is exercised for real — a throw here is the whole document lost.
+  return buildPickTicketPdf(t).then((buf) => {
+    assert.equal(buf.subarray(0, 5).toString(), '%PDF-')
+  })
+})
