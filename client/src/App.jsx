@@ -250,6 +250,12 @@ export default function App() {
   // ⚠️ Freight that left with no ASN. See src/model/asnDue.js — PO 50220600 reached a
   // Nordstrom compliance notice because nothing said so before 4pm.
   const [asnDueFeed, setAsnDueFeed] = useState(null)
+  // ⚠️ THE BANNER IS A DOOR, NOT AN ANNOUNCEMENT (Nima, 2026-09-09). Handing Routing
+  // the BOLs means he lands ON the cards rather than being told a number and left to
+  // find them — at 3:45pm that is the whole difference. Declared HERE with the other
+  // state, not next to its handler: `viewProps` reads it and a later `const` is a
+  // temporal-dead-zone crash that blanks the whole app.
+  const [asnFocus, setAsnFocus] = useState(null)
   // Ship desk + the two other "whose court" feeds. These live here rather than
   // in CommandCenter because the court strip is app-wide now (Nima, 2026-07-31)
   // — and lifting them means the Command view no longer fetches them twice.
@@ -432,6 +438,7 @@ export default function App() {
     labelGaps, custody, bay,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     handoffPo, onHandoffPoTaken: () => setHandoffPo(null), onOpenBulkPick: openBulkPick,
+    asnFocus, onAsnFocusTaken: () => setAsnFocus(null),
     onNavigate: navigate, onRefresh: refresh,
   }
 
@@ -457,6 +464,10 @@ export default function App() {
     return () => clearInterval(t)
   }, [])
   const asnBanner = asnDueFeed?.banner || null
+  const openAsnDue = () => {
+    setAsnFocus(asnBanner?.bols || [])
+    setView('routing')
+  }
 
   return (
   // ⚠️ THE LEAVING CUTOFF, IN THE TOP BAR (Nima, 2026-09-09: "we need to make sure
@@ -479,10 +490,12 @@ export default function App() {
         <ViewMenu views={VIEWS} view={view} onPick={setView} />
         <div className="topmeta">
           {asnBanner && (
-            <span className={'pill asnCutoff ' + (asnBanner.severity === 'critical' ? 'danger' : 'warn')}
-              title={`BOLs: ${(asnBanner.bols || []).join(', ')}\nTruth is a real 856 in Orderful — not NetSuite's synced flag, not the link table.`}>
+            <button type="button" onClick={openAsnDue}
+              className={'pill asnCutoff ' + (asnBanner.severity === 'critical' ? 'danger' : 'warn')}
+              title={`Click to open these shipments in Routing.\nBOLs: ${(asnBanner.bols || []).join(', ')}\nTruth is a real 856 in Orderful — not NetSuite's synced flag, not the link table.`}>
               {asnBanner.severity === 'critical' ? '⚠ ' : ''}{asnBanner.text}
-            </span>
+              <span className="asnCutoffGo"> →</span>
+            </button>
           )}
           {/* Scan a tag from ANY view and open that record in NetSuite. Lives in the
               top bar because the whole point is that it is reachable without

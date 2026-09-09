@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
@@ -54,13 +54,31 @@ function todayStr() {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-export default function Routing() {
+export default function Routing({ asnFocus, onAsnFocusTaken }) {
+  // ⚠️ THE BANNER HAD TO BECOME A DOOR (Nima, 2026-09-09: "i was hoping clicking on
+  // it would take me to the ASN im missing showing me where to look instead of just
+  // announcing a problem"). Announcing a problem without pointing at it makes the
+  // reader do the search, which at 3:45pm is the difference between fixing it and
+  // leaving. Same handoff idiom as `handoffPo`: App holds the value, the view
+  // consumes it once and clears it, so a back-and-forth does not re-trigger.
+  const [focusBols, setFocusBols] = useState(() => new Set())
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(null)
   const [selected, setSelected] = useState(null) // Set<poNumber> | null (=all)
   const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
   const [tab, setTab] = useState('active') // 'active' | 'shipped'
+
+  // ⚠️ SHIPPED FREIGHT LIVES ON THE 'shipped' TAB, and every ASN-due shipment has by
+  // definition left the building — so landing on 'active' would show an empty board
+  // and read as "nothing to do", the precise opposite of the point.
+  useEffect(() => {
+    const bols = (asnFocus || []).filter(Boolean)
+    if (!bols.length) return
+    setFocusBols(new Set(bols))
+    setTab('shipped')
+    onAsnFocusTaken?.()
+  }, [asnFocus])
 
   const [pulled, setPulled] = useState(null) // last NetSuite pull's result line
   const [pushed, setPushed] = useState(null) // last ShipStation push's result line
@@ -324,7 +342,7 @@ export default function Routing() {
                 {activeDetached.map((s) => (
                   <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
                     auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip}
-                    onApplyTender={onApplyTender} readerLive={readerLive} detached />
+                    onApplyTender={onApplyTender} readerLive={readerLive} detached focus={focusBols.has(s.bolNumber)} />
                 ))}
               </div>
             </section>
@@ -340,7 +358,7 @@ export default function Routing() {
                   <div className="rt-cards">
                     {list.map((s) => (
                       <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
-                        auths={auths} busy={busy} onSaveRefs={onSaveRefs} onShip={onShip} detached />
+                        auths={auths} busy={busy} onSaveRefs={onSaveRefs} onShip={onShip} detached focus={focusBols.has(s.bolNumber)} />
                     ))}
                   </div>
                 </section>
@@ -677,7 +695,14 @@ function TenderLine({ tender, busy, onApply }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, readerLive, detached, groupable, groupChecked, onToggleGroup }) {
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, readerLive, detached, groupable, groupChecked, onToggleGroup , focus }) {
+  // Scrolls itself into view when the banner sent us here — the card has to be the
+  // thing you land on, not something you then hunt for.
+  const focusRef = useRef(null)
+  useEffect(() => {
+    if (focus && focusRef.current) focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focus])
+
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -687,7 +712,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
   const canHold = onHold && !detached && !s?.shippedAt
 
   return (
-    <div className={'rt-card' + (s ? ' has-bol' : '')}>
+    <div className={'rt-card' + (s ? ' has-bol' : '') + (focus ? ' rt-asnFocus' : '')} ref={focusRef}>
       <div className="rt-dc">
         <span className="rt-dcCode">{g.dc}</span>
         <span className="rt-dcName">{g.dcLabel}</span>
