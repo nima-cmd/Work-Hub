@@ -14,6 +14,7 @@
 import { pool } from '../db.js'
 import { slipRevision } from '../model/packingSlipRevision.js'
 import { containerLabel } from '../model/itemReceiptCsv.js'
+import { ensureShipment } from './inboundShipmentLoad.js'
 
 /**
  * Insert or replace a container.
@@ -30,6 +31,23 @@ import { containerLabel } from '../model/itemReceiptCsv.js'
  * read as a container with no boxes — indistinguishable from a master list, and
  * the exact wrong answer to "which box was it in".
  */
+/**
+ * "2026.9.7" -> "2026-09-07", for a real DATE column.
+ *
+ * ⚠️ The slip's own text stays in packing_slip.container_date exactly as printed —
+ * factories vary and that column must not assert a precision the document lacks.
+ * This is the parsed form, for arithmetic only, and it returns null rather than
+ * guessing when the shape is not a date.
+ */
+export function slipDateToIso(raw) {
+  const p = String(raw ?? '').trim().split(/[.\-/]/)
+  if (p.length < 3) return null
+  const [y, m, d] = p
+  const yy = Number(y), mm = Number(m), dd = Number(d)
+  if (!(yy > 1900 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31)) return null
+  return `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+}
+
 export async function savePackingSlip(container, { sourceFilename = null, db = pool } = {}) {
   // ⚠️ THE LABEL IS THE KEY, not container_num — see db/schema.sql. It is computed
   // in exactly one place so the stored slip and the generated External IDs can
@@ -90,6 +108,12 @@ export async function savePackingSlip(container, { sourceFilename = null, db = p
         }
       }
     }
+    // ⚠️ THE VESSEL IS CREATED HERE, INSIDE THE SAME TRANSACTION. A container that
+    // exists as a slip but not as a shipment would be inventory nobody is expecting —
+    // and the slip's own printed date is the only witness we have to when it left,
+    // so there is no second place to type it and nothing to keep in sync.
+    await ensureShipment(label, { departedOn: slipDateToIso(container.containerDate), db: client })
+
     await client.query('COMMIT')
     return { containerLabel: label, containerNum: container.containerNum, ...rev, lines: (container.skuTotals || []).length }
   } catch (e) {

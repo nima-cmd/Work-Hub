@@ -50,6 +50,7 @@ import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
+import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
@@ -1081,6 +1082,41 @@ app.get('/api/packing-slips/:label', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// The Harbour — every inbound vessel, where it is, and when to expect it.
+app.get('/api/shipments', async (_req, res) => {
+  try {
+    res.json(await fetchShipmentBoard())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/shipments/:label', async (req, res) => {
+  try {
+    const s = await fetchShipment(req.params.label)
+    if (!s) return res.status(404).json({ error: 'no such shipment' })
+    res.json(s)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Mark an arrival, set an ETA, choose the mode, record a tracking number.
+// ⚠️ A 409, not a 500, when the write is REFUSED rather than broken: updateShipment
+// will not let an estimate overwrite a date a person entered, and the caller needs to
+// tell those two apart.
+app.post('/api/shipments/:label', async (req, res) => {
+  try {
+    res.json(await updateShipment(req.params.label, req.body || {}))
+  } catch (e) {
+    console.error(e)
+    const refused = /refusing to overwrite/i.test(e.message || '')
+    res.status(refused ? 409 : 400).json({ error: e.message })
   }
 })
 
