@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
+  fetchRouting, fetchAsnDue, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
@@ -62,6 +62,11 @@ export default function Routing({ asnFocus, onAsnFocusTaken }) {
   // leaving. Same handoff idiom as `handoffPo`: App holds the value, the view
   // consumes it once and clears it, so a back-and-forth does not re-trigger.
   const [focusBols, setFocusBols] = useState(() => new Set())
+  // ⚠️ THE YARD ASKS FOR ITSELF (Nima, 2026-09-09: "in the routing yard would be a
+  // good place to have it as well"). It does NOT read the top bar's copy: Routing is
+  // reachable directly, and a panel that renders only after App has polled would be
+  // blank exactly when someone opens the view to check.
+  const [asnFeed, setAsnFeed] = useState(null)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(null)
@@ -85,6 +90,9 @@ export default function Routing({ asnFocus, onAsnFocusTaken }) {
 
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
+    // Best-effort, like every other secondary feed: the yard still draws its cards
+    // if this fails, it just cannot warn.
+    fetchAsnDue().then(setAsnFeed).catch(() => {})
   }
   useEffect(load, [])
 
@@ -303,6 +311,8 @@ export default function Routing({ asnFocus, onAsnFocusTaken }) {
           <AuthPanel auths={auths} shipments={data.shipments || []} busy={busy}
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
+
+          <AsnDuePanel feed={asnFeed} onFocus={(bols) => { setFocusBols(new Set(bols)); setTab('shipped') }} />
 
           <div className="rt-tabs">
             <button className={'tab' + (tab === 'active' ? ' active' : '')} onClick={() => setTab('active')}>
@@ -692,6 +702,48 @@ function TenderLine({ tender, busy, onApply }) {
         </button>
       )}
     </div>
+  )
+}
+
+// ⚠️ THE YARD'S OWN ASN WARNING. The top bar catches you anywhere; this catches you
+// HERE, where the shipments are — and it lists them rather than counting them,
+// because "1 ASN past due" is the announcement-without-a-pointer failure that
+// clicking the pill was added to fix. Same yellow-on-red, so the colour means one
+// thing across the app.
+//
+// ⚠️ SILENT WHEN CLEAR. A panel that always draws is furniture; this one appears
+// only when freight has left unannounced.
+function AsnDuePanel({ feed, onFocus }) {
+  const rows = feed?.shipments || []
+  if (!rows.length) return null
+  const banner = feed?.banner
+  return (
+    <section className={'rt-asnDue' + (banner?.severity === 'critical' ? ' critical' : '')}>
+      <h3>
+        ASN NOT SENT
+        <span className="muted"> · {banner?.text || `${rows.length} shipment${rows.length === 1 ? '' : 's'} awaiting an ASN`}</span>
+      </h3>
+      <div className="rt-asnDueRows">
+        {rows.map((r) => (
+          <button key={r.bolNumber || r.po} type="button" className={'rt-asnDueRow ' + r.state}
+            onClick={() => onFocus([r.bolNumber])}
+            title="Show this shipment below">
+            <span className="rt-asnBol">{r.bolNumber}</span>
+            <span className="rt-asnPartner">{r.partner}</span>
+            <span className="muted">PO {r.po}</span>
+            {r.cartons != null && <span className="muted">{r.cartons} carton{r.cartons === 1 ? '' : 's'}</span>}
+            {/* The clock, in the unit a person thinks in. `basis` matters: "from our
+                mark" is a GUESS at the pickup the partner actually counts from. */}
+            <span className="rt-asnClock">
+              {r.state === 'due'
+                ? `${Math.round(-r.hoursLeft)}h past the ${24}h window`
+                : `${Math.round(r.hoursLeft)}h left`}
+              <span className="muted"> · from {r.basis}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
   )
 }
 
