@@ -48,6 +48,8 @@ import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
+import { previewPackingSlip, commitPackingSlip } from './packingSlipImport.js'
+import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
@@ -1034,6 +1036,62 @@ app.post('/api/scan/file-to-drive', async (req, res) => {
     res.status(badRequest ? 400 : 200).json(
       badRequest ? { error: e.message } : { ok: false, reason: 'server_error', detail: e.message },
     )
+  }
+})
+
+// Factory packing slip → the two NetSuite CSVs, plus the carton map (2026-09-09).
+// Moved out of Naghedi-Warehouse so the slip is STORED and checkable, not merely
+// translated. /preview writes nothing; /commit stores the container.
+app.post('/api/packing-slip/preview', async (req, res) => {
+  try {
+    res.json(await previewPackingSlip(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    // ⚠️ 400, not 500, and the message reaches the screen verbatim. "Unrecognised
+    // packing slip: neither an OFFICE.NO. factory slip nor a SKU/Total Units master
+    // list" is the single most useful sentence this endpoint can say, and a generic
+    // 500 would replace it with nothing actionable.
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/packing-slip/commit', async (req, res) => {
+  try {
+    res.json(await commitPackingSlip(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.get('/api/packing-slips', async (_req, res) => {
+  try {
+    res.json(await listPackingSlips())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/packing-slips/:label', async (req, res) => {
+  try {
+    const slip = await fetchPackingSlip(req.params.label)
+    if (!slip) return res.status(404).json({ error: 'no such container' })
+    res.json(slip)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// "Which container and box did this arrive in?" — the question NetSuite cannot
+// answer, because it records the receipt and not the packing.
+app.get('/api/packing-slip-sku/:sku', async (req, res) => {
+  try {
+    res.json(await findSkuInCartons(req.params.sku))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 

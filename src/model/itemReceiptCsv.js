@@ -9,6 +9,11 @@
 // Ported from Naghedi-Warehouse `src/services/exportGenerator.js`, with the PO line
 // data coming from NetSuite live instead of a manual CSV parked in localStorage.
 
+// The container's NetSuite label. Re-exported so callers building a receipt do not
+// have to know which module owns the naming rule — it is the same identity.
+export { containerLabel, toNsDateLabel } from './containerIdentity.js'
+import { containerLabel } from './containerIdentity.js'
+
 /** Charms, stickers and hangtags are not inventory — they never reach a receipt. */
 export const DEFAULT_NOTRACK_KEYWORDS = ['sticker', 'hangtag']
 
@@ -19,39 +24,6 @@ export const isNotTracked = (sku, keywords = DEFAULT_NOTRACK_KEYWORDS) =>
 export const toPoFull = (po) => {
   const s = String(po ?? '').trim()
   return /^po/i.test(s) ? s.toUpperCase() : `PO${s}`
-}
-
-/**
- * "2026.9.7" -> "2026.9.7", "2026-09-07" -> "2026.9.7". Leading zeros are STRIPPED,
- * because the live records read `321 carton 2026.7.10`, not `2026.07.10`.
- */
-const toNsDateLabel = (raw) => {
-  const p = String(raw ?? '').trim().split(/[.\-/]/)
-  if (p.length < 3) return ''
-  const [y, m, d] = p
-  return `${y}.${parseInt(m, 10)}.${parseInt(d, 10)}`
-}
-
-/**
- * The container's NetSuite label — the thing every External ID and Memo is built on.
- *
- * ⚠️ THE " carton <date>" SUFFIX IS NOT DECORATION, and I shipped the port without it.
- * Every generated container already in NetSuite carries it — `EXT-IR-321 carton
- * 2026.7.101706`, `EXT-16 carton 2026.7.91721`, 134 of the 143 external ids on
- * receipts and transfers. Emitting `EXT-IR-551747` instead would import fine and
- * still be WRONG: docs/packing-slip-to-netsuite.md pairs a receipt with its transfer
- * by recomputing this key, and post-import verification would report "no generated
- * pair found" for every container this app produced. Caught by diffing the two
- * pipelines, which agreed on every quantity and disagreed on every id.
- *
- * ⚠️ AND `containerNum` IS THE BARE NUMBER — "55", "11 Air", "321" — never the
- * filename stem. Passing "55 Container 2026.9.7" yields "55 Container 2026.9.7
- * carton 2026.9.7", which is the same date twice.
- */
-export function containerLabel(container) {
-  const num = String(container?.containerNum ?? '')
-  const date = toNsDateLabel(container?.containerDate)
-  return date ? `${num} carton ${date}` : `${num} carton`
 }
 
 const csvCell = (v) => {
