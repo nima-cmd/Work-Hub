@@ -15,7 +15,7 @@
 // moving — excluding it strands the units in China forever. An unmatched line was
 // never received, so there is nothing to move. See buildItemReceiptCsv Guard 1.
 
-import { DEFAULT_NOTRACK_KEYWORDS, isNotTracked, toPoFull, slipDateToUs } from './itemReceiptCsv.js'
+import { DEFAULT_NOTRACK_KEYWORDS, isNotTracked, toPoFull, slipDateToUs, containerLabel } from './itemReceiptCsv.js'
 
 const csvCell = (v) => {
   const s = v == null ? '' : String(v)
@@ -49,7 +49,7 @@ export function destinationFor(lines) {
  * @param unmatchedLines  from the Item Receipt — the ONLY thing excluded here
  */
 export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), unmatchedLines = [], { notrack = DEFAULT_NOTRACK_KEYWORDS } = {}) {
-  const label = String(container.containerNum ?? '')
+  const label = containerLabel(container)
   const date = slipDateToUs(container.containerDate)
 
   const headers = ['External ID', 'Memo', 'Date', 'From Location', 'To Location',

@@ -8,7 +8,7 @@ const PO_LINES = [
   { poNumber: '1785', sku: 'A-X', item_line_position: 1, qty_ordered: 25, qty_received: 0, final_destination: 'Virtual Warehouse' },
   { poNumber: '1785', sku: 'B-Y', item_line_position: 2, qty_ordered: 60, qty_received: 0, final_destination: 'Virtual Warehouse' },
 ]
-const slip = (skuTotals) => ({ containerNum: '55 Container 2026.9.7', containerDate: '2026.9.7', skuTotals })
+const slip = (skuTotals) => ({ containerNum: '55', containerDate: '2026.9.7', skuTotals })
 const rowsOf = (r) => r.csv.trim().split('\n').slice(1).map((l) => l.split(','))
 
 test('⚠️ AN ALREADY-RECEIVED PO STILL TRANSFERS', () => {
@@ -84,17 +84,17 @@ test('the header and External ID are what the import expects', () => {
   assert.equal(r.csv.split('\n')[0],
     'External ID,Memo,Date,From Location,To Location,PO #,Style Number,Color,Item,Quantity,Purchase Order')
   const row = rowsOf(r)[0]
-  assert.equal(row[0], 'EXT-55 Container 2026.9.71785', 'the receipt key minus IR-')
+  assert.equal(row[0], 'EXT-55 carton 2026.9.71785', 'the receipt key minus IR-')
   assert.equal(row[5], '1785', 'PO # is digits only')
   assert.equal(row[10], 'Purchase Order #PO1785')
-  assert.equal(r.filename, 'Inventory Transfer - 55 Container 2026.9.7.csv')
+  assert.equal(r.filename, 'Inventory Transfer - 55 carton 2026.9.7.csv')
 })
 
 test('⚠️ THE TWO EXTERNAL IDS PAIR, WHICH IS HOW A SLIP IS LINKED TO NETSUITE LATER', () => {
   // Verified live: EXT-IR-321 carton 2026.7.101706 and EXT-321 carton
   // 2026.7.101706 are the same shipment. 134 such pairs already exist.
   return buildNetsuiteExport(
-    { containerNum: '321 carton 2026.7.10', containerDate: '2026.7.10', skuTotals: [{ poNumber: '1706', sku: 'A-X', units: 1 }] },
+    { containerNum: '321', containerDate: '2026.7.10', skuTotals: [{ poNumber: '1706', sku: 'A-X', units: 1 }] },
     [{ poNumber: '1706', sku: 'A-X', item_line_position: 1, qty_ordered: 1, qty_received: 0, final_destination: 'Warehouse' }],
   ).then(({ itemReceipt, transfer, importOrder }) => {
     const ir = itemReceipt.csv.trim().split('\n')[1].split(',')[0]

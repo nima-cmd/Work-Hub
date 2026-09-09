@@ -13,7 +13,7 @@ const PO_LINES = [
   { poNumber: '1785', sku: 'SN13011QJ-LINEN', item_line_position: 3, qty_ordered: 40, qty_received: 40, final_destination: 'Warehouse' },
   { poNumber: '1785', sku: 'SN13012LD-CERISE', item_line_position: 4, qty_ordered: 60, qty_received: 20, final_destination: 'Warehouse' },
 ]
-const slip = (skuTotals) => ({ containerNum: '55 Container 2026.9.7', containerDate: '2026.9.7', skuTotals })
+const slip = (skuTotals) => ({ containerNum: '55', containerDate: '2026.9.7', skuTotals })
 const rowsOf = (r) => r.csv.trim().split('\n').slice(1).map((l) => l.split(','))
 
 test('⚠️ THE F ROWS ARE MANDATORY — without them NetSuite auto-receives the rest', () => {
@@ -110,11 +110,11 @@ test('the header, External ID and Created From are exactly what the import expec
   const header = r.csv.split('\n')[0]
   assert.equal(header, 'External ID,Created From,Date,Memo,Item,Order Line,Quantity,Receive,To Location')
   const row = rowsOf(r)[0]
-  assert.equal(row[0], 'EXT-IR-55 Container 2026.9.71785')
+  assert.equal(row[0], 'EXT-IR-55 carton 2026.9.71785')
   assert.equal(row[1], 'Purchase Order #PO1785')
   assert.equal(row[2], '09/07/2026')
   assert.equal(row[8], 'China')
-  assert.equal(r.filename, 'Item Receipts - 55 Container 2026.9.7.csv')
+  assert.equal(r.filename, 'Item Receipts - 55 carton 2026.9.7.csv')
 })
 
 test('⚠️ THE EXTERNAL ID MATCHES THE ONE ALREADY IN NETSUITE', () => {
@@ -122,7 +122,7 @@ test('⚠️ THE EXTERNAL ID MATCHES THE ONE ALREADY IN NETSUITE', () => {
   // 2026.7.101706 paired with EXT-321 carton 2026.7.101706. Changing the shape
   // would orphan every past container from its receipt.
   const r = buildItemReceiptCsv(
-    { containerNum: '321 carton 2026.7.10', containerDate: '2026.7.10', skuTotals: [{ poNumber: '1706', sku: 'A-X', units: 1 }] },
+    { containerNum: '321', containerDate: '2026.7.10', skuTotals: [{ poNumber: '1706', sku: 'A-X', units: 1 }] },
     [{ poNumber: '1706', sku: 'A-X', item_line_position: 1, qty_ordered: 1, qty_received: 0 }],
   )
   assert.equal(rowsOf(r)[0][0], 'EXT-IR-321 carton 2026.7.101706')
@@ -156,5 +156,28 @@ test('a container label with a comma is quoted, not left to break the file', () 
     { containerNum: 'Air, urgent', containerDate: '2026.9.9', skuTotals: [{ poNumber: '1785', sku: 'SN04022CP-FIRENZE', units: 1 }] },
     PO_LINES,
   )
-  assert.match(r.csv.split('\n')[1], /"EXT-IR-Air, urgent1785"/)
+  assert.match(r.csv.split('\n')[1], /"EXT-IR-Air, urgent carton 2026.9.91785"/)
+})
+
+test('⚠️ A MANUALLY CLOSED LINE IS NOT OPEN, WHATEVER THE ARITHMETIC SAYS', () => {
+  // Closed short: 60 ordered, 0 received. remaining computes to 60 but the line is
+  // not receivable — emitting a Receive = F row for it is exactly the case that
+  // breaks the import with "Unable to find a matching line for sublist expense".
+  // Found by diffing this pipeline against Naghedi-Warehouse, which reads isclosed.
+  const lines = [
+    { poNumber: '1785', sku: 'A-X', item_line_position: 1, qty_ordered: 25, qty_received: 0 },
+    { poNumber: '1785', sku: 'CLOSED-SHORT', item_line_position: 2, qty_ordered: 60, qty_received: 0, line_closed: true },
+  ]
+  const r = buildItemReceiptCsv(slip([{ poNumber: '1785', sku: 'A-X', units: 25 }]), lines)
+  const skus = rowsOf(r).map((x) => x[4])
+  assert.ok(!skus.includes('CLOSED-SHORT'), 'no F row for a closed line')
+  assert.deepEqual(skus, ['A-X'])
+})
+
+test('⚠️ AND SHIPPING AGAINST A CLOSED LINE IS AN OVER-RECEIVE', () => {
+  const lines = [{ poNumber: '1785', sku: 'CLOSED-SHORT', item_line_position: 1, qty_ordered: 60, qty_received: 0, line_closed: true }]
+  const r = buildItemReceiptCsv(slip([{ poNumber: '1785', sku: 'CLOSED-SHORT', units: 10 }]), lines)
+  assert.equal(r.overReceives.length, 1)
+  assert.equal(r.overReceives[0].remaining, 0)
+  assert.equal(r.blocked, true)
 })

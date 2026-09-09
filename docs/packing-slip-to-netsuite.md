@@ -83,9 +83,33 @@ External ID, Created From, Date, Memo, Item, Order Line, Quantity, Receive, To L
 
 | Field | Value |
 |---|---|
-| External ID | `EXT-IR-<containerLabel><poDigits>` |
+| External ID | `EXT-IR-<containerLabel><poDigits>` — see the label rule below |
 | Created From | `Purchase Order #PO1705` — the **full display name**, which is what the import resolves by Name |
 | To Location | `China` |
+
+### ⚠️ The container label is `<num> carton <y.m.d>`, and it is load-bearing
+
+```
+containerNum "321" + containerDate "2026.7.10"  ->  "321 carton 2026.7.10"
+                                                    EXT-IR-321 carton 2026.7.101706
+                                                    EXT-321 carton 2026.7.101706
+```
+
+Leading zeros are **stripped** (`2026.9.7`, not `2026.09.07`), and a slip with no
+date falls back to `<num> carton`.
+
+⚠️ **`containerNum` is the bare number** — `55`, `11 Air`, `321` — **never the
+filename stem.** Passing `55 Container 2026.9.7` produces
+`55 Container 2026.9.7 carton 2026.9.7`: the date twice.
+
+⚠️ **The port shipped without the suffix and the tests did not catch it**, because
+each fixture pre-composed the label into `containerNum` by hand — asserting the
+right output through an input no real caller supplies. `EXT-IR-551747` imports
+perfectly well and is still wrong: 134 of the 143 external ids on receipts and
+transfers already carry the suffix, and [post-import verification](#post-import-verification)
+pairs a receipt with its transfer by **recomputing this key**, so every container
+this app produced would have read as *"no generated pair found."* Caught by the
+pipeline diff — which agreed on every quantity and disagreed on every id.
 
 ### ⚠️ Receive = F rows are mandatory, not optional
 
@@ -199,6 +223,12 @@ porting, both were run against `55 Container 2026.9.7` and `11 Air 1820 1777`:
 **every PO+SKU quantity identical** — 44 rows / 1,439 units and 4 rows / 150 units,
 zero differences. Two independent implementations agreeing on unseen files is why
 the port is a lift rather than a rewrite.
+
+Then the port itself was diffed against Naghedi-Warehouse's generator, both fed the
+same live NetSuite PO lines, on both containers: **byte-identical CSVs** — 57 and 8
+receipt rows, 44 and 4 transfer rows. That diff is the only check that would have
+found the missing label suffix, and it is what makes an import trustworthy: nothing
+this code generates has yet been through NetSuite's import assistant.
 
 Both slips and both reference CSVs are committed as fixtures in
 `test/fixtures/packing-slips/`.

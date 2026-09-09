@@ -21,6 +21,39 @@ export const toPoFull = (po) => {
   return /^po/i.test(s) ? s.toUpperCase() : `PO${s}`
 }
 
+/**
+ * "2026.9.7" -> "2026.9.7", "2026-09-07" -> "2026.9.7". Leading zeros are STRIPPED,
+ * because the live records read `321 carton 2026.7.10`, not `2026.07.10`.
+ */
+const toNsDateLabel = (raw) => {
+  const p = String(raw ?? '').trim().split(/[.\-/]/)
+  if (p.length < 3) return ''
+  const [y, m, d] = p
+  return `${y}.${parseInt(m, 10)}.${parseInt(d, 10)}`
+}
+
+/**
+ * The container's NetSuite label — the thing every External ID and Memo is built on.
+ *
+ * ⚠️ THE " carton <date>" SUFFIX IS NOT DECORATION, and I shipped the port without it.
+ * Every generated container already in NetSuite carries it — `EXT-IR-321 carton
+ * 2026.7.101706`, `EXT-16 carton 2026.7.91721`, 134 of the 143 external ids on
+ * receipts and transfers. Emitting `EXT-IR-551747` instead would import fine and
+ * still be WRONG: docs/packing-slip-to-netsuite.md pairs a receipt with its transfer
+ * by recomputing this key, and post-import verification would report "no generated
+ * pair found" for every container this app produced. Caught by diffing the two
+ * pipelines, which agreed on every quantity and disagreed on every id.
+ *
+ * ⚠️ AND `containerNum` IS THE BARE NUMBER — "55", "11 Air", "321" — never the
+ * filename stem. Passing "55 Container 2026.9.7" yields "55 Container 2026.9.7
+ * carton 2026.9.7", which is the same date twice.
+ */
+export function containerLabel(container) {
+  const num = String(container?.containerNum ?? '')
+  const date = toNsDateLabel(container?.containerDate)
+  return date ? `${num} carton ${date}` : `${num} carton`
+}
+
 const csvCell = (v) => {
   const s = v == null ? '' : String(v)
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -54,12 +87,22 @@ export function indexPoLines(poLines = []) {
     const entry = (byPo.get(po) ?? new Map())
     const ordered = Number(l.ordered ?? l.qty_ordered) || 0
     const received = Number(l.received ?? l.qty_received) || 0
+    // ⚠️ A MANUALLY CLOSED LINE HAS NOTHING REMAINING, WHATEVER THE ARITHMETIC SAYS.
+    // A line closed short — 60 ordered, 0 received, closed — computes 60 remaining
+    // and is not receivable at all. Treating it as open emits a Receive = F row for
+    // it, which is the case that breaks the import ("Unable to find a matching line
+    // for sublist expense"), and it would also miss an over-receive against it.
+    // `line_closed` comes from tl.isclosed and was already carried by
+    // mapWarehousePoLines; I simply was not reading it until the pipeline diff
+    // against Naghedi-Warehouse showed it computes remaining the same way.
+    const closed = l.closed ?? l.line_closed ?? false
     const rec = {
       sku,
       orderLine: Number(l.orderLine ?? l.item_line_position) || null,
       ordered,
       received,
-      remaining: Math.max(0, ordered - received),
+      closed: !!closed,
+      remaining: closed ? 0 : Math.max(0, ordered - received),
       finalDestination: l.finalDestination ?? l.final_destination ?? null,
       poLocation: l.poLocation ?? l.po_location ?? null,
       vendor: l.vendor ?? null,
@@ -86,7 +129,7 @@ export function indexPoLines(poLines = []) {
  *            unmatchedLines, duplicateSkus, excluded, excludedPOs, blocked }
  */
 export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT_NOTRACK_KEYWORDS } = {}) {
-  const label = String(container.containerNum ?? '')
+  const label = containerLabel(container)
   const date = slipDateToUs(container.containerDate)
   const { byPo, duplicateSkus } = indexPoLines(poLines)
 
