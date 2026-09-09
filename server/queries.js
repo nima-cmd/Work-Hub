@@ -3839,18 +3839,29 @@ export async function getShipDateAudit({ today = new Date() } = {}) {
 /**
  * What still owes an ASN, and where we are against the 3:30-4:00pm cutoff.
  *
- * ⚠️ THE JOIN IS BOL -> 856 business_number, DIRECTLY. There is no link table in
- * this query on purpose: routing_shipment_edi is populated on 30 of 53 shipped
- * rows, so reading it reported 23 shipments overdue when 21 had perfectly good
- * ASNs. An 856's business_number IS the BOL number — that is the mapping.
+ * ⚠️ THE JOIN IS NOT JUST THE BOL, AND THAT COST A FALSE ALARM. There is no link
+ * table here on purpose: routing_shipment_edi is populated on 30 of 53 shipped rows,
+ * so reading it reported 23 shipments overdue when 21 had perfectly good ASNs.
+ *
+ * ⚠️ BUT THE BOL ALONE IS ALSO WRONG, because THE PARCEL LANE NEVER GETS A BOL.
+ * NB1731262 (ShopBop, DC SBX2, PO POJ00384244) was reported 29 days overdue while
+ * its 856 had been delivered and accepted on 2026-08-10 — keyed on the UPS lead
+ * tracking number `1ZC6J6100327802357`, because ShopBop is parcel and a BOL is not
+ * part of that conversation. Measured across our outbound 856s: business_number is
+ * `NB…` for LTL and a `1Z…` tracking number for parcel.
+ *
+ * So an ASN counts if a real outbound 856 carries EITHER this shipment's BOL or any
+ * of its tracking numbers. See [[shopbop-fc-and-parcel-lane]].
  */
 export async function getAsnDue() {
   const { rows } = await pool.query(`
     SELECT rs.bol_number, rs.partner, rs.member_pos, rs.cartons, rs.units,
-           rs.ship_date, rs.shipped_at,
+           rs.ship_date, rs.shipped_at, rs.tracking_numbers,
            (SELECT MIN(t.created_at) FROM edi_transactions t
              WHERE t.type = '856_SHIP_NOTICE_MANIFEST' AND t.direction = 'OUT'
-               AND t.business_number = rs.bol_number) AS asn_sent_at
+               AND (t.business_number = rs.bol_number
+                    OR t.business_number = ANY(COALESCE(rs.tracking_numbers, ARRAY[]::text[])))
+           ) AS asn_sent_at
       FROM routing_shipment rs
      WHERE rs.shipped_at IS NOT NULL OR rs.ship_date IS NOT NULL
   `)
