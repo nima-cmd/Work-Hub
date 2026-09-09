@@ -3327,3 +3327,52 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 /* Scan → Drive: a capability this browser lacks, stated rather than implied. */
 .s2dWarn { color: var(--warn, #e8b44a); }
+
+/* The leaving cutoff in the top bar. Deliberately the loudest thing up there: a
+   shipment that leaves unannounced becomes a partner offset fee overnight, and
+   nobody is here to fix it. See src/model/asnDue.js.
+
+   ⚠️ YELLOW ON RED, HIS CALL (2026-09-09: "i think yellow on red would be a good
+   color scheme to make this stand out more"). It has to survive being glanced at on
+   the way out of the door, which the muted danger pill did not. It is a BUTTON, so
+   it also has to look pressable — the banner is a door to the cards, not a notice. */
+.pill.asnCutoff {
+  font-weight: 700; max-width: 52ch; cursor: pointer; text-align: left;
+  border: 1px solid #ffd23f; font-family: inherit; font-size: inherit; line-height: 1.35;
+}
+.pill.asnCutoff.danger { background: #b3121b; color: #ffd23f; border-color: #ffd23f; }
+.pill.asnCutoff.warn   { background: #7a3d02; color: #ffd23f; border-color: #e8b44a; }
+.pill.asnCutoff:hover  { background: #d4161f; }
+.pill.asnCutoff.warn:hover { background: #96500a; }
+.asnCutoffGo { opacity: 0.75; font-weight: 400; }
+
+/* The cards the banner lands on. Same yellow-on-red family so the eye carries the
+   colour from the top bar to the work — landing on a page of identical cards is the
+   "announcing a problem" failure one step later. */
+.rt-card.rt-asnFocus {
+  border-color: #ffd23f;
+  box-shadow: 0 0 0 2px rgba(255, 210, 63, 0.55), 0 0 18px rgba(179, 18, 27, 0.5);
+}
+.rt-card.rt-asnFocus::before {
+  content: 'ASN NOT SENT';
+  display: inline-block; margin-bottom: 6px; padding: 2px 8px; border-radius: 5px;
+  background: #b3121b; color: #ffd23f; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+}
+
+/* The yard-level ASN warning. Same yellow-on-red as the top-bar pill so the colour
+   means one thing everywhere. Rows are BUTTONS: naming a BOL without letting you jump
+   to it is the announcement-without-a-pointer failure over again. */
+.rt-asnDue { border: 1px solid #ffd23f; border-radius: 8px; padding: 10px 12px; margin: 10px 0;
+  background: rgba(179, 18, 27, 0.14); }
+.rt-asnDue.critical { background: rgba(179, 18, 27, 0.24); box-shadow: 0 0 0 1px rgba(255,210,63,0.35); }
+.rt-asnDue h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.08em; color: #ffd23f; }
+.rt-asnDueRows { display: flex; flex-direction: column; gap: 4px; }
+.rt-asnDueRow { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; width: 100%;
+  text-align: left; cursor: pointer; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid rgba(255, 210, 63, 0.3); background: rgba(0,0,0,0.22);
+  color: inherit; font: inherit; font-size: 12px; }
+.rt-asnDueRow:hover { background: rgba(179, 18, 27, 0.4); border-color: #ffd23f; }
+.rt-asnBol { font-weight: 700; font-variant-numeric: tabular-nums; color: #ffd23f; min-width: 88px; }
+.rt-asnPartner { min-width: 120px; }
+.rt-asnClock { margin-left: auto; font-variant-numeric: tabular-nums; }
+.rt-asnDueRow.due .rt-asnClock { color: #ffd23f; font-weight: 700; }

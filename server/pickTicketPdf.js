@@ -138,9 +138,21 @@ function render(doc, ticket) {
       .text(WARN + 'stock could not be read from NetSuite — the on-hand columns are UNKNOWN, not zero. Nothing here is called short.', M, y, { width: W })
     y = doc.y + 3
   }
-  if (ticket.shortSkus?.length) {
+  // ⚠️ A TRANSFER AND A SHORTAGE READ DIFFERENTLY, because they are different jobs.
+  // Before Offsite Storage was a column, PO 50203208 printed "419 units short" on
+  // stock we own — the sheet said buy, when the answer was fetch. Split so the red
+  // line only ever means "we do not have these".
+  const transfers = (ticket.shortSkus || []).filter((s) => s.coveredByOffsite)
+  const shortages = (ticket.shortSkus || []).filter((s) => !s.coveredByOffsite)
+  if (shortages.length) {
     doc.font('Helvetica-Bold').fontSize(8).fillColor(RED)
-      .text(`${WARN}${ticket.shortSkus.length} SKU${ticket.shortSkus.length === 1 ? '' : 's'} short on hand: ${ticket.shortSkus.map((s) => `${s.sku} need ${s.need}, have ${s.have}`).join(' · ')}`, M, y, { width: W })
+      .text(`${WARN}${shortages.length} SKU${shortages.length === 1 ? '' : 's'} short on hand: ${shortages.map((s) => `${s.sku} need ${s.need}, have ${s.have}${s.offsite ? ` (+${s.offsite} offsite)` : ''}`).join(' · ')}`, M, y, { width: W })
+    y = doc.y + 3
+  }
+  if (transfers.length) {
+    // Not red, and not a warning word: nothing is missing, something needs moving.
+    doc.font('Helvetica-Bold').fontSize(8).fillColor('#000')
+      .text(`TRANSFER FROM OFFSITE: ${transfers.length} SKU${transfers.length === 1 ? '' : 's'}, ${transfers.reduce((n, s) => n + s.offsiteCovers, 0)} units — ${transfers.map((s) => `${s.sku} ${s.offsiteCovers}`).join(' · ')}`, M, y, { width: W })
     y = doc.y + 3
   }
   if (y > M + 66) y += 6

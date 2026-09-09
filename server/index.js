@@ -22,7 +22,7 @@ import {
   ackEdiTransaction, unackEdiTransaction, getSeasons, setSeason, createEdiTaskFor,
   setEdiSupply, clearEdiSupply, getLinksFor, createDocLink, removeDocLink, searchDocNumbers,
   resolveEdiPo, unresolveEdiPo, getEdiArrivals, dismissEdiArrivals,
-  getRouting, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth, applyTender,
+  getRouting, getAsnDue, assignRoutingBol, voidRouting, setShipmentRefs, setShipmentShipped, saveRoutingAuth, removeRoutingAuth, applyTender,
   getTagSheet, getShipDays, getCustomsInvoice, toCsv,
   streamShipmentBol, fileShipmentToDrive, holdRoutingPo, releaseRoutingPo,
   streamMasterBol, fileMasterToDrive, getLabelGaps, getOverdueInvoices, getUpsRate, getUpsConnection,
@@ -768,6 +768,25 @@ app.get('/api/ups/connection', async (_req, res) => {
 app.get('/api/routing', async (_req, res) => {
   try {
     res.json(await getRouting())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ⚠️ THE LEAVING CUTOFF, ON ITS OWN ENDPOINT. Freight that left today and has not
+// been announced must be caught before 4pm, and it needs to reach the TOP BAR from
+// every view — Nima, 2026-09-09: "we need to make sure its sent by then". Hanging it
+// off /api/routing would mean the banner only appears once someone opens Routing,
+// which is the view you go to when you are already thinking about it.
+//
+// ⚠️ Truth is a real outbound 856 whose business_number IS the BOL. NOT
+// routing_shipment_edi (populated on 30 of 53 shipped rows) and NOT NetSuite's
+// custbody_hb_edi_856_synced (read T on ten fulfilments with zero ASNs sent). See
+// src/model/asnDue.js for what each of those cost.
+app.get('/api/asn-due', async (_req, res) => {
+  try {
+    res.json(await getAsnDue())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

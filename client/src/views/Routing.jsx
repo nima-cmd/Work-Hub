@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  fetchRouting, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
+  fetchRouting, fetchAsnDue, assignRoutingBol, voidRoutingShipment, setShipmentShipped,
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
@@ -54,7 +54,19 @@ function todayStr() {
   return `${d.getFullYear()}-${m}-${day}`
 }
 
-export default function Routing() {
+export default function Routing({ asnFocus, onAsnFocusTaken }) {
+  // ⚠️ THE BANNER HAD TO BECOME A DOOR (Nima, 2026-09-09: "i was hoping clicking on
+  // it would take me to the ASN im missing showing me where to look instead of just
+  // announcing a problem"). Announcing a problem without pointing at it makes the
+  // reader do the search, which at 3:45pm is the difference between fixing it and
+  // leaving. Same handoff idiom as `handoffPo`: App holds the value, the view
+  // consumes it once and clears it, so a back-and-forth does not re-trigger.
+  const [focusBols, setFocusBols] = useState(() => new Set())
+  // ⚠️ THE YARD ASKS FOR ITSELF (Nima, 2026-09-09: "in the routing yard would be a
+  // good place to have it as well"). It does NOT read the top bar's copy: Routing is
+  // reachable directly, and a panel that renders only after App has polled would be
+  // blank exactly when someone opens the view to check.
+  const [asnFeed, setAsnFeed] = useState(null)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(null)
@@ -62,11 +74,25 @@ export default function Routing() {
   const [groupSel, setGroupSel] = useState(() => new Set()) // Set<shipmentId> to master-group
   const [tab, setTab] = useState('active') // 'active' | 'shipped'
 
+  // ⚠️ SHIPPED FREIGHT LIVES ON THE 'shipped' TAB, and every ASN-due shipment has by
+  // definition left the building — so landing on 'active' would show an empty board
+  // and read as "nothing to do", the precise opposite of the point.
+  useEffect(() => {
+    const bols = (asnFocus || []).filter(Boolean)
+    if (!bols.length) return
+    setFocusBols(new Set(bols))
+    setTab('shipped')
+    onAsnFocusTaken?.()
+  }, [asnFocus])
+
   const [pulled, setPulled] = useState(null) // last NetSuite pull's result line
   const [pushed, setPushed] = useState(null) // last ShipStation push's result line
 
   function load() {
     fetchRouting().then(setData).catch((e) => setErr(e.message))
+    // Best-effort, like every other secondary feed: the yard still draws its cards
+    // if this fails, it just cannot warn.
+    fetchAsnDue().then(setAsnFeed).catch(() => {})
   }
   useEffect(load, [])
 
@@ -286,6 +312,8 @@ export default function Routing() {
             onSave={(b) => run('auth', () => saveRoutingAuth(b))}
             onDelete={(n) => run('authdel' + n, () => deleteRoutingAuth(n))} />
 
+          <AsnDuePanel feed={asnFeed} onFocus={(bols) => { setFocusBols(new Set(bols)); setTab('shipped') }} />
+
           <div className="rt-tabs">
             <button className={'tab' + (tab === 'active' ? ' active' : '')} onClick={() => setTab('active')}>
               Active <span className="count">{activeByPartner.reduce((n, [, l]) => n + l.length, 0) + activeDetached.length}</span>
@@ -324,7 +352,7 @@ export default function Routing() {
                 {activeDetached.map((s) => (
                   <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
                     auths={auths} busy={busy} onVoid={onVoid} onSaveRefs={onSaveRefs} onShip={onShip}
-                    onApplyTender={onApplyTender} readerLive={readerLive} detached />
+                    onApplyTender={onApplyTender} readerLive={readerLive} detached focus={focusBols.has(s.bolNumber)} />
                 ))}
               </div>
             </section>
@@ -340,7 +368,7 @@ export default function Routing() {
                   <div className="rt-cards">
                     {list.map((s) => (
                       <ShipmentCard key={s.id} g={{ ...s, dcLabel: s.dc, poCount: (s.memberPos || []).length, shipment: s }}
-                        auths={auths} busy={busy} onSaveRefs={onSaveRefs} onShip={onShip} detached />
+                        auths={auths} busy={busy} onSaveRefs={onSaveRefs} onShip={onShip} detached focus={focusBols.has(s.bolNumber)} />
                     ))}
                   </div>
                 </section>
@@ -677,7 +705,56 @@ function TenderLine({ tender, busy, onApply }) {
   )
 }
 
-function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, readerLive, detached, groupable, groupChecked, onToggleGroup }) {
+// ⚠️ THE YARD'S OWN ASN WARNING. The top bar catches you anywhere; this catches you
+// HERE, where the shipments are — and it lists them rather than counting them,
+// because "1 ASN past due" is the announcement-without-a-pointer failure that
+// clicking the pill was added to fix. Same yellow-on-red, so the colour means one
+// thing across the app.
+//
+// ⚠️ SILENT WHEN CLEAR. A panel that always draws is furniture; this one appears
+// only when freight has left unannounced.
+function AsnDuePanel({ feed, onFocus }) {
+  const rows = feed?.shipments || []
+  if (!rows.length) return null
+  const banner = feed?.banner
+  return (
+    <section className={'rt-asnDue' + (banner?.severity === 'critical' ? ' critical' : '')}>
+      <h3>
+        ASN NOT SENT
+        <span className="muted"> · {banner?.text || `${rows.length} shipment${rows.length === 1 ? '' : 's'} awaiting an ASN`}</span>
+      </h3>
+      <div className="rt-asnDueRows">
+        {rows.map((r) => (
+          <button key={r.bolNumber || r.po} type="button" className={'rt-asnDueRow ' + r.state}
+            onClick={() => onFocus([r.bolNumber])}
+            title="Show this shipment below">
+            <span className="rt-asnBol">{r.bolNumber}</span>
+            <span className="rt-asnPartner">{r.partner}</span>
+            <span className="muted">PO {r.po}</span>
+            {r.cartons != null && <span className="muted">{r.cartons} carton{r.cartons === 1 ? '' : 's'}</span>}
+            {/* The clock, in the unit a person thinks in. `basis` matters: "from our
+                mark" is a GUESS at the pickup the partner actually counts from. */}
+            <span className="rt-asnClock">
+              {r.state === 'due'
+                ? `${Math.round(-r.hoursLeft)}h past the ${24}h window`
+                : `${Math.round(r.hoursLeft)}h left`}
+              <span className="muted"> · from {r.basis}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, onShip, onSetRouted, onApplyTender, readerLive, detached, groupable, groupChecked, onToggleGroup , focus }) {
+  // Scrolls itself into view when the banner sent us here — the card has to be the
+  // thing you land on, not something you then hunt for.
+  const focusRef = useRef(null)
+  useEffect(() => {
+    if (focus && focusRef.current) focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focus])
+
   const s = g.shipment
   const [editing, setEditing] = useState(false)
   const st = s ? (STATUS[s.status] || STATUS.needs_routing) : null
@@ -687,7 +764,7 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
   const canHold = onHold && !detached && !s?.shippedAt
 
   return (
-    <div className={'rt-card' + (s ? ' has-bol' : '')}>
+    <div className={'rt-card' + (s ? ' has-bol' : '') + (focus ? ' rt-asnFocus' : '')} ref={focusRef}>
       <div className="rt-dc">
         <span className="rt-dcCode">{g.dc}</span>
         <span className="rt-dcName">{g.dcLabel}</span>

@@ -135,7 +135,23 @@ export const STOCK_LOCATIONS = [
   // against `location` (19 rows) — Warehouse 2, Virtual Warehouse 3.
   { id: 2, name: 'Warehouse' },
   { id: 3, name: 'Virtual Warehouse' },
+  // ⚠️ OFFSITE STORAGE IS REAL STOCK AND WAS INVISIBLE. Measured 2026-09-08 on
+  // SO12578 (PO 50203208, Nordstrom Rack closeout): 1,033 units needed, 1,027 on
+  // hand — and 419 of those, the whole NS04120* family, are ONLY at Offsite. With
+  // just the two Glendale buckets the ticket read 419 units short on stock we
+  // actually own, which is the "cancel a pull you could have made" failure
+  // src/model/pickStock.js's own header warns about.
+  //
+  // ⚠️ IT IS A COLUMN, NOT PART OF THE LOCAL TOTAL — Nima, 2026-09-08: "we wont
+  // always pull from offsite we may want to pick where we can pick from". So the
+  // sheet SHOWS what is there and he decides whether the van is worth it; it never
+  // quietly promises a pull from a building nobody planned to visit. See
+  // `offsiteOnly` in src/model/pickStock.js for how the shortfall stays honest.
+  { id: 19, name: 'Offsite Storage', offsite: true },
 ]
+
+/** The location ids that are NOT on the Glendale floor. */
+export const OFFSITE_LOCATION_IDS = STOCK_LOCATIONS.filter((l) => l.offsite).map((l) => String(l.id))
 
 const intOnly = (v) => (/^\d{1,9}$/.test(String(v ?? '').trim()) ? String(v).trim() : null)
 
