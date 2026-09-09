@@ -48,7 +48,7 @@ import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
-import { previewPackingSlip, commitPackingSlip } from './packingSlipImport.js'
+import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
@@ -1078,6 +1078,19 @@ app.get('/api/packing-slips/:label', async (req, res) => {
     const slip = await fetchPackingSlip(req.params.label)
     if (!slip) return res.status(404).json({ error: 'no such container' })
     res.json(slip)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Did the import do what we expected? Pairs the stored slip against the Item Receipt
+// and Transfer Order NetSuite actually holds, by recomputing their External IDs.
+app.get('/api/packing-slips/:label/verify', async (req, res) => {
+  try {
+    const r = await verifyStoredContainer(req.params.label)
+    if (!r) return res.status(404).json({ error: 'no such container' })
+    res.json(r)
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

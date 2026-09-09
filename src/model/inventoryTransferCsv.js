@@ -26,19 +26,30 @@ const toCsv = (rows) => rows.map((r) => r.map(csvCell).join(',')).join('\n') + '
 /**
  * Where does this PO's stock end up?
  *
- * ⚠️ A BLANK FINAL DESTINATION FALLS BACK TO THE WRONG PLACE, and silently. The
- * PO's own location, or "Warehouse", is a guess — and this transfer is what
- * physically moves inventory in the books. So the fallback is used (a file that
- * refuses to generate helps nobody) but the PO is REPORTED so the destination gets
- * filled in before anything ships. Same rule as
- * [[default-is-not-an-answer]]: a default is not an answer, it is a claim nobody made.
+ * ⚠️ THIS FUNCTION USED TO END `return { location: 'Warehouse' }` AND IT MOVED 150
+ * UNITS TO THE WRONG PLACE. On 2026-09-09, importing the Item Receipt pushed both
+ * POs to status E, which dropped them out of the PO feed (see
+ * PACKING_SLIP_PO_STATUS_CODES); regenerating the Transfer then found no lines,
+ * fell through to that hardcoded default, and produced a file routing container
+ * `11 Air ... 2026.9.7` to Warehouse instead of the Virtual Warehouse both POs
+ * specify. The file imported cleanly. Nothing looked wrong.
+ *
+ * The comment above it already cited [[default-is-not-an-answer]] — and the code
+ * beneath it named a real, plausible, wrong warehouse. A default is not an answer,
+ * and "Warehouse" is the most answer-shaped default in this account.
+ *
+ * So an unknown destination is now NULL, and null BLOCKS the export. This file is
+ * what physically moves inventory in the books; a plausible wrong answer is strictly
+ * worse than no file.
  */
 export function destinationFor(lines) {
   const withDest = (lines || []).find((l) => l.finalDestination)
-  if (withDest) return { location: withDest.finalDestination, isFallback: false }
+  if (withDest) return { location: withDest.finalDestination, isFallback: false, unknown: false }
+  // The PO's own location is still a guess, but it is at least DERIVED from the PO
+  // rather than invented here. Reported, not blocking.
   const withLoc = (lines || []).find((l) => l.poLocation)
-  if (withLoc) return { location: withLoc.poLocation, isFallback: true }
-  return { location: 'Warehouse', isFallback: true }
+  if (withLoc) return { location: withLoc.poLocation, isFallback: true, unknown: false }
+  return { location: null, isFallback: true, unknown: true }
 }
 
 /**
@@ -57,6 +68,7 @@ export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), un
   const rows = []
   const excluded = []
   const missingDestinations = []
+  const unknownDestinations = []
   const heldBack = []
 
   // Keyed `PO|SKU` — a specific line, never a whole PO.
@@ -74,13 +86,18 @@ export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), un
   for (const po of [...byPoTotals.keys()].sort()) {
     const shipped = byPoTotals.get(po)
     const lines = [...(poLinesByPo.get(po)?.values() ?? [])]
-    const { location, isFallback } = destinationFor(lines)
+    const { location, isFallback, unknown } = destinationFor(lines)
     if (isFallback) {
       missingDestinations.push({
         poNumber: po,
         fallbackLocation: location,
+        unknown,
         units: [...shipped.values()].reduce((a, b) => a + b, 0),
+        reason: unknown
+          ? 'no destination at all — the PO is not in the PO feed (already received? check its status)'
+          : "using the PO's own location, not its Final Naghedi Destination",
       })
+      if (unknown) unknownDestinations.push(po)
     }
 
     // ⚠️ NOTE WHAT IS NOT HERE: no check that the PO was on the receipt. An
@@ -95,7 +112,7 @@ export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), un
         continue
       }
       rows.push([
-        externalId, label, date, 'China', location, poDigits,
+        externalId, label, date, 'China', location ?? '', poDigits,
         // ⚠️ Style and Colour are deliberately EMPTY. NetSuite derives both from the
         // item, and supplying them invites a mismatch between what we say and what
         // the item record says — a disagreement the import resolves silently.
@@ -116,6 +133,12 @@ export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), un
     // shown, because nothing downstream will ever mention it again.
     missingDestinations,
     heldBack,
+    // ⚠️ AN UNKNOWN DESTINATION BLOCKS THE FILE. Not a warning — the transfer is the
+    // document that moves the stock, and there is no honest value to put in the
+    // column. A PO landing here is almost always one the Item Receipt just pushed
+    // out of the feed's status scope, so the fix is upstream, not in this file.
+    blocked: unknownDestinations.length > 0,
+    unknownDestinations,
   }
 }
 

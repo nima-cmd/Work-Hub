@@ -225,10 +225,21 @@ export default function PackingSlipImport() {
             note="Already received, the wrong PO, or a size never ordered. Off both files — these units were never received, so there is nothing to move. Worth a physical look."
             render={(r) => `${r.poNumber} ${r.sku}: ${n(r.qty)} units`}
           />
+          {/* ⚠️ SPLIT IN TWO ON PURPOSE. "No destination at all" blocks the file;
+              "using the PO's own location" only warns. They used to be one amber
+              block, and the day it mattered it was not loud enough to stop an
+              import that sent 150 units to the wrong warehouse. */}
           <Findings
-            title="Transferring to a guessed destination" tone="warn" rows={tr.missingDestinations}
-            note="The PO has no Final Naghedi Destination, so the transfer falls back to the receiving location. This is what physically moves the stock in the books — fill the field in NetSuite before importing."
-            render={(r) => `${r.poNumber}: ${n(r.units)} units → ${r.fallbackLocation} (fallback)`}
+            title="No destination — this BLOCKS the files" tone="bad"
+            rows={tr.missingDestinations.filter((r) => r.unknown)}
+            note="The PO is not in the PO feed at all, so there is no destination to write. Almost always a PO the Item Receipt just pushed out of scope by receiving it. There is no honest value for this column, so no file is offered."
+            render={(r) => `${r.poNumber}: ${n(r.units)} units — ${r.reason}`}
+          />
+          <Findings
+            title="Using the PO's own location, not its Final Destination" tone="warn"
+            rows={tr.missingDestinations.filter((r) => !r.unknown)}
+            note="Weaker than the Final Naghedi Destination but still derived from the PO. This file is what physically moves the stock in the books — fill the field in NetSuite before importing."
+            render={(r) => `${r.poNumber}: ${n(r.units)} units → ${r.fallbackLocation}`}
           />
           <Findings
             title="Not inventory — left off both files" tone="info" rows={ir.excluded}
@@ -246,12 +257,12 @@ export default function PackingSlipImport() {
             <div>
               <h4>1 · {ir.filename}</h4>
               <p className="slip-note">{n(ir.rows)} rows across {ir.poCount} POs — Receive = T for what shipped, F for every other still-open line.</p>
-              <button onClick={() => download(ir.csv, ir.filename)} disabled={preview.blocked}>Download</button>
+              <button onClick={() => download(ir.csv, ir.filename)} disabled={ir.blocked}>Download</button>
             </div>
             <div>
               <h4>2 · {tr.filename}</h4>
               <p className="slip-note">{n(tr.rows)} rows across {tr.poCount} POs — China → each PO’s destination.</p>
-              <button onClick={() => download(tr.csv, tr.filename)} disabled={preview.blocked}>Download</button>
+              <button onClick={() => download(tr.csv, tr.filename)} disabled={tr.blocked}>Download</button>
             </div>
           </div>
           {/* ⚠️ ORDER IS NOT A PREFERENCE. You cannot transfer units NetSuite does not
@@ -260,11 +271,25 @@ export default function PackingSlipImport() {
             <b>Import the receipt first.</b> The transfer moves units NetSuite has to
             already believe it owns.
           </p>
-          {preview.blocked && (
+          {/* ⚠️ BLOCKED PER FILE, NOT PER CONTAINER. One shared flag looked tidier
+              and made a real situation impossible: once the receipt has been
+              imported, every SKU reads as an over-receive — correctly — and a
+              combined flag then withholds the TRANSFER too, which is valid and is
+              the very file still needed. Caught on 2026-09-09 re-running a
+              container whose receipt was already in NetSuite. */}
+          {ir.blocked && (
             <p className="slip-error">
-              Downloads are withheld until the blocking findings above are resolved.
-              Both put units on a PO line that cannot hold them, and NetSuite would
-              accept the file without complaint.
+              The <b>Item Receipt</b> is withheld: units would land on a PO line that
+              cannot hold them, and NetSuite accepts that without complaint. If this
+              container's receipt has already been imported, that is exactly what an
+              over-receive of the full quantity means — you do not need it again.
+            </p>
+          )}
+          {tr.blocked && (
+            <p className="slip-error">
+              The <b>Inventory Transfer</b> is withheld: a PO has no destination, so
+              there is no honest value for the To Location column. This file moves
+              physical stock — a plausible wrong warehouse is worse than no file.
             </p>
           )}
 

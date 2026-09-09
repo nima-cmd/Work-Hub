@@ -19,14 +19,24 @@ import { readPackingSlip } from '../src/ingest/packingSlipFile.js'
 import { buildNetsuiteExport } from '../src/model/inventoryTransferCsv.js'
 import { containerLabel, suggestContainerFields } from '../src/model/containerIdentity.js'
 import { slipRevision } from '../src/model/packingSlipRevision.js'
-import { savePackingSlip } from '../src/ingest/packingSlipLoad.js'
-import { warehousePoLineSql, mapWarehousePoLines } from '../src/ingest/warehouseFeed.js'
+import { savePackingSlip, fetchPackingSlip } from '../src/ingest/packingSlipLoad.js'
+import { verifyContainer, expectedKeys } from '../src/model/containerVerify.js'
+import { fetchContainerRecords } from '../src/ingest/containerVerifyLive.js'
+import { warehousePoLineSql, mapWarehousePoLines, PACKING_SLIP_PO_STATUS_CODES } from '../src/ingest/warehouseFeed.js'
 import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
 import { pool } from '../src/db.js'
 
-/** The live open-PO lines both CSVs are built against. */
+/**
+ * The live PO lines both CSVs are built against.
+ *
+ * ⚠️ A WIDER STATUS SCOPE THAN THE WAREHOUSE FEED'S, and that difference is the
+ * whole point. The dock's feed asks for B/D only, so the moment an Item Receipt is
+ * imported the PO moves to E and vanishes from it — which on 2026-09-09 made a
+ * regenerated Transfer lose its destination entirely. See
+ * PACKING_SLIP_PO_STATUS_CODES.
+ */
 async function livePoLines() {
-  const raw = await runSuiteQL(warehousePoLineSql())
+  const raw = await runSuiteQL(warehousePoLineSql(PACKING_SLIP_PO_STATUS_CODES))
   const { rows } = mapWarehousePoLines(raw.rows || raw)
   return rows
 }
@@ -93,7 +103,11 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     // blocks on an over-receive or a duplicate SKU; both put units on a PO line that
     // cannot hold them, and both are silent in NetSuite until a count disagrees
     // weeks later. The screen must not offer a download while this is true.
-    blocked: itemReceipt.blocked,
+    //
+    // ⚠️ AND THE TRANSFER GETS A VOTE. It blocks when a PO has no destination at
+    // all — previously that produced a file routing stock to a hardcoded
+    // "Warehouse", which is how 150 units went to the wrong location on 2026-09-09.
+    blocked: itemReceipt.blocked || transfer.blocked,
   }
 }
 
@@ -135,4 +149,22 @@ export async function commitPackingSlip(body = {}) {
   })
   const saved = await savePackingSlip(container, { sourceFilename: body.filename ?? null })
   return { ...saved, blocked: preview.blocked }
+}
+
+/**
+ * Verify one stored container against NetSuite.
+ *
+ * ⚠️ THE STORED SLIP IS THE EXPECTATION, and it has to be — the file on someone's
+ * laptop is not evidence, and NetSuite alone cannot say what was supposed to arrive.
+ * This is the payoff for storing the slip rather than translating and forgetting it.
+ */
+export async function verifyStoredContainer(label) {
+  const slip = await fetchPackingSlip(label)
+  if (!slip) return null
+  const keys = (slip.poNumbers || []).flatMap((po) => {
+    const k = expectedKeys(slip, po)
+    return [k.itemReceipt, k.transfer]
+  })
+  const { byExternalId, blindSpot } = await fetchContainerRecords(keys)
+  return { ...verifyContainer(slip, { byExternalId }), blindSpot, containerDate: slip.containerDate }
 }

@@ -55,18 +55,33 @@ test('the destination comes from the PO Final Naghedi Destination', () => {
   assert.deepEqual(r.missingDestinations, [])
 })
 
-test('⚠️ A BLANK DESTINATION IS USED BUT REPORTED', () => {
-  // The fallback is the WRONG location, and this transfer physically moves stock in
-  // the books. Refusing to generate helps nobody; going quiet is what does damage.
+test("⚠️ THE PO'S OWN LOCATION IS USED BUT REPORTED — it is derived, not invented", () => {
+  // A weaker answer than the Final Naghedi Destination, but it does come from the
+  // PO. Reported so it gets filled in; not blocking, because the file is still
+  // saying something the PO said.
   const { byPo } = indexPoLines([{ poNumber: '1785', sku: 'A-X', item_line_position: 1, qty_ordered: 25, qty_received: 0, po_location: 'Warehouse Bulk' }])
   const r = buildInventoryTransferCsv(slip([{ poNumber: '1785', sku: 'A-X', units: 25 }]), byPo, [])
   assert.equal(rowsOf(r)[0][4], 'Warehouse Bulk')
-  assert.deepEqual(r.missingDestinations, [{ poNumber: 'PO1785', fallbackLocation: 'Warehouse Bulk', units: 25 }])
+  assert.equal(r.blocked, false)
+  assert.equal(r.missingDestinations[0].poNumber, 'PO1785')
+  assert.equal(r.missingDestinations[0].unknown, false)
 })
 
-test('with nothing at all to go on, it falls back to Warehouse and says so', () => {
+test('⚠️ NO DESTINATION AT ALL BLOCKS THE FILE — it used to say "Warehouse"', () => {
+  // 2026-09-09, live: importing the Item Receipt moved PO1777/PO1820 to status E,
+  // which dropped them out of the PO feed. With no lines, this used to return the
+  // hardcoded string 'Warehouse' — a real location — and the generated transfer
+  // routed 150 units there instead of the Virtual Warehouse both POs specify. The
+  // file imported cleanly and nothing looked wrong.
   const d = destinationFor([])
-  assert.deepEqual(d, { location: 'Warehouse', isFallback: true })
+  assert.equal(d.location, null, 'never a hardcoded location name')
+  assert.equal(d.unknown, true)
+
+  const r = buildInventoryTransferCsv(slip([{ poNumber: '1785', sku: 'A-X', units: 25 }]), new Map(), [])
+  assert.equal(r.blocked, true, 'the download must be withheld')
+  assert.deepEqual(r.unknownDestinations, ['PO1785'])
+  assert.equal(rowsOf(r)[0][4], '', 'and the column is empty, not guessed')
+  assert.match(r.missingDestinations[0].reason, /not in the PO feed/)
 })
 
 test('⚠️ STYLE AND COLOUR ARE DELIBERATELY EMPTY', () => {
