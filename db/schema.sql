@@ -1974,3 +1974,77 @@ CREATE INDEX IF NOT EXISTS weaver_divergence_kind_idx ON weaver_divergence (kind
 -- scripts/backfill-if-created.js, which only ever corrects a row where a real creation
 -- timestamp exists.
 ALTER TABLE fulfillments ADD COLUMN IF NOT EXISTS if_created_at TIMESTAMPTZ;
+
+
+-- ── Packing slips: the container as it was actually packed ───────────────────
+--
+-- Nima, 2026-09-09, on why this belongs in Work-Hub rather than passing through
+-- the floor app: "we can check the import to make sure nothing weird is happening
+-- we can track the shipment we can make sure were receiving it on time we can have
+-- a record to go back against ... if we we still have the information of whats in
+-- what box if we ever eneded to do a look up of an item by what container and box
+-- it was teh app would be able to help".
+--
+-- Every one of those needs the slip STORED, not merely translated. A generator that
+-- emits two CSVs and forgets can answer none of them.
+--
+-- ⚠️ THE SLIP IS EVIDENCE, AND EVIDENCE IS KEPT PER IMPORT. `imported_at` and
+-- `source_filename` are recorded because a factory reissues a slip when a shipment
+-- changes, and "the container held 1,439 units" is only true as of a particular
+-- document. See packing_slip_revision below for what happens when the numbers move.
+CREATE TABLE IF NOT EXISTS packing_slip (
+  container_num   TEXT PRIMARY KEY,     -- "55 Container 2026.9.7" — the label IS the identity
+  container_date  TEXT,                 -- as printed, "2026.9.7" (not a DATE: factories vary)
+  format          TEXT NOT NULL,        -- 'factory' | 'master'
+  source_filename TEXT,
+  unit_count      INTEGER NOT NULL,
+  -- ⚠️ NULL, NOT ZERO, on a master list. That form carries no cartons at all, and
+  -- zero would assert "no boxes" where the truth is "this document cannot say".
+  carton_count    INTEGER,
+  po_numbers      TEXT[] NOT NULL,
+  imported_at     TIMESTAMPTZ DEFAULT now(),
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- One row per PO+SKU — what the NetSuite Item Receipt and Transfer are built from.
+CREATE TABLE IF NOT EXISTS packing_slip_line (
+  container_num TEXT NOT NULL REFERENCES packing_slip(container_num) ON DELETE CASCADE,
+  po_number     TEXT NOT NULL,
+  sku           TEXT NOT NULL,
+  style         TEXT,
+  color         TEXT,
+  units         INTEGER NOT NULL,
+  PRIMARY KEY (container_num, po_number, sku)
+);
+
+-- ⚠️ WHAT IS IN WHICH BOX — the half the import does not care about and the floor
+-- cannot work without. This is what lets "which container and box was this item in"
+-- be answerable months later, which is a question no other system here can answer:
+-- NetSuite records the receipt, not the packing.
+CREATE TABLE IF NOT EXISTS packing_slip_carton (
+  container_num TEXT NOT NULL REFERENCES packing_slip(container_num) ON DELETE CASCADE,
+  po_number     TEXT NOT NULL,
+  box           INTEGER NOT NULL,
+  sku           TEXT NOT NULL,
+  qty           INTEGER NOT NULL,
+  PRIMARY KEY (container_num, po_number, box, sku)
+);
+CREATE INDEX IF NOT EXISTS packing_slip_carton_sku ON packing_slip_carton (sku);
+
+-- ⚠️ A REISSUED SLIP IS NEWS, NOT A SILENT OVERWRITE. Factories resend a slip when
+-- a shipment changes, and re-importing replaces the lines — so the fact that the
+-- numbers moved would vanish with them. Each import that CHANGES the totals writes
+-- a row here first. An import that matches what is stored writes nothing.
+-- Same rule as [[prefer-entered-over-derived]]: keep what a document said, and when.
+CREATE TABLE IF NOT EXISTS packing_slip_revision (
+  id             SERIAL PRIMARY KEY,
+  container_num  TEXT NOT NULL,
+  observed_at    TIMESTAMPTZ DEFAULT now(),
+  prev_units     INTEGER,
+  new_units      INTEGER,
+  prev_cartons   INTEGER,
+  new_cartons    INTEGER,
+  source_filename TEXT,
+  note           TEXT
+);
+CREATE INDEX IF NOT EXISTS packing_slip_revision_container ON packing_slip_revision (container_num);
