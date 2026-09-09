@@ -26,9 +26,18 @@
 import { containerLabel } from './containerIdentity.js'
 import { toPoFull } from './itemReceiptCsv.js'
 
-/** The two keys a container's PO should have produced in NetSuite. */
+/**
+ * The two keys a container's PO should have produced in NetSuite.
+ *
+ * ⚠️ A STORED LABEL WINS OVER A RECOMPUTED ONE. A freshly parsed slip carries a
+ * container number and date and the label is derived from them; a slip read back out
+ * of the database carries the label itself — and that stored string is what NetSuite
+ * actually holds. Recomputing it from the parts would silently produce a different
+ * key the moment the two disagree, which is exactly the failure this whole scheme
+ * exists to detect. The authoritative form is the one that was used.
+ */
 export function expectedKeys(container, poNumber) {
-  const label = containerLabel(container)
+  const label = container?.containerLabel || containerLabel(container)
   const digits = String(poNumber ?? '').replace(/^PO/i, '')
   return { itemReceipt: `EXT-IR-${label}${digits}`, transfer: `EXT-${label}${digits}` }
 }
@@ -125,7 +134,7 @@ export function verifyContainer(container, found = {}) {
 
   const problems = legs.filter((l) => l.problem)
   return {
-    containerLabel: containerLabel(container),
+    containerLabel: container?.containerLabel || containerLabel(container),
     poCount: legs.length,
     units: legs.reduce((a, l) => a + l.units, 0),
     legs,

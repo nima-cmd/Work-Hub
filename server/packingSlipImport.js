@@ -22,6 +22,10 @@ import { slipRevision } from '../src/model/packingSlipRevision.js'
 import { savePackingSlip, fetchPackingSlip } from '../src/ingest/packingSlipLoad.js'
 import { verifyContainer, expectedKeys } from '../src/model/containerVerify.js'
 import { fetchContainerRecords } from '../src/ingest/containerVerifyLive.js'
+import { findDuplicates, duplicateVerdict, slipFingerprint } from '../src/model/containerDuplicate.js'
+import { importPreflight, explainOverReceives } from '../src/model/importPreflight.js'
+import { listPackingSlips } from '../src/ingest/packingSlipLoad.js'
+import { createHash } from 'node:crypto'
 import { warehousePoLineSql, mapWarehousePoLines, PACKING_SLIP_PO_STATUS_CODES } from '../src/ingest/warehouseFeed.js'
 import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
 import { pool } from '../src/db.js'
@@ -42,6 +46,13 @@ async function livePoLines() {
 }
 
 const toBytes = (base64) => new Uint8Array(Buffer.from(String(base64 || ''), 'base64'))
+
+// ⚠️ HASHED FROM THE RAW DOCUMENT, not from the parse. Two labels over identical
+// bytes is the duplicate that actually happened on 2026-09-09, and only the bytes
+// can prove it — a re-parse of the same file under a different container number
+// produces a different-looking container.
+const contentHashOf = (base64, text) =>
+  createHash('sha256').update(text != null ? String(text) : Buffer.from(String(base64 || ''), 'base64')).digest('hex')
 
 /**
  * Parse a slip, build both CSVs, and report everything that looks wrong — storing
@@ -72,6 +83,31 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
 
   const { itemReceipt, transfer, importOrder } = await buildNetsuiteExport(container, mine)
 
+  // ── the checks Nima asked for, 2026-09-09 ──────────────────────────────────
+  // "we want check balacnces we want to make sure we dont doulbe import anything
+  //  we want to make sure were warned if something is off"
+
+  // 1. Is this shipment already here under a DIFFERENT name?
+  const contentHash = contentHashOf(base64, text)
+  const storedSlips = await listPackingSlips()
+  const duplicates = duplicateVerdict(findDuplicates(
+    { ...container, containerLabel: label, contentHash },
+    storedSlips.map((s) => ({ containerLabel: s.containerLabel, contentHash: s.contentHash ?? null,
+                         unitCount: s.unitCount, cartonCount: s.cartonCount, poNumbers: s.poNumbers,
+                         lineKey: s.lineKey ?? null })),
+  ))
+
+  // 2. Has either file ALREADY been imported into NetSuite? Asked directly, by the
+  //    External IDs this container computes — rather than left to be inferred from a
+  //    wall of over-receives, which is how tonight's re-run read.
+  const keys = (container.poNumbers || []).flatMap((po) => {
+    const k = expectedKeys({ ...container, containerLabel: label }, po)
+    return [k.itemReceipt, k.transfer]
+  })
+  const { byExternalId } = await fetchContainerRecords(keys)
+  const preflight = importPreflight({ ...container, containerLabel: label }, container.poNumbers || [], byExternalId)
+  const overReceiveCause = explainOverReceives(preflight, itemReceipt.overReceives)
+
   // What a commit would say about a container we already hold.
   const { rows: [stored] } = await pool.query(
     'SELECT container_label, unit_count, carton_count, po_numbers FROM packing_slip WHERE container_label = $1',
@@ -96,6 +132,13 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     cartons: container.cartons,
     skipped: container.skipped || [],
     revision,
+    contentHash,
+    duplicates,
+    preflight,
+    // ⚠️ Sits ABOVE the over-receive list on the screen. Four findings with one cause
+    // read as four quantity problems, and that is what sent me hunting for a
+    // quantity problem that did not exist.
+    overReceiveCause,
     importOrder,
     itemReceipt: csvSummary(itemReceipt),
     transfer: csvSummary(transfer),
@@ -147,7 +190,7 @@ export async function commitPackingSlip(body = {}) {
     containerNum: preview.containerNum,
     containerDate: preview.containerDate,
   })
-  const saved = await savePackingSlip(container, { sourceFilename: body.filename ?? null })
+  const saved = await savePackingSlip(container, { sourceFilename: body.filename ?? null, contentHash: preview.contentHash })
   return { ...saved, blocked: preview.blocked }
 }
 

@@ -2019,6 +2019,19 @@ CREATE TABLE IF NOT EXISTS packing_slip (
 );
 CREATE INDEX IF NOT EXISTS packing_slip_num ON packing_slip (container_num);
 
+-- ⚠️ THE FINGERPRINT THAT CATCHES THE SAME CONTAINER UNDER A DIFFERENT NAME. The
+-- label is the identity and cannot be otherwise (NetSuite holds it inside every
+-- External ID), but it is assembled from a number and a date a person types — so
+-- `11 Air ... carton`, `11 Air ... carton 2026.9.7` and `11 air carton 2026.9.9` are
+-- three rows and one shipment. Neither column below is an identity; they exist so
+-- src/model/containerDuplicate.js can ASK before a fourth one is created.
+--   content_hash  sha256 of the raw document — the same bytes under two names
+--   line_key      sorted PO|SKU|qty over every line — the same shipment, reissued
+ALTER TABLE packing_slip ADD COLUMN IF NOT EXISTS content_hash TEXT;
+ALTER TABLE packing_slip ADD COLUMN IF NOT EXISTS line_key     TEXT;
+CREATE INDEX IF NOT EXISTS packing_slip_content_hash ON packing_slip (content_hash);
+CREATE INDEX IF NOT EXISTS packing_slip_line_key ON packing_slip (line_key);
+
 -- One row per PO+SKU — what the NetSuite Item Receipt and Transfer are built from.
 CREATE TABLE IF NOT EXISTS packing_slip_line (
   container_label TEXT NOT NULL REFERENCES packing_slip(container_label) ON DELETE CASCADE,

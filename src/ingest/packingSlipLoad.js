@@ -15,6 +15,7 @@ import { pool } from '../db.js'
 import { slipRevision } from '../model/packingSlipRevision.js'
 import { containerLabel } from '../model/itemReceiptCsv.js'
 import { ensureShipment } from './inboundShipmentLoad.js'
+import { slipFingerprint } from '../model/containerDuplicate.js'
 
 /**
  * Insert or replace a container.
@@ -48,7 +49,7 @@ export function slipDateToIso(raw) {
   return `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
 }
 
-export async function savePackingSlip(container, { sourceFilename = null, db = pool } = {}) {
+export async function savePackingSlip(container, { sourceFilename = null, contentHash = null, db = pool } = {}) {
   // ⚠️ THE LABEL IS THE KEY, not container_num — see db/schema.sql. It is computed
   // in exactly one place so the stored slip and the generated External IDs can
   // never disagree about which shipment they mean.
@@ -73,16 +74,19 @@ export async function savePackingSlip(container, { sourceFilename = null, db = p
 
     await client.query(
       `INSERT INTO packing_slip (container_label, container_num, container_date, format,
-                                 source_filename, unit_count, carton_count, po_numbers, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+                                 source_filename, unit_count, carton_count, po_numbers,
+                                 content_hash, line_key, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
        ON CONFLICT (container_label) DO UPDATE SET
          container_num = EXCLUDED.container_num,
          container_date = EXCLUDED.container_date, format = EXCLUDED.format,
          source_filename = EXCLUDED.source_filename, unit_count = EXCLUDED.unit_count,
          carton_count = EXCLUDED.carton_count, po_numbers = EXCLUDED.po_numbers,
+         content_hash = EXCLUDED.content_hash, line_key = EXCLUDED.line_key,
          updated_at = now()`,
       [label, container.containerNum, container.containerDate, container.format || 'factory',
-       sourceFilename, container.unitCount, container.cartonCount, container.poNumbers],
+       sourceFilename, container.unitCount, container.cartonCount, container.poNumbers,
+       contentHash, slipFingerprint(container).lineKey],
     )
 
     await client.query('DELETE FROM packing_slip_line WHERE container_label = $1', [label])
@@ -196,11 +200,13 @@ export async function listPackingSlips({ db = pool, limit = 200 } = {}) {
   const { rows } = await db.query(
     `SELECT s.container_label, s.container_num, s.container_date, s.format,
             s.unit_count, s.carton_count, s.po_numbers, s.imported_at,
+            s.content_hash, s.line_key,
             (SELECT COUNT(*) FROM packing_slip_revision r WHERE r.container_label = s.container_label) AS revisions
        FROM packing_slip s ORDER BY s.imported_at DESC LIMIT $1`, [limit],
   )
   return rows.map((r) => ({
     containerLabel: r.container_label,
+    contentHash: r.content_hash, lineKey: r.line_key,
     containerNum: r.container_num, containerDate: r.container_date, format: r.format,
     unitCount: r.unit_count, cartonCount: r.carton_count, poNumbers: r.po_numbers,
     importedAt: r.imported_at, revisions: Number(r.revisions),
