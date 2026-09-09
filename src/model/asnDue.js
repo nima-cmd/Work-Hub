@@ -156,3 +156,100 @@ export function asnDueSummary(shipments = [], now = Date.now()) {
     severity: due.length ? 'critical' : warn.length ? 'warn' : 'notice',
   }
 }
+
+
+// ── ⚠️ THE LEAVING CUTOFF ────────────────────────────────────────────────────
+//
+// Nima, 2026-09-09: "can we have some sort of warning in the top baner for ASN not
+// transmitted on same day we leave betweenn 3:30pm- 4:00pm we need to make sure
+// its sent by then".
+//
+// This is a SECOND, EARLIER deadline than the partner's, and deliberately so.
+// Nordstrom's 24 hours from pickup is the point at which a fee lands; leaving the
+// building with freight unannounced is the point at which that fee becomes certain,
+// because nobody is here to send it. So the app stops him at the door instead of
+// discovering it the next morning, which is exactly how PO 50220600 went wrong.
+//
+// ⚠️ THE CUTOFF IS A WALL-CLOCK TIME IN GLENDALE, NOT A UTC HOUR. Every timestamp in
+// this database is UTC and the warehouse is Pacific — 3:30pm local is 22:30 or 23:30
+// UTC depending on daylight saving. Comparing raw hours would fire the banner at
+// 8:30am half the year and never the other half. `Intl.DateTimeFormat` with an
+// explicit zone is what makes it right across the DST boundary, so the zone is a
+// parameter and never assumed from the host.
+
+export const ASN_CUTOFF_TZ = 'America/Los_Angeles'
+/** When the leaving window opens — send it NOW. */
+export const ASN_CUTOFF_START = 15 * 60 + 30   // 15:30
+/** When it closes. Past this, we have left with freight unannounced. */
+export const ASN_CUTOFF_END = 16 * 60          // 16:00
+/** How early to start nudging, so 3:30pm is a reminder and not a surprise. */
+export const ASN_CUTOFF_LEAD_MIN = 60
+
+/** Minutes past local midnight, in the given zone. DST-correct by construction. */
+export function localMinutes(now = Date.now(), tz = ASN_CUTOFF_TZ) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(now))
+  const h = Number(parts.find((p) => p.type === 'hour')?.value)
+  const m = Number(parts.find((p) => p.type === 'minute')?.value)
+  return Number.isFinite(h) && Number.isFinite(m) ? (h % 24) * 60 + m : null
+}
+
+/**
+ * Where we are relative to the leaving window.
+ *
+ * 'clear'    — too early to nag
+ * 'approach' — inside the lead-in; get it sent
+ * 'window'   — 15:30-16:00, we are leaving
+ * 'missed'   — past 16:00 and it is still not sent
+ */
+export function cutoffPhase(now = Date.now(), tz = ASN_CUTOFF_TZ) {
+  const mins = localMinutes(now, tz)
+  if (mins == null) return { phase: 'clear', minutesToCutoff: null }
+  const minutesToCutoff = ASN_CUTOFF_START - mins
+  if (mins >= ASN_CUTOFF_END) return { phase: 'missed', minutesToCutoff }
+  if (mins >= ASN_CUTOFF_START) return { phase: 'window', minutesToCutoff }
+  if (minutesToCutoff <= ASN_CUTOFF_LEAD_MIN) return { phase: 'approach', minutesToCutoff }
+  return { phase: 'clear', minutesToCutoff }
+}
+
+/**
+ * The top-bar banner: null when there is nothing to say.
+ *
+ * ⚠️ IT SPEAKS BEFORE THE PARTNER'S CLOCK RUNS OUT. A shipment picked up today is
+ * `watch` under the 24-hour rule — perfectly fine, hours in hand — and is EXACTLY
+ * what must go out before 4pm. Keying the banner on `state === 'due'` would stay
+ * silent all afternoon and light up tomorrow morning, which is the failure it exists
+ * to prevent. So anything OWING an ASN counts, whatever its 24-hour state.
+ *
+ * ⚠️ AND IT IS SILENT BEFORE THE LEAD-IN. A banner that is always on is wallpaper;
+ * this one appears when it can still be acted on.
+ */
+export function asnBanner(shipments = [], now = Date.now(), tz = ASN_CUTOFF_TZ) {
+  const list = asnDueList(shipments, now)
+  if (!list.length) return null
+  const { phase, minutesToCutoff } = cutoffPhase(now, tz)
+  const overdue = list.filter((r) => r.state === 'due')
+
+  // Outside the leaving window, only a partner-deadline breach is worth a banner —
+  // that one is already costing money and does not wait for 3:30.
+  if (phase === 'clear' && !overdue.length) return null
+
+  const n = list.length
+  const bols = list.map((r) => r.bolNumber).filter(Boolean)
+  const what = `${n} shipment${n === 1 ? '' : 's'} with no ASN sent`
+  if (phase === 'missed') {
+    return { severity: 'critical', phase, total: n, overdue: overdue.length, bols,
+      text: `${what} and it is past 4:00pm - send before you leave or it misses the day` }
+  }
+  if (phase === 'window') {
+    return { severity: 'critical', phase, total: n, overdue: overdue.length, bols,
+      text: `SEND NOW: ${what}. We leave between 3:30 and 4:00pm` }
+  }
+  if (phase === 'approach') {
+    return { severity: 'warn', phase, total: n, overdue: overdue.length, bols,
+      text: `${what} - ${minutesToCutoff} min until the 3:30pm cutoff` }
+  }
+  return { severity: 'critical', phase, total: n, overdue: overdue.length, bols,
+    text: `${overdue.length} ASN${overdue.length === 1 ? '' : 's'} past the partner deadline - offset fees accrue` }
+}

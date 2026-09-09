@@ -1169,3 +1169,11 @@ export async function fetchPulse() {
   if (!res.ok) throw new Error('pulse ' + res.status)
   return res.json()
 }
+
+// The leaving cutoff — freight that left with no ASN. Polled from the top bar, so
+// it reaches every view rather than only Routing.
+export async function fetchAsnDue() {
+  const res = await fetch('/api/asn-due')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

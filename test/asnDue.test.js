@@ -129,3 +129,82 @@ test('⚠️ THE LINK TABLE IS NOT THE TRUTH — rule 3', () => {
   assert.equal(asnDue(sentButNotLinked, Date.parse('2026-09-09T14:00:00Z')), null,
     'a real 856 clears it even with nothing linked')
 })
+
+// ── The leaving cutoff ──────────────────────────────────────────────────────
+import { asnBanner, cutoffPhase, localMinutes, ASN_CUTOFF_TZ } from '../src/model/asnDue.js'
+
+// 2026-09-09 is PDT (UTC-7). 15:30 local = 22:30Z.
+const pdt = (h, m = 0) => Date.parse(`2026-09-09T${String(h + 7).padStart(2, '0')}:${String(m).padStart(2, '0')}:00Z`)
+
+test('⚠️ THE CUTOFF IS GLENDALE WALL-CLOCK, NOT A UTC HOUR', () => {
+  // Every timestamp here is UTC and the warehouse is Pacific. Comparing raw hours
+  // would fire this at 8:30am half the year and never the other half.
+  assert.equal(localMinutes(pdt(15, 30), ASN_CUTOFF_TZ), 15 * 60 + 30)
+
+  // ⚠️ AND IT MUST SURVIVE DST. 2026-12-09 is PST (UTC-8), so 15:30 local is 23:30Z
+  // — an hour later in UTC than the same wall-clock time in September.
+  const pst = Date.parse('2026-12-09T23:30:00Z')
+  assert.equal(localMinutes(pst, ASN_CUTOFF_TZ), 15 * 60 + 30, 'same wall clock across the DST boundary')
+  assert.equal(cutoffPhase(pst, ASN_CUTOFF_TZ).phase, 'window')
+})
+
+test('the four phases of the afternoon', () => {
+  assert.equal(cutoffPhase(pdt(9), ASN_CUTOFF_TZ).phase, 'clear')
+  assert.equal(cutoffPhase(pdt(14, 45), ASN_CUTOFF_TZ).phase, 'approach')
+  assert.equal(cutoffPhase(pdt(15, 45), ASN_CUTOFF_TZ).phase, 'window')
+  assert.equal(cutoffPhase(pdt(16, 15), ASN_CUTOFF_TZ).phase, 'missed')
+})
+
+test('⚠️ THE BANNER SPEAKS BEFORE THE PARTNER CLOCK RUNS OUT', () => {
+  // A shipment picked up TODAY is 'watch' under the 24-hour rule — hours in hand —
+  // and is exactly what must go out before 4pm. Keying the banner on 'due' would
+  // stay silent all afternoon and light up tomorrow morning, which is precisely how
+  // PO 50220600 went wrong.
+  // Collected 7am local today, so at 3:45pm there are still 15 hours in hand — the
+  // partner rule is entirely relaxed about it, and it is the most urgent thing on
+  // the board because nobody will be here to send it.
+  const today = {
+    bolNumber: 'NB1731282', partner: 'Nordstrom', memberPos: ['50220600'],
+    shipDate: '2026-09-09T14:00:00Z', asnSentAt: null,
+  }
+  const d = asnDue(today, pdt(15, 45))
+  assert.equal(d.state, 'watch', 'not remotely late for the partner')
+  assert.ok(d.hoursLeft > 12, `${d.hoursLeft}h still in hand under the 24h rule`)
+  const b = asnBanner([today], pdt(15, 45), ASN_CUTOFF_TZ)
+  assert.equal(b.severity, 'critical')
+  assert.match(b.text, /SEND NOW/)
+  assert.match(b.text, /3:30 and 4:00pm/)
+})
+
+test('⚠️ SILENT BEFORE THE LEAD-IN — a permanent banner is wallpaper', () => {
+  const today = { bolNumber: 'NB1', shipDate: '2026-09-09T00:00:00Z', asnSentAt: null }
+  assert.equal(asnBanner([today], pdt(9), ASN_CUTOFF_TZ), null, '9am, nothing overdue, say nothing')
+  assert.ok(asnBanner([today], pdt(14, 45), ASN_CUTOFF_TZ), 'but 45 min before the cutoff, speak')
+})
+
+test('a partner-deadline breach speaks at any hour', () => {
+  // That one is already costing money; it does not wait for 3:30.
+  const old = { bolNumber: 'NB1731262', partner: "Bloomingdale's", shipDate: '2026-08-11T00:00:00Z', asnSentAt: null }
+  const b = asnBanner([old], pdt(9), ASN_CUTOFF_TZ)
+  assert.equal(b.severity, 'critical')
+  assert.match(b.text, /offset fees/)
+})
+
+test('past 4pm it says the day is being missed', () => {
+  const today = { bolNumber: 'NB1', shipDate: '2026-09-09T00:00:00Z', asnSentAt: null }
+  assert.match(asnBanner([today], pdt(16, 20), ASN_CUTOFF_TZ).text, /past 4:00pm/)
+})
+
+test('a clear board never banners, at any hour', () => {
+  for (const h of [9, 14.75, 15.75, 16.5]) {
+    assert.equal(asnBanner([], pdt(Math.floor(h), (h % 1) * 60), ASN_CUTOFF_TZ), null)
+  }
+})
+
+test('⚠️ NO CHARACTER OUTSIDE WinAnsi IN THE BANNER', () => {
+  const today = { bolNumber: 'NB1', shipDate: '2026-09-09T00:00:00Z', asnSentAt: null }
+  for (const t of [pdt(14, 45), pdt(15, 45), pdt(16, 20)]) {
+    const b = asnBanner([today], t, ASN_CUTOFF_TZ)
+    assert.doesNotMatch(b.text, /[←-⯿]/, b.text)
+  }
+})

@@ -75,6 +75,7 @@ import { pushingAllowed, pushBlockedForLocation, PUSH_DISABLED_REASON } from '..
 import { PARCEL_LANE_SQL, isParcelLane, noBolReason } from '../src/model/parcelLane.js'
 import { labelTracking, labelCount, SHIPSTATION_TRACKING_SQL, DEAD_LABEL_SQL } from '../src/model/labelEvidence.js'
 import { closeReadiness } from '../src/model/closeReady.js'
+import { asnDueList, asnBanner } from '../src/model/asnDue.js'
 import { loadTenders, loadRoutingShipments } from '../src/ingest/manhattanTender.js'
 import { reconcileTender, matchStop, planTenderApply } from '../src/model/manhattanTender.js'
 import { lastCheckedAt as macysRoutingLastChecked } from '../src/ingest/macysRouting.js'
@@ -3833,6 +3834,27 @@ export async function getShipDateAudit({ today = new Date() } = {}) {
     rows.map((r) => ({ ...r, edi: r.source === 'edi' })),
     { today, custodyEpoch: epoch?.first || null },
   )
+}
+
+/**
+ * What still owes an ASN, and where we are against the 3:30-4:00pm cutoff.
+ *
+ * ⚠️ THE JOIN IS BOL -> 856 business_number, DIRECTLY. There is no link table in
+ * this query on purpose: routing_shipment_edi is populated on 30 of 53 shipped
+ * rows, so reading it reported 23 shipments overdue when 21 had perfectly good
+ * ASNs. An 856's business_number IS the BOL number — that is the mapping.
+ */
+export async function getAsnDue() {
+  const { rows } = await pool.query(`
+    SELECT rs.bol_number, rs.partner, rs.member_pos, rs.cartons, rs.units,
+           rs.ship_date, rs.shipped_at,
+           (SELECT MIN(t.created_at) FROM edi_transactions t
+             WHERE t.type = '856_SHIP_NOTICE_MANIFEST' AND t.direction = 'OUT'
+               AND t.business_number = rs.bol_number) AS asn_sent_at
+      FROM routing_shipment rs
+     WHERE rs.shipped_at IS NOT NULL OR rs.ship_date IS NOT NULL
+  `)
+  return { shipments: asnDueList(rows), banner: asnBanner(rows), checkedAt: new Date().toISOString() }
 }
 
 export async function setShipmentRefs(id, fields = {}) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , fetchTransfers, recordViewVisit } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , fetchTransfers, recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -247,6 +247,9 @@ export default function App() {
   }, [view])
   const [credits, setCredits] = useState(null)
   const [arrivals, setArrivals] = useState([])
+  // ⚠️ Freight that left with no ASN. See src/model/asnDue.js — PO 50220600 reached a
+  // Nordstrom compliance notice because nothing said so before 4pm.
+  const [asnDueFeed, setAsnDueFeed] = useState(null)
   // Ship desk + the two other "whose court" feeds. These live here rather than
   // in CommandCenter because the court strip is app-wide now (Nima, 2026-07-31)
   // — and lifting them means the Command view no longer fetches them twice.
@@ -270,6 +273,7 @@ export default function App() {
     // board still draws its sales orders rather than showing nothing.
     fetchTransfers().then(setTransfers).catch(() => {})
     fetchCredits().then(setCredits).catch(() => {})
+    fetchAsnDue().then(setAsnDueFeed).catch(() => {})
     // New-850 arrival alerts (the cron pulls Orderful and flags fresh POs) —
     // best-effort; the banner just doesn't show if it can't load.
     fetchEdiArrivals().then(setArrivals).catch(() => {})
@@ -444,7 +448,25 @@ export default function App() {
   const openTaskCount = tasks.filter((t) => t.status === 'open').length
   const attention = (orders ? orders.filter((o) => o.severity > 0).length : 0) + openTaskCount
 
+  // Re-poll every 5 minutes so a tab left open since morning crosses 3:30pm on its
+  // own. ⚠️ THE PHASE IS A WALL-CLOCK FACT, not a data change — nothing about the
+  // shipments differs at 3:29 and 3:31, so without this the banner would only appear
+  // on a manual refresh, which is the one thing you do not do on the way out.
+  useEffect(() => {
+    const t = setInterval(() => { fetchAsnDue().then(setAsnDueFeed).catch(() => {}) }, 5 * 60_000)
+    return () => clearInterval(t)
+  }, [])
+  const asnBanner = asnDueFeed?.banner || null
+
   return (
+  // ⚠️ THE LEAVING CUTOFF, IN THE TOP BAR (Nima, 2026-09-09: "we need to make sure
+  // its sent by then"). It lives here rather than on Routing because Routing is the
+  // view you open when you are ALREADY thinking about ASNs — and PO 50220600 was
+  // missed by someone who was not.
+  //
+  // ⚠️ Re-polled on an interval AND re-evaluated locally, because the whole point is
+  // a wall-clock deadline: a tab left open at 2pm must start shouting at 3:30
+  // without anyone touching it.
     // Every view sits inside the drawer's provider, because NsLink prints document
     // numbers on nearly all of them and the drawer has to be openable from any.
     <TraceDrawerProvider onNavigate={navigate}>
@@ -456,6 +478,12 @@ export default function App() {
         </div>
         <ViewMenu views={VIEWS} view={view} onPick={setView} />
         <div className="topmeta">
+          {asnBanner && (
+            <span className={'pill asnCutoff ' + (asnBanner.severity === 'critical' ? 'danger' : 'warn')}
+              title={`BOLs: ${(asnBanner.bols || []).join(', ')}\nTruth is a real 856 in Orderful — not NetSuite's synced flag, not the link table.`}>
+              {asnBanner.severity === 'critical' ? '⚠ ' : ''}{asnBanner.text}
+            </span>
+          )}
           {/* Scan a tag from ANY view and open that record in NetSuite. Lives in the
               top bar because the whole point is that it is reachable without
               navigating to Scan Bay. ⚠️ It logs NOTHING — Scan Bay owns custody. */}

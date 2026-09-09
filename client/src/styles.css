@@ -3327,3 +3327,8 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 /* Scan → Drive: a capability this browser lacks, stated rather than implied. */
 .s2dWarn { color: var(--warn, #e8b44a); }
+
+/* The leaving cutoff in the top bar. Deliberately the loudest pill up there: a
+   shipment that leaves unannounced becomes a partner offset fee overnight, and
+   nobody is here to fix it. See src/model/asnDue.js. */
+.pill.asnCutoff { font-weight: 600; max-width: 46ch; }
