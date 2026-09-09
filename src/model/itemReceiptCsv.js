@@ -115,8 +115,15 @@ export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT
 
     // ⚠️ GUARD 1 — PO NOT OPEN IN NETSUITE. No order lines and no "Created From" to
     // build against, and it almost always means the PO is already fully received or
-    // closed. Its rows are dropped entirely and the PO is fed to the Transfer's
-    // exclusion list so both files describe the same shipment.
+    // closed. Its rows are dropped from the RECEIPT.
+    //
+    // ⚠️ BUT IT MUST STILL TRANSFER, and this asymmetry is easy to get backwards —
+    // I had this comment wrong before checking. Units on an already-received PO ARE
+    // in China and ARE moving, so excluding the PO from the Transfer would strand
+    // them in China forever. Only an unmatched LINE (a SKU with no open line, held
+    // for inspection) is kept off the Transfer, because those units were never
+    // received and cannot move. `excludedPOs` is reported for the operator, NOT fed
+    // to the Transfer as an exclusion. See buildInventoryTransferCsv.
     if (!lines || lines.size === 0) {
       unknownPOs.push({
         poNumber: po,
@@ -189,6 +196,8 @@ export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT
     unmatchedLines,
     duplicateSkus,
     excluded,
+    // Reported so the operator knows these POs are missing from the receipt.
+    // ⚠️ NOT a Transfer exclusion — see Guard 1.
     excludedPOs: [...excludedPOs],
     // ⚠️ AN OVER-RECEIVE OR A DUPLICATE SKU BLOCKS THE EXPORT. Both put units on a
     // PO line that cannot hold them, and both are silent in NetSuite until a count
