@@ -9,7 +9,7 @@
 // parseCsv(text) -> array of row objects keyed by (de-duplicated) header name.
 
 export function parseCsv(text) {
-  const rows = parseRows(text)
+  const rows = parseCsvRows(text)
   if (rows.length === 0) return []
 
   const headers = dedupeHeaders(rows[0])
@@ -26,7 +26,11 @@ export function parseCsv(text) {
 }
 
 // Split the raw text into rows of raw cell strings, honoring quotes.
-function parseRows(text) {
+// ⚠️ EXPORTED FOR THE PACKING SLIP (2026-09-09). `parseCsv` returns objects keyed
+// by header, which is right for a saved search export but wrong for a document
+// read by COLUMN POSITION — a factory slip has a two-row bilingual header and
+// merged cells, so its meaning lives in the grid, not in header names.
+export function parseCsvRows(text) {
   const rows = []
   let row = []
   let field = ''
