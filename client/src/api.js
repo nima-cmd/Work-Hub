@@ -1177,3 +1177,48 @@ export async function fetchAsnDue() {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// ── Factory packing slip → the two NetSuite CSVs (2026-09-09) ────────────────
+// ⚠️ THE BYTES GO TO THE SERVER, not to a parser in the browser. `xlsx` stays a
+// server dependency so src/model/packingSlip.js can be unit-tested against the real
+// slips without a spreadsheet library — which is what caught the carton
+// double-count the original had shipped for months.
+
+/** Parse + build + check, storing nothing. Throws with the server's own message. */
+export async function previewPackingSlip(body) {
+  const res = await fetch('/api/packing-slip/preview', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const j = await res.json().catch(() => ({}))
+  // ⚠️ The server's message is the payload, not a status code. "Unrecognised packing
+  // slip: neither an OFFICE.NO. factory slip nor a SKU/Total Units master list" is
+  // the one sentence that tells someone what to do next.
+  if (!res.ok) throw new Error(j.error || `API ${res.status}`)
+  return j
+}
+
+/** Store the container. Re-parses server-side; the preview is not trusted as fact. */
+export async function commitPackingSlip(body) {
+  const res = await fetch('/api/packing-slip/commit', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const j = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(j.error || `API ${res.status}`)
+  return j
+}
+
+/** Every stored container, newest first. */
+export async function fetchPackingSlips() {
+  const res = await fetch('/api/packing-slips')
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+/** Which container and box did this SKU arrive in? */
+export async function fetchSkuCartons(sku) {
+  const res = await fetch(`/api/packing-slip-sku/${encodeURIComponent(sku)}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}

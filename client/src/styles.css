@@ -3376,3 +3376,60 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-asnPartner { min-width: 120px; }
 .rt-asnClock { margin-left: auto; font-variant-numeric: tabular-nums; }
 .rt-asnDueRow.due .rt-asnClock { color: #ffd23f; font-weight: 700; }
+
+/* ── Packing slip import (2026-09-09) ─────────────────────────────────────────
+   ⚠️ THE FINDINGS ARE THE LOUD PART, not the download buttons. The app this
+   replaced was a download button with no checks; a layout that buries an
+   over-receive under the file it must not let you use would reproduce it. */
+.slip-import { margin-top: 24px; }
+.slip-intro, .slip-note { color: var(--muted); margin: 6px 0; }
+.slip-note { font-size: 13px; }
+.slip-error { color: #ffb3ad; background: rgba(248,81,73,0.08); border-left: 3px solid var(--hi);
+              padding: 8px 12px; margin: 10px 0; }
+.slip-drop { display: inline-block; padding: 14px 20px; background: var(--panel2);
+             border: 1px dashed var(--line); border-radius: 6px; cursor: pointer; margin: 8px 0; }
+.slip-drop:hover { border-color: var(--accent); }
+
+.slip-ident { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin: 12px 0 4px; }
+.slip-ident label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.slip-ident input { background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 6px 8px; font: inherit; width: 180px; }
+.slip-label { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.slip-label code { color: var(--accent); background: var(--panel2); padding: 1px 5px; border-radius: 3px; }
+
+.slip-totals { display: flex; gap: 20px; flex-wrap: wrap; padding: 10px 14px; background: var(--panel);
+               border: 1px solid var(--line); border-radius: 6px; }
+.slip-totals b { color: var(--text); font-size: 16px; }
+.slip-totals span { color: var(--muted); }
+.slip-format { margin-left: auto; font-family: var(--display); font-size: 11px; letter-spacing: 0.06em; }
+
+.slip-findings { margin: 12px 0; padding: 10px 14px; background: var(--panel);
+                 border-left: 3px solid var(--line); border-radius: 4px; }
+.slip-findings.bad  { border-left-color: var(--hi); }
+.slip-findings.warn { border-left-color: var(--mid); }
+.slip-findings.info { border-left-color: var(--lo); }
+.slip-findings h4 { margin: 0 0 4px; font-size: 13px; }
+.slip-findings ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.slip-findings li { margin: 2px 0; }
+.slip-count { color: var(--muted); font-weight: 400; }
+
+.slip-files { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0 4px; }
+.slip-files > div { flex: 1 1 280px; padding: 12px 14px; background: var(--panel);
+                    border: 1px solid var(--line); border-radius: 6px; }
+.slip-files h4 { margin: 0 0 4px; font-size: 13px; }
+
+.slip-cartons { margin: 16px 0; padding: 10px 14px; background: var(--panel);
+                border: 1px solid var(--line); border-radius: 6px; }
+.slip-cartons h4 { margin: 0; font-size: 13px; display: flex; gap: 10px; align-items: baseline; }
+.slip-carton-po { margin: 10px 0; font-size: 13px; }
+.slip-carton-po ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+.slip-linkish { background: none; border: none; color: var(--accent); cursor: pointer;
+                padding: 0; font: inherit; font-weight: 400; text-decoration: underline; }
+
+.slip-commit { display: flex; gap: 12px; align-items: center; margin: 16px 0; }
+.slip-ok { color: #7ee787; font-size: 13px; }
+.slip-stored { margin-top: 24px; }
+.slip-stored table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.slip-stored th { text-align: left; color: var(--muted); font-weight: 500;
+                  border-bottom: 1px solid var(--line); padding: 6px 8px; }
+.slip-stored td { padding: 6px 8px; border-bottom: 1px solid var(--line); }

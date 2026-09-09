@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { fetchOcPoReview, commitOcPo, undoOcPoLink, dismissOcPo, fetchSeasons, saveSeason } from '../api.js'
 import { SeasonBadge } from '../lib.jsx'
+
+// Lazy so the slip screen's markup is not in the bundle for everyone who opens
+// Allocations to work the OC↔PO queue. Same pattern as ScanToDrive in the Scan Bay.
+const PackingSlipImport = lazy(() => import('./PackingSlipImport.jsx'))
 
 const keyOf = (...parts) => parts.join('|')
 
@@ -43,11 +47,16 @@ function downloadCsv(links) {
 // sharing a due date (Nima, 2026-08-02), so this groups the same PO rows by that
 // date instead of by destination.
 //
-// It does NOT model the physical container — the Naghedi-Warehouse app owns
-// that, along with the packing-slip breakdown and the Item Receipt / Transfer
-// Order CSVs. This answers only what that app structurally cannot: a container
-// exists over there once the packing slip arrives, so nothing there can say a
-// container was due five weeks ago and hasn't been started.
+// It does NOT model the physical container: this is the DUE side, derived from PO
+// due dates, and it exists to say what the slip cannot — that a container was due
+// five weeks ago and has not been started, which is only knowable before any
+// document arrives.
+//
+// ⚠️ THE COMMENT HERE USED TO SAY the Naghedi-Warehouse app owned the packing-slip
+// breakdown and the Item Receipt / Transfer CSVs. It no longer does — that work
+// moved into this repo on 2026-09-09 and now sits directly below, because the slip
+// needs to be STORED rather than translated and thrown away. The two sections are
+// the same container from opposite ends: due, then arrived.
 function InboundContainers({ inbound }) {
   const [showOld, setShowOld] = useState(false)
   if (!inbound) return null
@@ -222,6 +231,9 @@ export default function Allocations() {
       </div>
 
       <InboundContainers inbound={inbound} />
+
+      {/* The arrival document for the containers above. */}
+      <Suspense fallback={null}><PackingSlipImport /></Suspense>
 
       <section>
         <h2>Locations</h2>
