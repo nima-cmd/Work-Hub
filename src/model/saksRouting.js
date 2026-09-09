@@ -169,7 +169,31 @@ export const BOL_FIELDS = [
  *
  * So this returns the question, not a comfortable answer.
  */
-export function documentsRequired({ asnWillBeSent } = {}) {
+/**
+ * ⚠️ WE ARE NON-EDI WITH SAKS. Nima, 2026-09-09: "we are non edi for now so we
+ * aren't edi compliant."
+ *
+ * The data agreed and I read it the wrong way round: receiving their 850s made us
+ * look EDI-compliant, but compliance is about what we TRANSMIT, and the last 856
+ * delivered to the Saks partner was 2024-11-01. So §8.5 applies today — packing
+ * slips are required, and an expense offset fee is assessed on every non-compliant
+ * shipment.
+ *
+ * ⚠️ AND IT IS THE PACKING SLIP THAT GETS AUDITED. §9.1 audits "the packing slip
+ * data OR the ASN" against the GS1-128 label against the physical units. With no
+ * ASN, the packing slip is the document our error rate is measured on.
+ *
+ * Kept as a dated fact rather than a hardcoded false, so switching the 856 lane on
+ * is a one-line change with a date beside it.
+ */
+export const EDI_STATUS = {
+  asnTransmitted: false,
+  since: 'the last 856 delivered to the Saks partner was 2024-11-01',
+  statedBy: 'Nima, 2026-09-09',
+  consequence: 'Non-ASN shipment under standards manual §8.5 — packing slips required, expense offset fee assessed',
+}
+
+export function documentsRequired({ asnWillBeSent = EDI_STATUS.asnTransmitted } = {}) {
   const manifest = {
     required: true,
     // ⚠️ REQUIRED FOR ALL SHIPMENTS — this is the one that does not depend on EDI at
@@ -257,7 +281,18 @@ export const AUDIT = {
   exitRequirement: 'three consecutive receipt months at 99.5% error-free',
   page: '§9.1',
   basis: 'ASN or packing slip vs the GS1-128 label vs the physical units, at store/style/colour/size/quantity level',
+  // ⚠️ THE MINIMUM IS THREE MONTHS; THE EXIT IS THREE CONSECUTIVE CLEAN MONTHS, and
+  // those are not the same sentence. One bad month inside the run restarts the
+  // counter, so the floor is $3,000 and there is no ceiling. "Calculations are
+  // performed monthly."
+  entry: ['an item error rate of 2% or higher in a DC audit',
+          'consistently under-shipping, over-shipping or substituting merchandise'],
+  alsoLoses: 'Exemplar "reserves the right to keep the discrepancies found during audit" — the short/wrong units are not returned',
+  scope: 'every PO is audited',
 }
+
+/** 2% of what? The trigger in units, for one PO. */
+export const auditTriggerUnits = (poUnits) => Math.ceil((Number(poUnits) || 0) * AUDIT.itemErrorRateTrigger)
 
 export const CONTACTS = {
   shippingAndRouting: 'sg-transportation@saks.com',

@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   dcFor, modeFor, documentsRequired, checkSaksShipment, businessDaysBefore,
-  DEADLINES, AUDIT, PROHIBITED,
+  DEADLINES, AUDIT, PROHIBITED, EDI_STATUS, auditTriggerUnits,
 } from '../src/model/saksRouting.js'
 
 const WED_9_SEP = new Date('2026-09-09T12:00:00Z')
@@ -60,11 +60,14 @@ test('⚠️ THE PACKING SLIP TURNS ON WHETHER THE 856 ACTUALLY GOES OUT', () =>
   assert.ok(no.packingSlip.rules.some((r) => /all six sides/.test(r)))
   assert.ok(no.packingSlip.rules.some((r) => /PER PURCHASE ORDER/.test(r)))
 
-  // ⚠️ Unknown is its own answer. Defaulting to "not required" because we are
-  // nominally EDI-capable is exactly how an expense offset fee arrives unexplained.
-  const unknown = documentsRequired({})
-  assert.equal(unknown.packingSlip.required, null)
-  assert.match(unknown.packingSlip.why, /2024-11-01/)
+  // ⚠️ THE DEFAULT IS NOW "REQUIRED", because we are non-EDI. Nima, 2026-09-09:
+  // "we are non edi for now so we aren't edi compliant." Receiving their 850s made
+  // us LOOK compliant; compliance is about what we transmit, and the last 856
+  // delivered to the Saks partner was 2024-11-01. Calling the caller-less default
+  // "unknown" was me hedging on a fact someone could just answer.
+  const now = documentsRequired({})
+  assert.equal(now.packingSlip.required, true)
+  assert.equal(EDI_STATUS.asnTransmitted, false)
 })
 
 test('business days skip weekends, and the helper admits it ignores holidays', () => {
@@ -130,4 +133,16 @@ test('the prohibition only WE can catch is marked as such', () => {
     'we mint the BOL numbers, so nothing else can see this before it is printed')
   assert.equal(DEADLINES.tmsRouting.businessDaysBeforeCancel, 3)
   assert.deepEqual(DEADLINES.asn.hoursBeforeArrival, [24, 48])
+})
+
+test('⚠️ 2% OF PO 0008928906 IS SIX UNITS — one carton exceeds it on its own', () => {
+  // 270 units on the PO. The audit measures at unit level, so a single missing
+  // carton is very unlikely to come in under the trigger.
+  assert.equal(auditTriggerUnits(270), 6)
+  assert.equal(auditTriggerUnits(100), 2)
+  // ⚠️ The minimum and the exit are different sentences: three months minimum, but
+  // exit needs three CONSECUTIVE clean months, so a bad month restarts the counter.
+  assert.equal(AUDIT.minimumMonths, 3)
+  assert.match(AUDIT.exitRequirement, /three consecutive/)
+  assert.match(AUDIT.alsoLoses, /keep the discrepancies/)
 })
