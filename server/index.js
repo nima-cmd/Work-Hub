@@ -53,6 +53,8 @@ import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ing
 import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
+import { renderPoRevisionTo } from './poRevisionPdf.js'
+import { poRevisionTicket } from '../src/ingest/poRevisionLive.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -1079,6 +1081,19 @@ app.get('/api/packing-slips/:label', async (req, res) => {
     const slip = await fetchPackingSlip(req.params.label)
     if (!slip) return res.status(404).json({ error: 'no such container' })
     res.json(slip)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// A PO that was re-sent: what changed, as a pick ticket. Reads the EDI, not
+// NetSuite — the new version may have no sales orders at all.
+app.get('/api/po/:po/revision-pick', async (req, res) => {
+  try {
+    const t = await poRevisionTicket(req.params.po)
+    if (req.query.json) return res.json(t)
+    await renderPoRevisionTo(res, t)
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
