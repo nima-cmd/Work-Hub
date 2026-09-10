@@ -210,8 +210,31 @@ function blockingFulfilment(fulfilments = []) {
 // `shipWindow` is the order's window (src/model/shipWindow.js). `today` is
 // passed in, never read from the clock, so the states are testable.
 export function postCustodyState(card = {}, today = new Date()) {
-  const { source, location, fulfilments = [], invoices = [], routing = null, shipWindow = null, departed = false, terms = null } = card
+  const { source, location, fulfilments = [], invoices = [], routing = null, shipWindow = null, departed = false, terms = null, soStatus = null } = card
   const edi = source === 'edi'
+
+  // ⚠️ A CLOSED SALES ORDER CANNOT BE ACTED ON, AND THIS FILE USED TO TELL HIM TO
+  // ANYWAY. Found 2026-09-10 from his own screenshot: three cards sat under
+  // "Invoice it to release" — SO8461 (Joseph Wexner, shipped 2024-06-17, closed
+  // 2025-07-31), SO11087 and SO12073 — all three genuinely uninvoiced, all three
+  // CLOSED in NetSuite, and all three already gone from the building. The advice
+  // was impossible: you cannot raise an invoice against a closed order, and the
+  // goods it offered to "release" left over a year ago.
+  //
+  // ⚠️ AND `billing_status` IS THE TRAP HERE, NOT THE FIX. All three read
+  // "Fully Billed" in our own orders table, because NetSuite reports a CLOSED order
+  // as fully billed — nothing remains billable once the lines are closed. Keying
+  // `hasInvoice` on that field would have silenced these three by asserting an
+  // invoice that does not exist, which is the [[netsuite-fields-that-lie]] shape
+  // with money attached. `soStatus` says closed; the invoice rows say uninvoiced;
+  // both are true and they mean different things.
+  //
+  // Closed is terminal for THIS surface only. The fact that $5,124 shipped and was
+  // never invoiced is a real finding — it just is not a thing to do today, so it
+  // belongs in an audit, not on a card that says "raise the invoice".
+  if (/closed/i.test(String(soStatus || ''))) {
+    return state(PC.DEPARTED, 'Closed in NetSuite')
+  }
 
   // ── The Net-terms boutique flow (Nima, 2026-08-11) ──────────────────────────
   //

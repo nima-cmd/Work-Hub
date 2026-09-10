@@ -530,3 +530,40 @@ test('an IF scan is not a cargo-tag scan — that is the other branch', () => {
   const events = [{ docType: 'IF', docNumber: 'IF7480', eventType: 'CUSTODY_OUT' }]
   assert.equal(allDcTagsScanned(card, events, [{ dc: '299' }]), false)
 })
+
+test('⚠️ A CLOSED SALES ORDER IS TERMINAL — it used to say "raise the invoice"', () => {
+  // From Nima's screenshot, 2026-09-10. Three cards under "Invoice it to release":
+  // SO8461 (Joseph Wexner, shipped 2024-06-17, closed 2025-07-31), SO11087 and
+  // SO12073. All three genuinely have no invoice — confirmed against NetSuite on
+  // both the SO and the IF link — and all three are Closed. The advice was
+  // impossible on every count: you cannot invoice a closed order, and the goods it
+  // offered to release left the building over a year ago.
+  const card = {
+    source: 'boutique', terms: 'Net 30', departed: true, soStatus: 'Closed',
+    fulfilments: [{ ifNumber: 'IF3284', status: 'Shipped', actualShipDate: '2024-06-17' }],
+    invoices: [],
+  }
+  const r = postCustodyState(card, new Date('2026-09-10T12:00:00Z'))
+  assert.equal(r.key, PC.DEPARTED)
+  // `label` is the COLUMN name and stays "Departed"; `waitingOn` is the per-card
+  // sentence, and it says why rather than implying the truck just left.
+  assert.equal(r.waitingOn, 'Closed in NetSuite')
+  assert.equal(r.isWork, false, 'and it must not count as work')
+
+  // ⚠️ AND THE SAME CARD STILL OPEN IS STILL WORK. Closing the door on "closed"
+  // must not close it on the state this surface exists to show.
+  const open = postCustodyState({ ...card, soStatus: 'Pending Billing' }, new Date('2026-09-10T12:00:00Z'))
+  assert.equal(open.key, PC.SHIPPED_AWAITING_INVOICE)
+})
+
+test('⚠️ billing_status IS NOT the fix — a closed order reads "Fully Billed"', () => {
+  // All three read Fully Billed in our orders table, because NetSuite reports a
+  // closed order that way: nothing remains billable once the lines are closed.
+  // Keying hasInvoice on it would assert an invoice that does not exist.
+  const r = postCustodyState({
+    source: 'boutique', terms: 'Net 30', departed: true,
+    soStatus: 'Pending Billing', billingStatus: 'Fully Billed',
+    fulfilments: [{ ifNumber: 'IF9999', status: 'Shipped' }], invoices: [],
+  }, new Date('2026-09-10T12:00:00Z'))
+  assert.equal(r.key, PC.SHIPPED_AWAITING_INVOICE, 'billingStatus must not be read as an invoice')
+})
