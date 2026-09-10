@@ -31,8 +31,104 @@ const isoDay = (d) => {
 export function buildPoRevisionPdf(ticket) {
   const doc = new PDFDocument({ size: 'LETTER', margin: M })
   render(doc, ticket)
+  // ⚠️ THE GRID IS A SECOND PAGE, LANDSCAPE, IN THE SAME DOCUMENT. 24 stores against
+  // 10 SKUs does not fit portrait, and splitting it into two prints is how one half
+  // ends up on a bench without the other. Page 1 is what to DO; page 2 is what they
+  // WANT — Nima, 2026-09-10: "what thye want in total is the important number".
+  if (ticket.comparable && ticket.grid?.stores?.length) {
+    doc.addPage({ size: 'LETTER', layout: 'landscape', margin: M })
+    renderGrid(doc, ticket)
+  }
   doc.end()
   return doc
+}
+
+/** A short column head. SN03012LD-CASHMERE -> "3012 CASH" in a 60pt column. */
+export function shortSku(sku) {
+  const m = String(sku).match(/^SN0?(\d+)[A-Z]{2}-(.+)$/)
+  if (!m) return String(sku).slice(0, 10)
+  return `${m[1]} ${m[2].replace(/[^A-Z]/gi, '').slice(0, 5)}`
+}
+
+function renderGrid(doc, t) {
+  const g = t.grid
+  const W = doc.page.width - M * 2
+  doc.font('Helvetica-Bold').fontSize(14).fillColor('#000').text('WHAT THEY WANT — BY STORE', M, M)
+  doc.font('Helvetica').fontSize(8).fillColor(GREY)
+    .text(`PO ${t.poNumber}  ·  ${isoDay(t.v2.receivedAt)} version, Orderful ${t.v2.transactionId}`
+      + `  ·  ${t.v2.units} units across ${g.stores.length} stores`
+      + `  ·  a red cell changed from the ${isoDay(t.v1.receivedAt)} version`, M, M + 18)
+
+  // ⚠️ Reported, not assumed away: a line whose store split does not sum to its own
+  // declared quantity means a store is short and the grid cannot show which.
+  let y = M + 32
+  if (g.sdqMismatch.length) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(
+      WARN + `${g.sdqMismatch.length} line(s) whose store split does not add up to the PO quantity: `
+      + g.sdqMismatch.map((x) => `${x.sku} declares ${x.declared}, stores sum ${x.fromStores}`).join('; '),
+      M, y, { width: W })
+    y = doc.y + 4
+  }
+
+  const storeW = 40
+  const totW = 42
+  const n = g.skus.length
+  const colW = Math.max(34, Math.floor((W - storeW - totW) / n))
+
+  // ── Head ──────────────────────────────────────────────────────────────────
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(GREY).text('STORE', M, y, { width: storeW })
+  g.skus.forEach((sku, i) => doc.text(shortSku(sku), M + storeW + i * colW, y, { width: colW - 2, align: 'right' }))
+  doc.text('TOTAL', M + storeW + n * colW, y, { width: totW, align: 'right' })
+  y = doc.y + 3
+  doc.moveTo(M, y).lineTo(M + W, y).lineWidth(0.5).strokeColor('#999').stroke()
+  y += 4
+
+  // ── One row per store ─────────────────────────────────────────────────────
+  doc.fontSize(8)
+  for (const store of g.stores) {
+    const st = g.storeTotals[store]
+    doc.font('Helvetica-Bold').fillColor('#000').text(store, M, y, { width: storeW })
+    g.skus.forEach((sku, i) => {
+      const cell = g.cell[sku][store]
+      const x = M + storeW + i * colW
+      if (cell.was === cell.now) {
+        // ⚠️ A ZERO IS BLANK, not "0". Twenty-four rows of zeros is a wall someone
+        // has to read past to find the seven numbers that matter.
+        doc.font('Helvetica').fillColor('#000').text(cell.now ? String(cell.now) : '', x, y, { width: colW - 2, align: 'right' })
+      } else {
+        doc.font('Helvetica-Bold').fillColor(RED)
+          .text(`${cell.was}>${cell.now}`, x, y, { width: colW - 2, align: 'right' })
+      }
+    })
+    doc.font('Helvetica-Bold').fillColor(st.was === st.now ? '#000' : RED)
+      .text(st.was === st.now ? String(st.now) : `${st.was}>${st.now}`,
+        M + storeW + n * colW, y, { width: totW, align: 'right' })
+    y = doc.y + 2
+    if (y > doc.page.height - M - 40) {
+      doc.addPage({ size: 'LETTER', layout: 'landscape', margin: M })
+      y = M
+    }
+  }
+
+  // ── The number that matters ───────────────────────────────────────────────
+  doc.moveTo(M, y + 1).lineTo(M + W, y + 1).lineWidth(1).strokeColor('#000').stroke()
+  y += 5
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#000').text('WANT', M, y, { width: storeW })
+  g.skus.forEach((sku, i) => {
+    const tot = g.skuTotals[sku]
+    doc.fillColor(tot.was === tot.now ? '#000' : RED)
+      .text(String(tot.now), M + storeW + i * colW, y, { width: colW - 2, align: 'right' })
+  })
+  doc.fillColor('#000').text(String(t.v2.units), M + storeW + n * colW, y, { width: totW, align: 'right' })
+  y = doc.y + 1
+
+  // The previous ask, small, underneath — for checking against the sheet on the bench.
+  doc.font('Helvetica').fontSize(7).fillColor(GREY).text('was', M, y, { width: storeW })
+  g.skus.forEach((sku, i) => {
+    const tot = g.skuTotals[sku]
+    doc.text(tot.was === tot.now ? '' : String(tot.was), M + storeW + i * colW, y, { width: colW - 2, align: 'right' })
+  })
+  doc.text(String(t.v1.units), M + storeW + n * colW, y, { width: totW, align: 'right' })
 }
 
 export async function renderPoRevisionTo(res, ticket) {

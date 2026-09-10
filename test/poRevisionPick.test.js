@@ -118,3 +118,40 @@ test('an added SKU is not mistaken for an increase', () => {
   assert.equal(r.fetch, 7)
   assert.equal(r.putBack, 0)
 })
+
+test('⚠️ THE GRID CARRIES EVERY CELL, not just the changed ones', () => {
+  // rows[].byStore holds only what moved — right for the action list, wrong for a
+  // pick sheet. Someone bagging store 0058 needs all its numbers.
+  const r = revisionPick(v1, v2)
+  const c = r.grid.cell
+  // Unchanged cell is present with equal was/now.
+  assert.deepEqual(c['SN03012LD-CASHMERE']['0002'], { was: 10, now: 10 })
+  // A removed SKU still has a row, with zeros.
+  assert.deepEqual(c['SN04023LD-ONYX']['0011'], { was: 4, now: 0 })
+  // A store that never carried a SKU is 0/0, not missing.
+  assert.deepEqual(c['SN03012LD-ONYX']['0011'], { was: 0, now: 0 })
+  assert.equal(r.grid.skus.length, 5)
+  assert.equal(r.grid.stores.length, 6)
+})
+
+test('⚠️ THE TOTAL IS WHAT THEY WANT NOW — was is only there to check against', () => {
+  const r = revisionPick(v1, v2)
+  // The DECLARED line quantity — what the PO says it wants.
+  assert.deepEqual(r.grid.declared['SN03013LD-ONYX'], { was: 8, now: 12 })
+  assert.deepEqual(r.grid.declared['SN04023LD-ONYX'], { was: 6, now: 0 })
+
+  // ⚠️ BOTH MARGINS SUM FROM THE CELLS, so they always reconcile. This assertion is
+  // what found the bug: skuTotals used the PO1 line quantity and storeTotals summed
+  // the SDQ split, so the grid's edges disagreed by construction.
+  const sumSkus = Object.values(r.grid.skuTotals).reduce((a, x) => a + x.now, 0)
+  const sumStores = Object.values(r.grid.storeTotals).reduce((a, x) => a + x.now, 0)
+  assert.equal(sumSkus, sumStores, 'row and column totals must agree')
+
+  // ⚠️ AND A DECLARED TOTAL THAT DOES NOT MATCH ITS STORE SPLIT IS REPORTED. This
+  // fixture is abridged, so it mismatches on purpose — on a well-formed 850 the SDQ
+  // sums to PO1, and when it does not, a store is short and nobody would see it.
+  assert.ok(r.grid.sdqMismatch.length > 0)
+  const m = r.grid.sdqMismatch.find((x) => x.sku === 'SN03012LD-CASHMERE')
+  assert.equal(m.declared, 87)
+  assert.equal(m.fromStores, 16)
+})

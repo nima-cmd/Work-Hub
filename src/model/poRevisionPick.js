@@ -63,12 +63,49 @@ export function revisionPick(v1, v2) {
     return { store, was, now, delta: now - was }
   })
 
+  // ⚠️ THE FULL GRID, NOT JUST THE CHANGED CELLS. `rows[].byStore` carries only what
+  // moved, which is right for the action list and wrong for a pick sheet: someone
+  // bagging store 0058 needs all seven of its numbers, not the two that changed.
+  // Nima, 2026-09-10: "what thye want in total is the important number".
+  const grid = {
+    skus,
+    stores,
+    cell: Object.fromEntries(skus.map((sku) => [sku,
+      Object.fromEntries(stores.map((store) => [store, { was: at(v1, sku, store), now: at(v2, sku, store) }])),
+    ])),
+    // ⚠️ BOTH MARGINS ARE SUMMED FROM THE CELLS, and that is not pedantry. A grid
+    // whose row totals and column totals disagree is a grid nobody can trust, and
+    // they WILL disagree if one margin comes from the PO1 line quantity and the other
+    // from the SDQ store split. Found by the test that asserted they reconcile.
+    skuTotals: Object.fromEntries(skus.map((sku) => [sku, {
+      was: stores.reduce((a, st) => a + at(v1, sku, st), 0),
+      now: stores.reduce((a, st) => a + at(v2, sku, st), 0),
+    }])),
+    storeTotals: Object.fromEntries(stores.map((store) => [store, {
+      was: skus.reduce((a, s) => a + at(v1, s, store), 0),
+      now: skus.reduce((a, s) => a + at(v2, s, store), 0),
+    }])),
+    // ⚠️ AND THE DECLARED LINE QUANTITY IS KEPT SEPARATELY, because a well-formed 850
+    // has SDQ summing to PO1 and a malformed one does not. Reporting the difference
+    // is worth more than silently preferring either number — a store split that does
+    // not add up to the line is the shape that under-ships a store nobody noticed.
+    declared: Object.fromEntries(skus.map((sku) => [sku, { was: unitsFor(v1, sku), now: unitsFor(v2, sku) }])),
+    sdqMismatch: skus
+      .map((sku) => ({
+        sku,
+        declared: unitsFor(v2, sku),
+        fromStores: stores.reduce((a, st) => a + at(v2, sku, st), 0),
+      }))
+      .filter((x) => x.declared !== x.fromStores),
+  }
+
   return {
     poNumber: v2.poNumber ?? v1.poNumber ?? null,
     v1: summary(v1),
     v2: summary(v2),
     rows,
     changed,
+    grid,
     storeRows,
     storesMoved: storeRows.filter((s) => s.delta !== 0),
     // ⚠️ THE HEADLINE IS THE WORK, NOT THE DIFFERENCE. "9 fewer units" is arithmetic;
