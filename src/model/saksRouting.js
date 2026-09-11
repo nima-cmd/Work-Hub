@@ -20,6 +20,8 @@
 // for TELLING SOMEONE WHAT TO EXPECT and for catching an obvious mismatch — never
 // for choosing on the TMS's behalf.
 
+import { DCS as STORE_DCS, dcAddressLines } from './exemplarStores.js'
+
 export const SOURCE = {
   guide: 'Saks Global US Routing Guide',
   revision: '11',
@@ -38,56 +40,30 @@ export const SOURCE = {
  * ship-to `0510`; the guide's table says `510`. Looked up either way here, because a
  * lookup that misses returns "unknown DC" and someone types an address by hand.
  */
-export const DCS = {
-  510: {
-    code: '510', name: 'NMG-Pinnacle Point', abbrev: 'PNDC',
-    address: ['4123 Pinnacle Point Dr', 'Dallas, TX 75211'],
-    // ⚠️ Jewellery goes to Suite J at the same address — a different dock, same code.
-    jewelleryAddress: ['4123 Pinnacle Point Dr Suite J', 'Dallas, TX 75211'],
-    receiving: 'Tue-Fri 6:30 AM - 3:30 PM',
-    appointment: 'Conduit (scheduling link in the guide)',
-    page: 4,
-  },
-  577: {
-    code: '577', name: 'NMG-West Coast Service Center', abbrev: 'WCSC',
-    address: ['2500 Workman Mill Road', 'Whittier, CA 90601'],
-    receiving: 'Mon-Fri 3:00 AM - 3:30 PM',
-    appointment: 'Email SG-Transportation@saks.com, subject "Delivery Apt Request"',
-    page: 4,
-  },
-  560: {
-    code: '560', name: 'NMG-East Coast Service Center', abbrev: 'ECDC',
-    address: ['600 Research Dr', 'Pittston, PA 18640'],
-    receiving: 'Mon-Fri 7 AM - 3:30 PM',
-    appointment: 'Conduit',
-    page: 4,
-    note: 'Also the Bergdorf Goodman DC.',
-  },
-  517: {
-    code: '517', name: 'SFA West Coast Service Center', abbrev: 'WCSC',
-    address: ['2500 Workman Mill Road', 'Whittier, CA 90601'],
-    receiving: 'Mon-Fri 10:00 AM - 5:00 PM',
-    // ⚠️ The only DC that says delivery is REFUSED without a TMS routing, in writing.
-    appointment: 'No appointment needed IF the PO is routed in Dynamic TMS — delivery is REJECTED if it is not',
-    page: 5,
-  },
-  '072': {
-    code: '072', name: 'NMG-Thomasville DC', abbrev: 'WH4',
-    address: ['115 Morrison Ave', 'Thomasville, NC 27360'],
-    receiving: 'Mon-Fri 7:30 AM - 3:30 PM',
-    appointment: 'Email NMtickets@sun-wd.com',
-    page: 5,
-    // ⚠️ NCDC bypasses the TMS entirely — keyed as a special order (guide p18).
-    note: 'POs for NCDC (Store 072 / DC 550) ship direct without the TMS or DTS approval.',
-  },
-  694: {
-    code: '694', name: 'Saks Photo Studio', abbrev: 'Photo',
-    address: ['250 Vesey Street - 22nd Floor', 'New York, NY 10281'],
-    receiving: 'Mon-Fri 9:00 AM - 5:00 PM',
-    appointment: 'None — samples are DTS and skip the TMS',
-    page: 5,
-  },
-}
+// ⚠️ DERIVED, NOT DECLARED. This table used to be transcribed by hand from the
+// Routing Guide's prose and disagreed with the dedicated DC list on ALL SEVEN
+// entries — "600 Research Dr, Pittston" for what is actually "600-620 Research
+// Drive, CenterPoint Commerce & Trade Park, Pittston Township", "2500 Workman Mill
+// Road" for "2500 S Workman Mill", and 072/694 keyed as DCs when both are STORE
+// numbers. The carton label imported THIS one, so it was the wrong address that
+// would have printed. Addresses now come from src/model/exemplarStores.js, which
+// reads the DC list document; the shape is kept so nothing downstream changes.
+export const DCS = Object.fromEntries(Object.entries(STORE_DCS).map(([code, d]) => [code, {
+  code: d.dc,
+  name: d.name === 'PNDC' ? 'NMG-Pinnacle Point'
+    : d.name === 'ECDC' ? 'NMG-East Coast Service Center'
+    : d.name === 'NM WCSC' ? 'NMG-West Coast Service Center'
+    : d.name === 'SAKS WCSC' ? 'SFA West Coast Service Center'
+    : d.name === 'NCDC' ? 'NMG-Thomasville DC' : d.name,
+  abbrev: d.abbrev,
+  address: dcAddressLines(code),
+  ...(d.jewelleryStreet ? { jewelleryAddress: [d.jewelleryStreet, `${d.city}, ${d.state} ${d.zip}`] } : {}),
+  receiving: d.receiving,
+  appointment: d.appointment,
+  ...(d.note ? { note: d.note } : {}),
+  page: d.guidePage,
+}]))
+
 
 export const dcFor = (code) => DCS[String(code ?? '').replace(/^0+/, '')] ?? DCS[String(code ?? '')] ?? null
 

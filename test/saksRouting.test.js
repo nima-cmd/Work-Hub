@@ -15,7 +15,15 @@ test('⚠️ THE DC CODE IS ZERO-PADDED IN EDI AND BARE IN THE GUIDE', () => {
   assert.equal(dcFor('0510').abbrev, 'PNDC')
   assert.equal(dcFor('510').abbrev, 'PNDC')
   assert.equal(dcFor(510).name, 'NMG-Pinnacle Point')
-  assert.deepEqual(dcFor('0510').address, ['4123 Pinnacle Point Dr', 'Dallas, TX 75211'])
+  // ⚠️ "4123 Pinnacle Point", not "…Point Dr". This table is now DERIVED from
+  // exemplarStores.js, which reads the dedicated DC list of 2026-04-21; the "Dr" was
+  // my own transcription from the Routing Guide's prose. All seven entries differed,
+  // and DC 560 differed materially — see that file's header.
+  assert.deepEqual(dcFor('0510').address, ['4123 Pinnacle Point', 'Dallas, TX 75211'])
+  assert.deepEqual(dcFor('560').address, [
+    '600-620 Research Drive', 'CenterPoint Commerce & Trade Park', 'Pittston Township, PA 18640',
+  ])
+  assert.match(dcFor('577').address[0], /2500 S Workman Mill/)
   assert.equal(dcFor('999'), null, 'an unknown code is null, never a guess')
 })
 

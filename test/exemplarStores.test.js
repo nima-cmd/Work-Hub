@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import {
   STORES, DCS, DC_STORES, REPORTING_ONLY, store, storeByAbbrev, servicingDc,
   storesForDc, groupByDc, LEGACY_DC_DISAGREEMENTS, LEGACY_ONLY, SOURCE,
-  LIVE_ENTITY, isLiveShipTo,
+  LIVE_ENTITY, isLiveShipTo, STOREFRONT_RENAME, storefrontFor, dcAddressLines,
 } from '../src/model/exemplarStores.js'
 
 test('⚠️ THE 18 DISAGREEMENTS ARE DORMANT LEGACY, NOT LIVE MIS-ROUTING', () => {
@@ -161,4 +161,62 @@ test('⚠️ THREE OLD RECORDS ARE ON NO CURRENT EXEMPLAR LIST', () => {
   // and Topanga are two of the six that ever shipped, both last on 2025-03-11.
   assert.deepEqual(LEGACY_ONLY.map((s) => s.abbrev), ['BN', 'AM', 'TP'])
   for (const s of LEGACY_ONLY) assert.equal(storeByAbbrev(s.abbrev), null)
+})
+
+test('⚠️ THE STOREFRONT RENAME IS A NAME CHANGE, NOT A RENUMBERING', () => {
+  // Exemplar's EDI director: effective 2026-09-21 "SAKS GLOBAL" becomes "EXEMPLAR
+  // LUXURY GROUP" in REF(19) and MTX. Store and DC numbers are untouched — which is
+  // why 0077 is still 0077 on DC 510, and why reading this as a renumbering would
+  // have thrown away a store list that is still correct.
+  assert.equal(STOREFRONT_RENAME.renumbering, false)
+  assert.equal(STOREFRONT_RENAME.effective, '2026-09-21')
+  assert.deepEqual(STOREFRONT_RENAME.segments, ['REF(19)', 'MTX'])
+  // Only the two stores whose STOREFRONT column reads SAKS GLOBAL are affected.
+  assert.deepEqual(STOREFRONT_RENAME.affectsStores, ['0073', '0077'])
+
+  // It is date-driven, so the cutover cannot be missed or applied early.
+  assert.equal(storefrontFor('0077', '2026-09-20'), 'SAKS GLOBAL')
+  assert.equal(storefrontFor('0077', '2026-09-21'), 'EXEMPLAR LUXURY GROUP')
+  assert.equal(storefrontFor('0077', '2026-12-01'), 'EXEMPLAR LUXURY GROUP')
+  // A store the notice does not cover returns null rather than a banner name.
+  assert.equal(storefrontFor('0210'), null)
+})
+
+test('⚠️ TWO THINGS IN THE RENAME NOTICE ARE UNRESOLVED AND STAY THAT WAY', () => {
+  // The notice addresses 5010 partners and then names the 4050 segments, and it
+  // omits Saks OFF 5th from the updated storefront list while 12 O5 stores are on
+  // the servicing list. Both are recorded as open questions for edi@saks.com rather
+  // than resolved by inference.
+  assert.equal(STOREFRONT_RENAME.openQuestions.length, 2)
+  assert.match(STOREFRONT_RENAME.openQuestions[0], /5010.*4050|4050.*5010/)
+  assert.match(STOREFRONT_RENAME.openQuestions[1], /OFF 5th/)
+  assert.ok(!STOREFRONT_RENAME.updatedStorefrontList.some((n) => /OFF 5TH/i.test(n)))
+  assert.equal(STORES.filter((s) => s.banner === 'O5').length, 12)
+})
+
+test('⚠️ ONE DC TABLE, AND IT IS THE DOCUMENT\'S', () => {
+  // There were two and they disagreed on all seven entries; the carton label
+  // imported the hand-transcribed one. saksRouting.js now derives from here.
+  assert.deepEqual(dcAddressLines('0510'), ['4123 Pinnacle Point', 'Dallas, TX 75211'])
+  assert.deepEqual(dcAddressLines('560'), [
+    '600-620 Research Drive', 'CenterPoint Commerce & Trade Park', 'Pittston Township, PA 18640',
+  ])
+  assert.equal(dcAddressLines('999'), null, 'an unknown DC yields no address, never a partial one')
+  // 072 and 694 are STORE numbers and must not resolve as DCs.
+  assert.equal(dcAddressLines('072'), null)
+  assert.equal(dcAddressLines('694'), null)
+  assert.equal(store('0694').store, '0694', 'but 694 is a real store')
+})
+
+test('store 0077 resolves end to end, which is what Nima asked', () => {
+  assert.equal(DC_STORES['0077'].name, 'GLOBAL PNDC')
+  assert.equal(isLiveShipTo('0077'), true)
+  const dc = servicingDc('0077')
+  assert.equal(dc.dc, '510')
+  assert.equal(dc.name, 'PNDC')
+  assert.equal(dc.receiving, 'Tue-Fri 6:30 AM - 3:30 PM')
+  assert.match(dc.appointment, /Conduit/)
+  // ⚠️ Jewellery is a different dock on the same DC code — not relevant to handbags,
+  // but it is the kind of detail that makes a delivery turn up at the wrong door.
+  assert.equal(dc.jewelleryStreet, '4123 Pinnacle Point Suite J')
 })

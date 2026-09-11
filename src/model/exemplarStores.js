@@ -47,19 +47,131 @@ export const BANNERS = {
 }
 
 /**
- * The distribution centres, by Exemplar's DC number.
+ * ⚠️ THE STOREFRONT RENAME — a NAME change, not a renumbering.
+ *
+ * Rohan Fenton, Director EDI, Exemplar Luxury Group, forwarded by Nima 2026-09-11:
+ * effective 2026-09-21 the identifier "SAKS GLOBAL" is replaced by "EXEMPLAR LUXURY
+ * GROUP" in the REF(19) and MTX segments. Store and DC numbers are untouched, which
+ * is why store 0077 is still 0077 on DC 510 — it is the STOREFRONT column of the
+ * 2026-04-21 list that changes, and 0073/0077 are the two stores whose storefront
+ * reads "SAKS GLOBAL". That is exactly why Nima renamed the NetSuite customer.
+ *
+ * ⚠️ THE LETTER'S OWN INSTRUCTION IS SELF-CONTRADICTORY AND I AM NOT GUESSING AT IT:
+ * "For partners currently utilizing version 5010, please update your systems to
+ * reflect this change in the REF(19) and MTX segments for EDI version 4050." It
+ * addresses 5010 partners and then names 4050. Both mapping specs are in Drive
+ * (saks-edi-5010, saks-edi-4050) and which one Exemplar expects from us is still
+ * open — a question for edi@saks.com, not an inference.
+ *
+ * ⚠️ AND "SAKS OFF 5TH" IS ABSENT FROM THE UPDATED STOREFRONT LIST. The letter names
+ * four: Exemplar Luxury Group, Saks Fifth Avenue, Neiman Marcus, Bergdorf Goodman.
+ * Twelve O5 stores are on the servicing list. Dropped, folded in, or simply not
+ * mentioned — recorded as unknown rather than resolved either way.
+ */
+export const STOREFRONT_RENAME = {
+  from: 'SAKS GLOBAL',
+  to: 'EXEMPLAR LUXURY GROUP',
+  effective: '2026-09-21',
+  segments: ['REF(19)', 'MTX'],
+  affectsStores: ['0073', '0077'],
+  renumbering: false,
+  source: 'Rohan Fenton, Director EDI, Exemplar Luxury Group — notice relayed 2026-09-11',
+  contact: 'edi@saks.com',
+  updatedStorefrontList: [
+    'Exemplar Luxury Group', 'Saks Fifth Avenue', 'Neiman Marcus', 'Bergdorf Goodman',
+  ],
+  openQuestions: [
+    'The notice addresses 5010 partners but names the 4050 segments — which version does Exemplar expect from us?',
+    'Saks OFF 5th is not on the updated storefront list, yet 12 O5 stores are on the servicing list.',
+  ],
+}
+
+/** The storefront name to put in REF(19)/MTX for a date. */
+export function storefrontFor(store, on = new Date().toISOString().slice(0, 10)) {
+  const s = STOREFRONT_RENAME.affectsStores.includes(pad4(store))
+  if (!s) return null
+  return on >= STOREFRONT_RENAME.effective ? STOREFRONT_RENAME.to : STOREFRONT_RENAME.from
+}
+
+/**
+ * THE distribution centres — the single address source for every Exemplar document.
+ *
+ * ⚠️ THERE WERE TWO OF THESE AND THEY DISAGREED ON ALL SEVEN ENTRIES. saksRouting.js
+ * had its own DCS transcribed from the Routing Guide's prose, and the carton label
+ * imported THAT one. Compared against the dedicated DC list of 2026-04-21:
+ *
+ *   510  "4123 Pinnacle Point Dr"      → "4123 Pinnacle Point"      (no "Dr")
+ *   517  "2500 Workman Mill Road"      → "2500 S Workman Mill"      (missing "S")
+ *   577  same                          → same
+ *   560  "600 Research Dr, Pittston"   → "600-620 Research Drive,
+ *                                         CenterPoint Commerce & Trade Park,
+ *                                         Pittston Township"        (materially short)
+ *   072  keyed as a DC                 → 072 is a STORE; the DC is 550
+ *   694  keyed as a DC                 → 694 is a STORE whose DC is N/A
+ *
+ * A carton label carrying an incomplete consignee is fee 55/355, "No/incorrect
+ * format — DC, Dept or Suite # on GS1 or carton", $10 per carton / $250 minimum.
+ * saksRouting.js now derives its table from this one, so there is one place to fix.
  *
  * ⚠️ 517 AND 577 ARE THE SAME BUILDING WITH DIFFERENT DC NUMBERS. 2500 S Workman
  * Mill, Whittier is DC 517 for the Saks banners and DC 577 for Neiman. The number is
  * per banner, not per address, so a Neiman carton labelled 517 is mis-routed inside
  * a warehouse that did receive it.
+ *
+ * Addresses from the EDI Store and DC codes list (2026-04-21). The operational
+ * fields — receiving hours, how to book, the notes — are from the Routing Guide
+ * rev 11, which is the only source for them.
  */
 export const DCS = {
-  510: { dc: '510', name: 'PNDC', street: '4123 Pinnacle Point', city: 'Dallas', state: 'TX', zip: '75211' },
-  517: { dc: '517', name: 'SAKS WCSC', street: '2500 S Workman Mill', city: 'Whittier', state: 'CA', zip: '90601', banners: ['SFA', 'O5'] },
-  550: { dc: '550', name: 'NCDC', street: '115 Morrison Ave', city: 'Thomasville', state: 'NC', zip: '27360' },
-  560: { dc: '560', name: 'ECDC', street: '600-620 Research Drive', street2: 'CenterPoint Commerce & Trade Park', city: 'Pittston Township', state: 'PA', zip: '18640' },
-  577: { dc: '577', name: 'NM WCSC', street: '2500 S Workman Mill', city: 'Whittier', state: 'CA', zip: '90601', banners: ['NM'] },
+  510: {
+    dc: '510', name: 'PNDC', abbrev: 'PNDC',
+    street: '4123 Pinnacle Point', city: 'Dallas', state: 'TX', zip: '75211',
+    receiving: 'Tue-Fri 6:30 AM - 3:30 PM',
+    appointment: 'Conduit (scheduling link in the guide)',
+    // ⚠️ Jewellery goes to Suite J at the same address — a different dock, same code.
+    jewelleryStreet: '4123 Pinnacle Point Suite J',
+    guidePage: 4,
+  },
+  517: {
+    dc: '517', name: 'SAKS WCSC', abbrev: 'WCSC', banners: ['SFA', 'O5'],
+    street: '2500 S Workman Mill', city: 'Whittier', state: 'CA', zip: '90601',
+    receiving: 'Mon-Fri 10:00 AM - 5:00 PM',
+    // ⚠️ The only DC that says delivery is REFUSED without a TMS routing, in writing.
+    appointment: 'No appointment needed IF the PO is routed in Dynamic TMS — delivery is REJECTED if it is not',
+    guidePage: 5,
+  },
+  550: {
+    dc: '550', name: 'NCDC', abbrev: 'WH4',
+    street: '115 Morrison Ave', city: 'Thomasville', state: 'NC', zip: '27360',
+    receiving: 'Mon-Fri 7:30 AM - 3:30 PM',
+    appointment: 'Email NMtickets@sun-wd.com',
+    // ⚠️ NCDC bypasses the TMS entirely — keyed as a special order (guide p18).
+    note: 'POs for NCDC ship direct without the TMS or DTS approval. Its STORE number is 0072; the DC number is 550.',
+    guidePage: 5,
+  },
+  560: {
+    dc: '560', name: 'ECDC', abbrev: 'ECDC',
+    street: '600-620 Research Drive', street2: 'CenterPoint Commerce & Trade Park',
+    city: 'Pittston Township', state: 'PA', zip: '18640',
+    receiving: 'Mon-Fri 7 AM - 3:30 PM',
+    appointment: 'Conduit',
+    note: 'Also the Bergdorf Goodman DC. Services 42 of the 67 stores.',
+    guidePage: 4,
+  },
+  577: {
+    dc: '577', name: 'NM WCSC', abbrev: 'WCSC', banners: ['NM'],
+    street: '2500 S Workman Mill', city: 'Whittier', state: 'CA', zip: '90601',
+    receiving: 'Mon-Fri 3:00 AM - 3:30 PM',
+    appointment: 'Email SG-Transportation@saks.com, subject "Delivery Apt Request"',
+    guidePage: 4,
+  },
+}
+
+/** The consignee block for a label or a BOL, as lines. */
+export function dcAddressLines(code) {
+  const d = DCS[String(code ?? '').replace(/^0+/, '')]
+  if (!d) return null
+  return [d.street, d.street2, `${d.city}, ${d.state} ${d.zip}`].filter(Boolean)
 }
 
 // A store row: [store, banner, name, abbrev|null, street, city, state, zip, dc|null]

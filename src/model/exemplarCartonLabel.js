@@ -30,7 +30,12 @@
 // Copying the ShopBop layout unchanged would have produced a label that looks right
 // and is chargeable three ways ($250 minimum each). They are required fields here.
 
-import { DCS } from './saksRouting.js'
+// ⚠️ FROM exemplarStores.js, NOT saksRouting.js. This originally imported
+// saksRouting's hand-transcribed table, which disagreed with the DC list document on
+// every entry — so a label for DC 560 would have printed "600 Research Dr, Pittston"
+// instead of "600-620 Research Drive, CenterPoint Commerce & Trade Park, Pittston
+// Township". An incomplete consignee is fee 55/355, $250 minimum.
+import { DCS, dcAddressLines, servicingDc, isLiveShipTo } from './exemplarStores.js'
 
 /** 4x6 thermal at 203 dpi, the stock the warehouse Zebra is loaded with. */
 export const LABEL = { widthDots: 812, heightDots: 1218, dpi: 203 }
@@ -141,7 +146,8 @@ export function cartonLabelZpl(c = {}) {
       [...p.missing.map((m) => `missing ${m.field} (${m.requirement})`), ...p.errors].join('; ')}`)
   }
   const dc = DCS[String(c.dc).replace(/^0+/, '')]
-  const zip = (dc.address[dc.address.length - 1].match(/(\d{5})(?:-\d{4})?\s*$/) || [])[1]
+  const lines = dcAddressLines(c.dc)
+  const zip = dc.zip
   const sscc = digits(c.sscc)
 
   const out = ['^XA', '']
@@ -153,7 +159,7 @@ export function cartonLabelZpl(c = {}) {
 
   out.push('', fd(20, 370, 25, 'SHIP TO'), fd(25, 370, 55, `${c.operatingCompany}`))
   out.push(fd(25, 370, 90, dc.name))
-  dc.address.forEach((l, i) => out.push(fd(25, 370, 125 + i * 35, l)))
+  lines.forEach((l, i) => out.push(fd(25, 370, 125 + i * 35, l)))
 
   // ── Postal-code barcode (AI 420) + carrier, as the live label does ──
   out.push('', `^FO0,235^GB${LABEL.widthDots},213,2^FS`, '^FO380,235^GB2,213,2^FS')

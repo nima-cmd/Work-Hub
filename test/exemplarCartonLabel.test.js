@@ -94,12 +94,29 @@ test('every §8 marking actually appears in the rendered label', () => {
 
 test('the ship-to block comes from the Routing Guide DC, not from free text', () => {
   const z = cartonLabelZpl(full)
-  assert.match(z, /NMG-Pinnacle Point/)
-  assert.match(z, /4123 Pinnacle Point Dr/)
+  // ⚠️ FROM THE DC LIST DOCUMENT, not from saksRouting's transcription. The label
+  // used to import that table and would have printed "4123 Pinnacle Point Dr" — and
+  // for DC 560, "600 Research Dr, Pittston" instead of the full CenterPoint address.
+  // An incomplete consignee is fee 55/355, $250 minimum.
+  assert.match(z, /PNDC/)
+  assert.match(z, /4123 Pinnacle Point/)
+  assert.ok(!/Pinnacle Point Dr/.test(z))
   assert.match(z, /Dallas, TX 75211/)
   // AI 420 postal barcode, zip pulled off the DC's own address line.
   assert.match(z, /\(420\) 75211/)
   assert.match(z, /\^BCN,110,N,N,Y,D\^FD42075211\^FS/)
+})
+
+test('⚠️ DC 560 PRINTS ITS FULL THREE-LINE CONSIGNEE', () => {
+  // The worst of the seven disagreements: the old table had "600 Research Dr,
+  // Pittston, PA" for a DC whose real address carries a street RANGE, a business
+  // park and a different municipality. 560 services 42 of the 67 stores, so this is
+  // the address most cartons would have carried.
+  const z = cartonLabelZpl({ ...full, dc: '560' })
+  assert.match(z, /600-620 Research Drive/)
+  assert.match(z, /CenterPoint Commerce & Trade Park/)
+  assert.match(z, /Pittston Township, PA 18640/)
+  assert.match(z, /\(420\) 18640/)
 })
 
 test('⚠️ ^ AND ~ ARE STRIPPED FROM DATA — they are ZPL control characters', () => {
