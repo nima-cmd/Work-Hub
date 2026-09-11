@@ -98,6 +98,43 @@ const COL = { po: 0, customer: 1, cartonRange: 2, cartonCount: 3, style: 4, colo
  * @param opts.containerDate optional, for the id
  * @returns { containerNum, poNumbers, skuTotals, cartons, poMeta, cartonCount, unitCount, skipped }
  */
+/**
+ * ⚠️ NON-MERCHANDISE SLIP LINES — accessories that travel WITH a bag.
+ *
+ * Nima, 2026-09-11, on container "59 cartons LCL to LA": "firstly the strap shouldn't
+ * be counted its not a real item." The slip carried "straps-CHOCOLATE", 5 units
+ * against PO1758. Nothing was purchased, so the PO has no line for it; the importer
+ * already kept it off both CSVs, but it was still in the headline unit count, which
+ * is what made it look like cargo.
+ *
+ * ⚠️ A BLANKET "ANYTHING WITH STRAP" RULE WOULD LOSE REAL STOCK. NetSuite holds 32
+ * REAL strap items — STRAP-PETIT-CASHMERE, STRAP-SMALL-ONYX and the rest, all
+ * Inventory Items that can be ordered and received like anything else.
+ *
+ * The distinction is the whole rule, and it is precise:
+ *   straps-CHOCOLATE       plural, no size  -> accessory, excluded
+ *   STRAP-PETIT-CASHMERE   singular, sized  -> stock, kept
+ *   STRAP-SMALL-ONYX       singular, sized  -> stock, kept
+ *
+ * Anchored on the WHOLE sku, never a substring, so "STRAPS" inside a longer style
+ * code cannot trigger it.
+ */
+export const NON_MERCHANDISE = [
+  { test: /^straps-[a-z0-9-]+$/i, what: 'straps packed with a bag, not a purchased line' },
+]
+
+export function isNonMerchandise(sku) {
+  const s = String(sku ?? '').trim()
+  // A sized strap is real stock and is never excluded, whatever else matches.
+  if (/^strap-(petit|small)-/i.test(s)) return false
+  return NON_MERCHANDISE.some((r) => r.test.test(s))
+}
+
+const splitMerchandise = (rows = []) => ({
+  merchandise: rows.filter((r) => !isNonMerchandise(r.sku)),
+  nonMerch: rows.filter((r) => isNonMerchandise(r.sku)),
+})
+
 export function parseRawFactorySlip(rows = [], { containerNum, containerDate = null } = {}) {
   const headerIdx = rows.findIndex((r) => txt(r?.[0]).toUpperCase().includes('OFFICE'))
   if (headerIdx === -1) {
@@ -216,6 +253,24 @@ export function parseRawFactorySlip(rows = [], { containerNum, containerDate = n
     }
   }
 
+  // ── ⚠️ NON-MERCHANDISE SLIP LINES ─────────────────────────────────────────
+  //
+  // Nima, 2026-09-11, on container "59 cartons LCL to LA": "firstly the strap
+  // shouldn't be counted its not a real item."
+  //
+  // The factory slip lists accessories that travel WITH a bag — a "straps-CHOCOLATE"
+  // line of 5 units against PO1758. Nothing was purchased, so the PO has no line for
+  // it, and the importer correctly kept it off both CSVs. It was still counted in the
+  // headline units, which is what made it look like cargo.
+  //
+  // ⚠️ AND A BLANKET "ANYTHING WITH STRAP" RULE WOULD BE WRONG. NetSuite holds 32
+  // REAL strap items — STRAP-PETIT-CASHMERE, STRAP-SMALL-ONYX and so on, all
+  // Inventory Items — which can be ordered and received like anything else. Dropping
+  // those silently would lose real stock.
+  //
+  // The distinction is precise and is the whole rule: a real strap SKU is SINGULAR
+  // and SIZED (STRAP-PETIT-*, STRAP-SMALL-*); the slip's accessory line is PLURAL
+  // with no size (straps-<colour>). Only the second is excluded.
   const skuTotals = [...totals.entries()]
     .map(([key, units]) => {
       const [po, sku] = key.split('|')
@@ -239,16 +294,25 @@ export function parseRawFactorySlip(rows = [], { containerNum, containerDate = n
     Object.entries(meta).map(([po, m]) => [po, { cartons: m.cartons || null, memo: m.memo || null }]),
   )
 
+  const { merchandise, nonMerch } = splitMerchandise(skuTotals)
+
   return {
     id: `cnt-${containerNum}${containerDate ? `-${String(containerDate).replace(/[^0-9]/g, '')}` : ''}`,
     containerNum: String(containerNum ?? ''),
     containerDate: containerDate ?? null,
-    poNumbers: [...new Set(skuTotals.map((r) => r.poNumber).filter(Boolean))],
-    skuTotals,
+    // ⚠️ POs come from MERCHANDISE only. An accessory-only PO would otherwise appear
+    // on the container as a PO we are receiving against, with nothing to receive.
+    poNumbers: [...new Set(merchandise.map((r) => r.poNumber).filter(Boolean))],
+    // ⚠️ skuTotals carries MERCHANDISE ONLY — the CSVs, the unit count and the
+    // over-receive check all read it. Accessory lines are reported separately so
+    // they are visible rather than silently dropped.
+    skuTotals: merchandise,
+    nonMerchandise: nonMerch,
     cartons,
     poMeta,
     cartonCount: Object.values(poMeta).reduce((n, m) => n + (m.cartons ?? 0), 0),
-    unitCount: skuTotals.reduce((n, r) => n + r.units, 0),
+    unitCount: merchandise.reduce((n, r) => n + r.units, 0),
+    nonMerchandiseUnits: nonMerch.reduce((n, r) => n + r.units, 0),
     boxCount: Object.values(cartons).reduce((n, l) => n + l.length, 0),
     skipped,
   }
@@ -286,16 +350,25 @@ export function parseMasterPackingList(rows = [], { containerNum, containerDate 
       units,
     })
   }
+  const { merchandise, nonMerch } = splitMerchandise(skuTotals)
+
   return {
     id: `cnt-${containerNum}${containerDate ? `-${String(containerDate).replace(/[^0-9]/g, '')}` : ''}`,
     containerNum: String(containerNum ?? ''),
     containerDate: containerDate ?? null,
-    poNumbers: [...new Set(skuTotals.map((r) => r.poNumber).filter(Boolean))],
-    skuTotals,
+    // ⚠️ POs come from MERCHANDISE only. An accessory-only PO would otherwise appear
+    // on the container as a PO we are receiving against, with nothing to receive.
+    poNumbers: [...new Set(merchandise.map((r) => r.poNumber).filter(Boolean))],
+    // ⚠️ skuTotals carries MERCHANDISE ONLY — the CSVs, the unit count and the
+    // over-receive check all read it. Accessory lines are reported separately so
+    // they are visible rather than silently dropped.
+    skuTotals: merchandise,
+    nonMerchandise: nonMerch,
     cartons: {},
     poMeta: {},
     cartonCount: null,
-    unitCount: skuTotals.reduce((n, r) => n + r.units, 0),
+    unitCount: merchandise.reduce((n, r) => n + r.units, 0),
+    nonMerchandiseUnits: nonMerch.reduce((n, r) => n + r.units, 0),
     boxCount: 0,
     skipped: [],
   }

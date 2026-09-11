@@ -172,3 +172,48 @@ test('⚠️ MIAMI PINK SURVIVES THE ROUND TRIP', () => {
   assert.equal(row.units, 40)
   assert.equal(row.poNumber, '1761')
 })
+
+test('⚠️ AN ACCESSORY LINE IS NOT CARGO, AND A REAL STRAP IS', async () => {
+  const { isNonMerchandise } = await import('../src/model/packingSlip.js')
+  // Nima: "firstly the strap shouldn't be counted its not a real item." The slip
+  // carried "straps-CHOCOLATE", 5 units against PO1758, with no PO line to receive
+  // against — straps travel WITH a bag, nothing was purchased.
+  assert.equal(isNonMerchandise('straps-CHOCOLATE'), true)
+  assert.equal(isNonMerchandise('straps-onyx'), true)
+
+  // ⚠️ AND NETSUITE HOLDS 32 REAL STRAP ITEMS. STRAP-PETIT-* and STRAP-SMALL-* are
+  // Inventory Items that can be ordered and received; a blanket "anything with
+  // strap" rule would silently lose real stock. Singular and SIZED is the tell.
+  assert.equal(isNonMerchandise('STRAP-PETIT-CASHMERE'), false)
+  assert.equal(isNonMerchandise('STRAP-SMALL-ONYX'), false)
+  assert.equal(isNonMerchandise('STRAP'), false)
+
+  // Anchored on the whole SKU — a style code containing the letters must not match.
+  assert.equal(isNonMerchandise('SN03011LD-STRAPS-MOCHA'), false)
+  assert.equal(isNonMerchandise('SN02262NB-CHOCOLATE'), false)
+  assert.equal(isNonMerchandise(''), false)
+  assert.equal(isNonMerchandise(null), false)
+})
+
+test('⚠️ EXCLUDED LINES ARE REPORTED, NOT DISCARDED', async () => {
+  const { parsePackingSlip } = await import('../src/model/packingSlip.js')
+  // A master packing list is the simpler of the two shapes: SKU + Total Units.
+  // Straps come back on `nonMerchandise` with their own count rather than vanishing
+  // — silently dropping a line is how a real shortage hides.
+  const rows = [
+    ['PO#', 'SKU', 'Total Units'],
+    ['1747', 'SN02262NB-CHOCOLATE', 54],
+    ['1758', 'straps-CHOCOLATE', 5],
+    ['1758', 'STRAP-PETIT-CASHMERE', 3],
+  ]
+  const out = parsePackingSlip(rows, { containerNum: '59 cartons LCL to LA', containerDate: '2026.8.17' })
+
+  assert.equal(out.unitCount, 57, '54 + 3 real strap units, NOT the 5 accessories')
+  assert.equal(out.nonMerchandiseUnits, 5)
+  assert.deepEqual(out.nonMerchandise.map((r) => r.sku), ['straps-CHOCOLATE'])
+  assert.ok(!out.skuTotals.some((r) => /^straps-/i.test(r.sku)))
+  // ⚠️ A sized strap stays in the cargo, because it is real stock.
+  assert.ok(out.skuTotals.some((r) => r.sku === 'STRAP-PETIT-CASHMERE'))
+  // ⚠️ And an accessory-only PO does not appear as a PO we are receiving against.
+  assert.deepEqual([...out.poNumbers].sort(), ['1747', '1758'])
+})
