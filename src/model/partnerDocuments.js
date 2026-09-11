@@ -75,6 +75,9 @@ export const DOCUMENTS = [
     readFrom: 'ELG Vendor Standards [8.6.26]_thap.pdf — the site\'s latest, unlocked so it could be saved',
     alsoOnDisk: 'ELG Vendor Standards [8.6.26].pdf (4,789,155 bytes) — the restricted original',
     rulesIn: 'src/model/exemplarStandards.js',
+    editionDate: '2026-08-06',
+    // Nima confirmed on 2026-09-11 that this is the latest from Exemplar's site.
+    lastChecked: '2026-09-11',
     governs: 'Incorporates the routing guides by reference and governs where they overlap',
   },
   {
@@ -96,6 +99,12 @@ export const DOCUMENTS = [
     // as both rather than picking one, because the next edition will have to be told
     // apart from this one and a guessed version number makes that impossible.
     note: 'Filename says 11.4; the cover page says Revision 11.',
+    editionDate: '2026-06-01',
+    // ⚠️ Nima re-supplied this on 2026-09-11 as "…REV.11.4 current.pdf" at
+    // 5,594,501 bytes — BYTE-IDENTICAL to this entry. Same document renamed, not a
+    // new revision, so the rename does not read as an uncatalogued edition.
+    alsoNamed: '_Saks Global Routing Guide_REV.11.4 current.pdf',
+    lastChecked: '2026-09-11',
   },
   {
     key: 'saks-standards-2024-06',
@@ -169,7 +178,89 @@ export const DOCUMENTS = [
     driveId: '1UZoCV2nsYQgVx8lRR4Bp33lR3jVUuZRu',
     rulesIn: null,
   },
+  // ── Supplied by Nima 2026-09-11: "We are providing you everything we have." ──
   {
+    key: 'saks-servicing-dc-list',
+    partner: 'Exemplar Luxury Group',
+    also: ['Neiman Marcus', 'Saks Fifth Avenue', 'Bergdorf Goodman', 'Saks OFF 5th'],
+    kind: 'store/DC list',
+    title: 'Saks Global Store Servicing DC List -6_10_26.pdf',
+    alsoNamed: 'Saks Global Store Servicing DC List -6_10_26 current.pdf',
+    edition: '2026-06-10',
+    editionDate: '2026-06-10',
+    lastChecked: '2026-09-11',
+    // 80,718 bytes, byte-identical to the "current"-renamed copy Nima sent.
+    driveId: '1RdwO9ZzmTiSjCAwIbLM2AjPhAFOt8CSs',
+    folder: 'data',
+    rulesIn: 'src/model/exemplarStores.js',
+    // ⚠️ THE MOST CONSEQUENTIAL DOCUMENT IN THIS REGISTRY. It is the only
+    // authoritative store→servicing-DC map, and it disagrees with NetSuite's
+    // custentity_dc_location on 18 of 33 Neiman stores. Freight routed on NetSuite
+    // goes to the wrong building.
+    governs: 'which DC services each store — supersedes NetSuite on this question',
+  },
+  {
+    key: 'saks-edi-store-dc-codes',
+    partner: 'Exemplar Luxury Group',
+    kind: 'store/DC list',
+    title: 'Saks Global EDI Store and DC codes_04-21-2026 Current.pdf',
+    edition: '2026-04-21',
+    editionDate: '2026-04-21',
+    lastChecked: '2026-09-11',
+    // ⚠️ 76,314 bytes on disk and NOT in the connector's index, so no id can be read.
+    driveId: null,
+    folder: 'data',
+    rulesIn: 'src/model/exemplarStores.js',
+    governs: 'DC addresses, store addresses, and the EDI 852 reporting-only codes',
+    // ⚠️ IT CONFLICTS WITH THE NEWER SERVICING LIST ON STORE 0694. This one puts the
+    // Saks Photo Studio at 250 Vesey Street, 22nd Floor; the 2026-06-10 list puts it
+    // at 611 5th Ave, 10th Floor. The newer document wins, and exemplarStores.js
+    // carries 611 5th Ave — but it is worth confirming with Exemplar, because
+    // saksRouting.js DCS still holds the Vesey address from the Routing Guide.
+    conflicts: ['store 0694 address vs saks-servicing-dc-list (newer) and saks-routing-rev11'],
+  },
+  {
+    key: 'saks-edi-5010',
+    partner: 'Exemplar Luxury Group',
+    kind: 'edi spec',
+    title: 'Saks Global EDI 5010 Mapping Specs.pdf',
+    edition: 'X12 version 5010',
+    editionDate: null,
+    pages: 82,
+    driveId: null,
+    folder: 'data',
+    rulesIn: null,
+    // The version we will need when we leave non-EDI. Not yet read.
+    governs: 'the 5010 maps for 850/856/810 once we go EDI with Exemplar',
+  },
+  {
+    key: 'saks-edi-4050',
+    partner: 'Exemplar Luxury Group',
+    kind: 'edi spec',
+    title: 'Saks Global EDI_4050 Mapping Specs.pdf',
+    edition: 'X12 version 4050',
+    editionDate: null,
+    pages: 93,
+    driveId: null,
+    folder: 'data',
+    rulesIn: null,
+    governs: 'the 4050 maps — which of 4050/5010 Exemplar expects from us is an open question',
+  },
+  {
+    key: 'saks-vendor-pickup-entry',
+    partner: 'Exemplar Luxury Group',
+    kind: 'routing guide',
+    title: 'Saks  Global - Vendor Pickup Entry Guide -1.2.5U.pdf',
+    edition: 'v1.2.5U',
+    editionDate: '2026-05-22',
+    driveId: '1AcNpQRKZnqaT_rYVYWs_2f_ONMwn2HJm',
+    folder: 'data',
+    rulesIn: null,
+    // ⚠️ FOUND WHILE LOOKING FOR SOMETHING ELSE, AND IT MAY BE THE MISSING PIECE.
+    // Nothing in this app has read it, and "how a pickup is entered" is exactly the
+    // gap blocking the BOL for PO 8928906.
+    governs: 'how a vendor books the pickup — unread, and likely relevant to the open TMS question',
+  },  {
     key: 'saint-bernard-routing',
     partner: 'Saint Bernard',
     kind: 'routing guide',
@@ -223,3 +314,89 @@ export function unreadDocuments() {
 
 /** Documents that exist in Drive but whose link we cannot yet produce. */
 export const unlinkedDocuments = () => DOCUMENTS.filter((d) => !d.driveId).map(withUrl)
+
+
+// ── ⚠️ HOW OLD IS IT, AND WHEN DID WE LAST CHECK? ───────────────────────────
+//
+// Nima, 2026-09-11: "we want to have a folder like we have for if scan for the
+// guides so there all stored together in the same place and so we can date them and
+// check how old they are too."
+//
+// TWO DIFFERENT AGES, and conflating them is the trap:
+//
+//   editionDate  what is printed ON the document. A 2024 routing guide is stale no
+//                matter how recently someone looked at it.
+//   lastChecked  when WE last confirmed it is still the current published version.
+//                A 2026 guide checked eight months ago may have been reissued twice.
+//
+// The Routing Guide puts the duty on us in writing — "It is the responsibility of
+// each vendor to regularly monitor this site" — so an unchecked document is an open
+// exposure, not a filing problem. Every fee in exemplarStandards.js is assessed
+// against whatever the CURRENT version says.
+//
+// ⚠️ A DOCUMENT WITH NO lastChecked IS "NEVER CHECKED", NOT "FINE". It reports
+// overdue from its edition date. [[default-is-not-an-answer]] — the alternative is a
+// registry that goes quiet about the documents nobody has ever verified.
+
+/** Default review cadence. Partner guides are reissued without notice. */
+export const REVIEW_EVERY_DAYS = 90
+
+const DAY = 86_400_000
+const asDate = (v) => { const t = v ? new Date(v).getTime() : NaN; return Number.isFinite(t) ? t : null }
+
+/**
+ * @returns editionAgeDays · sinceCheckedDays (null if never) · overdue · why
+ */
+export function reviewStatus(doc = {}, now = Date.now()) {
+  const edition = asDate(doc.editionDate)
+  const checked = asDate(doc.lastChecked)
+  const every = doc.reviewEveryDays ?? REVIEW_EVERY_DAYS
+  const days = (t) => (t === null ? null : Math.floor((now - t) / DAY))
+
+  const editionAgeDays = days(edition)
+  const sinceCheckedDays = days(checked)
+
+  // Superseded editions are not chased — nobody should be reading them at all.
+  if (doc.supersededBy) {
+    return { state: 'superseded', editionAgeDays, sinceCheckedDays, overdue: false,
+      why: `Superseded by ${doc.supersededBy}; kept for history only.` }
+  }
+  if (checked === null) {
+    return { state: 'never-checked', editionAgeDays, sinceCheckedDays: null, overdue: true,
+      why: editionAgeDays === null
+        ? 'No edition date and never verified against the partner\'s site.'
+        : `Never verified against the partner's site; the edition is ${editionAgeDays} days old.` }
+  }
+  const overdue = sinceCheckedDays > every
+  return {
+    state: overdue ? 'overdue' : 'current',
+    editionAgeDays, sinceCheckedDays, overdue, dueInDays: every - sinceCheckedDays,
+    why: overdue
+      ? `Last verified ${sinceCheckedDays} days ago; the cadence is ${every}.`
+      : `Verified ${sinceCheckedDays} days ago; next check in ${every - sinceCheckedDays} days.`,
+  }
+}
+
+/** Everything that needs looking at, worst first. */
+export function needsReview(now = Date.now()) {
+  return DOCUMENTS
+    .map((d) => ({ ...withUrl(d), review: reviewStatus(d, now) }))
+    .filter((d) => d.review.overdue)
+    .sort((a, b) => (b.review.sinceCheckedDays ?? Infinity) - (a.review.sinceCheckedDays ?? Infinity))
+}
+
+/**
+ * Where the guides live together, mirroring the scan-filing convention in
+ * src/ingest/googleDrive.js (a named root, partner subfolders via ensureFolder).
+ *
+ * ⚠️ NOT CREATED YET. Creating folders and moving files in a shared Drive is
+ * Nima's call, not a side effect of reading a registry — and the files are
+ * currently spread across three folders (see FOLDERS above), so "putting them
+ * together" MOVES documents other people may be linking to.
+ */
+export const GUIDES_ROOT = {
+  name: 'Vendor Guides',
+  layout: '<root>/<partner>/<document> — partner subfolder per banner group',
+  mirrors: 'src/ingest/googleDrive.js DRIVE_ROOT_BOLS / DRIVE_ROOT_SLIPS',
+  created: false,
+}
