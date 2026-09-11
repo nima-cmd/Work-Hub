@@ -343,7 +343,10 @@ function summarise(lines) {
 export function invoiceAdjustments(plan) {
   const byOrder = new Map()
   for (const l of plan.lines) {
-    if (!byOrder.has(l.order)) byOrder.set(l.order, { order: l.order, po: l.po, store: l.store, lines: [], ordered: 0, shipping: 0, cut: 0 })
+    // ⚠️ `iff` rides along once fulfilments exist: the invoice and the ASN are
+    // raised against the FULFILMENT, so a short list keyed only on sales orders
+    // makes whoever is invoicing go and look each one up.
+    if (!byOrder.has(l.order)) byOrder.set(l.order, { order: l.order, iff: l.iff ?? null, po: l.po, store: l.store, lines: [], ordered: 0, shipping: 0, cut: 0 })
     const e = byOrder.get(l.order)
     e.lines.push({ sku: l.sku, ordered: int(l.qty), shipping: l.allocated, cut: l.cut })
     e.ordered += int(l.qty); e.shipping += l.allocated; e.cut += l.cut

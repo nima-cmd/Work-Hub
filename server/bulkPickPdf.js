@@ -135,23 +135,28 @@ export function bulkPickPdf(demand, available, { rule: ruleName, ruleOptions = {
   // discovers the shortage is the person holding this piece of paper.
   if (adjustments.length) {
     if (y > PAGE.h - 140) { doc.addPage({ size: [PAGE.w, PAGE.h], margin: 0 }); y = M }
-    doc.fontSize(11).font('Helvetica-Bold').text('CUT — invoice these orders SHORT', M, y); y += 4
+    doc.fontSize(11).font('Helvetica-Bold').text('SHORT — remember these when you invoice', M, y); y += 4
     doc.fontSize(7.5).font('Helvetica').fillColor('#555')
-      .text('Invoicing the ordered quantity on a short shipment is an overbill the partner will dispute.', M, y + 10)
+      .text('The SKU is absent from these fulfilments entirely, not reduced. Invoicing the ORDERED quantity on any of them is an overbill the partner will dispute.', M, y + 10)
     doc.fillColor('black'); y += 26
     doc.fontSize(8).font('Helvetica-Bold')
-    doc.text('ORDER', M, y); doc.text('PO', M + 70, y); doc.text('STORE', M + 130, y)
-    doc.text('SKU', M + 210, y); doc.text('ORDERED', M + 360, y); doc.text('SHIPPING', M + 430, y); doc.text('CUT', M + 500, y)
+    doc.text('ORDER', M, y); doc.text('IF', M + 62, y); doc.text('PO', M + 124, y); doc.text('STORE', M + 180, y)
+    doc.text('SKU', M + 270, y); doc.text('ORDERED', M + 420, y); doc.text('SHIPPING', M + 490, y); doc.text('CUT', M + 560, y)
     y += 11; rule(doc, y); y += 5
     doc.font('Helvetica').fontSize(8)
     for (const o of adjustments) {
       for (const l of o.lines) {
-        doc.text(o.order, M, y); doc.text(String(o.po), M + 70, y)
-        doc.text(String(o.store).slice(0, 26), M + 130, y)
-        doc.text(l.sku, M + 210, y)
-        doc.text(String(l.ordered), M + 360, y); doc.text(String(l.shipping), M + 430, y)
-        doc.fillColor('#c33').font('Helvetica-Bold').text(`-${l.cut}`, M + 500, y).fillColor('black').font('Helvetica')
-        if (o.shipsNothing) doc.fillColor('#c33').fontSize(7).text('SHIPS NOTHING', M + 540, y).fontSize(8).fillColor('black')
+        doc.text(o.order, M, y)
+        // ⚠️ THE IF NUMBER IS THE ONE THAT MATTERS ONCE FULFILMENTS EXIST. The
+        // invoice and the ASN are raised against the fulfilment, not the sales
+        // order, so a short list keyed only on SO numbers makes someone look it up.
+        doc.font('Helvetica-Bold').text(o.iff || '-', M + 62, y).font('Helvetica')
+        doc.text(String(o.po), M + 124, y)
+        doc.text(String(o.store).slice(0, 30), M + 180, y)
+        doc.text(l.sku, M + 270, y)
+        doc.text(String(l.ordered), M + 420, y); doc.text(String(l.shipping), M + 490, y)
+        doc.fillColor('#c33').font('Helvetica-Bold').text(`-${l.cut}`, M + 560, y).fillColor('black').font('Helvetica')
+        if (l.shipping === 0) doc.fillColor('#c33').fontSize(7).text('SKU NOT ON THE IF', M + 600, y).fontSize(8).fillColor('black')
         y += 11
         if (y > PAGE.h - 40) { doc.addPage({ size: [PAGE.w, PAGE.h], margin: 0 }); y = M }
       }
