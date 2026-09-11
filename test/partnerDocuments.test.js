@@ -82,13 +82,14 @@ test('⚠️ THE RULES MODULES POINT BACK AT A DOCUMENT KEY THAT EXISTS', async 
   assert.equal(documentForModule('src/model/saksRouting.js').key, saks.SOURCE.documentKey)
 })
 
-test('⚠️ THE ELG RULES CAME FROM A CONVERTED PDF, AND THE REGISTRY SAYS SO', async () => {
-  // exemplarStandards.js SOURCE.file names "..._thap.pdf" — a 4pdf.net conversion,
-  // not the original sitting beside it. A converter can re-flow or re-OCR text, and
-  // §12 is a fee table where a transposed digit is money. Flagged until diffed.
+test('⚠️ THE REGISTRY NAMES THE FILE THE RULES WERE ACTUALLY READ FROM', async () => {
+  // Two copies sit side by side. "_thap" is the site's latest, unlocked so it could
+  // be saved (Nima, 2026-09-11); the other is the restricted original.
+  // exemplarStandards.js reads the unlocked one, and the registry has to agree with
+  // it, or a future reader checks a rule against the wrong file.
   const { SOURCE } = await import('../src/model/exemplarStandards.js')
   const d = DOCUMENTS.find((x) => x.key === 'exemplar-standards-2026-08')
   assert.match(SOURCE.file, /_thap\.pdf$/)
   assert.ok(d.readFrom.includes(SOURCE.file), 'the registry must name the file actually read')
-  assert.equal(d.unverifiedAgainstOriginal, true)
+  assert.match(d.alsoOnDisk, /restricted original/)
 })

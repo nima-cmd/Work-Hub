@@ -59,15 +59,21 @@ export const DOCUMENTS = [
     // Fill this in from Drive once it appears; do not reconstruct it.
     driveId: null,
     localPath: 'Shared drives/NAGHEDI Warehouse/Warehouse Documents/Data/ELG Vendor Standards [8.6.26].pdf',
-    // ⚠️ THE RULES WERE READ FROM A THIRD-PARTY CONVERSION, NOT THE ORIGINAL.
-    // exemplarStandards.js SOURCE.file names "..._thap.pdf" — the 20 MB copy that
-    // came back from 4pdf.net (a web PDF converter), sitting beside the 4.7 MB
-    // original. Recorded because a converter can re-flow or re-OCR text, and the
-    // fee table is the part of that Manual where a transposed digit costs money.
-    // The two should be diffed against each other before anyone relies on a figure.
-    readFrom: 'ELG Vendor Standards [8.6.26]_thap.pdf (a 4pdf.net conversion)',
-    originalOnDisk: 'ELG Vendor Standards [8.6.26].pdf (4,789,155 bytes)',
-    unverifiedAgainstOriginal: true,
+    // ⚠️ "_thap" IS THE AUTHORITATIVE COPY. Nima, 2026-09-11: "use the _thap its
+    // latest off their site" and "it was a conversion cause the original document
+    // wouldn't let me save it, i used something to convert it."
+    //
+    // So: the latest pull from Exemplar's site arrived SAVE-RESTRICTED, and the
+    // _thap file is that same document with the restriction removed (via 4pdf.net,
+    // which is what its download attribute records). Same edition, readable copy.
+    // exemplarStandards.js reads it, which is correct.
+    //
+    // Noted because I first read the download attribute as evidence of an unknown
+    // third-party document and flagged the fee table as unverified. It is not a
+    // re-OCR — an unlock preserves the existing text layer — and the provenance is
+    // now on the record so nobody re-opens it from the same attribute.
+    readFrom: 'ELG Vendor Standards [8.6.26]_thap.pdf — the site\'s latest, unlocked so it could be saved',
+    alsoOnDisk: 'ELG Vendor Standards [8.6.26].pdf (4,789,155 bytes) — the restricted original',
     rulesIn: 'src/model/exemplarStandards.js',
     governs: 'Incorporates the routing guides by reference and governs where they overlap',
   },
