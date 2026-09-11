@@ -274,7 +274,18 @@ export const PALLET = { sizeIn: [40, 48], maxHeightIn: 72, shrinkWrapTurns: 3, d
  *
  * IF7650 currently declares 11 cartons and has 10.
  */
+/**
+ * ⚠️ SUPERSEDED BY src/model/exemplarStandards.js. The full Vendor Standards Manual
+ * (August 2026) has now been read end to end, and it answers the question this entry
+ * could not: "Calculations are performed monthly", so the 2% is a receipt-month
+ * figure, not a per-PO one. It also renames the company — Exemplar Luxury Group,
+ * formerly Saks Global.
+ *
+ * Kept here because saksRouting.js is about the Routing Guide and checkSaksShipment
+ * still reads it. The Manual is the governing document where the two overlap.
+ */
 export const AUDIT = {
+  cadence: 'monthly — see exemplarStandards.js AUDIT, read from the Manual itself',
   itemErrorRateTrigger: 0.02,
   feePerMonth: 1000,
   minimumMonths: 3,

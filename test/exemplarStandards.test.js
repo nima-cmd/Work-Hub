@@ -1,0 +1,117 @@
+// test/exemplarStandards.test.js — the Manual, priced, against the live shipment.
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  FEES, feeFor, shipmentChecklist, AUDIT, CARTON, PALLET,
+  RECEIVED_NOT_ORDERED, SOURCE,
+} from '../src/model/exemplarStandards.js'
+
+test('⚠️ THE MINIMUM CHARGE IS THE REAL NUMBER, not the per-carton amount', () => {
+  // Almost every carton violation reads "$10.00 per carton, $250.00 minimum".
+  // Reading the left column alone understates one mislabelled carton by 25x.
+  assert.equal(feeFor('storeMissing', { cartons: 1 }).estimate, 250)
+  assert.equal(feeFor('storeMissing', { cartons: 25 }).estimate, 250)
+  // Only above the floor does the per-carton rate start to matter.
+  assert.equal(feeFor('storeMissing', { cartons: 40 }).estimate, 400)
+})
+
+test('⚠️ SHORT AND OVER SHIPPING SAY "EDI/NON-EDI" — being non-EDI is no shelter', () => {
+  assert.match(FEES.shortShipped.what, /EDI\/NON-EDI/)
+  assert.match(FEES.overShipped.what, /EDI\/NON-EDI/)
+  assert.equal(feeFor('shortShipped', { pos: 1 }).estimate, 500)
+})
+
+test('the expensive transportation fees are the ones with no carton divisor', () => {
+  assert.equal(feeFor('notBookedInTms', { pos: 1 }).estimate, 300)
+  assert.equal(feeFor('notBookedInTms', { pos: 24 }).estimate, 7200, 'per PO, and PO 1236143 is 24 orders')
+  assert.equal(feeFor('noBolToCarrier').estimate, 250)
+  assert.equal(feeFor('missingBoltSeal').estimate, 200)
+  // A formula fee has no number, and says so rather than guessing one.
+  assert.equal(feeFor('multipleBols').estimate, null)
+  assert.match(feeFor('multipleBols').note, /cost of freight \+ \$75/)
+})
+
+test('⚠️ THE AUDIT PROGRAMME IS ASSESSED MONTHLY — the open question, answered', () => {
+  // I could not tell from the screenshots whether 2% was per PO or per month. The
+  // Manual says "Calculations are performed monthly", so one bad shipment does not
+  // place you on its own — though every PO is still audited.
+  assert.equal(AUDIT.cadence, 'monthly')
+  assert.equal(AUDIT.itemErrorRateTrigger, 0.02)
+  assert.equal(AUDIT.feePerMonth, 1000)
+  assert.equal(AUDIT.minimumMonths, 3)
+  assert.match(AUDIT.exit, /three consecutive/)
+  // And the audited document is the packing slip when there is no ASN.
+  assert.match(AUDIT.auditedAgainst, /packing slip data OR the ASN/)
+})
+
+test('⚠️ A RETRANSMITTED PO IS THE CONFIRMATION OF A CHANGE, per §9.2', () => {
+  // Bloomingdale's sent PO 1236143 a second time coded 07 Duplicate while removing
+  // three SKUs. The Manual puts the retransmission on THEM as the confirmation.
+  assert.equal(RECEIVED_NOT_ORDERED.retransmissionIsConfirmation, true)
+  assert.match(RECEIVED_NOT_ORDERED.noSubstitutions, /Do not substitute/)
+  assert.match(RECEIVED_NOT_ORDERED.consequence, /keep the units/)
+})
+
+test('the checklist is ordered by when it has to be true, not by section number', () => {
+  const c = shipmentChecklist({ asnWillBeSent: false, cartons: 11, pos: 1 })
+  const phases = [...new Set(c.steps.map((s) => s.phase))]
+  // Route before pack (the TMS decides the mode); label before pallet (you cannot
+  // reach a carton label through three turns of shrink wrap).
+  assert.deepEqual(phases, ['before', 'route', 'pack', 'label', 'documents', 'pallet', 'after'])
+  assert.ok(phases.indexOf('route') < phases.indexOf('pack'))
+  assert.ok(phases.indexOf('label') < phases.indexOf('pallet'))
+})
+
+test('⚠️ NON-EDI GETS THE PACKING SLIP STEP; EDI GETS THE ASN STEP', () => {
+  const nonEdi = shipmentChecklist({ asnWillBeSent: false })
+  const edi = shipmentChecklist({ asnWillBeSent: true })
+
+  const ps = nonEdi.steps.find((s) => /Packing slip per PO/.test(s.what))
+  assert.ok(ps, 'non-EDI must be told about the packing slip')
+  assert.match(ps.detail, /all six sides/)
+  assert.match(ps.detail, /UNSIGNED BOL/)
+  assert.equal(ps.fee.cost, '$250')
+
+  assert.ok(edi.steps.find((s) => /Transmit the 856/.test(s.what)))
+  assert.ok(!edi.steps.find((s) => /Packing slip per PO/.test(s.what)))
+
+  // Everything else is identical — EDI status changes one line, not the process.
+  assert.equal(nonEdi.steps.length, edi.steps.length)
+})
+
+test('the bolt seal step appears only for a full truckload', () => {
+  assert.ok(!shipmentChecklist({ mode: 'parcel' }).steps.find((s) => /bolt seal/i.test(s.what)))
+  assert.ok(shipmentChecklist({ mode: 'TL' }).steps.find((s) => /bolt seal/i.test(s.what)))
+})
+
+test('direct-to-store adds its authorization step, and it is per PO one time only', () => {
+  const dts = shipmentChecklist({ dts: true })
+  const step = dts.steps.find((s) => /Direct-to-Door/.test(s.what))
+  assert.ok(step)
+  assert.match(step.detail, /ONE TIME, never reused/)
+  assert.match(step.detail, /carton labels AND the BOL/)
+})
+
+test('every step that cites a fee resolves to a real fee line', () => {
+  // ⚠️ A checklist step pointing at a fee key that does not exist would print an
+  // empty cost and read as "free".
+  for (const s of shipmentChecklist({ cartons: 5 }).steps) {
+    if (!s.fee) continue
+    assert.ok(s.fee.section, `${s.what} has a fee with no section`)
+    assert.ok(s.fee.cost, `${s.what} has a fee with no cost`)
+  }
+})
+
+test('the specs match the Manual, not memory', () => {
+  assert.deepEqual(CARTON.weightLb, [5, 50])
+  assert.deepEqual(CARTON.lengthIn, [9, 36])
+  assert.equal(CARTON.recycledAllowed, false)
+  assert.deepEqual(PALLET.sizeIn, [48, 40])
+  assert.equal(PALLET.type, '4-way')
+  assert.equal(PALLET.maxHeightIn, 72)
+  assert.equal(PALLET.shrinkWrapTurns, 3)
+  assert.equal(PALLET.wrapIndividually, false)
+  assert.equal(SOURCE.formerly, 'Saks Global')
+  assert.equal(SOURCE.edition, 'August 2026')
+})
