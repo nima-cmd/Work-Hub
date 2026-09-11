@@ -439,3 +439,85 @@ export function readyToFulfil(plan, available = {}) {
     note: 'On-hand is a number in NetSuite. This says the paperwork is coherent, not that the units are on the shelf — the pick proves that.',
   }
 }
+
+
+/**
+ * ⚠️ WHICH WHOLE ORDERS, CUT ENTIRELY, EXACTLY COVER THE SHORTAGE?
+ *
+ * Nima's rule is no partial cuts; his goal is the fewest orders adjusted. Those two
+ * together are a subset-sum: find the smallest set of lines whose quantities total
+ * EXACTLY the shortage. Exactly, because cutting more stranded units and cutting
+ * less is impossible.
+ *
+ * Worth computing rather than eyeballing. On the live CASHMERE shortage he reached 4
+ * orders by hand but kept one partial (Boca Raton 4 of 10) — and there are 4-order
+ * solutions with no partial at all, which his own rules prefer. The difference is
+ * not obvious by inspection: 50+3+6+6 and 50+3+6 plus a 6-unit partial both total
+ * 65, and only one of them obeys the rule.
+ *
+ * ⚠️ EXHAUSTIVE, WITH A CEILING. Subset-sum is exponential; this searches by
+ * increasing set size and stops at `maxLines`, so a pathological order book cannot
+ * hang a pick ticket. If nothing exact exists inside the ceiling it says so rather
+ * than returning a near miss that would strand units without saying it did.
+ */
+export function wholeCutOptions(lines = [], shortage = 0, { maxLines = 5, maxOptions = 8 } = {}) {
+  const target = int(shortage)
+  if (target === 0) return { target, options: [], exact: true }
+  const pool = lines
+    .map((l) => ({ order: l.order, store: l.store, po: l.po, qty: int(l.qty) }))
+    .filter((l) => l.qty > 0 && l.qty <= target)
+    .sort((a, b) => b.qty - a.qty)
+
+  const found = []
+  const seen = new Set()
+  const walk = (start, remaining, chosen) => {
+    if (found.length >= maxOptions) return
+    if (remaining === 0) {
+      const key = chosen.map((c) => c.order).sort().join(',')
+      if (!seen.has(key)) { seen.add(key); found.push([...chosen]) }
+      return
+    }
+    if (chosen.length >= maxLines) return
+    for (let i = start; i < pool.length; i++) {
+      if (pool[i].qty > remaining) continue
+      chosen.push(pool[i])
+      walk(i + 1, remaining - pool[i].qty, chosen)
+      chosen.pop()
+      if (found.length >= maxOptions) return
+    }
+  }
+  // Smallest sets first: try each cardinality in turn.
+  for (let size = 1; size <= maxLines && found.length < maxOptions; size++) {
+    const before = found.length
+    const walkN = (start, remaining, chosen) => {
+      if (found.length >= maxOptions) return
+      if (chosen.length === size) {
+        if (remaining === 0) {
+          const key = chosen.map((c) => c.order).sort().join(',')
+          if (!seen.has(key)) { seen.add(key); found.push([...chosen]) }
+        }
+        return
+      }
+      for (let i = start; i < pool.length; i++) {
+        if (pool[i].qty > remaining) continue
+        chosen.push(pool[i]); walkN(i + 1, remaining - pool[i].qty, chosen); chosen.pop()
+        if (found.length >= maxOptions) return
+      }
+    }
+    walkN(0, target, [])
+    if (found.length > before) break   // minimum cardinality reached
+  }
+  void walk
+  return {
+    target,
+    exact: found.length > 0,
+    minimumOrders: found.length ? found[0].length : null,
+    options: found.map((set) => ({
+      orders: set,
+      count: set.length,
+      units: set.reduce((a, c) => a + c.qty, 0),
+    })),
+    note: found.length ? null
+      : `No combination of whole lines totals exactly ${target} within ${maxLines} orders — a partial cut or stranded units are unavoidable.`,
+  }
+}

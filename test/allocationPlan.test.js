@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos, DECIDING_RULES,
+  shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos, DECIDING_RULES, wholeCutOptions,
 } from '../src/model/allocationPlan.js'
 
 // The one contended SKU: 137 wanted, 72 in the Bloomingdale's location.
@@ -296,4 +296,67 @@ test('as-committed never invents units beyond what was ordered', () => {
   const p = allocate(lines, { K: 99 }, { rule: 'as-committed' })
   assert.equal(p.lines[0].allocated, 5)
   assert.equal(p.lines[0].cut, 0)
+})
+
+test('⚠️ FEWEST WHOLE ORDERS THAT EXACTLY COVER THE SHORTAGE', () => {
+  // Nima's two rules together — no partial cuts, fewest orders adjusted — are a
+  // subset-sum: the smallest set of lines totalling EXACTLY the shortage. Exactly,
+  // because cutting more strands units and cutting less is impossible.
+  //
+  // He reached 4 orders by hand but kept one partial (Boca Raton 4 of 10), and
+  // 4-order solutions with no partial exist. The difference is invisible by
+  // inspection: 50+3+6+6 and 50+3+6 plus a 6-unit partial both total 65.
+  const lines = [
+    { order: 'CFC', store: '0231', qty: 50 }, { order: 'A', store: '0003', qty: 10 },
+    { order: 'B', store: '0001', qty: 10 }, { order: 'C', store: '0002', qty: 10 },
+    { order: 'D', store: '0012', qty: 6 }, { order: 'E', store: '0004', qty: 6 },
+    { order: 'F', store: '0006', qty: 4 }, { order: 'G', store: '0010', qty: 3 },
+    { order: 'H', store: '0017', qty: 1 },
+  ]
+  const r = wholeCutOptions(lines, 65)
+  assert.equal(r.exact, true)
+  assert.equal(r.minimumOrders, 4)
+  for (const o of r.options) {
+    assert.equal(o.units, 65, 'every option must total the shortage EXACTLY')
+    assert.equal(o.count, 4)
+    assert.equal(new Set(o.orders.map((x) => x.order)).size, 4, 'no order counted twice')
+  }
+})
+
+test('⚠️ IT ANSWERS "WHAT DO I CHANGE", not just "what could you have done"', () => {
+  // The useful question once someone has already committed most of it: given these
+  // whole cuts, what single whole line covers the rest? On the live data three
+  // 6-unit stores each close the gap, which is what removes the Boca Raton partial.
+  const remaining = [
+    { order: 'ALA', store: '0058', qty: 6 }, { order: 'BERGEN', store: '0005', qty: 6 },
+    { order: 'HUNT', store: '0004', qty: 6 }, { order: 'BOCA', store: '0002', qty: 10 },
+  ]
+  const r = wholeCutOptions(remaining, 6)
+  assert.equal(r.minimumOrders, 1)
+  assert.equal(r.options.length, 3)
+  assert.ok(r.options.every((o) => o.orders[0].qty === 6))
+  // ⚠️ The 10-unit line is NOT offered: cutting it covers 10 against a gap of 6 and
+  // would strand 4. Only exact totals are returned.
+  assert.ok(!r.options.some((o) => o.orders.some((x) => x.order === 'BOCA')))
+})
+
+test('⚠️ WHEN NO EXACT COMBINATION EXISTS IT SAYS SO, not a near miss', () => {
+  // Returning a close-enough set would strand units without admitting it.
+  const r = wholeCutOptions([{ order: 'X', store: 'a', qty: 4 }, { order: 'Y', store: 'b', qty: 4 }], 7)
+  assert.equal(r.exact, false)
+  assert.equal(r.options.length, 0)
+  assert.match(r.note, /No combination of whole lines totals exactly 7/)
+  assert.match(r.note, /partial cut or stranded units are unavoidable/)
+})
+
+test('a line bigger than the shortage is never part of a cut set', () => {
+  const r = wholeCutOptions([{ order: 'BIG', store: 'a', qty: 99 }, { order: 'S', store: 'b', qty: 5 }], 5)
+  assert.equal(r.minimumOrders, 1)
+  assert.equal(r.options[0].orders[0].order, 'S')
+})
+
+test('no shortage means nothing to cut', () => {
+  const r = wholeCutOptions([{ order: 'A', store: 'a', qty: 5 }], 0)
+  assert.equal(r.exact, true)
+  assert.deepEqual(r.options, [])
 })
