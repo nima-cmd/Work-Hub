@@ -29,6 +29,10 @@ export const SOURCE = {
   routingGuide: 'Saks Global US Routing Guide rev 11 (2026-06-01) — see src/model/saksRouting.js',
   portal: 'Inbound Management System (IMS) — login via compliance@saks.com',
   disputeWindowDays: 60,
+  // The document lives in Drive — src/model/partnerDocuments.js holds the link.
+  // ⚠️ That entry also records what `file` above quietly says: these rules were read
+  // from a 4pdf.net CONVERSION of the Manual, not the original PDF beside it.
+  documentKey: 'exemplar-standards-2026-08',
 }
 
 /**

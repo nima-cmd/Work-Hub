@@ -26,6 +26,9 @@ export const SOURCE = {
   updated: '2026-06-01',
   banners: ['Saks Fifth Avenue', 'Saks.com', 'Neiman Marcus', 'Bergdorf Goodman'],
   standardsManual: 'Exemplar Luxury Group Vendor Standards Manual',
+  // The document itself lives in Drive, not in this repo — see
+  // src/model/partnerDocuments.js, which holds the link and the provenance.
+  documentKey: 'saks-routing-rev11',
 }
 
 /**
