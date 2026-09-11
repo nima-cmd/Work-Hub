@@ -47,15 +47,18 @@ export const CHARACTERS = [
   { id: 'maomao', name: 'Maomao', universe: 'The Apothecary Diaries' },
   { id: 'emilia', name: 'Emilia', universe: 'Re:Zero' },
 
-  // ⚠️ UNIVERSE UNKNOWN, AND LEFT THAT WAY ON PURPOSE. I could not identify these
-  // five from the art, and a plausible-looking wrong universe would print on the
-  // trading card and the hologram as if it were a fact. `null` renders as empty,
-  // which is honest; fill them in when Nima says what they are.
-  { id: 'alicia-glenfall', name: 'Alicia Glenfall', universe: null },
-  { id: 'clen', name: 'Clen', universe: null },
-  { id: 'coco', name: 'Coco', universe: null },
-  { id: 'nemu-miyao', name: 'Nemu Miyao', universe: null },
-  { id: 'nico-wakatsuki', name: 'Nico Wakatsuki', universe: null },
+  // ── Identified by Nima, 2026-09-11 ────────────────────────────────────────
+  // These five were added with `universe: null` because I could not name the series
+  // from the art, and `universe` prints on the trading card and the hologram — a
+  // plausible wrong franchise would have read as a fact. Nima supplied them.
+  { id: 'alicia-glenfall', name: 'Alicia Glenfall', universe: 'Clevatess' },
+  { id: 'clen', name: 'Clen', universe: 'Clevatess' },
+  { id: 'coco', name: 'Coco', universe: 'Witch Hat Atelier' },
+  // ⚠️ ATTRIBUTED, NOT CONFIRMED. Nima's words were "Nemu and Nico i believe are
+  // from Witch watch" — so this pair carries his own hedge. Recorded as given
+  // rather than firmed up, because the hedge is part of what he told me.
+  { id: 'nemu-miyao', name: 'Nemu Miyao', universe: 'Witch Watch', attribution: 'believed' },
+  { id: 'nico-wakatsuki', name: 'Nico Wakatsuki', universe: 'Witch Watch', attribution: 'believed' },
 ]
 
 export function getCharacterById(id) {

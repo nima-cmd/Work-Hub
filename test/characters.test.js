@@ -32,17 +32,26 @@ test('ids are unique, lower-kebab, and match the filename convention', () => {
 })
 
 test('⚠️ AN UNKNOWN UNIVERSE IS null, NEVER A PLAUSIBLE GUESS', () => {
-  // `universe` prints on the trading card and the hologram. Five of the portraits
-  // added 2026-09-11 could not be identified from the art, and a guessed franchise
-  // would read as a fact. null renders empty, which is honest.
-  const unknown = CHARACTERS.filter((c) => c.universe === null).map((c) => c.id)
-  assert.deepEqual(unknown.sort(),
-    ['alicia-glenfall', 'clen', 'coco', 'nemu-miyao', 'nico-wakatsuki'])
-  // Everything else must be a real non-empty string — not '', not undefined.
+  // `universe` prints on the trading card and the hologram, so a guessed franchise
+  // would read as a fact. Five portraits added 2026-09-11 carried null until Nima
+  // named them; all 43 now have a real one. null stays the correct representation
+  // for an unidentified series — this asserts the SHAPE, so a future addition
+  // cannot sneak in '' or undefined and render as blank-but-claimed.
   for (const c of CHARACTERS) {
-    if (c.universe === null) continue
-    assert.ok(typeof c.universe === 'string' && c.universe.trim(), `${c.id} universe is empty`)
+    assert.ok(c.universe === null || (typeof c.universe === 'string' && c.universe.trim()),
+      `${c.id} universe must be a non-empty string or explicitly null`)
   }
+  assert.deepEqual(CHARACTERS.filter((c) => !c.universe).map((c) => c.id), [])
+})
+
+test('⚠️ A BELIEVED ATTRIBUTION KEEPS ITS HEDGE', () => {
+  // Nima's words were "Nemu and Nico i believe are from Witch watch". The hedge is
+  // part of what he told me, so it is recorded rather than quietly firmed up.
+  const believed = CHARACTERS.filter((c) => c.attribution === 'believed')
+  assert.deepEqual(believed.map((c) => c.id), ['nemu-miyao', 'nico-wakatsuki'])
+  for (const c of believed) assert.equal(c.universe, 'Witch Watch')
+  // Every other entry is unhedged — the field means something only if it is rare.
+  assert.equal(CHARACTERS.filter((c) => c.attribution).length, 2)
 })
 
 test('the rotation covers every character, and a sender keeps its assignment', () => {

@@ -767,10 +767,56 @@ export const DIALOGUE = {
     ],
   },
 
-  // ⚠️ VOICE PROVISIONAL. These five could not be identified from the art (see
-  // characters.js — their `universe` is null), so these lines are written warm and
-  // neutral ON PURPOSE rather than imitating a character I cannot name. Rewrite
-  // them once Nima says who they are.
+  // ── Voices revisited 2026-09-11, once Nima named the series ───────────────
+  // Coco and Nico are written in voice below. Alicia, Clen and Nemu are NOT, and
+  // that is deliberate: Clevatess is a series I do not know, and I do not know
+  // Nemu's character well enough to imitate her. Warm and neutral is honest;
+  // a confident impression of someone I cannot actually place is not.
+
+  // Witch Hat Atelier — Coco: earnest, wonder-struck, told once she could never
+  // be a witch and quietly determined to prove otherwise.
+  coco: {
+    greeting: [
+      'Oh! A new task — I want to understand it properly before I touch it.',
+      'Something to do! Can I ask what it is *for*? I always want to know that part.',
+      'A fresh one. I will draw out the steps first, so I can see the whole shape.',
+    ],
+    urgent: [
+      'This one cannot wait! I will be careful, but I will be quick.',
+      'Please hurry — but do not skip the step that makes it safe.',
+    ],
+    reminder: [
+      'The everyday one again. I do not mind; that is how you get good at something.',
+      'It came back around! Practice is not the boring part, I think.',
+    ],
+    done: [
+      'We did it! And I know *why* it worked, which is the best bit.',
+      'Finished! I am going to write down how, so I never lose it.',
+    ],
+  },
+
+  // Witch Watch — Nico: cheerful witch, fond of pranks, magic that overshoots.
+  'nico-wakatsuki': {
+    greeting: [
+      'New task! I could do it with magic, but you know how that usually ends.',
+      'Ta-da! A job for you. I have deliberately not enchanted it. Probably.',
+      'Here you go! I tried helping earlier and made it slightly worse, so — yours!',
+    ],
+    urgent: [
+      'Eep, this one is urgent! Go, go! I will not cast anything, I promise!',
+      'Hurry! And if something starts glowing, that was not me.',
+    ],
+    reminder: [
+      'The daily one is back! I like the ones that keep coming round.',
+      'Same task, same time. Cosy, right?',
+    ],
+    done: [
+      'Yaaay! Finished, and nothing exploded! Best kind of day.',
+      'Done! I am counting that as a win for both of us.',
+    ],
+  },
+
+  // Clevatess — series unknown to me; see the note above.
   'alicia-glenfall': {
     greeting: [
       'A new task for you. I have laid out what it needs.',
@@ -791,16 +837,7 @@ export const DIALOGUE = {
     reminder: ['The recurring one. Again, as ever.', 'Due today. It always is.'],
     done: ['Done. Good.', 'Handled. That is enough said.'],
   },
-  coco: {
-    greeting: [
-      'Ooh, a new task! Let us see what it wants.',
-      'Something to do! I do like a fresh one.',
-      'Here you go — a brand new job, still shiny.',
-    ],
-    urgent: ['Quick quick! This one will not wait!', 'Urgent! Off you go, I will keep up!'],
-    reminder: ['The usual one is back around again!', 'Same task, new day. Cosy, really.'],
-    done: ['All finished! That felt good, did it not?', 'Done and dusted! Lovely.'],
-  },
+  // Witch Watch, believed — voice kept neutral; I do not know her well enough.
   'nemu-miyao': {
     greeting: [
       'A task for you. I have kept the details short.',
@@ -810,16 +847,6 @@ export const DIALOGUE = {
     urgent: ['This needs you now, before anything else.', 'Urgent. Please do not set it down.'],
     reminder: ['The scheduled one has come round again.', 'Due today, same as always.'],
     done: ['Complete. Neatly done.', 'Finished. That is one fewer thing waiting.'],
-  },
-  'nico-wakatsuki': {
-    greeting: [
-      'Hey! New task, and it has your name on it.',
-      'Got something for you — nothing scary, promise.',
-      'Fresh one off the pile! Shall we?',
-    ],
-    urgent: ['Okay, this one is actually urgent — go!', 'No dawdling on this one, it is hot.'],
-    reminder: ['The daily one! Hello again, old friend.', 'Round it comes. I do not mind.'],
-    done: ['Yes! Finished! Nice one.', 'Done! That is the good feeling right there.'],
   },
 }
 
