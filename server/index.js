@@ -11,7 +11,8 @@ import { resolveNetsuiteLink } from '../src/ingest/netsuiteLink.js'
 import { LINK_ERROR, LINK_MESSAGE } from '../src/model/netsuiteLinks.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync, readdirSync } from 'node:fs'
+import { buildStaleness, WATCHED } from '../src/model/buildStaleness.js'
 
 import {
   setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, recordDeadLabel, undoDeadLabel, listDeadLabels, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
@@ -197,6 +198,13 @@ app.get('/api/health', async (_req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
+
+// ⚠️ MUST BE REGISTERED BEFORE THE SPA CATCH-ALL at the bottom of this file, which
+// answers every unmatched GET with index.html — a route declared after it returns
+// HTML from /api/..., which is how I first shipped this one.
+// `clientBuildState` is a hoisted function declaration further down; the handler
+// only runs after module evaluation, so the `dist` const it closes over is ready.
+app.get('/api/build-state', (_req, res) => res.json(clientBuildState()))
 
 app.get('/api/sync-health', async (_req, res) => {
   try {
@@ -2000,12 +2008,59 @@ if (existsSync(dist)) {
   app.use((_req, res) => res.sendFile(join(dist, 'index.html')))
 }
 
+// ── Is the bundle :3001 serves older than the code that made it? ────────────
+//
+// Nima lost time to this on 2026-09-11: client/dist was two days old, :3001 served
+// it without comment, and a feature that worked read as missing. The API is never
+// stale — only the built client is — so this reports and never blocks.
+//
+// ⚠️ It walks src/model too, because the client imports the shared model directly;
+// editing only characters.js changes the UI while nothing under client/ moves.
+function newestMtime(root) {
+  let newest = 0
+  let file = null
+  const walk = (p, rel) => {
+    let st
+    try { st = statSync(p) } catch { return }
+    if (st.isDirectory()) {
+      let entries = []
+      try { entries = readdirSync(p) } catch { return }
+      for (const e of entries) {
+        if (e === 'node_modules' || e.startsWith('.')) continue
+        walk(join(p, e), rel ? `${rel}/${e}` : e)
+      }
+      return
+    }
+    if (st.mtimeMs > newest) { newest = st.mtimeMs; file = rel }
+  }
+  walk(join(__dirname, "..", root), root)
+  return { newest, file }
+}
+
+export function clientBuildState() {
+  let builtAt = null
+  try { builtAt = statSync(join(dist, 'index.html')).mtimeMs } catch { builtAt = null }
+  let newestSrc = 0
+  let newestFile = null
+  for (const w of WATCHED) {
+    const { newest, file } = newestMtime(w)
+    if (newest > newestSrc) { newestSrc = newest; newestFile = file }
+  }
+  return buildStaleness({ builtAt, newestSrc: newestSrc || null, newestFile })
+}
+
 // ⚠️ WHICH DATABASE, said out loud, every start. The local mirror is stale by
 // definition, and a stale mirror reporting as live is the worst version of the bug
 // class src/model/fieldAssumptions.js exists to record. If the target is ever
 // ambiguous, no number from this server can be trusted.
 app.listen(PORT, async () => {
   console.log(`▶ Tracker running at http://localhost:${PORT}`)
+  const build = clientBuildState()
+  if (build.stale) {
+    console.log(`⚠  ${build.message}`)
+  } else if (build.state === 'fresh') {
+    console.log(`   CLIENT: built ${build.builtAgeLabel} ago, current with source.`)
+  }
   if (IS_MIRROR) {
     const m = await mirrorAsOf()
     const age = m?.ageHours == null ? 'unknown age' : `${m.ageHours.toFixed(1)}h old`
