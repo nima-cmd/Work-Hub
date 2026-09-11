@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   cartonLabelZpl, labelProblems, shipmentLabels, ssccCheckDigit, ssccError,
-  REQUIRED, SHIP_FROM, LABEL,
+  REQUIRED, SHIP_FROM, LABEL, nonAscii, STORE_UNITS_OMITTED,
 } from '../src/model/exemplarCartonLabel.js'
 
 // Carton 1 of IF7650, verbatim from NetSuite.
@@ -20,7 +20,11 @@ const carton1 = {
 }
 const common = {
   shipFromName: SHIP_FROM.name,
-  operatingCompany: 'Saks Fifth Avenue',
+  // ⚠️ THE STOREFRONT, NOT THE TRADING-PARTNER NAME. I had "Saks Fifth Avenue" here,
+  // which is what Orderful calls the partner. Store 0077's STOREFRONT column on the
+  // 2026-04-21 list reads "SAKS GLOBAL", renamed to "EXEMPLAR LUXURY GROUP" effective
+  // 2026-09-21. Nima: "ship to i think need to read Exemplar luxury group".
+  operatingCompany: 'EXEMPLAR LUXURY GROUP',
   po: '8928906', department: '204', store: '0077', storeAbbrev: 'PNDC',
   dc: '0510', carrier: 'PER TMS',
 }
@@ -85,15 +89,71 @@ test('the ZPL carries the GS1-128 in Mode D, with the (00) application identifie
 test('every §8 marking actually appears in the rendered label', () => {
   const z = cartonLabelZpl(full)
   assert.match(z, /Entrelaced Holdings, LLC/)     // company name
-  assert.match(z, /Saks Fifth Avenue/)            // operating company
+  assert.match(z, /EXEMPLAR LUXURY GROUP/)        // operating company = the STOREFRONT
   assert.match(z, /8928906/)                      // PO
   assert.match(z, /DEPT: 204/)                    // department
   assert.match(z, /STORE: 0077 PNDC/)             // store number + abbreviation
   assert.match(z, /CARTON 1 of 22/)               // carton n of m
-  assert.match(z, /STORE TOTAL: 270 units \/ 22 ctns/)
-  assert.match(z, /STYLE: SN03011LD-MOCHA/)       // style / colour
-  assert.match(z, /UPC: 840470893555/)
+  assert.match(z, /STYLE: SN03011LD-MOCHA/)       // style / colour — SKU alone
+  assert.match(z, /ITEM UPC: 840470893555/)
   assert.match(z, /QTY: 10/)
+  // ⚠️ STORE UNITS ARE DELIBERATELY OFF. §8 asks for "cartons & units per store";
+  // Nima's call is to print the carton half only. STORE_UNITS_OMITTED records it.
+  assert.ok(!/STORE TOTAL/.test(z))
+  assert.match(cartonLabelZpl({ ...full, showStoreTotal: true }), /STORE TOTAL: 270 units/)
+})
+
+test('⚠️ THE STYLE IS THE SKU ALONE, NOT THE ITEM NAME', () => {
+  // Nima: "the style should be just sku SN03011ld-mocha. we dont need the name of
+  // the item". The SKU already carries style and colour, and the description wrapped
+  // to two lines on the narrow stocks.
+  const z = cartonLabelZpl({ ...full, style: 'SN03011LD-MOCHA | St. Barths Petit Tote | Mocha' })
+  assert.match(z, /STYLE: SN03011LD-MOCHA\^FS/)
+  assert.ok(!/Petit Tote/.test(z))
+})
+
+test('⚠️ THE TWO LONG NUMBERS ARE LABELLED APART', () => {
+  // Nima asked where the "two UPC" come from. There is one UPC and one SSCC:
+  // the UPC identifies what is INSIDE (same on every unit in the box); the SSCC
+  // identifies the BOX (unique to this carton). Labelling both "UPC" invited the
+  // question, so the label now says ITEM UPC and "SSCC-18 (this carton)".
+  const z = cartonLabelZpl(full)
+  assert.match(z, /ITEM UPC: 840470893555/)
+  assert.match(z, /SSCC-18  \(this carton\)/)
+  assert.ok(!/\^FDUPC:/.test(z), 'a bare "UPC:" is what made them look like a pair')
+})
+
+test('⚠️ NO NON-ASCII REACHES THE PRINTER', () => {
+  // I used an EM DASH as the placeholder for an unknown PRO/BOL and it printed as
+  // garbage — Nima: "we see also invalid - s which we dont understand". The
+  // resident fonts are single-byte; same class as the pdfkit WinAnsi rule.
+  const z = cartonLabelZpl({ ...full, style: 'SN0—3011’LD…' })
+  assert.deepEqual(nonAscii(z), [], 'the whole label must be ASCII')
+  // And an unknown PRO/BOL says so rather than printing a dash.
+  assert.match(z, /PRO#:\^FS\n\^AN,25\^FO490,350\^FDPENDING/)
+  assert.match(z, /BOL#:\^FS\n\^AN,25\^FO490,390\^FDPENDING/)
+})
+
+test('⚠️ THE ADDRESS BLOCKS ARE WIDTH-BOUNDED SO THEY CANNOT SPILL', () => {
+  // "Entrelaced Holdings, LLC" at font height 25 is ~360 dots; the column divider is
+  // at 345, so it printed straight over the SHIP TO block. ZPL has no automatic
+  // width — only ^FB bounds a field. Nima: "vew artifiact ship from spill into ship to".
+  const z = cartonLabelZpl(full)
+  // ⚠️ Asserted on CONTENT, not coordinates. My first version swept by ^FO position
+  // and matched the PO number at y=530 because the range regex "5[0-9]" caught "53"
+  // — a full-width field that is supposed to be unbounded.
+  const lines = z.split('\n')
+  const mustBeBounded = [
+    'Entrelaced Holdings', '825 Western Avenue', 'Unit 13', 'Glendale, CA',
+    'EXEMPLAR LUXURY GROUP', 'PNDC', '4123 Pinnacle Point', 'Dallas, TX',
+  ]
+  for (const text of mustBeBounded) {
+    const l = lines.find((x) => x.includes(`^FD${text}`) || x.includes(text))
+    assert.ok(l, `expected a field containing "${text}"`)
+    assert.match(l, /\^FB\d+,/, `unbounded address field: ${l}`)
+  }
+  // The ship-from column is bounded to 300 dots — inside the 345-dot divider.
+  assert.match(lines.find((l) => l.includes('Entrelaced Holdings')), /\^FB300,/)
 })
 
 test('the ship-to block comes from the Routing Guide DC, not from free text', () => {
@@ -172,7 +232,9 @@ test('⚠️ THE STYLE IS DERIVED FROM THE UPC, BECAUSE I TYPED ONE WRONG', () =
   // With no typed style at all, it is looked up.
   const ok = shipmentLabels([carton], common, { upcMap })
   assert.equal(ok.ready, 1)
-  assert.match(ok.labels[0].zpl, /STYLE: SN41263LD-ONYX \| Porto Medium Half-Moon Bag \| Onyx/)
+  assert.match(ok.labels[0].zpl, /STYLE: SN41263LD-ONYX\^FS/)
+  assert.equal(ok.labels[0].style, 'SN41263LD-ONYX | Porto Medium Half-Moon Bag | Onyx',
+    'the packing slip still gets the description; only the LABEL is the SKU alone')
 
   // ⚠️ A typed style that DISAGREES is blocked, not silently overwritten — two
   // sources disagreeing about what is in the box is a packing question.

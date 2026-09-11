@@ -83,7 +83,27 @@ export function ssccError(sscc) {
   return null
 }
 
-/** §8 markings this label must carry. A missing one is its own chargeback. */
+/**
+ * §8 markings this label must carry. A missing one is its own chargeback.
+ *
+ * ⚠️ `totalUnits` IS NO LONGER REQUIRED, AND THAT IS A DELIBERATE DEVIATION.
+ * Nima, 2026-09-11: "we dont think we need the store units". The Manual's §8 list
+ * reads "Total number of cartons & units per store", so the units half is a
+ * documented requirement we are choosing not to print. "CARTON n of m" still carries
+ * the cartons half.
+ *
+ * Recorded rather than quietly dropped: if a carton marking is ever queried, this is
+ * the line that was left off and the decision that left it off. Pass `totalUnits`
+ * with `showStoreTotal: true` to put it back — nothing else changes.
+ */
+export const STORE_UNITS_OMITTED = {
+  requirement: 'Total number of cartons & units per store',
+  section: '8 (CARTON_MARKINGS)',
+  decidedBy: 'Nima, 2026-09-11',
+  stillPrinted: 'the carton count, as "CARTON n of m"',
+  restoreWith: 'showStoreTotal: true',
+}
+
 export const REQUIRED = [
   ['shipFromName', 'Company name / address'],
   ['operatingCompany', 'Operating company (e.g. Saks Fifth Avenue)'],
@@ -92,7 +112,6 @@ export const REQUIRED = [
   ['store', 'Store number'],
   ['storeAbbrev', 'Store abbreviation'],
   ['totalCartons', 'Total cartons for the store'],
-  ['totalUnits', 'Total units for the store'],
   ['style', 'Style / colour / size'],
   ['sscc', 'GS1-128 SSCC'],
 ]
@@ -122,8 +141,49 @@ export function labelProblems(c = {}) {
   return { missing, errors, printable: missing.length === 0 && errors.length === 0 }
 }
 
-const esc = (s) => String(s ?? '').replace(/[\^~]/g, ' ')
+/**
+ * ⚠️ ZPL DATA IS ASCII. Two separate hazards, and I hit the second one.
+ *
+ * `^` and `~` are ZPL's own control characters: leaving one in data terminates the
+ * field and corrupts every command after it.
+ *
+ * And the printer's resident fonts are a single-byte code page, so a non-ASCII
+ * character prints as a box or the wrong glyph. I used an EM DASH as the placeholder
+ * for an unknown PRO and BOL number, and Nima saw it come out as garbage — "we see
+ * also invalid - s which we dont understand". Same class as the pdfkit WinAnsi rule
+ * already recorded in this repo: use ASCII on a label, always.
+ */
+const esc = (s) => String(s ?? '')
+  .replace(/[\u2010-\u2015]/g, '-')   // dashes
+  .replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"')
+  .replace(/\u2026/g, '...')
+  .replace(/[^\x20-\x7E]/g, '')       // anything else non-ASCII is dropped, not drawn
+  .replace(/[\^~]/g, ' ')
+
+/**
+ * Characters the printer's resident font cannot render. Newline, carriage return and
+ * tab are excluded: they separate ZPL commands and are not drawn.
+ *
+ * ⚠️ My first version flagged \n and reported 45 "non-ASCII characters" on a
+ * perfectly clean label — a checker that cries wolf gets switched off.
+ */
+export const nonAscii = (s) => [...String(s ?? '')]
+  .filter((c) => { const n = c.charCodeAt(0); return (n > 126 || n < 32) && n !== 10 && n !== 13 && n !== 9 })
+
 const fd = (font, x, y, text) => `^AN,${font}^FO${x},${y}^FD${esc(text)}^FS`
+
+/**
+ * A field constrained to a column width, so long text WRAPS instead of running into
+ * the next column. ZPL has no automatic width: every ^FD prints from its origin to
+ * the edge of the label unless a ^FB field block bounds it.
+ *
+ * ⚠️ THIS IS WHAT MADE THE SHIP-FROM SPILL. "Entrelaced Holdings, LLC" at font
+ * height 25 is about 360 dots wide, the divider is at 345, so the company name
+ * printed straight over the SHIP TO block. Nima: "vew artifiact ship from spill into
+ * ship to". Exactly the same bug as the PDF labels, in a different language.
+ */
+const fb = (font, x, y, width, text, lines = 2) =>
+  `^AN,${font}^FO${x},${y}^FB${width},${lines},0,L,0^FD${esc(text)}^FS`
 
 /**
  * The label, as ZPL.
@@ -153,13 +213,14 @@ export function cartonLabelZpl(c = {}) {
   const out = ['^XA', '']
   // ── Ship from / ship to, split down the middle like the live template ──
   out.push(`^FO0,0^GB${LABEL.widthDots},237,2^FS`, '^FO345,0^GB2,237,2^FS')
-  out.push(fd(20, 30, 25, 'SHIP FROM'), fd(25, 30, 55, SHIP_FROM.name))
-  SHIP_FROM.lines.forEach((l, i) => out.push(fd(25, 30, 90 + i * 35, l)))
-  out.push(fd(25, 30, 160, `${SHIP_FROM.city}, ${SHIP_FROM.state}`), fd(25, 30, 195, SHIP_FROM.zip))
+  const COL = 300   // dots: 345 divider - 30 origin, less a gutter
+  out.push(fd(20, 30, 25, 'SHIP FROM'), fb(22, 30, 52, COL, SHIP_FROM.name, 2))
+  SHIP_FROM.lines.forEach((l, i) => out.push(fb(22, 30, 108 + i * 30, COL, l, 1)))
+  out.push(fb(22, 30, 168, COL, `${SHIP_FROM.city}, ${SHIP_FROM.state} ${SHIP_FROM.zip}`, 1))
 
-  out.push('', fd(20, 370, 25, 'SHIP TO'), fd(25, 370, 55, `${c.operatingCompany}`))
-  out.push(fd(25, 370, 90, dc.name))
-  lines.forEach((l, i) => out.push(fd(25, 370, 125 + i * 35, l)))
+  out.push('', fd(20, 370, 25, 'SHIP TO'), fb(24, 370, 52, 410, c.operatingCompany, 2))
+  out.push(fb(22, 370, 112, 410, dc.name, 1))
+  lines.forEach((l, i) => out.push(fb(22, 370, 142 + i * 30, 410, l, 1)))
 
   // ── Postal-code barcode (AI 420) + carrier, as the live label does ──
   out.push('', `^FO0,235^GB${LABEL.widthDots},213,2^FS`, '^FO380,235^GB2,213,2^FS')
@@ -168,8 +229,12 @@ export function cartonLabelZpl(c = {}) {
     out.push(`^BY3,3,10^FO55,315^BCN,110,N,N,Y,D^FD420${zip}^FS`)
   }
   out.push('', fd(20, 405, 250, 'CARRIER'), `^A0N,35^FO405,290^FDCARR: ${esc(c.carrier || 'PER TMS')}^FS`)
-  out.push(fd(25, 405, 350, 'PRO#:'), fd(25, 490, 350, c.pro || '—'))
-  out.push(fd(25, 405, 390, 'BOL#:'), fd(25, 490, 390, c.bol || '—'))
+  // ⚠️ AN UNKNOWN PRO OR BOL PRINTS "PENDING", NOT A DASH. Both are issued when the
+  // freight is booked and the BOL is minted, which has not happened for this
+  // shipment — so the honest label says the number is coming. A dash reads as a
+  // formatting glitch (and, as an em dash, printed as one).
+  out.push(fd(25, 405, 350, 'PRO#:'), fd(25, 490, 350, c.pro || 'PENDING'))
+  out.push(fd(25, 405, 390, 'BOL#:'), fd(25, 490, 390, c.bol || 'PENDING'))
 
   // ── PO + department + store: the §8 fields ShopBop's label has no room for ──
   out.push('', fd(25, 30, 475, 'PURCHASE ORDER:'), `^AN,40^FO30,530^FD${esc(c.po)}^FS`)
@@ -177,15 +242,30 @@ export function cartonLabelZpl(c = {}) {
   out.push(fd(28, 30, 600, `DEPT: ${c.department}    STORE: ${c.store} ${c.storeAbbrev}`))
 
   // ── What is in the box ──
-  out.push('', fd(30, 30, 655, `UPC: ${c.upc}`))
-  out.push(fd(28, 30, 700, `STYLE: ${c.style}`))
+  //
+  // ⚠️ TWO NUMBERS ON THIS LABEL LOOK ALIKE AND ARE NOT. Nima asked where the two
+  // UPCs come from; there is only one UPC, and the other long number is the SSCC.
+  //   ITEM UPC  840470893555        what is INSIDE — the product, ours, from
+  //                                 item.upccode. Same on all 10 units in the box.
+  //   SSCC-18   185072747098541640  the BOX ITSELF — a serial licence plate, unique
+  //                                 to this carton, from custrecord_hb_edi_package_ucc.
+  // Labelled "ITEM UPC" rather than "UPC" so the two are not read as a pair.
+  //
+  // ⚠️ STYLE IS THE SKU ALONE. Nima: "the style should be just sku SN03011ld-mocha.
+  // we dont need the name of the item". The SKU already encodes style and colour,
+  // and the description wrapped to two lines on the narrow stocks.
+  const sku = String(c.style).split(/\s*[|·]/)[0].trim()
+  out.push('', fd(30, 30, 655, `ITEM UPC: ${c.upc}`))
+  out.push(fd(32, 30, 700, `STYLE: ${sku}`))
   out.push(fd(30, 30, 750, `QTY: ${c.units}`))
-  out.push(fd(24, 300, 750, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
-  out.push(fd(30, 30, 830, `CARTON ${c.carton} of ${c.totalCartons}`))
+  if (c.showStoreTotal && c.totalUnits) {
+    out.push(fd(24, 300, 750, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
+  }
+  out.push(fd(34, 30, 820, `CARTON ${c.carton} of ${c.totalCartons}`))
 
   // ── SSCC-18, the scanned identity of the box ──
   out.push('', `^FO0,896^GB${LABEL.widthDots},400,2^FS`)
-  out.push(fd(20, 30, 911, 'SSCC-18'), fd(25, 240, 942, `(00) ${sscc}`))
+  out.push(fd(20, 30, 911, 'SSCC-18  (this carton)'), fd(25, 240, 942, `(00) ${sscc}`))
   out.push(`^BY4,3,10^FO95,972^BCN,225,N,N,Y,D^FD00${sscc}^FS`)
   out.push(`^FO0,0^GB${LABEL.widthDots},${LABEL.heightDots},2,W^FS`, '', '^XZ')
   return out.join('\n')
