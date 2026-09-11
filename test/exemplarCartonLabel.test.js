@@ -8,11 +8,15 @@ import {
 } from '../src/model/exemplarCartonLabel.js'
 
 // Carton 1 of IF7650, verbatim from NetSuite.
+// ⚠️ 270, not 311. My first fixture said 311 — that is PO 1236143's figure, a
+// different Bloomingdale's order. IF7650's 22 cartons hold 270 units, which matches
+// SO12534's 22 order lines exactly. A fixture claiming to be "verbatim from
+// NetSuite" has to actually be.
 const carton1 = {
   sscc: '185072747098541640',
   upc: '840470893555',
   style: 'SN03011LD-MOCHA · St. Barths Petit Tote | Mocha',
-  carton: 1, totalCartons: 22, units: 10, totalUnits: 311,
+  carton: 1, totalCartons: 22, units: 10, totalUnits: 270,
 }
 const common = {
   shipFromName: SHIP_FROM.name,
@@ -86,7 +90,7 @@ test('every §8 marking actually appears in the rendered label', () => {
   assert.match(z, /DEPT: 204/)                    // department
   assert.match(z, /STORE: 0077 PNDC/)             // store number + abbreviation
   assert.match(z, /CARTON 1 of 22/)               // carton n of m
-  assert.match(z, /STORE TOTAL: 311 units \/ 22 ctns/)
+  assert.match(z, /STORE TOTAL: 270 units \/ 22 ctns/)
   assert.match(z, /STYLE: SN03011LD-MOCHA/)       // style / colour
   assert.match(z, /UPC: 840470893555/)
   assert.match(z, /QTY: 10/)
@@ -149,4 +153,50 @@ test('4x6 at 203 dpi — the stock the warehouse Zebra is loaded with', () => {
   assert.equal(LABEL.heightDots, 1218)
   assert.equal(Math.round(LABEL.widthDots / LABEL.dpi), 4)
   assert.equal(Math.round(LABEL.heightDots / LABEL.dpi), 6)
+})
+
+test('⚠️ THE STYLE IS DERIVED FROM THE UPC, BECAUSE I TYPED ONE WRONG', () => {
+  // Generating IF7650's labels I hand-typed the styles and wrote
+  // "SN41263LD-CHOCOLATE" for UPC 840470890059, which the sales order calls
+  // "SN41263LD-ONYX" — my query had paginated and cut off before that row, so I
+  // filled in a plausible colour. §9.1 audits the label's colour against the
+  // physical units at a 2% error rate; one bad carton in 22 is 4.5%.
+  const upcMap = {
+    '840470890059': { sku: 'SN41263LD-ONYX', description: 'Porto Medium Half-Moon Bag | Onyx', qty: 10 },
+  }
+  const carton = {
+    carton: 22, sscc: '285072747014483044', upc: '840470890059', units: 10,
+    totalCartons: 22, totalUnits: 270,
+  }
+
+  // With no typed style at all, it is looked up.
+  const ok = shipmentLabels([carton], common, { upcMap })
+  assert.equal(ok.ready, 1)
+  assert.match(ok.labels[0].zpl, /STYLE: SN41263LD-ONYX \| Porto Medium Half-Moon Bag \| Onyx/)
+
+  // ⚠️ A typed style that DISAGREES is blocked, not silently overwritten — two
+  // sources disagreeing about what is in the box is a packing question.
+  const wrong = shipmentLabels(
+    [{ ...carton, style: 'SN41263LD-CHOCOLATE | Porto Medium Half-Moon Bag | Chocolate' }], common, { upcMap })
+  assert.equal(wrong.ready, 0)
+  assert.match(wrong.blocked[0].errors[0], /style disagrees/)
+  assert.match(wrong.blocked[0].errors[0], /SN41263LD-ONYX/)
+})
+
+test('⚠️ A UPC ON NO ORDER LINE IS BLOCKED, NOT LABELLED FROM A TYPED STYLE', () => {
+  const r = shipmentLabels(
+    [{ carton: 1, sscc: '185072747098541640', upc: '999999999999', units: 10, style: 'WHATEVER',
+       totalCartons: 22, totalUnits: 270 }],
+    common, { upcMap: {} })
+  assert.equal(r.ready, 0)
+  assert.match(r.blocked[0].errors[0], /on no line of this order/)
+})
+
+test('a carton quantity that disagrees with its order line is blocked', () => {
+  const upcMap = { '840470893555': { sku: 'SN03011LD-MOCHA', qty: 10 } }
+  const r = shipmentLabels(
+    [{ carton: 1, sscc: '185072747098541640', upc: '840470893555', units: 12,
+       totalCartons: 22, totalUnits: 270 }], common, { upcMap })
+  assert.equal(r.ready, 0)
+  assert.match(r.blocked[0].errors[0], /quantity disagrees: carton holds 12.*is 10/)
 })

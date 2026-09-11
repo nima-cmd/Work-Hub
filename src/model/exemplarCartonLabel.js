@@ -197,15 +197,60 @@ export function cartonLabelZpl(c = {}) {
  * ⚠️ ONE BAD CARTON DOES NOT WITHHOLD THE OTHER 21. The over-receive blocking bug
  * taught this: a per-shipment gate meant one problem held back everything valid.
  * Good labels come back ready to print; bad ones come back named.
+ *
+ * ── ⚠️ THE STYLE IS DERIVED FROM THE UPC, NEVER TYPED ───────────────────────
+ *
+ * `upcMap` is UPC → { sku, description }, built from the order's own lines. Pass it
+ * and the style on the label is LOOKED UP; a carton whose UPC is not in the map is
+ * blocked rather than labelled.
+ *
+ * This exists because I got one wrong. Generating IF7650's 22 labels I hand-typed
+ * the style names, and for UPC 840470890059 I wrote "SN41263LD-CHOCOLATE" when the
+ * sales order says "SN41263LD-ONYX" — my NetSuite query had paginated and cut off
+ * before that row, so I filled in a plausible colour. It was caught only by
+ * re-checking every carton against the order.
+ *
+ * A wrong colour on a GS1-128 is exactly what Exemplar audits: §9.1 compares the
+ * label's store/style/colour/size against the PHYSICAL units, at 2% item error rate
+ * for the $1,000-a-month programme. One mislabelled carton out of 22 is 4.5%.
  */
-export function shipmentLabels(cartons = [], common = {}) {
+export function shipmentLabels(cartons = [], common = {}, { upcMap = null } = {}) {
   const labels = []
   const blocked = []
   for (const carton of cartons) {
     const c = { ...common, ...carton }
+    if (upcMap) {
+      const hit = upcMap[String(c.upc ?? '').trim()]
+      if (!hit) {
+        blocked.push({
+          carton: c.carton, sscc: c.sscc, missing: [], printable: false,
+          errors: [`UPC ${c.upc} is on no line of this order — cannot derive the style, and a typed one is not trusted`],
+        })
+        continue
+      }
+      // ⚠️ A TYPED STYLE THAT DISAGREES IS AN ERROR, NOT SOMETHING TO OVERWRITE.
+      // Silently replacing it would hide the fact that two sources disagree about
+      // what is in the box, which is a packing question, not a formatting one.
+      const typedSku = c.style ? String(c.style).split(/\s*[|·]/)[0].trim() : null
+      if (typedSku && typedSku !== hit.sku) {
+        blocked.push({
+          carton: c.carton, sscc: c.sscc, missing: [], printable: false,
+          errors: [`style disagrees: carton says "${typedSku}", UPC ${c.upc} on this order is "${hit.sku}"`],
+        })
+        continue
+      }
+      c.style = hit.description ? `${hit.sku} | ${hit.description}` : hit.sku
+      if (hit.qty != null && Number(c.units) !== Number(hit.qty)) {
+        blocked.push({
+          carton: c.carton, sscc: c.sscc, missing: [], printable: false,
+          errors: [`quantity disagrees: carton holds ${c.units}, the order line for ${hit.sku} is ${hit.qty}`],
+        })
+        continue
+      }
+    }
     const p = labelProblems(c)
     if (!p.printable) { blocked.push({ carton: c.carton, sscc: c.sscc, ...p }); continue }
-    labels.push({ carton: c.carton, sscc: c.sscc, zpl: cartonLabelZpl(c) })
+    labels.push({ carton: c.carton, sscc: c.sscc, upc: c.upc, style: c.style, units: c.units, zpl: cartonLabelZpl(c) })
   }
   return { labels, blocked, ready: labels.length, total: cartons.length }
 }

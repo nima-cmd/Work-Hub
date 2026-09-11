@@ -54,6 +54,50 @@ export function extractPoPurpose(message) {
   return code == null || code === '' ? null : String(code).trim()
 }
 
+/**
+ * The REF segments at the header of an 850 — the identifiers the CARTON LABEL and
+ * the BOL need and that nothing in this app was reading.
+ *
+ * ⚠️ THE DEPARTMENT NUMBER WAS HERE THE WHOLE TIME. Exemplar's Manual §8 requires a
+ * department number on every carton marking (fee 55/355, $10 per carton, $250
+ * minimum) and I told Nima we did not capture it anywhere — having checked the
+ * NetSuite custom fields and this parser, both of which were true, and never opened
+ * the 850 body. His answer: "remember we have the department number fro the 850 we
+ * received right". PO 0008928906 carries REF*DP*0118.
+ *
+ * Qualifiers seen on real Exemplar 850s (Orderful 1031938076, 2026-09-03):
+ *   VR  vendor number as the PARTNER knows us  → 7126456
+ *   DP  department                             → 0118
+ *   IA  internal vendor number                 → 146
+ *   PG  product group                          → 39
+ *
+ * ⚠️ READ BY QUALIFIER, NEVER BY POSITION. The array order is Orderful's and is not
+ * guaranteed; the SDQ bug in poRevisionLive.js came from trusting position. An
+ * unrecognised qualifier is KEPT in `other` rather than dropped, so the next partner
+ * that sends something new is visible instead of silently discarded.
+ */
+export const REF_QUALIFIERS = {
+  DP: 'department',
+  VR: 'vendorNumber',
+  IA: 'internalVendorNumber',
+  PG: 'productGroup',
+}
+
+export function extractPoReferences(message) {
+  const refs = message?.transactionSets?.[0]?.referenceInformation || []
+  const out = { department: null, vendorNumber: null, internalVendorNumber: null, productGroup: null, other: {} }
+  for (const r of refs) {
+    const q = String(r?.referenceIdentificationQualifier ?? '').trim()
+    const v = r?.referenceIdentification
+    if (!q || v == null || String(v).trim() === '') continue
+    const val = String(v).trim()
+    const field = REF_QUALIFIERS[q]
+    if (field) out[field] = val
+    else out.other[q] = val
+  }
+  return out
+}
+
 function productIds(baseline) {
   // Collect every (qualifier, id) pair regardless of the numeric suffix Orderful
   // appends (productServiceIDQualifier, ...Qualifier1, ...Qualifier2, …).
