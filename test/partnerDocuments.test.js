@@ -176,3 +176,36 @@ test('the guides folder is described but NOT created', () => {
   assert.equal(GUIDES_ROOT.created, false)
   assert.match(GUIDES_ROOT.mirrors, /googleDrive\.js/)
 })
+
+test('⚠️ THE BLOOMINGDALE\'S DOCUMENTS ARE REGISTERED AND MARKED UNREAD', () => {
+  // Four Bloomingdale's orders shipped short the same day these arrived, and I could
+  // not say what that costs — Exemplar's §12.3 is Exemplar's and fee schedules do not
+  // transfer between partners. Registered so the gap is visible rather than implied.
+  for (const key of ['bloomingdales-routing', 'bloomingdales-vendor-standards', 'macys-store-dc-listing']) {
+    const d = DOCUMENTS.find((x) => x.key === key)
+    assert.ok(d, key)
+    assert.equal(d.rulesIn, null, `${key} is not read yet and must say so`)
+  }
+  assert.ok(unreadDocuments().some((d) => d.key === 'bloomingdales-vendor-standards'))
+})
+
+test('⚠️ TWO FILES SHARE A NAME WITH DOCUMENTS THAT ARE NOT THEM', () => {
+  // "Vendor Standards.pdf" already exists elsewhere in Drive at a different size, and
+  // the Bloomingdale's routing guide is a different file from macys-routing. Matching
+  // either by title alone picks the wrong document.
+  const vs = DOCUMENTS.find((d) => d.key === 'bloomingdales-vendor-standards')
+  assert.match(vs.note, /1,294,548/)
+  const br = DOCUMENTS.find((d) => d.key === 'bloomingdales-routing')
+  assert.match(br.note, /Distinct from macys-routing/)
+  assert.ok(DOCUMENTS.some((d) => d.key === 'macys-routing'), 'and that one still exists separately')
+})
+
+test('⚠️ THE STORE LIST DATES ITSELF FROM ITS OWN CHANGE LOG', () => {
+  // The workbook carries a "Summary of Changes" tab; its newest entry is 2026-07-28,
+  // which is a firmer edition date than the file's mtime (2026-09-11, when Nima
+  // downloaded it).
+  const d = DOCUMENTS.find((x) => x.key === 'macys-store-dc-listing')
+  assert.equal(d.editionDate, '2026-07-28')
+  assert.ok(d.findings.some((f) => /TU and HI are NOT in/.test(f)),
+    'the two unmapped DC codes must be recorded, not just counted')
+})

@@ -260,7 +260,77 @@ export const DOCUMENTS = [
     // Nothing in this app has read it, and "how a pickup is entered" is exactly the
     // gap blocking the BOL for PO 8928906.
     governs: 'how a vendor books the pickup — unread, and likely relevant to the open TMS question',
-  },  {
+  },  // ── Bloomingdale's, supplied 2026-09-11 ───────────────────────────────────
+  //
+  // ⚠️ THE GAP THAT MATTERED THE SAME DAY. Four Bloomingdale's orders shipped short
+  // on PO 1236143 (IF7692, IF7678, IF7681, IF7689) and I could not tell Nima what a
+  // short ship costs there — Exemplar's §12.3 is Exemplar's, and fee schedules do not
+  // transfer between partners. These are the documents that answer it, and until one
+  // of them is READ the answer is still unknown.
+  {
+    key: 'bloomingdales-routing',
+    partner: "Bloomingdale's",
+    also: ["Macy's Inc"],
+    kind: 'routing guide',
+    title: 'Bloomingdales Routing Guide.pdf',
+    edition: 'unknown — supplied 2026-09-11, 1,429,760 bytes',
+    editionDate: null,
+    driveId: null,
+    folder: 'data',
+    rulesIn: null,
+    governs: 'how Bloomingdale\'s freight is routed and what non-compliance costs',
+    // ⚠️ This is a DIFFERENT document from 'macys-routing' already in this registry
+    // (macy routing Guide.pdf, 1,095,654 bytes). Both are unread; do not assume one
+    // supersedes the other without comparing them.
+    note: 'Distinct from macys-routing — different file, different size, both unread.',
+  },
+  {
+    key: 'bloomingdales-vendor-standards',
+    partner: "Bloomingdale's",
+    kind: 'vendor standards',
+    title: 'Vendor Standards.pdf',
+    edition: 'unknown — supplied 2026-09-11, 1,906,026 bytes',
+    editionDate: null,
+    driveId: null,
+    folder: 'data',
+    rulesIn: null,
+    governs: "the chargeback schedule — the open question on today's four short shipments",
+    // ⚠️ A file called exactly "Vendor Standards.pdf" already exists elsewhere in
+    // Drive (1ZtsPuKBLI8JCwg-TSSCTS1FXh91OciK5, 1,294,548 bytes, 2024-03-15) and is a
+    // DIFFERENT document. Matching this one by title alone would pick the wrong file.
+    note: 'A different "Vendor Standards.pdf" exists in Drive at 1,294,548 bytes — match on size, not title.',
+  },
+  {
+    key: 'macys-store-dc-listing',
+    partner: "Bloomingdale's",
+    also: ["Macy's Inc", "Bloomingdale's Outlet"],
+    kind: 'store/DC list',
+    title: 'Shipping_-_Store_to_DC_Listing_for_Small_Ticket_Merchandise.xls',
+    // The workbook dates itself: its "Summary of Changes" tab logs amendments, the
+    // newest 2026-07-28. That is a firmer edition date than the file's mtime.
+    edition: 'newest logged change 2026-07-28',
+    editionDate: '2026-07-28',
+    lastChecked: '2026-09-11',
+    driveId: null,
+    folder: 'data',
+    rulesIn: null,
+    governs: "store → servicing DC for Macy's, Bloomingdale's and Bloomingdale's Outlet",
+    // ⚠️ FOUR TABS, AND THE STORE LISTS ARE PER BANNER: Summary of Changes (684
+    // rows), Macy's (516), Bloomingdale's (40 stores), Bloomingdale's Outlet.
+    // Extracted 2026-09-11: 40 Bloomingdale's stores across NINE DC codes —
+    // SC 13, CI 8, JP 6, ST 5, CL 2, HA 2, CG 2, TU 1, HI 1.
+    //
+    // ⚠️ TWO OF THOSE CODES ARE NOT IN src/model/dc.js. DC_ABBREV knows SC, ST, JP,
+    // CI, CL, CG and HA — it does not know TU (Bloomies University Village, Seattle)
+    // or HI (Hawaii Pool Stock, c/o City of Industry). A shipment to either store
+    // would abbreviate to nothing on a cargo tag.
+    findings: [
+      '40 Bloomingdale\'s stores, 9 DC codes: SC 13, CI 8, JP 6, ST 5, CL 2, HA 2, CG 2, TU 1, HI 1',
+      'TU and HI are NOT in src/model/dc.js DC_ABBREV',
+      'This is the Bloomingdale\'s equivalent of saks-servicing-dc-list and nothing reads it yet',
+    ],
+  },
+  {
     key: 'saint-bernard-routing',
     partner: 'Saint Bernard',
     kind: 'routing guide',
