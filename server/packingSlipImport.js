@@ -63,7 +63,15 @@ const contentHashOf = (base64, text) =>
  * @param containerNum   the bare number; falls back to the filename guess
  * @param containerDate  as printed, "2026.9.7"
  */
-export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null } = {}) {
+/**
+ * @param opts.acceptExcess  receive MORE than a PO line has left, when the factory
+ *   genuinely shipped extra. Nima, 2026-09-11: "can we also receive the extra unit on
+ *   the ir and use it on the transfer and keep the PO the same showing the overrage in
+ *   receipt." It never lifts the DUPLICATE block — see itemReceiptCsv.js — because a
+ *   line with nothing remaining is what a re-imported container looks like, and the
+ *   two are indistinguishable from the quantities alone.
+ */
+export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null, acceptExcess = false } = {}) {
   if (!base64 && !text) throw new Error('base64 or text is required')
   const suggested = suggestContainerFields(filename || '')
   const num = String(containerNum ?? suggested.containerNum ?? '').trim()
@@ -81,7 +89,7 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
   const wanted = new Set((container.poNumbers || []).map((p) => `PO${String(p).replace(/^PO/i, '')}`.toUpperCase()))
   const mine = poLines.filter((l) => wanted.has(`PO${String(l.po_number).replace(/^PO/i, '')}`.toUpperCase()))
 
-  const { itemReceipt, transfer, importOrder } = await buildNetsuiteExport(container, mine)
+  const { itemReceipt, transfer, importOrder } = await buildNetsuiteExport(container, mine, { acceptExcess })
 
   // ── the checks Nima asked for, 2026-09-09 ──────────────────────────────────
   // "we want check balacnces we want to make sure we dont doulbe import anything
@@ -151,6 +159,11 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     // all — previously that produced a file routing stock to a hardcoded
     // "Warehouse", which is how 150 units went to the wrong location on 2026-09-09.
     blocked: itemReceipt.blocked || transfer.blocked,
+    // Surfaced so the screen can OFFER the decision rather than only refusing.
+    excessShipped: itemReceipt.excessShipped ?? [],
+    blockingOverReceives: itemReceipt.blockingOverReceives ?? [],
+    acceptedExcess: itemReceipt.acceptedExcess ?? [],
+    acceptExcess,
   }
 }
 

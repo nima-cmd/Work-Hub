@@ -101,13 +101,18 @@ export default function PackingSlipImport() {
     }
   }
 
-  async function reparse() {
+  async function reparse(opts = {}) {
     if (!file) return
     setError(null); setSaved(null); setPhase('previewing')
     try {
       const p = await previewPackingSlip({
         filename: file.name, base64: file.base64, text: file.text,
         containerNum: num, containerDate: date || null,
+        // ⚠️ ALWAYS SENT FROM THE ARGUMENT, NEVER FROM STATE. Reading a checkbox here
+        // would let a re-check after an unrelated edit silently carry the acceptance
+        // forward — an over-receive has to be decided for the shipment in front of
+        // you, every time.
+        acceptExcess: opts.acceptExcess === true,
       })
       setPreview(p); setPhase('ready')
     } catch (err) {
@@ -277,12 +282,46 @@ export default function PackingSlipImport() {
               combined flag then withholds the TRANSFER too, which is valid and is
               the very file still needed. Caught on 2026-09-09 re-running a
               container whose receipt was already in NetSuite. */}
-          {ir.blocked && (
+          {/* ⚠️ TWO SHAPES OF OVER-RECEIVE, AND ONLY ONE CAN BE ACCEPTED.
+              A line with room left that receives a few extra units is the factory
+              making more than ordered — receiving them records what physically
+              arrived and leaves the PO reading "received 101 of 100", which is true.
+              A line with NOTHING remaining is what every line looks like once this
+              container's receipt has already been imported, and taking it again
+              doubles the stock silently. The first can be accepted; the second never
+              can, and acceptExcess does not open that door. */}
+          {ir.blocked && (preview.excessShipped || []).length > 0
+            && (preview.blockingOverReceives || []).length === 0 && (
+            <div className="slip-error">
+              <p>
+                The factory shipped <b>more than the PO has left</b> on{' '}
+                {preview.excessShipped.length === 1 ? 'one line' : `${preview.excessShipped.length} lines`}
+                {' '}— {preview.excessShipped.map((o) => `${o.sku} ${o.shipped} against ${o.remaining} remaining (+${o.excess})`).join('; ')}.
+              </p>
+              <p>
+                Receiving it records what actually arrived: the PO stays as it is and
+                reads received-over-ordered, and the extra units go onto the transfer
+                so nothing is received in China and left there.
+              </p>
+              <button onClick={() => reparse({ acceptExcess: true })} disabled={phase === 'previewing'}>
+                Receive the extra {preview.excessShipped.reduce((n, o) => n + o.excess, 0)} and build both files
+              </button>
+            </div>
+          )}
+          {ir.blocked && !((preview.excessShipped || []).length > 0
+            && (preview.blockingOverReceives || []).length === 0) && (
             <p className="slip-error">
               The <b>Item Receipt</b> is withheld: units would land on a PO line that
               cannot hold them, and NetSuite accepts that without complaint. If this
               container's receipt has already been imported, that is exactly what an
               over-receive of the full quantity means — you do not need it again.
+            </p>
+          )}
+          {preview.acceptExcess && (preview.acceptedExcess || []).length > 0 && (
+            <p className="slip-note">
+              Receiving <b>{preview.acceptedExcess.reduce((n, o) => n + o.excess, 0)} unit(s) over</b>{' '}
+              deliberately — {preview.acceptedExcess.map((o) => `${o.sku} +${o.excess}`).join(', ')}.
+              The PO is unchanged; the overage shows on the receipt.
             </p>
           )}
           {tr.blocked && (
