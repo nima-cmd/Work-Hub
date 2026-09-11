@@ -66,11 +66,37 @@ export function pickTicketFilename(ticket) {
 // row. Built once so the header and the body can never disagree about what a column is.
 export function columnPlan(ticket, width) {
   const perPo = ticket.poColumns?.length > 1 ? ticket.poColumns : []
-  const stock = ticket.stockColumns || []
+  const a = ticket.allocation
+
+  // ⚠️ PICK IS WHAT TO PULL, AND WHEN THERE IS A SHORTAGE THAT IS NOT WHAT WAS
+  // ORDERED. Nima, 2026-09-11: "we need the actualy pick number which is what he
+  // needs to pull not whats needed ... thats the most important bit of information."
+  // On the live shortage PICK read 137 while only 72 were allocated — sending someone
+  // to find 65 units that do not exist, on the one number the whole sheet is for.
+  const pulled = a
+    ? new Map(Object.entries((a.lines || []).reduce((m, l) => {
+      m[l.sku] = (m[l.sku] || 0) + l.allocated; return m
+    }, {})))
+    : null
+  const pick = (sku) => (pulled ? (pulled.get(sku) ?? 0) : null)
+
+  // ⚠️ ONLY THE POOL'S COLUMN, once a pool is chosen. Nima: "you dont need to show
+  // anything but whats in bloomingdales too on the print the others shouldn't show
+  // up." Printing Warehouse, Virtual WH and Offsite beside a pool that may not use
+  // them invites pulling from a building nobody planned to visit — the same reason
+  // poolFor refuses to sum locations.
+  const stock = a?.pool
+    ? (ticket.stockColumns || []).filter((c) => leafOf(c.name).toLowerCase() === leafOf(a.pool).toLowerCase())
+    : (ticket.stockColumns || [])
+
   const cols = [
     { key: 'sku', label: 'SKU', w: 150, align: 'left', get: (s) => s.sku },
+    // ⚠️ BEFORE the PO columns — it is the number the floor acts on, and it was
+    // buried to the right of them.
+    { key: 'need', label: 'PULL', w: 50, align: 'right', bold: true,
+      get: (s) => (pulled ? pick(s.sku) : s.total) },
     ...perPo.map((po) => ({ key: 'po:' + po, label: 'PO ' + po, w: 52, align: 'right', get: (s) => s.byPo[po] || '' })),
-    { key: 'need', label: 'PICK', w: 46, align: 'right', bold: true, get: (s) => s.total },
+    ...(pulled ? [{ key: 'ordered', label: 'ORDERED', w: 54, align: 'right', get: (s) => s.total }] : []),
     ...stock.map((c) => ({
       key: 'loc:' + c.id,
       // The order's own location is marked, because it is the one that is routinely
@@ -81,7 +107,18 @@ export function columnPlan(ticket, width) {
     })),
     {
       key: 'short', label: 'SHORT', w: 50, align: 'right',
-      get: (s) => (ticket.stockKnown && s.short > 0 ? s.short : ''),
+      // ⚠️ AGAINST THE POOL, NOT EVERY LOCATION. s.short is computed across all local
+      // columns, so with a pool chosen it read 60 (137 - 77) beside a PULL of 72 —
+      // two numbers on one row that cannot both be right. The allocation already
+      // knows the pool's shortage.
+      get: (s) => {
+        if (!ticket.stockKnown) return ''
+        if (a) {
+          const row = (a.shortfall?.rows || []).find((r) => r.sku === s.sku)
+          return row && row.short > 0 ? row.short : ''
+        }
+        return s.short > 0 ? s.short : ''
+      },
     },
   ]
   // The SKU column absorbs whatever is left, so the table always fills the page.
@@ -93,6 +130,12 @@ export function columnPlan(ticket, width) {
 // "Warehouse Bulk : Bloomingdale's" is 31 characters and will not fit a 62pt column.
 // ⚠️ The LEAF is kept, not the parent — "Warehouse Bulk" would be identical for all
 // seven partner buckets, which is the fullname-vs-leaf trap in the other direction.
+/** The leaf of a NetSuite location path, shared by the column filter and shortLoc. */
+export const leafOf = (name) => {
+  const raw = String(name || '').trim()
+  return raw.includes(' : ') ? raw.split(' : ').pop().trim() : raw
+}
+
 export function shortLoc(name) {
   const raw = String(name || '').trim()
   const leaf = raw.includes(' : ') ? raw.split(' : ').pop().trim() : raw
@@ -146,7 +189,13 @@ function render(doc, ticket) {
   const shortages = (ticket.shortSkus || []).filter((s) => !s.coveredByOffsite)
   if (shortages.length) {
     doc.font('Helvetica-Bold').fontSize(8).fillColor(RED)
-      .text(`${WARN}${shortages.length} SKU${shortages.length === 1 ? '' : 's'} short on hand: ${shortages.map((s) => `${s.sku} need ${s.need}, have ${s.have}${s.offsite ? ` (+${s.offsite} offsite)` : ''}`).join(' · ')}`, M, y, { width: W })
+      // ⚠️ When a pool is chosen the headline must quote the POOL's on-hand. It read
+      // "need 137, have 77" — the sum of every local column — beside a PULL of 72.
+      .text(ticket.allocation
+        ? `${WARN}${(ticket.allocation.shortfall?.shortSkus || []).length} SKU short in ${ticket.allocation.pool}: ${
+          (ticket.allocation.shortfall?.shortSkus || []).map((r) => `${r.sku} need ${r.demand}, have ${r.available}`).join(' · ')}`
+        : `${WARN}${shortages.length} SKU${shortages.length === 1 ? '' : 's'} short on hand: ${shortages.map((s) => `${s.sku} need ${s.need}, have ${s.have}${s.offsite ? ` (+${s.offsite} offsite)` : ''}`).join(' · ')}`,
+      M, y, { width: W })
     y = doc.y + 3
   }
   if (transfers.length) {
@@ -322,7 +371,11 @@ function totals(doc, cols, ticket, y, M) {
   for (const c of cols) {
     let v = ''
     if (c.key === 'sku') v = 'TOTAL'
-    else if (c.key === 'need') v = ticket.totalUnits
+    else if (c.key === 'need') {
+      v = ticket.allocation
+        ? (ticket.allocation.lines || []).reduce((n, l) => n + l.allocated, 0)
+        : ticket.totalUnits
+    } else if (c.key === 'ordered') v = ticket.totalUnits
     else if (c.key.startsWith('po:')) v = ticket.pos.find((p) => p.po === c.key.slice(3))?.units || 0
     doc.text(String(v), x, y + 2, { width: c.w - 4, align: c.align })
     x += c.w

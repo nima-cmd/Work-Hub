@@ -71,9 +71,12 @@ test('a single-PO ticket does not print its total twice', () => {
   assert.deepEqual(cols, ['sku', 'need', 'loc:7', 'loc:2', 'loc:3', 'short'])
 })
 
-test('several POs each get a column', () => {
+test('several POs each get a column, AFTER the pull number', () => {
+  // ⚠️ PULL MOVED IN FRONT OF THE PO COLUMNS. Nima, 2026-09-11: "we need the actualy
+  // pick number ... thats the most important bit of information" — and it was sitting
+  // to the right of the per-PO breakdown, which is reference, not instruction.
   const cols = columnPlan(ticket({ poColumns: ['A', 'B'] }), 540).map((c) => c.key)
-  assert.deepEqual(cols.slice(0, 3), ['sku', 'po:A', 'po:B'])
+  assert.deepEqual(cols.slice(0, 4), ['sku', 'need', 'po:A', 'po:B'])
 })
 
 test('⚠️ an unknown stock column prints "?", never 0', () => {

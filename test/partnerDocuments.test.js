@@ -19,8 +19,13 @@ test('⚠️ A LINK IS EITHER VERIFIED OR ABSENT — never a plausible-looking i
   // ⚠️ FOUR are unlinked, and every one is unlinked for the SAME honest reason: the
   // file is in the Data folder on disk and the Drive connector has not indexed it,
   // so no id can be READ. An id that was not read is not written here.
+  // ⚠️ Every unlinked entry is unlinked for the SAME honest reason: the file is in
+  // the Data folder on disk and the Drive connector has not indexed it, so no id can
+  // be READ. An id that was not read is not written here.
   assert.deepEqual(unlinkedDocuments().map((d) => d.key).sort(), [
-    'exemplar-standards-2026-08', 'saks-edi-4050', 'saks-edi-5010', 'saks-edi-store-dc-codes',
+    'bloomingdales-routing', 'bloomingdales-vendor-standards',
+    'exemplar-standards-2026-08', 'macys-store-dc-listing',
+    'saks-edi-4050', 'saks-edi-5010', 'saks-edi-store-dc-codes',
   ])
   assert.equal(driveUrl(null), null, 'no id must produce no url, not a broken one')
 })
