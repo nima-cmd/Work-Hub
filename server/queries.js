@@ -20,7 +20,7 @@ import {
   shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
 } from '../src/model/allocationPlan.js'
 import { withStock, stockLocationIds } from '../src/model/pickStock.js'
-import { fetchBulkPickLines, fetchPickStock, STOCK_LOCATIONS } from '../src/ingest/bulkPickFetch.js'
+import { fetchBulkPickLines, fetchPickStock, fetchFulfilments, STOCK_LOCATIONS } from '../src/ingest/bulkPickFetch.js'
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
@@ -6115,12 +6115,22 @@ export async function getBulkPick(poText, { rule = null, pool = null } = {}) {
       throw new Error('a shortage plan needs BOTH a rule and a stock pool — a rule with no pool would allocate every location, and a pool with no rule has no way to choose who goes short')
     }
     const demand = demandLines(lines, pos)
+    // The IF number per order, so the short list is usable at invoicing time.
+    const iffs = await fetchFulfilments(pos)
+    for (const d of demand) d.iff = iffs[d.order] || null
     // ⚠️ From the TICKET, not the raw stock rows — those are keyed by item id, so
     // reading them by SKU silently produced an empty pool. See poolFor().
     const available = poolFor(withQty, pool)
     if (!available) {
       throw new Error(`no location matching "${pool}" on this ticket — available pools: ${
         poolNames(withQty).map((p) => p.leaf).join(', ')}`)
+    }
+    // ⚠️ 'as-committed' PRINTS NETSUITE'S ANSWER, SO NETSUITE HAS TO HAVE GIVEN ONE.
+    // When the line fetch did not carry quantitycommitted every line read as zero and
+    // the sheet said all 25 orders ship nothing and the whole pool is stranded — a
+    // confident, entirely wrong document. If nothing is committed, say so.
+    if (rule === 'as-committed' && !demand.some((d) => d.committed != null)) {
+      throw new Error('rule "as-committed" needs committed quantities and none came back from NetSuite — use a computing rule, or check that the allocation has been saved')
     }
     const short = shortfall(demand, available)
     const plan = allocate(demand, available, { rule })

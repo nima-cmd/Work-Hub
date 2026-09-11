@@ -242,8 +242,18 @@ export function allocationSection(doc, a, M, startY) {
   // line down the edge. Every cell now has an explicit width so nothing can bleed.
   const widths = [0.10, 0.10, 0.10, 0.22, 0.26, 0.08, 0.08, 0.06].map((f) => f * W)
   const c = widths.reduce((acc, w, i) => { acc.push(i === 0 ? M : acc[i - 1] + widths[i - 1]); return acc }, [])
-  const cell = (i, text, opts = {}) =>
-    doc.text(String(text ?? ''), c[i], y, { width: widths[i] - 4, lineBreak: false, ellipsis: true, ...opts })
+  // ⚠️ TRUNCATED IN CODE, NOT BY pdfkit. `lineBreak: false, ellipsis: true` still
+  // wrapped the CFC's 84-character store name onto a second line, which printed over
+  // the row beneath it. Measuring and cutting the string is the only reliable way.
+  const cell = (i, text, opts = {}) => {
+    let t = String(text ?? '')
+    const max = widths[i] - 4
+    if (doc.widthOfString(t) > max) {
+      while (t.length > 1 && doc.widthOfString(t + '\u2026') > max) t = t.slice(0, -1)
+      t += '\u2026'
+    }
+    doc.text(t, c[i], y, { width: max, lineBreak: false, ...opts })
+  }
 
   doc.font('Helvetica-Bold').fontSize(7)
   ;['ORDER', 'IF', 'PO', 'STORE', 'SKU', 'ORD', 'SHIP', 'CUT'].forEach((h, i) => cell(i, h))

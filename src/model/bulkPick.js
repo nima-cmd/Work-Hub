@@ -222,6 +222,10 @@ export function demandLines(lines = [], asked = []) {
       sku: norm(l.sku),
       itemId: norm(l.itemId) || null,
       qty: units(l.quantity),
+      // ⚠️ null, not 0, when NetSuite did not send it. Zero is a real commitment
+      // meaning "this line ships nothing"; absent means "nobody asked". Collapsing
+      // the two is what printed a cancel-everything pick ticket.
+      committed: l.committed == null || l.committed === '' ? null : units(l.committed),
     }))
     .filter((l) => l.sku && l.qty > 0)
 }

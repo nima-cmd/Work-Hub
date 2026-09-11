@@ -105,3 +105,48 @@ test('leafLocation is the same split the display helper uses', async () => {
   assert.equal(leafLocation('A : B : C'), 'C')
   assert.equal(leafLocation(null), '')
 })
+
+test('⚠️ ABSENT COMMITTED IS null, NOT ZERO — the difference printed a wrong ticket', () => {
+  // Zero is a real commitment meaning "this line ships nothing". Absent means nobody
+  // asked. Collapsing them made every line read as committed-zero when the fetch did
+  // not select quantitycommitted, and the sheet said all 25 orders ship NOTHING and
+  // the entire pool was stranded — a confident, entirely wrong document.
+  const noField = demandLines([row({ quantity: -10 })], ['1236143'])
+  assert.equal(noField[0].committed, null)
+  const zero = demandLines([row({ quantity: -10, committed: 0 })], ['1236143'])
+  assert.equal(zero[0].committed, 0)
+  const some = demandLines([row({ quantity: -10, committed: 4 })], ['1236143'])
+  assert.equal(some[0].committed, 4)
+})
+
+test("⚠️ 'as-committed' WITH NOTHING COMMITTED MUST REFUSE, NOT GUESS", async () => {
+  // The guard that turns that wrong document into an error. Tested against the model
+  // directly: every line at zero produces a plan that cancels everything, which is
+  // exactly the output a human would act on without questioning.
+  const demand = demandLines([row({ quantity: -10 }), row({ tranid: 'SO2', quantity: -6 })], ['1236143'])
+  assert.ok(demand.every((d) => d.committed == null), 'nothing came back committed')
+  const p = allocate(demand.map((d) => ({ ...d })), { K: 72 }, { rule: 'as-committed' })
+  assert.equal(p.lines.every((l) => l.allocated === 0), true,
+    'which is why the caller must refuse before it ever gets here')
+})
+
+test('⚠️ runSuiteQL RESOLVES TO { ok, rows } — iterating the wrapper yields nothing', async () => {
+  // The IF column printed "-" on every row of a sheet whose whole purpose is carrying
+  // those numbers to the invoice, because I iterated the wrapper object instead of
+  // its rows. The other fetchers in that file already unwrap it the same way.
+  const { fetchFulfilments, fulfilmentSql } = await import('../src/ingest/bulkPickFetch.js')
+  const wrapped = async () => ({ ok: true, rows: [{ ord: 'SO1', iff: 'IF1' }, { ord: 'SO2', iff: 'IF2' }] })
+  assert.deepEqual(await fetchFulfilments(['P1'], { run: wrapped }), { SO1: 'IF1', SO2: 'IF2' })
+  // A bare array still works, and so does { items }.
+  assert.deepEqual(await fetchFulfilments(['P1'], { run: async () => [{ ord: 'SO3', iff: 'IF3' }] }), { SO3: 'IF3' })
+  assert.deepEqual(await fetchFulfilments(['P1'], { run: async () => ({ items: [{ ord: 'SO4', iff: 'IF4' }] }) }), { SO4: 'IF4' })
+
+  // ⚠️ Keys read case-insensitively: SuiteQL lowercases aliases and the driver may
+  // hand back either case. The difference is a silently empty column.
+  assert.deepEqual(await fetchFulfilments(['P1'], { run: async () => ({ rows: [{ ORD: 'SO5', IFF: 'IF5' }] }) }), { SO5: 'IF5' })
+
+  // ⚠️ ALLOWED TO FAIL. The pick ticket is the deliverable; the IF is an annotation.
+  assert.deepEqual(await fetchFulfilments(['P1'], { run: async () => { throw new Error('down') } }), {})
+  assert.deepEqual(await fetchFulfilments([], { run: wrapped }), {}, 'no POs, no query')
+  assert.equal(fulfilmentSql([]), null)
+})
