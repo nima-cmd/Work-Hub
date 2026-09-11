@@ -464,9 +464,13 @@ app.delete('/api/transfers/receipt', async (req, res) => {
 // The bulk pick ticket — replaces the NetSuite "Bulk Pick & Ship Manifest" Suitelet.
 // ⚠️ POST, not GET: PO numbers are pasted free text and can be long, and a pick ticket is
 // not something to cache in a URL.
+// ⚠️ `rule` and `pool` are OPTIONAL and travel together. Without them this is the
+// ticket it has always been; with them it also says who goes short. See getBulkPick —
+// passing one without the other is an error rather than a guess.
 app.post('/api/bulk-pick', async (req, res) => {
   try {
-    res.json(await getBulkPick((req.body || {}).pos || ''))
+    const b = req.body || {}
+    res.json(await getBulkPick(b.pos || '', { rule: b.rule || null, pool: b.pool || null }))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
@@ -484,8 +488,11 @@ app.post('/api/bulk-pick', async (req, res) => {
 // A plain link opened in the click itself is never blocked, and the tab can be reloaded.
 app.all('/api/bulk-pick/pdf', async (req, res) => {
   try {
-    const pos = (req.body || {}).pos || req.query.pos || ''
-    await renderPickTicketTo(res, await getBulkPick(pos))
+    const b = req.body || {}
+    const pos = b.pos || req.query.pos || ''
+    const rule = b.rule || req.query.rule || null
+    const pool = b.pool || req.query.pool || null
+    await renderPickTicketTo(res, await getBulkPick(pos, { rule, pool }))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

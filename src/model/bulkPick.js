@@ -189,3 +189,56 @@ export function storeOf(customer) {
 /** One line per SKU, for a printed sheet. */
 export const pickLines = (ticket) =>
   ticket.skus.map((s) => ({ sku: s.sku, qty: s.total }))
+
+
+/**
+ * The per-ORDER demand rows an allocation needs, filtered by exactly the same rules
+ * the ticket totals use.
+ *
+ * Nima, 2026-09-11: "can we make this a feature if i want to do multiple PO in one
+ * bulk and also account for shortages like this.. is this something we can build in
+ * the app so we dont have to do it like this."
+ *
+ * ⚠️ IT REUSES isGoodsLine AND isClosedLine RATHER THAN RE-FILTERING. The pick ticket
+ * drops closed lines and non-goods types; if the allocation applied its own rules the
+ * two halves of one sheet would disagree about what is being shipped — the ticket
+ * would total 684 and the cut list would reconcile to something else, with no way to
+ * tell which was right.
+ */
+export function demandLines(lines = [], asked = []) {
+  const wanted = asked.length ? new Set(asked.map(key)) : null
+  return lines
+    .filter((l) => (!wanted || wanted.has(key(l.po))) && isGoodsLine(l) && !isClosedLine(l.isclosed))
+    .map((l) => ({
+      po: norm(l.po),
+      order: norm(l.tranid),
+      store: storeOf(l.customer) || norm(l.customer),
+      sku: norm(l.sku),
+      itemId: norm(l.itemId) || null,
+      qty: units(l.quantity),
+    }))
+    .filter((l) => l.sku && l.qty > 0)
+}
+
+/**
+ * Stock for ONE named pool, from the rows pickStock already fetched.
+ *
+ * ⚠️ ONE POOL, BY NAME, AND IT MUST BE CHOSEN. Nima: "what we have in the warehouse
+ * for bloomingdaels is all we can use." Summing every location would allocate stock
+ * sitting in China, in Damages, or earmarked for another customer — the shortage
+ * would read as zero and the pick ticket would send someone to find units that are
+ * on another continent.
+ */
+export function poolFor(stockRows = [], poolName) {
+  const want = norm(poolName).toLowerCase()
+  if (!want) return null
+  const pool = {}
+  for (const r of stockRows) {
+    const loc = norm(r.locationName || r.location || '').toLowerCase()
+    if (loc !== want) continue
+    const sku = norm(r.sku)
+    if (!sku) continue
+    pool[sku] = (pool[sku] || 0) + (Number(r.onHand ?? r.quantityonhand ?? r.quantity) || 0)
+  }
+  return pool
+}
