@@ -167,6 +167,21 @@ function render(doc, ticket) {
     y = row(doc, cols, s, y, M, ticket)
   }
   totals(doc, cols, ticket, y, M)
+  // ⚠️ totals() draws but returns nothing, so the next section is positioned from the
+  // row we just placed rather than from doc.y — which pdfkit leaves wherever the last
+  // text() landed, not after the table.
+  y += 22
+
+  // ── ⚠️ THE SHORTAGE HALF, only when one was asked for ──────────────────────
+  //
+  // Nima, 2026-09-11: "i need that bulk pick ticket before teh UI if we can do that."
+  // The allocation arrives on the ticket when /api/bulk-pick is called with a rule
+  // and a pool; without them this whole block is skipped and the sheet is exactly
+  // what it has always been.
+  //
+  // It prints AFTER the totals because the pull is the same either way — the shortage
+  // changes who gets what, not what leaves the shelf.
+  if (ticket.allocation) allocationSection(doc, ticket.allocation, M, y)
 
   // ── Footer ────────────────────────────────────────────────────────────────
   // Two lines of room. The first render clipped the on-hand explanation mid-sentence.
@@ -180,6 +195,79 @@ function render(doc, ticket) {
     ].filter(Boolean).join('  '),
     M, foot, { width: doc.page.width - M * 2 },
   )
+}
+
+/**
+ * ⚠️ THE CUT LIST IS THE POINT OF THIS SECTION, not the verdict banner. The verdict
+ * says whether to proceed; the cut list is what someone has to still be holding when
+ * they raise the invoice, and it is keyed on the FULFILMENT number because that is
+ * what an invoice and an ASN are raised against.
+ */
+export function allocationSection(doc, a, M, startY) {
+  const W = doc.page.width - M * 2
+  let y = (startY ?? doc.y ?? M) + 14
+  const page = (need) => { if (y > doc.page.height - M - need) { doc.addPage(); y = M } }
+
+  page(70)
+  const r = a.ready || {}
+  const fg = r.ready === false ? '#a11' : (r.warnings || []).length ? '#8a5a00' : '#1c6b3a'
+  const bg = r.ready === false ? '#fdecec' : (r.warnings || []).length ? '#fff4e5' : '#eefaf0'
+  const boxH = 20 + ((r.blocks || []).length + (r.warnings || []).length) * 10
+  doc.rect(M, y, W, boxH).fillAndStroke(bg, fg)
+  doc.fillColor(fg).font('Helvetica-Bold').fontSize(10).text(r.verdict || '', M + 8, y + 6)
+  doc.font('Helvetica').fontSize(7)
+  let ly = y + 18
+  for (const b of r.blocks || []) { doc.text('BLOCKED: ' + b, M + 8, ly, { width: W - 16 }); ly += 10 }
+  for (const w of r.warnings || []) { doc.text('- ' + w, M + 8, ly, { width: W - 16 }); ly += 10 }
+  doc.fillColor('black')
+  y += boxH + 6
+
+  doc.font('Helvetica').fontSize(7).fillColor(GREY)
+    .text(`Allocation rule: ${a.rule} · pool: ${a.pool}`
+      + (a.strandedUnits ? ` · ${a.strandedUnits} units stranded (too few for any unfilled line)` : ''),
+      M, y, { width: W })
+  doc.fillColor('black'); y += 14
+
+  const cuts = a.invoiceAdjustments || []
+  if (!cuts.length) return
+  page(60)
+  doc.font('Helvetica-Bold').fontSize(10).text('SHORT — remember these when you invoice', M, y); y += 12
+  doc.font('Helvetica').fontSize(7).fillColor(GREY)
+    .text('Invoicing the ORDERED quantity on any of these is an overbill the partner will dispute.', M, y, { width: W })
+  doc.fillColor('black'); y += 12
+
+  // ⚠️ COLUMNS ARE COMPUTED FROM THE PAGE, NOT HARD-CODED. My first version used
+  // landscape offsets on what is usually a PORTRAIT sheet: the SKU ran into ORDERED,
+  // and "SKU NOT ON THE IF" started past the right margin and wrapped one letter per
+  // line down the edge. Every cell now has an explicit width so nothing can bleed.
+  const widths = [0.10, 0.10, 0.10, 0.22, 0.26, 0.08, 0.08, 0.06].map((f) => f * W)
+  const c = widths.reduce((acc, w, i) => { acc.push(i === 0 ? M : acc[i - 1] + widths[i - 1]); return acc }, [])
+  const cell = (i, text, opts = {}) =>
+    doc.text(String(text ?? ''), c[i], y, { width: widths[i] - 4, lineBreak: false, ellipsis: true, ...opts })
+
+  doc.font('Helvetica-Bold').fontSize(7)
+  ;['ORDER', 'IF', 'PO', 'STORE', 'SKU', 'ORD', 'SHIP', 'CUT'].forEach((h, i) => cell(i, h))
+  y += 9
+  doc.moveTo(M, y).lineTo(M + W, y).stroke(); y += 4
+  doc.font('Helvetica').fontSize(7)
+  for (const o of cuts) {
+    for (const l of o.lines) {
+      page(20)
+      cell(0, o.order)
+      doc.font('Helvetica-Bold'); cell(1, o.iff || '-'); doc.font('Helvetica')
+      cell(2, o.po)
+      cell(3, o.store)
+      cell(4, l.sku)
+      cell(5, l.ordered)
+      // ⚠️ SHIPPING 0 IS ITSELF THE "whole SKU dropped" signal. A separate marker
+      // column said the same thing and was what overflowed the page.
+      cell(6, l.shipping)
+      doc.fillColor('#c33').font('Helvetica-Bold'); cell(7, `-${l.cut}`)
+      doc.fillColor('black').font('Helvetica')
+      y += 10
+    }
+  }
+  doc.y = y
 }
 
 export function problemLine(p) {

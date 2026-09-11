@@ -15,7 +15,7 @@ import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartn
 import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
-import { bulkPick, parsePoInput, demandLines, poolFor } from '../src/model/bulkPick.js'
+import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
 import {
   shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
 } from '../src/model/allocationPlan.js'
@@ -6115,9 +6115,12 @@ export async function getBulkPick(poText, { rule = null, pool = null } = {}) {
       throw new Error('a shortage plan needs BOTH a rule and a stock pool — a rule with no pool would allocate every location, and a pool with no rule has no way to choose who goes short')
     }
     const demand = demandLines(lines, pos)
-    const available = poolFor(stock.rows, pool)
-    if (!available || !Object.keys(available).length) {
-      throw new Error(`no stock rows for pool "${pool}" — check the location name against ${STOCK_LOCATIONS.map((l) => l.name).join(', ')}`)
+    // ⚠️ From the TICKET, not the raw stock rows — those are keyed by item id, so
+    // reading them by SKU silently produced an empty pool. See poolFor().
+    const available = poolFor(withQty, pool)
+    if (!available) {
+      throw new Error(`no location matching "${pool}" on this ticket — available pools: ${
+        poolNames(withQty).map((p) => p.leaf).join(', ')}`)
     }
     const short = shortfall(demand, available)
     const plan = allocate(demand, available, { rule })

@@ -205,6 +205,12 @@ export const pickLines = (ticket) =>
  * would total 684 and the cut list would reconcile to something else, with no way to
  * tell which was right.
  */
+/** "Naghedi : Bloomingdale's" -> "Bloomingdale's". NetSuite location names are paths. */
+export const leafLocation = (name) => {
+  const raw = norm(name)
+  return raw.includes(' : ') ? norm(raw.split(' : ').pop()) : raw
+}
+
 export function demandLines(lines = [], asked = []) {
   const wanted = asked.length ? new Set(asked.map(key)) : null
   return lines
@@ -221,24 +227,40 @@ export function demandLines(lines = [], asked = []) {
 }
 
 /**
- * Stock for ONE named pool, from the rows pickStock already fetched.
+ * Stock for ONE named pool, read from the ticket withStock() already built.
  *
  * ⚠️ ONE POOL, BY NAME, AND IT MUST BE CHOSEN. Nima: "what we have in the warehouse
  * for bloomingdaels is all we can use." Summing every location would allocate stock
- * sitting in China, in Damages, or earmarked for another customer — the shortage
- * would read as zero and the pick ticket would send someone to find units that are
- * on another continent.
+ * sitting in Offsite Storage or the Virtual Warehouse — the shortage would read
+ * smaller than it is and the pick would send someone to find units elsewhere.
+ *
+ * ⚠️ IT READS THE TICKET, NOT THE RAW STOCK ROWS, AND THAT WAS A REAL BUG. My first
+ * version walked `stock.rows` looking for `r.sku` — but those rows are keyed by
+ * ITEM ID (`{ itemId, locationId, locationName, onHand }`), so every lookup returned
+ * undefined and the pool came back empty. Live, that surfaced as "no stock rows for
+ * pool Bloomingdale's" on a ticket that was visibly printing a Bloomingdale's column
+ * with 72 in it. withStock() has already done the itemId→sku join and keyed on-hand
+ * by location id, so use that.
+ *
+ * ⚠️ AND THE MATCH IS ON THE LEAF. The live location is named
+ * "Warehouse Bulk : Bloomingdale's" — NetSuite location names are PATHS, which this
+ * repo already records as the fullname-vs-leaf trap.
  */
-export function poolFor(stockRows = [], poolName) {
-  const want = norm(poolName).toLowerCase()
+export function poolFor(ticket = {}, poolName) {
+  const want = leafLocation(poolName).toLowerCase()
   if (!want) return null
+  const col = (ticket.stockColumns || []).find((c) => leafLocation(c.name).toLowerCase() === want)
+  if (!col) return null
   const pool = {}
-  for (const r of stockRows) {
-    const loc = norm(r.locationName || r.location || '').toLowerCase()
-    if (loc !== want) continue
-    const sku = norm(r.sku)
+  for (const s of ticket.skus || []) {
+    const sku = norm(s.sku)
     if (!sku) continue
-    pool[sku] = (pool[sku] || 0) + (Number(r.onHand ?? r.quantityonhand ?? r.quantity) || 0)
+    pool[sku] = Number((s.onHand || {})[col.id]) || 0
   }
   return pool
 }
+
+/** The pool names a ticket could actually be allocated from. */
+export const poolNames = (ticket = {}) =>
+  (ticket.stockColumns || []).map((c) => ({ id: c.id, name: c.name, leaf: leafLocation(c.name), isOrderLocation: !!c.isOrderLocation }))
+
