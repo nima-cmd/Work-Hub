@@ -3,7 +3,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shortfall, allocate, invoiceAdjustments, compareRules, RULES } from '../src/model/allocationPlan.js'
+import {
+  shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos,
+} from '../src/model/allocationPlan.js'
 
 // The one contended SKU: 137 wanted, 72 in the Bloomingdale's location.
 const CASHMERE = [
@@ -42,20 +44,27 @@ test('⚠️ A RULE IS REQUIRED — there is no sensible default for who goes sh
   assert.throws(() => allocate(CASHMERE, AVAIL, { rule: 'whatever' }), /needs an explicit rule/)
 })
 
-test('⚠️ EVERY RULE SHIPS EXACTLY THE STOCK — no fractions, none stranded', () => {
-  // Rounding each pro-rata share independently either over-allocates or leaves units
-  // nobody receives. Largest remainder gives every line its floor then hands out the
-  // leftovers, so the total is always exactly what is on hand.
+test('⚠️ NO RULE INVENTS OR LOSES UNITS — but only some ship every one', () => {
+  // This asserted "every rule ships exactly the stock" until whole-line-smallest-first
+  // existed. That rule legitimately strands units — once every line that FITS is
+  // filled, the remainder is smaller than any unfilled line — so the invariant is
+  // narrower than it was: shipped + stranded == stock, and shipped + cut == demand.
   for (const rule of Object.keys(RULES)) {
     const p = allocate(CASHMERE, AVAIL, { rule, ruleOptions: { order: ['1236132', '1236143'] } })
     const shipped = p.lines.reduce((a, l) => a + l.allocated, 0)
-    assert.equal(shipped, 72, `${rule} shipped ${shipped}`)
-    assert.equal(p.lines.reduce((a, l) => a + l.cut, 0), 35, rule)
+    const cut = p.lines.reduce((a, l) => a + l.cut, 0)
+    assert.equal(shipped + p.strandedUnits, 72, `${rule}: shipped + stranded != stock`)
+    assert.equal(shipped + cut, 107, `${rule}: shipped + cut != demand`)
+    assert.ok(shipped <= 72, `${rule} shipped more than exists`)
     for (const l of p.lines) {
       assert.ok(Number.isInteger(l.allocated), `${rule}: fractional units`)
       assert.ok(l.allocated <= l.qty, `${rule}: allocated more than ordered`)
       assert.ok(l.allocated >= 0, `${rule}: negative allocation`)
     }
+  }
+  // Only the whole-line rule strands anything.
+  for (const rule of ['pro-rata', 'fill-smallest-first', 'priority']) {
+    assert.equal(allocate(CASHMERE, AVAIL, { rule, ruleOptions: { order: [] } }).strandedUnits, 0, rule)
   }
 })
 
@@ -133,7 +142,15 @@ test('⚠️ SPARE STOCK IS REPORTED BUT NEVER OFFERED AS A SUBSTITUTE', () => {
 
 test('compareRules ships the same total every way — only the victims change', () => {
   const c = compareRules(CASHMERE, AVAIL, { priorityOrder: ['1236132', '1236143'] })
-  assert.equal(new Set(c.map((x) => x.shipped)).size, 1, 'the stock is the stock')
+  // ⚠️ The partial-permitting rules all ship the same total — the stock is the stock.
+  // whole-line-smallest-first ships LESS, on purpose, because refusing partials
+  // leaves a remainder too small for any unfilled line. That is the trade Nima chose.
+  const partialOk = c.filter((x) => x.rule !== 'whole-line-smallest-first')
+  assert.equal(new Set(partialOk.map((x) => x.shipped)).size, 1, 'the stock is the stock')
+  const whole = c.find((x) => x.rule === 'whole-line-smallest-first')
+  assert.ok(whole.shipped < partialOk[0].shipped)
+  assert.ok(whole.strandedUnits > 0)
+  assert.equal(whole.partialLines, 0)
   assert.ok(new Set(c.map((x) => x.linesZeroed)).size > 1, 'who gets nothing differs')
   // ⚠️ A ZEROED LINE IS NOT A ZEROED ORDER. An order can lose one SKU entirely and
   // still ship six others. Reporting lines under an "orders" label overstated the
@@ -150,4 +167,98 @@ test('⚠️ AN ORDER SHIPPING NOTHING IS COUNTED SEPARATELY FROM A ZEROED LINE'
   const c = compareRules(oneSku, { K: 10 }, { priorityOrder: ['A', 'B'] }).find((x) => x.rule === 'priority')
   assert.equal(p.zeroed.length, 1)
   assert.equal(c.ordersShippingNothing, 1, 'here the line IS the whole order')
+})
+
+test('⚠️ WHOLE-LINE MEANS NO PARTIAL CUTS, EVER', () => {
+  // Nima: "we dont want partial cuts we want full. meaning we dont want to ship
+  // short a sku we want to ship minus a sku if we dont have the units." A line is
+  // filled entirely or zeroed; the order ships WITHOUT that SKU rather than short
+  // on it. The absence of a Math.min in that rule is the whole implementation.
+  const p = allocate(CASHMERE, AVAIL, { rule: 'whole-line-smallest-first' })
+  for (const l of p.lines) {
+    assert.ok(l.allocated === 0 || l.allocated === l.qty,
+      `${l.order} got a partial: ${l.allocated} of ${l.qty}`)
+  }
+  assert.equal(p.lines.filter((l) => l.allocated > 0 && l.cut > 0).length, 0)
+})
+
+test('⚠️ IT STRANDS UNITS, AND THAT IS THE PRICE OF THE RULE', () => {
+  // Once every line that fits is filled, the remainder is smaller than any unfilled
+  // line and cannot ship without a partial. Reported, because a pick of 67 against
+  // 72 on hand otherwise reads as a counting error to whoever holds the ticket.
+  const p = allocate(CASHMERE, AVAIL, { rule: 'whole-line-smallest-first' })
+  const shipped = p.lines.reduce((a, l) => a + l.allocated, 0)
+  assert.ok(shipped < 72, 'some stock cannot be used without a partial')
+  assert.equal(p.stranded['SN03012LD-CASHMERE'], 72 - shipped)
+  assert.equal(p.strandedUnits, 72 - shipped)
+  // Rules that permit partials strand nothing.
+  assert.equal(allocate(CASHMERE, AVAIL, { rule: 'pro-rata' }).strandedUnits, 0)
+})
+
+test('⚠️ SMALLEST-FIRST MAXIMISES COMPLETE LINES — the stated goal', () => {
+  // "we want to have to adjust the fewest order we can while shipping complete for
+  // as many as we can." Filling small lines first is optimal for that: skipping one
+  // to fit a larger line trades one filled line for at most one other.
+  const whole = allocate(CASHMERE, AVAIL, { rule: 'whole-line-smallest-first' })
+  const complete = whole.lines.filter((l) => l.cut === 0).length
+  // No alternative whole-line selection fills more lines than smallest-first.
+  const sizes = CASHMERE.map((l) => l.qty).sort((a, b) => a - b)
+  let n = 0, left = 72
+  for (const q of sizes) { if (q <= left) { left -= q; n++ } }
+  assert.equal(complete, n)
+  // And the big lines are the ones dropped.
+  assert.equal(whole.lines.find((l) => l.order === 'SO12577').allocated, 0, 'the 50-unit CFC line')
+})
+
+test('the whole-line rule still never over-allocates or goes negative', () => {
+  const p = allocate(CASHMERE, AVAIL, { rule: 'whole-line-smallest-first' })
+  assert.ok(p.lines.reduce((a, l) => a + l.allocated, 0) <= 72)
+  for (const l of p.lines) assert.ok(l.allocated >= 0 && l.allocated <= l.qty)
+})
+
+test('an order cut on one SKU still ships its others', () => {
+  // "ship minus a sku" — the order goes out, just without that line.
+  const mixed = [
+    { po: 'P', order: 'S1', store: 'a', sku: 'SHORT', qty: 50 },
+    { po: 'P', order: 'S1', store: 'a', sku: 'PLENTY', qty: 5 },
+    { po: 'P', order: 'S2', store: 'b', sku: 'SHORT', qty: 5 },
+  ]
+  const p = allocate(mixed, { SHORT: 5, PLENTY: 999 }, { rule: 'whole-line-smallest-first' })
+  const s1short = p.lines.find((l) => l.order === 'S1' && l.sku === 'SHORT')
+  const s1plenty = p.lines.find((l) => l.order === 'S1' && l.sku === 'PLENTY')
+  assert.equal(s1short.allocated, 0, 'the contended SKU is dropped whole')
+  assert.equal(s1plenty.allocated, 5, 'and the rest of the order still ships')
+  assert.equal(invoiceAdjustments(p).find((o) => o.order === 'S1').shipsNothing, false)
+})
+
+test('⚠️ A SUPERSEDED PO IN THE DEMAND SET IS REFUSED', () => {
+  // Bloomingdale's retransmitted 1236143, so NetSuite holds two sets of 24 store
+  // orders: the live "1236143" and the superseded "1236143 | Closed" (status H).
+  // Pulled together — by a LIKE, a prefix, or a status filter that forgets H —
+  // demand doubles from 491 to ~980, the shortage reads as ~500 instead of 65, and
+  // the ticket cuts nearly every store for no reason. Nothing would look wrong.
+  const withClosed = [
+    ...CASHMERE,
+    { po: '1236143 | Closed', order: 'SO12500', store: '0002', sku: 'SN03012LD-CASHMERE', qty: 10 },
+  ]
+  assert.throws(() => shortfall(withClosed, AVAIL), /marked closed/)
+  assert.throws(() => shortfall(withClosed, AVAIL), /Filter to the live PO/)
+})
+
+test('⚠️ AND THE SILENT CASE: one PO shadowing another by prefix', () => {
+  // "1236143" and "1236143 | Closed" — a prefix query catches both, which is exactly
+  // how the wrong set gets pulled without anyone typing the word "closed".
+  const shadowed = [
+    { po: '1236143', order: 'A', store: 'x', sku: 'K', qty: 5 },
+    { po: '1236143-OLD', order: 'B', store: 'y', sku: 'K', qty: 5 },
+  ]
+  assert.throws(() => shortfall(shadowed, { K: 5 }), /shadows/)
+})
+
+test('the real demand set passes the check', () => {
+  // 25 orders across exactly two POs, no closed variants.
+  const s = supersededPos(CASHMERE)
+  assert.equal(s.clean, true)
+  assert.deepEqual(s.marked, [])
+  assert.deepEqual(s.overlapping, [])
 })

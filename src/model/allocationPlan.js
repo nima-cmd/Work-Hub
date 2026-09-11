@@ -27,6 +27,43 @@
 // cut our units so we can adjust when we make our invoice" — a shortfall figure is
 // useless at invoicing time. What is needed is which store lost how many of what.
 
+/**
+ * ⚠️ A SUPERSEDED PO STILL LOOKS LIKE DEMAND.
+ *
+ * Nima, 2026-09-11: "we have two version of 1236143 with one being closed we need to
+ * ignore the closed one that marked as 1236143 | Closed and is closed and use the
+ * open one."
+ *
+ * Bloomingdale's retransmitted PO 1236143, so NetSuite holds TWO sets of 24 store
+ * orders: the live ones under "1236143" and the superseded ones renamed
+ * "1236143 | Closed" (status H). Both are real records with real line quantities.
+ *
+ * Pull them together — with a LIKE, a prefix match, or a status filter that forgets
+ * to exclude Closed — and demand doubles from 491 to about 980. The shortage then
+ * reads as ~500 units instead of 65, and the pick ticket cuts almost every store for
+ * no reason. Nothing about the output would look obviously wrong; it would just be a
+ * far worse day.
+ *
+ * So the demand set is CHECKED here rather than trusted to whoever wrote the query.
+ * The markers are conventions this warehouse uses by hand, so they are matched
+ * loosely: anything with a pipe, or the word closed/cancelled/void.
+ */
+export const SUPERSEDED_MARKERS = /\||\bclosed\b|\bcancel/i
+
+export function supersededPos(lines = []) {
+  const pos = [...new Set(lines.map((l) => String(l.po ?? '')))]
+  const marked = pos.filter((p) => SUPERSEDED_MARKERS.test(p))
+  // ⚠️ ALSO the silent case: two POs where one is a prefix of the other. That is what
+  // "1236143" and "1236143 | Closed" are, and a prefix query catches both.
+  const overlapping = []
+  for (const a of pos) {
+    for (const b of pos) {
+      if (a !== b && b.startsWith(a)) overlapping.push({ live: a, alsoPresent: b })
+    }
+  }
+  return { marked, overlapping, clean: marked.length === 0 && overlapping.length === 0 }
+}
+
 /** Integer units, never fractions — you cannot ship half a handbag. */
 const int = (v) => Math.max(0, Math.trunc(Number(v) || 0))
 
@@ -37,6 +74,13 @@ const int = (v) => Math.max(0, Math.trunc(Number(v) || 0))
  * @param available  { sku: units } — the ONLY pool that may be used
  */
 export function shortfall(lines = [], available = {}) {
+  const dup = supersededPos(lines)
+  if (!dup.clean) {
+    throw new Error(`demand includes a superseded PO — ${
+      [...dup.marked.map((p) => `"${p}" is marked closed/cancelled`),
+       ...dup.overlapping.map((o) => `"${o.alsoPresent}" shadows "${o.live}"`)].join('; ')
+    }. Filter to the live PO before allocating.`)
+  }
   const bySku = new Map()
   for (const l of lines) {
     const k = l.sku
@@ -121,6 +165,43 @@ export const RULES = {
   },
 
   /**
+   * ⚠️ WHOLE LINES ONLY, SMALLEST FIRST — no partial cuts.
+   *
+   * Nima, 2026-09-11: "we dont want partial cuts we want full. meaning we dont want
+   * to ship short a sku we want to ship minus a sku if we dont have the units." And:
+   * "we want to have to adjust the fewest order we can while shipping complete for as
+   * many as we can."
+   *
+   * So a line is filled ENTIRELY or set to zero; the order then ships without that
+   * SKU rather than short on it. Taking the smallest lines first maximises the number
+   * of lines filled, which is exactly "complete for as many as we can" — and it is
+   * provably optimal for that goal, since any line you skip to fit a larger one
+   * trades one filled line for at most one other.
+   *
+   * ⚠️ IT STRANDS UNITS, AND THAT IS THE COST OF THE RULE, NOT A BUG. Once every
+   * line that fits is filled, the remainder is smaller than any unfilled line and
+   * cannot be shipped without a partial. On the live CASHMERE shortage that is 5
+   * units of 72 left in the building. `stranded` reports it rather than letting it
+   * look like a miscount.
+   */
+  'whole-line-smallest-first': (lines, units) => {
+    let left = units
+    const sorted = [...lines].sort((a, b) =>
+      int(a.qty) - int(b.qty) || String(a.order).localeCompare(String(b.order)))
+    const got = new Map()
+    for (const l of sorted) {
+      const need = int(l.qty)
+      // ⚠️ No `Math.min` here — that is what makes a partial. All or nothing.
+      if (need > 0 && need <= left) { got.set(l.order + '|' + l.sku, need); left -= need }
+      else got.set(l.order + '|' + l.sku, 0)
+    }
+    return lines.map((l) => {
+      const a = got.get(l.order + '|' + l.sku) ?? 0
+      return { ...l, allocated: a, cut: int(l.qty) - a }
+    })
+  },
+
+  /**
    * A named priority order — e.g. ['1236132', '1236143'] to fill the CFC first.
    * This is what NetSuite effectively did, by accident rather than by choice.
    */
@@ -170,8 +251,21 @@ export function allocate(lines = [], available = {}, { rule, ruleOptions = {} } 
     }
     allocated.push(...RULES[rule](group, units, ruleOptions))
   }
+  // ⚠️ UNITS LEFT IN THE BUILDING. Only whole-line rules strand any; for the others
+  // this is zero. Surfaced because a pick of 67 against 72 on hand otherwise looks
+  // like a counting error to whoever is holding the ticket.
+  const stranded = {}
+  for (const [sku, group] of bySku) {
+    const used = allocated.filter((l) => l.sku === sku).reduce((a, l) => a + l.allocated, 0)
+    const spareHere = int(available[sku]) - used
+    const demand = group.reduce((a, l) => a + int(l.qty), 0)
+    if (spareHere > 0 && demand > int(available[sku])) stranded[sku] = spareHere
+  }
+
   return {
     rule,
+    stranded,
+    strandedUnits: Object.values(stranded).reduce((a, n) => a + n, 0),
     lines: allocated,
     cuts: allocated.filter((l) => l.cut > 0).sort((a, b) => b.cut - a.cut || String(a.order).localeCompare(String(b.order))),
     zeroed: allocated.filter((l) => l.allocated === 0 && int(l.qty) > 0),
@@ -234,6 +328,10 @@ export function compareRules(lines, available, { priorityOrder = [] } = {}) {
       shipped: plan.lines.reduce((a, l) => a + l.allocated, 0),
       cut: plan.lines.reduce((a, l) => a + l.cut, 0),
       ordersCut: new Set(plan.cuts.map((c) => c.order)).size,
+      strandedUnits: plan.strandedUnits,
+      // ⚠️ THE NUMBER NIMA IS OPTIMISING: lines that ship exactly what was ordered.
+      linesComplete: plan.lines.filter((l) => l.cut === 0 && l.qty > 0).length,
+      partialLines: plan.lines.filter((l) => l.allocated > 0 && l.cut > 0).length,
       // ⚠️ TWO DIFFERENT NUMBERS, AND I HAD ONE LABELLED AS THE OTHER. `zeroed` is
       // LINES that got nothing; an order with a zeroed line may still ship plenty of
       // other SKUs. "ordersGettingNothing" counting lines is CLAUDE.md's second
