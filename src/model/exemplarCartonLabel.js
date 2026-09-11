@@ -262,7 +262,6 @@ export function cartonLabelZpl(c = {}) {
   out.push(fd(25, 405, 390, 'BOL#:'), ...(c.bol ? [fd(25, 490, 390, c.bol)] : []))
 
   // ── Department + store: two of the §8 markings ShopBop's template omits ──
-  out.push(fd(30, 30, 490, `DEPT: ${c.department}     STORE: ${c.store} ${c.storeAbbrev}`))
 
   // ── What is in the box ──
   //
@@ -278,13 +277,21 @@ export function cartonLabelZpl(c = {}) {
   // we dont need the name of the item". The SKU already encodes style and colour,
   // and the description wrapped to two lines on the narrow stocks.
   const sku = String(c.style).split(/\s*[|·]/)[0].trim()
-  out.push('', fd(30, 30, 655, `ITEM UPC: ${c.upc}`))
-  out.push(fd(32, 30, 610, `STYLE: ${sku}`))
-  out.push(fd(30, 30, 665, `QTY: ${c.units}`))
+
+  // ⚠️ ONE PLACE FOR THE VERTICAL RHYTHM. I shifted these by search-and-replace when
+  // the postal block came out, missed the line that had an extra argument, and left
+  // ITEM UPC at 655 with QTY at 665 — ten dots apart under a 30-dot font, i.e.
+  // printing on top of each other. Coordinates now come from one table so a block
+  // cannot be moved halfway.
+  const ROW = { dept: 490, style: 560, upc: 620, qty: 680, total: 680, carton: 750 }
+  out.push('', fd(30, 30, ROW.dept, `DEPT: ${c.department}     STORE: ${c.store} ${c.storeAbbrev}`))
+  out.push(fd(32, 30, ROW.style, `STYLE: ${sku}`))
+  out.push(fd(30, 30, ROW.upc, `ITEM UPC: ${c.upc}`))
+  out.push(fd(30, 30, ROW.qty, `QTY: ${c.units}`))
   if (c.showStoreTotal && c.totalUnits) {
-    out.push(fd(24, 300, 665, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
+    out.push(fd(24, 300, ROW.total, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
   }
-  out.push(fd(34, 30, 740, `CARTON ${c.carton} of ${c.totalCartons}`))
+  out.push(fd(34, 30, ROW.carton, `CARTON ${c.carton} of ${c.totalCartons}`))
 
   // ── SSCC-18, the scanned identity of the box ──
   out.push('', `^FO0,896^GB${LABEL.widthDots},400,2^FS`)

@@ -334,3 +334,32 @@ test('⚠️ THE PO BARCODE IS MODE A, NOT MODE D — THAT WAS THE "INVALID"', (
     if (/,D\^FD/.test(l)) assert.match(l, /\^FD00\d{18}\^FS/, `mode D on non-GS1 data: ${l}`)
   }
 })
+
+test('⚠️ NO TWO FIELDS PRINT ON TOP OF EACH OTHER', () => {
+  // I shifted the content block up by search-and-replace when the postal barcode came
+  // out, missed a line that had an extra argument, and left ITEM UPC at y=655 with
+  // QTY at y=665 — ten dots apart under a 30-dot font. Coordinates now come from one
+  // table, and this asserts the result rather than the table.
+  const z = cartonLabelZpl(full)
+  const rows = z.split('\n')
+    .map((l) => l.match(/\^A[N0],(\d+)\^FO(\d+),(\d+)\^/))
+    .filter(Boolean)
+    .map((m) => ({ size: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }))
+  assert.ok(rows.length > 10)
+  for (const a of rows) {
+    for (const b of rows) {
+      if (a === b || a.x !== b.x || a.y >= b.y) continue
+      assert.ok(b.y - a.y >= a.size,
+        `fields at x=${a.x} overlap: y=${a.y} (font ${a.size}) then y=${b.y}`)
+    }
+  }
+})
+
+test('the label still fits inside its own media', () => {
+  // ⚠️ A field placed past the label height prints nowhere and reports nothing.
+  const z = cartonLabelZpl(full)
+  for (const m of z.matchAll(/\^FO(\d+),(\d+)/g)) {
+    assert.ok(Number(m[1]) <= LABEL.widthDots, `x ${m[1]} is off the label`)
+    assert.ok(Number(m[2]) <= LABEL.heightDots, `y ${m[2]} is off the label`)
+  }
+})
