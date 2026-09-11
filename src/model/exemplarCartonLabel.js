@@ -334,3 +334,56 @@ export function shipmentLabels(cartons = [], common = {}, { upcMap = null } = {}
   }
   return { labels, blocked, ready: labels.length, total: cartons.length }
 }
+
+
+/**
+ * ⚠️ IS ANYTHING MISSING? — checked against §8's seven markings, not by eye.
+ *
+ * Nima, 2026-09-11: "make sure im not missing information on the label and adhering
+ * to their guidlines do i need something for Pro number".
+ *
+ * Answer to the PRO question, and it is worth stating plainly: PRO AND BOL ARE NOT
+ * CARTON MARKINGS. Neither appears in §8's list. They are on our label because I
+ * modelled it on the live ShopBop template, and ShopBop's parcel labels carry the
+ * UPS tracking number in those slots. For Exemplar they are optional — useful to a
+ * person reconciling freight, required by nothing.
+ *
+ * The BOL number IS required, but on the BOL itself (§12.9, $550, together with the
+ * TMS confirmation number in CID# and Special Instructions) — not on the box.
+ */
+export function auditCartonMarkings(zpl, carton = {}) {
+  const has = (re) => re.test(zpl)
+  const checks = [
+    { n: 1, requirement: 'Company name / address',
+      ok: has(/SHIP FROM/) && has(new RegExp(SHIP_FROM.name.split(',')[0])) && has(/Glendale/) },
+    { n: 2, requirement: 'Operating company name/address',
+      ok: has(/SHIP TO/) && Boolean(carton.operatingCompany) && has(new RegExp(String(carton.operatingCompany).slice(0, 12))) },
+    { n: 3, requirement: 'PO number', ok: has(/PURCHASE ORDER/) && has(new RegExp(String(carton.po))) },
+    { n: 4, requirement: 'Department number', ok: has(/DEPT:/) },
+    { n: 5, requirement: 'Store number and abbreviation', ok: has(/STORE:\s*\S+\s+\S+/) },
+    { n: 6, requirement: 'Total number of cartons & units per store',
+      ok: has(/CARTON \d+ of \d+/) && has(/STORE TOTAL/),
+      partial: has(/CARTON \d+ of \d+/) && !has(/STORE TOTAL/),
+      note: 'Cartons are printed as "CARTON n of m". The UNITS half is off by decision — see STORE_UNITS_OMITTED. showStoreTotal: true restores it.' },
+    { n: 7, requirement: 'Style, colour, size details',
+      ok: has(/STYLE:/) && /-/.test(String(carton.style ?? '')),
+      note: 'The SKU carries style and colour (SN03011LD-MOCHA). SIZE is not printed separately; every item on this PO is ONE SIZE / NO SIZE on the PO download, so there is no size to state — confirm that holds for a PO that carries real sizes.' },
+  ]
+  return {
+    checks,
+    missing: checks.filter((c) => !c.ok && !c.partial),
+    partial: checks.filter((c) => c.partial),
+    compliant: checks.every((c) => c.ok || c.partial),
+    // Not markings, but the label is useless if it is applied wrong.
+    placement: [
+      'Picket fence — the barcode reads bottom-to-top toward the conveyor.',
+      'Between 1.38 in and 12 in from the bottom of the carton.',
+      'On the LONGEST side of the carton.',
+      'A FedEx label may sit on the same or the opposite side, but must NOT cover the GS1-128.',
+    ],
+    notRequired: [
+      'PRO number — not a §8 carton marking; inherited from the ShopBop template this label was modelled on.',
+      'BOL number — required on the BOL (§12.9), not on the carton.',
+    ],
+  }
+}

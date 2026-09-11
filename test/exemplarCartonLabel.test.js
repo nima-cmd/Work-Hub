@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   cartonLabelZpl, labelProblems, shipmentLabels, ssccCheckDigit, ssccError,
-  REQUIRED, SHIP_FROM, LABEL, nonAscii, STORE_UNITS_OMITTED,
+  REQUIRED, SHIP_FROM, LABEL, nonAscii, STORE_UNITS_OMITTED, auditCartonMarkings,
 } from '../src/model/exemplarCartonLabel.js'
 
 // Carton 1 of IF7650, verbatim from NetSuite.
@@ -261,4 +261,46 @@ test('a carton quantity that disagrees with its order line is blocked', () => {
        totalCartons: 22, totalUnits: 270 }], common, { upcMap })
   assert.equal(r.ready, 0)
   assert.match(r.blocked[0].errors[0], /quantity disagrees: carton holds 12.*is 10/)
+})
+
+test('⚠️ PRO AND BOL ARE NOT CARTON MARKINGS', async () => {
+  // Nima: "do i need something for Pro number". Neither appears in §8's seven
+  // markings. They are on our label only because I modelled it on the live ShopBop
+  // template, where those slots carry the UPS tracking number. The BOL number IS
+  // required — on the BOL (§12.9, $550), not on the box.
+  const { CARTON_MARKINGS } = await import('../src/model/exemplarStandards.js')
+  assert.ok(!CARTON_MARKINGS.some((r) => /\bpro\b|bol|bill of lading/i.test(r)))
+  const a = auditCartonMarkings(cartonLabelZpl(full), full)
+  assert.ok(a.notRequired.some((n) => /PRO number/.test(n)))
+  assert.ok(a.notRequired.some((n) => /BOL number/.test(n)))
+})
+
+test('⚠️ THE §8 AUDIT IS MECHANICAL, AND IT REPORTS THE ONE PARTIAL', () => {
+  // "make sure im not missing information on the label" — checked against the seven
+  // markings rather than by eye, so the answer survives the next layout change.
+  const a = auditCartonMarkings(cartonLabelZpl(full), full)
+  assert.equal(a.missing.length, 0, 'nothing is outright missing')
+  assert.equal(a.partial.length, 1)
+  assert.equal(a.partial[0].n, 6, 'cartons & units per store — the units half is off by decision')
+  assert.match(a.partial[0].note, /STORE_UNITS_OMITTED/)
+  assert.equal(a.compliant, true)
+
+  // Turning the store total back on closes it completely.
+  const b = auditCartonMarkings(cartonLabelZpl({ ...full, showStoreTotal: true }), full)
+  assert.equal(b.partial.length, 0)
+  assert.ok(b.checks.every((c) => c.ok))
+})
+
+test('a label genuinely missing a marking is reported, not passed', () => {
+  // The audit has to be able to FAIL, or it is decoration.
+  const a = auditCartonMarkings('^XA^FDnothing^FS^XZ', {})
+  assert.ok(a.missing.length >= 5)
+  assert.equal(a.compliant, false)
+})
+
+test('placement is carried with the label, because content alone is not compliance', () => {
+  const a = auditCartonMarkings(cartonLabelZpl(full), full)
+  assert.ok(a.placement.some((p) => /picket fence/i.test(p)))
+  assert.ok(a.placement.some((p) => /1\.38/.test(p)))
+  assert.ok(a.placement.some((p) => /LONGEST side/i.test(p)))
 })
