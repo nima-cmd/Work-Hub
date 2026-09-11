@@ -3433,3 +3433,11 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .slip-stored th { text-align: left; color: var(--muted); font-weight: 500;
                   border-bottom: 1px solid var(--line); padding: 6px 8px; }
 .slip-stored td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+
+/* Crew: a character you have not worked with yet. Dimmed rather than hidden, so the
+   full roster is visible; it lifts on hover so the art stays inspectable.
+   ⚠️ The class goes on .tcard ITSELF, not a wrapper — .tcGrid is an auto-fill grid,
+   and a wrapper that was `display: contents` for earned cards and `display: block`
+   for unearned ones would size the two groups differently in the same row. */
+.tcard.tcUnearned { opacity: 0.42; filter: saturate(0.3); transition: opacity 0.18s ease, filter 0.18s ease; }
+.tcard.tcUnearned:hover { opacity: 1; filter: saturate(1); }

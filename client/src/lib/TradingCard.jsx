@@ -31,7 +31,11 @@ export default function TradingCard({ card }) {
   const s = card.stats || { agility: 0, strength: 0, intelligence: 0 }
 
   return (
-    <div className={'tcard' + (flipped ? ' flipped' : '')} onClick={() => setFlipped((f) => !f)} title="Click to flip">
+    <div
+      className={'tcard' + (flipped ? ' flipped' : '') + (card.unearned ? ' tcUnearned' : '')}
+      onClick={() => setFlipped((f) => !f)}
+      title={card.unearned ? 'No missions together yet — click to flip' : 'Click to flip'}
+    >
       <div className="tcardInner">
         {/* FRONT */}
         <div className="tcardFace tcardFront">

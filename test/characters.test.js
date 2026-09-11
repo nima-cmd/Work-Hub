@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { CHARACTERS, getCharacterById, resolveCharacterForSender } from '../src/model/characters.js'
+import { levelFor } from '../src/model/affection.js'
 
 const ART_DIR = new URL('../client/src/assets/characters/', import.meta.url)
 const artIds = [...new Set(readdirSync(ART_DIR)
@@ -44,14 +45,16 @@ test('⚠️ AN UNKNOWN UNIVERSE IS null, NEVER A PLAUSIBLE GUESS', () => {
   assert.deepEqual(CHARACTERS.filter((c) => !c.universe).map((c) => c.id), [])
 })
 
-test('⚠️ A BELIEVED ATTRIBUTION KEEPS ITS HEDGE', () => {
-  // Nima's words were "Nemu and Nico i believe are from Witch watch". The hedge is
-  // part of what he told me, so it is recorded rather than quietly firmed up.
-  const believed = CHARACTERS.filter((c) => c.attribution === 'believed')
-  assert.deepEqual(believed.map((c) => c.id), ['nemu-miyao', 'nico-wakatsuki'])
-  for (const c of believed) assert.equal(c.universe, 'Witch Watch')
-  // Every other entry is unhedged — the field means something only if it is rare.
-  assert.equal(CHARACTERS.filter((c) => c.attribution).length, 2)
+test('⚠️ A HEDGE IS RESOLVED BY EVIDENCE, NOT BY REPETITION', () => {
+  // Nemu and Nico were recorded attribution: 'believed' because Nima said "i believe
+  // are from Witch watch". His later description of Nemu names her friends — Nico,
+  // Morihito, Keigo, Kanshi, Miharu — which is that cast and places both of them in
+  // it, so the hedge came off on corroborating detail. Nothing is hedged now, and
+  // this asserts the field stays absent rather than lingering as stale doubt.
+  assert.deepEqual(CHARACTERS.filter((c) => c.attribution).map((c) => c.id), [])
+  for (const id of ['nemu-miyao', 'nico-wakatsuki']) {
+    assert.equal(CHARACTERS.find((c) => c.id === id).universe, 'Witch Watch')
+  }
 })
 
 test('the rotation covers every character, and a sender keeps its assignment', () => {
@@ -68,4 +71,18 @@ test('the rotation covers every character, and a sender keeps its assignment', (
   assert.equal(resolveCharacterForSender('a@b.com', { 'a@b.com': 'emilia' }, () => 0), 'emilia')
   // A preference naming a character that no longer exists falls back, never throws.
   assert.ok(getCharacterById(resolveCharacterForSender('a@b.com', { 'a@b.com': 'deleted' }, () => 0)))
+})
+
+test('⚠️ THE CREW GRID IS THE ROSTER, NOT ONLY WHO HAS DELIVERED', () => {
+  // Crew.jsx used to render `affection.map(...)` — one card per character with a
+  // COMPLETED quest — so 24 characters added 2026-09-11 were in the roster and in
+  // the rotation but invisible on the page, and would have surfaced one at a time
+  // over weeks as a brand-new sender happened to draw each. The grid now joins
+  // affection ONTO the roster. This pins the zero-state shape TradingCard needs,
+  // because it reads card.level.tier and card.missions unguarded.
+  const zero = { level: levelFor(0), missions: [], stats: { agility: 0, strength: 0, intelligence: 0 } }
+  assert.equal(zero.level.tier, 1)
+  assert.equal(zero.level.name, 'Stranger')
+  assert.equal(zero.level.progress, 0)
+  assert.ok(Array.isArray(zero.missions), 'missions must be an array, not undefined')
 })

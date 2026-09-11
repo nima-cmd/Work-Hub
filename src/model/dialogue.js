@@ -768,10 +768,10 @@ export const DIALOGUE = {
   },
 
   // ── Voices revisited 2026-09-11, once Nima named the series ───────────────
-  // Coco and Nico are written in voice below. Alicia, Clen and Nemu are NOT, and
-  // that is deliberate: Clevatess is a series I do not know, and I do not know
-  // Nemu's character well enough to imitate her. Warm and neutral is honest;
-  // a confident impression of someone I cannot actually place is not.
+  // All five are now written in voice. Alicia, Clen and Nemu were deliberately left
+  // warm-and-neutral while I could not place them; Nima then described Clevatess's
+  // personality and Nemu's in detail, so these are written from HIS description
+  // rather than from a series I had guessed at.
 
   // Witch Hat Atelier — Coco: earnest, wonder-struck, told once she could never
   // be a witch and quietly determined to prove otherwise.
@@ -816,37 +816,74 @@ export const DIALOGUE = {
     ],
   },
 
-  // Clevatess — series unknown to me; see the note above.
-  'alicia-glenfall': {
-    greeting: [
-      'A new task for you. I have laid out what it needs.',
-      'This came in and it is yours. Straightforward enough.',
-      'Here is the next one. Take it at the pace it deserves.',
-    ],
-    urgent: ['This one is urgent — please take it ahead of the rest.', 'No time to let this settle. Go.'],
-    reminder: ['The regular duty is due again today.', 'Back on the list. Steady work, steadily done.'],
-    done: ['Finished, and finished properly.', 'Complete. Onto the next.'],
-  },
+  // ── Clevatess ─────────────────────────────────────────────────────────────
+  // Clen IS Clevatess: cold, apathetic, contemptuous of humans to the point of
+  // finding conversation with them embarrassing, and genuinely ignorant of human
+  // society — he did not know that only women who have given birth produce milk,
+  // and does not know what money is. Caring for the baby Luna has begun to shift
+  // him slightly, so the warmth is grudging and never admitted.
   clen: {
     greeting: [
-      'Something needs doing, and I thought of you.',
-      'A task. Quiet one, but it matters.',
-      'Here. I will not make a speech about it.',
+      'A task. I neither understand why it matters nor intend to ask. It is yours.',
+      'Your kind has produced another obligation. See to it.',
+      'This requires doing. Do not explain the purpose to me — I will not retain it.',
     ],
-    urgent: ['This will not keep. Now, please.', 'Urgent — leave the rest where it is.'],
-    reminder: ['The recurring one. Again, as ever.', 'Due today. It always is.'],
-    done: ['Done. Good.', 'Handled. That is enough said.'],
+    urgent: [
+      'I am told this one is "urgent". Apparently that means your kind panics if it waits.',
+      'Attend to it now. Their distress is tedious to sit through.',
+    ],
+    reminder: [
+      'It has returned. Humans build their days out of repetition. Baffling.',
+      'The same duty again. I have stopped asking why it does not simply stay done.',
+    ],
+    done: [
+      'It is finished. I will not praise you. ...It was adequate.',
+      'Done, and without supervision. I note this. I am saying nothing further.',
+    ],
   },
-  // Witch Watch, believed — voice kept neutral; I do not know her well enough.
+  // Alicia Glenfall — his servant, raised again on his blood and then asked to wet-nurse
+  // a child she had not borne. She is the one he demands explanations from, so her voice
+  // is the patience of someone who explains the world for a living.
+  'alicia-glenfall': {
+    greeting: [
+      'A task, my lord— forgive me. A task, for you. I have written down the parts that need no explaining.',
+      'This one is straightforward. I have learned to be grateful for straightforward.',
+      'Here. I have already anticipated the questions someone will ask me about it.',
+    ],
+    urgent: [
+      'This cannot wait. Please — I have spent most of my patience already today.',
+      'Urgent, and yes, I checked. Twice. Go.',
+    ],
+    reminder: [
+      'The same duty as yesterday. I find the routine restful, honestly.',
+      'It comes round again today, as it always does. Small mercies.',
+    ],
+    done: [
+      'Finished, and properly. Thank you — it is nice to simply be able to say that.',
+      'Complete. Nobody required anything explained to them. A good day.',
+    ],
+  },
+  // Witch Watch — Nemu: shy, taught by her mother never to show what she felt, so she
+  // poured it into study instead and knows rare magic and the fundamentals cold. Nico
+  // and the others taught her how to be around people; she is still practising.
   'nemu-miyao': {
     greeting: [
-      'A task for you. I have kept the details short.',
-      'This one is yours. I trust you with it.',
-      'Here is the next thing. No rush beyond the real one.',
+      'Um — a task for you. I looked up the proper way to do it first. I hope that is alright.',
+      'I have a job for you. I... wrote notes. Rather a lot of notes.',
+      'Here. I checked it against the fundamentals before bringing it, so it should hold.',
     ],
-    urgent: ['This needs you now, before anything else.', 'Urgent. Please do not set it down.'],
-    reminder: ['The scheduled one has come round again.', 'Due today, same as always.'],
-    done: ['Complete. Neatly done.', 'Finished. That is one fewer thing waiting.'],
+    urgent: [
+      'This one is urgent — please. I would not push if I were not certain.',
+      'Quickly! I— sorry. I mean: quickly, please.',
+    ],
+    reminder: [
+      'The recurring one. I like these. Practice is how anything is learned properly.',
+      'It is due again. Repetition is not beneath anyone.',
+    ],
+    done: [
+      'You finished it. I am— I am really glad. I am trying to say that part out loud more.',
+      'Complete, and correctly. I will write down how it was done.',
+    ],
   },
 }
 

@@ -52,13 +52,16 @@ export const CHARACTERS = [
   // from the art, and `universe` prints on the trading card and the hologram — a
   // plausible wrong franchise would have read as a fact. Nima supplied them.
   { id: 'alicia-glenfall', name: 'Alicia Glenfall', universe: 'Clevatess' },
+  // Clen is Clevatess himself — the title character, and Alicia's master.
   { id: 'clen', name: 'Clen', universe: 'Clevatess' },
   { id: 'coco', name: 'Coco', universe: 'Witch Hat Atelier' },
-  // ⚠️ ATTRIBUTED, NOT CONFIRMED. Nima's words were "Nemu and Nico i believe are
-  // from Witch watch" — so this pair carries his own hedge. Recorded as given
-  // rather than firmed up, because the hedge is part of what he told me.
-  { id: 'nemu-miyao', name: 'Nemu Miyao', universe: 'Witch Watch', attribution: 'believed' },
-  { id: 'nico-wakatsuki', name: 'Nico Wakatsuki', universe: 'Witch Watch', attribution: 'believed' },
+  // ⚠️ THE HEDGE CAME OFF ON EVIDENCE, NOT ON REPETITION. These two were recorded
+  // as attribution: 'believed' because Nima said "i believe are from Witch watch".
+  // His later description of Nemu names her friends — Nico, Morihito, Keigo, Kanshi
+  // and Miharu — which is the Witch Watch cast, and places BOTH of them in it. So
+  // the hedge is resolved by corroborating detail, not by having been said twice.
+  { id: 'nemu-miyao', name: 'Nemu Miyao', universe: 'Witch Watch' },
+  { id: 'nico-wakatsuki', name: 'Nico Wakatsuki', universe: 'Witch Watch' },
 ]
 
 export function getCharacterById(id) {
