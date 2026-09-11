@@ -222,24 +222,47 @@ export function cartonLabelZpl(c = {}) {
   out.push(fb(22, 370, 112, 410, dc.name, 1))
   lines.forEach((l, i) => out.push(fb(22, 370, 142 + i * 30, 410, l, 1)))
 
-  // ── Postal-code barcode (AI 420) + carrier, as the live label does ──
+  // ── Carrier band ──
+  //
+  // ⚠️ THE "INVALID" TEXT WAS A ZPL BARCODE MODE ERROR, AND I INHERITED IT.
+  // Nima: "what is the invalid - s across from purchase order". `^BC`'s last
+  // parameter is the mode, and `D` is UCC/EAN Case Code — it requires numeric data
+  // in a valid GS1 structure. Given anything else the Zebra prints "INVALID - L"
+  // where the bars should be.
+  //
+  // All three barcodes were copied from the live ShopBop label with `,D`:
+  //   PO      0008928906   a plain 10-digit PO, not a GS1 structure  -> INVALID
+  //   postal  42075211     AI 420 without the FNC1 structure         -> INVALID
+  //   SSCC    00 + 18      a real GS1 SSCC                           -> fine
+  //
+  // ⚠️ AND THE SOURCE TEMPLATE HAS IT TOO: ShopBop's PO barcode reads
+  // `^FDPOJ00371660` under mode D — alphanumeric, which UCC/EAN cannot encode at
+  // all. Those production labels are almost certainly printing INVALID on the PO
+  // barcode and nobody noticed, because the SSCC is the one that gets scanned.
+  //
+  // So: the PO barcode is now mode A (Automatic) — a plain Code 128, which is what
+  // it always was. The SSCC keeps mode D unchanged, because that one IS a GS1
+  // structure and the ShopBop form is field-proven at a receiving DC.
+  //
+  // ⚠️ THE POSTAL BARCODE IS GONE, NOT FIXED. §4.2 requires the GS1-128 facing
+  // outward and nothing else; there is no postal-barcode requirement anywhere in the
+  // guide. It is parcel-carrier machinery from the ShopBop template, and this
+  // shipment is LTL to a DC. Keeping a second barcode that nothing reads, in a
+  // format that was printing an error, is cost without a reader.
   out.push('', `^FO0,235^GB${LABEL.widthDots},213,2^FS`, '^FO380,235^GB2,213,2^FS')
-  if (zip) {
-    out.push(fd(20, 30, 250, 'SHIP TO POSTAL CODE'), fd(25, 120, 285, `(420) ${zip}`))
-    out.push(`^BY3,3,10^FO55,315^BCN,110,N,N,Y,D^FD420${zip}^FS`)
-  }
-  out.push('', fd(20, 405, 250, 'CARRIER'), `^A0N,35^FO405,290^FDCARR: ${esc(c.carrier || 'PER TMS')}^FS`)
-  // ⚠️ AN UNKNOWN PRO OR BOL PRINTS "PENDING", NOT A DASH. Both are issued when the
-  // freight is booked and the BOL is minted, which has not happened for this
-  // shipment — so the honest label says the number is coming. A dash reads as a
-  // formatting glitch (and, as an em dash, printed as one).
-  out.push(fd(25, 405, 350, 'PRO#:'), fd(25, 490, 350, c.pro || 'PENDING'))
-  out.push(fd(25, 405, 390, 'BOL#:'), fd(25, 490, 390, c.bol || 'PENDING'))
+  out.push(fd(20, 30, 250, 'PURCHASE ORDER'))
+  out.push(`^BY3,3,10^FO40,290^BCN,95,N,N,N,A^FD${esc(digits(c.po) || c.po)}^FS`)
+  out.push(fd(26, 40, 400, String(c.po)))
 
-  // ── PO + department + store: the §8 fields ShopBop's label has no room for ──
-  out.push('', fd(25, 30, 475, 'PURCHASE ORDER:'), `^AN,40^FO30,530^FD${esc(c.po)}^FS`)
-  out.push(`^BY3,3,10^FO782,475,1^BCN,110,N,N,Y,D^FD${esc(digits(c.po) || c.po)}^FS`)
-  out.push(fd(28, 30, 600, `DEPT: ${c.department}    STORE: ${c.store} ${c.storeAbbrev}`))
+  out.push('', fd(20, 405, 250, 'CARRIER'), `^A0N,35^FO405,290^FDCARR: ${esc(c.carrier || 'PER TMS')}^FS`)
+  // ⚠️ BLANK, NOT "PENDING". Nima: "for pro and bol leave it blank instead of
+  // pending". Neither is a §8 carton marking — see auditCartonMarkings() — so an
+  // empty box a driver can write in beats a word that looks like a value.
+  out.push(fd(25, 405, 350, 'PRO#:'), ...(c.pro ? [fd(25, 490, 350, c.pro)] : []))
+  out.push(fd(25, 405, 390, 'BOL#:'), ...(c.bol ? [fd(25, 490, 390, c.bol)] : []))
+
+  // ── Department + store: two of the §8 markings ShopBop's template omits ──
+  out.push(fd(30, 30, 490, `DEPT: ${c.department}     STORE: ${c.store} ${c.storeAbbrev}`))
 
   // ── What is in the box ──
   //
@@ -256,12 +279,12 @@ export function cartonLabelZpl(c = {}) {
   // and the description wrapped to two lines on the narrow stocks.
   const sku = String(c.style).split(/\s*[|·]/)[0].trim()
   out.push('', fd(30, 30, 655, `ITEM UPC: ${c.upc}`))
-  out.push(fd(32, 30, 700, `STYLE: ${sku}`))
-  out.push(fd(30, 30, 750, `QTY: ${c.units}`))
+  out.push(fd(32, 30, 610, `STYLE: ${sku}`))
+  out.push(fd(30, 30, 665, `QTY: ${c.units}`))
   if (c.showStoreTotal && c.totalUnits) {
-    out.push(fd(24, 300, 750, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
+    out.push(fd(24, 300, 665, `STORE TOTAL: ${c.totalUnits} units / ${c.totalCartons} ctns`))
   }
-  out.push(fd(34, 30, 820, `CARTON ${c.carton} of ${c.totalCartons}`))
+  out.push(fd(34, 30, 740, `CARTON ${c.carton} of ${c.totalCartons}`))
 
   // ── SSCC-18, the scanned identity of the box ──
   out.push('', `^FO0,896^GB${LABEL.widthDots},400,2^FS`)

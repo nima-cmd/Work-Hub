@@ -26,7 +26,7 @@
 // shrink the barcode.
 
 import PDFDocument from 'pdfkit'
-import { gs1BarcodePng, code128Png, xDimensionFor, X_MIN_IN, MUST_TEST_SCAN } from '../src/model/code128.js'
+import { gs1BarcodePng, code128Png, xDimensionFor, X_MIN_IN } from '../src/model/code128.js'
 import { labelProblems, SHIP_FROM } from '../src/model/exemplarCartonLabel.js'
 import { DCS, dcAddressLines } from '../src/model/exemplarStores.js'
 
@@ -231,18 +231,34 @@ export async function packingSlipPdf(shipment) {
   doc.font('Helvetica-Bold').fontSize(9)
     .text(`TOTAL   ${shipment.totalCartons} cartons   ${shipment.totalUnits} units`, 40, doc.y)
 
-  // ── ⚠️ The half of §8.5 that is not printing ──
-  doc.moveDown(1)
-  doc.font('Helvetica-Bold').fontSize(8).fillColor('#8a6d00').text('REQUIRED HANDLING — Manual §8.5 / §12.4 ($250)')
-  doc.font('Helvetica').fontSize(7.5).fillColor('black')
-  for (const l of [
-    'Email this slip to Exemplar IN ADVANCE of the shipment — one per PO per store.',
-    'Put a copy in a REMOVABLE POUCH on the carton, with the UNSIGNED BOL (non-trailer shipments).',
-    'Mark "PACKING SLIP ATTACHED" on ALL SIX SIDES of that carton.',
-    'Parcel (FedEx/UPS) instead of freight: a slip goes on EVERY carton, not just one.',
-  ]) doc.text('•  ' + l, { indent: 4 })
-  doc.moveDown(0.4)
-  doc.fontSize(7).fillColor('#555').text(MUST_TEST_SCAN)
+  // ── ⚠️ NOTHING INTERNAL GOES ON THIS SHEET ─────────────────────────────────
+  //
+  // This page used to carry a "REQUIRED HANDLING - Manual §8.5 / §12.4 ($250)"
+  // block: our own reminder of what to do with the slip, printed on the document we
+  // hand to Exemplar. Nima: "we need it off the packing slip if we can".
+  //
+  // He is right, and for a stronger reason than the symbol. A packing slip is a
+  // CUSTOMER document. That block quoted their section numbers and their fee amount
+  // back at them, and told the receiver we needed reminding how to attach it.
+  //
+  // ("§" is the section sign — it just means "Section". It rendered fine; it was the
+  // content behind it that did not belong.)
+  //
+  // The instructions still matter, so packingSlipPdf RETURNS them for the app to
+  // show on screen, rather than printing them on the freight.
   doc.fillColor('black')
   return doc
 }
+
+/**
+ * What to DO with the packing slip once it is printed — §8.5 / §12.4, $250.
+ *
+ * ⚠️ Kept OUT of the PDF deliberately (see above) and exported here so the app can
+ * show it to whoever is packing. Printing it is the easy half of that requirement.
+ */
+export const PACKING_SLIP_HANDLING = [
+  'Email this slip to Exemplar IN ADVANCE of the shipment — one per PO per store.',
+  'Put a copy in a REMOVABLE POUCH on the carton, with the UNSIGNED BOL (non-trailer shipments).',
+  'Mark "PACKING SLIP ATTACHED" on ALL SIX SIDES of that carton.',
+  'Parcel (FedEx/UPS) instead of freight: a slip goes on EVERY carton, not just one.',
+]

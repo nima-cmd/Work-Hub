@@ -129,9 +129,16 @@ test('⚠️ NO NON-ASCII REACHES THE PRINTER', () => {
   // resident fonts are single-byte; same class as the pdfkit WinAnsi rule.
   const z = cartonLabelZpl({ ...full, style: 'SN0—3011’LD…' })
   assert.deepEqual(nonAscii(z), [], 'the whole label must be ASCII')
-  // And an unknown PRO/BOL says so rather than printing a dash.
-  assert.match(z, /PRO#:\^FS\n\^AN,25\^FO490,350\^FDPENDING/)
-  assert.match(z, /BOL#:\^FS\n\^AN,25\^FO490,390\^FDPENDING/)
+  // ⚠️ AN UNKNOWN PRO/BOL IS BLANK, NOT "PENDING". Nima: "for pro and bol leave it
+  // blank instead of pending". Neither is a §8 carton marking, so an empty box a
+  // driver can write in beats a word that reads like a value.
+  assert.match(z, /\^FDPRO#:\^FS/)
+  assert.match(z, /\^FDBOL#:\^FS/)
+  assert.ok(!/PENDING/.test(z))
+  // Given real numbers they print.
+  const withNums = cartonLabelZpl({ ...full, pro: '123456789', bol: 'NB1731300' })
+  assert.match(withNums, /\^FD123456789\^FS/)
+  assert.match(withNums, /\^FDNB1731300\^FS/)
 })
 
 test('⚠️ THE ADDRESS BLOCKS ARE WIDTH-BOUNDED SO THEY CANNOT SPILL', () => {
@@ -166,9 +173,12 @@ test('the ship-to block comes from the Routing Guide DC, not from free text', ()
   assert.match(z, /4123 Pinnacle Point/)
   assert.ok(!/Pinnacle Point Dr/.test(z))
   assert.match(z, /Dallas, TX 75211/)
-  // AI 420 postal barcode, zip pulled off the DC's own address line.
-  assert.match(z, /\(420\) 75211/)
-  assert.match(z, /\^BCN,110,N,N,Y,D\^FD42075211\^FS/)
+  // ⚠️ THE AI 420 POSTAL BARCODE IS GONE. §4.2 requires the GS1-128 facing outward
+  // and nothing else — there is no postal-barcode requirement in the guide. It came
+  // from the ShopBop PARCEL template, and under ZPL mode D it was printing
+  // "INVALID - L" because 42075211 is not a valid UCC/EAN structure.
+  assert.ok(!/\(420\)/.test(z))
+  assert.ok(!/42075211/.test(z))
 })
 
 test('⚠️ DC 560 PRINTS ITS FULL THREE-LINE CONSIGNEE', () => {
@@ -180,7 +190,6 @@ test('⚠️ DC 560 PRINTS ITS FULL THREE-LINE CONSIGNEE', () => {
   assert.match(z, /600-620 Research Drive/)
   assert.match(z, /CenterPoint Commerce & Trade Park/)
   assert.match(z, /Pittston Township, PA 18640/)
-  assert.match(z, /\(420\) 18640/)
 })
 
 test('⚠️ ^ AND ~ ARE STRIPPED FROM DATA — they are ZPL control characters', () => {
@@ -303,4 +312,25 @@ test('placement is carried with the label, because content alone is not complian
   assert.ok(a.placement.some((p) => /picket fence/i.test(p)))
   assert.ok(a.placement.some((p) => /1\.38/.test(p)))
   assert.ok(a.placement.some((p) => /LONGEST side/i.test(p)))
+})
+
+test('⚠️ THE PO BARCODE IS MODE A, NOT MODE D — THAT WAS THE "INVALID"', () => {
+  // ^BC's last parameter is the mode; D is UCC/EAN Case Code and needs numeric data
+  // in a valid GS1 structure. Given a plain 10-digit PO the Zebra prints
+  // "INVALID - L" where the bars go — Nima: "what is the invalid - s across from
+  // purchase order". It sat at x=782, directly across from the PO text at x=30.
+  const z = cartonLabelZpl(full)
+  const po = z.split('\n').find((l) => l.includes('^BC') && l.includes(String(full.po).replace(/\D/g, '')))
+  assert.match(po, /\^BCN,\d+,N,N,N,A\^FD/, 'the PO must be a plain Code 128 (mode A)')
+
+  // ⚠️ The SSCC KEEPS mode D — it is a real GS1 structure and that form is proven on
+  // the live ShopBop labels at a receiving DC. Only the non-GS1 barcodes changed.
+  const sscc = z.split('\n').find((l) => l.includes('^BC') && l.includes('00' + full.sscc))
+  assert.match(sscc, /\^BCN,\d+,N,N,Y,D\^FD00\d{18}\^FS/)
+
+  // No barcode anywhere uses mode D on data that is not a GS1 structure.
+  for (const l of z.split('\n')) {
+    if (!/\^BC/.test(l)) continue
+    if (/,D\^FD/.test(l)) assert.match(l, /\^FD00\d{18}\^FS/, `mode D on non-GS1 data: ${l}`)
+  }
 })
