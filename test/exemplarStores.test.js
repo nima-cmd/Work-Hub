@@ -4,25 +4,45 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   STORES, DCS, DC_STORES, REPORTING_ONLY, store, storeByAbbrev, servicingDc,
-  storesForDc, groupByDc, NETSUITE_DC_CONFLICTS, NETSUITE_ONLY, SOURCE,
+  storesForDc, groupByDc, LEGACY_DC_DISAGREEMENTS, LEGACY_ONLY, SOURCE,
+  LIVE_ENTITY, isLiveShipTo,
 } from '../src/model/exemplarStores.js'
 
-test('⚠️ NETSUITE SENDS 18 STORES TO THE WRONG DC, AND THAT IS THE POINT OF THIS FILE', () => {
-  // I built nmgStores.js from NetSuite's custentity_dc_location and argued in its
-  // header that reading NetSuite beat typing the guide. Against the official list,
-  // 17 stores NetSuite routes to PNDC 510 are serviced from ECDC 560 in Pittston PA,
-  // and Denver is the reverse. Freight on the NetSuite value goes to the wrong
-  // building — a refused delivery and a chargeback.
-  assert.equal(NETSUITE_DC_CONFLICTS.length, 18)
-  const toEcdc = NETSUITE_DC_CONFLICTS.filter((c) => c.netsuite === '510' && c.official === '560')
+test('⚠️ THE 18 DISAGREEMENTS ARE DORMANT LEGACY, NOT LIVE MIS-ROUTING', () => {
+  // I found these in NetSuite's custentity_dc_location and wrote that "freight
+  // routed on the NetSuite field goes to the wrong building — a refused delivery and
+  // a chargeback". One query killed that: 32 of the 39 old "Neiman Marcus - …"
+  // customers have NEVER had a sales order, and the other 6 stopped 2025-03-11. The
+  // disagreement is real; the consequence I attached was invented. Marked live:false
+  // so nobody re-raises it as an incident.
+  assert.equal(LEGACY_DC_DISAGREEMENTS.length, 18)
+  assert.ok(LEGACY_DC_DISAGREEMENTS.every((c) => c.live === false))
+  const toEcdc = LEGACY_DC_DISAGREEMENTS.filter((c) => c.netsuite === '510' && c.official === '560')
   assert.equal(toEcdc.length, 17)
-  const dn = NETSUITE_DC_CONFLICTS.find((c) => c.abbrev === 'DN')
+  const dn = LEGACY_DC_DISAGREEMENTS.find((c) => c.abbrev === 'DN')
   assert.deepEqual([dn.netsuite, dn.official], ['577', '510'])
-
-  // And every conflict resolves against this file to the OFFICIAL value.
-  for (const c of NETSUITE_DC_CONFLICTS) {
+  // Each still resolves here to the OFFICIAL value, for whenever one is reactivated.
+  for (const c of LEGACY_DC_DISAGREEMENTS) {
     assert.equal(servicingDc(storeByAbbrev(c.abbrev).store).dc, c.official, c.name)
   }
+})
+
+test('⚠️ THE NEW ENTITY HAS ONE SHIP-TO, AND THAT IS THE ROUTING AUTHORITY', () => {
+  // Nima: "they are a new company we need to only look at the new ones we made its a
+  // new entity." Exemplar Luxury Group was created in NetSuite 2026-09-04 with two
+  // records, and exactly one destination exists. A second needs a customer record
+  // that does not exist yet, so an order for one is a question, not a lookup.
+  assert.equal(LIVE_ENTITY.createdInNetSuite, '2026-09-04')
+  assert.equal(LIVE_ENTITY.formerly, 'Saks Global')
+  assert.equal(LIVE_ENTITY.shipTos.length, 1)
+  assert.deepEqual(
+    LIVE_ENTITY.shipTos.map((s) => [s.store, s.dc]), [['0077', '510']])
+  assert.equal(isLiveShipTo('0077'), true)
+  assert.equal(isLiveShipTo('77'), true, 'padding-tolerant, like every store lookup here')
+  // ⚠️ A store that EXISTS in the reference data is still not shippable today.
+  assert.equal(isLiveShipTo('0210'), false, 'Beverly Hills is reference, not a live ship-to')
+  assert.ok(store('0210'), 'and it does resolve as reference')
+  assert.equal(LIVE_ENTITY.legacyCustomers, 39)
 })
 
 test('⚠️ THE STORE NUMBER IS EXEMPLAR\'S, NOT NETSUITE\'S', () => {
@@ -136,10 +156,9 @@ test('the source documents carry the dates printed on them', () => {
   assert.equal(SOURCE.ediCodes.dated, '2026-04-21')
 })
 
-test('⚠️ THREE NETSUITE STORES ARE ON NO CURRENT EXEMPLAR LIST', () => {
-  // Boston, Ala Moana and Topanga are live NetSuite customers and appear on neither
-  // document. Closed, renamed or not EDI-enabled — a question for Exemplar, not
-  // something to infer. An order to one has no verifiable ship-to.
-  assert.deepEqual(NETSUITE_ONLY.map((s) => s.abbrev), ['BN', 'AM', 'TP'])
-  for (const s of NETSUITE_ONLY) assert.equal(storeByAbbrev(s.abbrev), null)
+test('⚠️ THREE OLD RECORDS ARE ON NO CURRENT EXEMPLAR LIST', () => {
+  // Boston, Ala Moana and Topanga are legacy customers on neither document. Boston
+  // and Topanga are two of the six that ever shipped, both last on 2025-03-11.
+  assert.deepEqual(LEGACY_ONLY.map((s) => s.abbrev), ['BN', 'AM', 'TP'])
+  for (const s of LEGACY_ONLY) assert.equal(storeByAbbrev(s.abbrev), null)
 })

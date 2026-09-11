@@ -3,39 +3,34 @@
 // Nima, 2026-09-11: "We are providing you everything we have. ... we also need to
 // make sure the store names are correct in the system as well."
 //
-// ── ⚠️ THIS REPLACES A VERSION OF MINE THAT WAS WRONG ───────────────────────
+// ── ⚠️ EXEMPLAR IS A NEW ENTITY. THE OLD RECORDS ARE NOT A ROUTING BUG. ─────
 //
-// Earlier the same day I built src/model/nmgStores.js from NetSuite's
-// `custentity_dc_location`, and argued in its own header that reading NetSuite was
-// better than typing the guide because it gave "one source of truth for where
-// freight goes". Measured against the official Store Servicing DC List (6/10/26):
+// Nima, 2026-09-11: "the store number in there are for old neiman marcus and global
+// they are a new company we need to only look at the new ones we made its a new
+// entity."
 //
-//   • 18 of 33 store→DC assignments in NetSuite are WRONG
-//   • 17 of them are stores NetSuite sends to PNDC 510 that Exemplar services from
-//     ECDC 560 in Pittston PA — Bal Harbour, Atlanta, Northbrook, Westchester,
-//     Oakbrook, Michigan Ave, Tysons, Short Hills, Paramus, King of Prussia, Troy,
-//     Coral Gables, Tampa Bay, Orlando, Boca Raton, Charlotte, Roosevelt Field
-//   • and Denver is the reverse: NetSuite says WCSC 577, Exemplar says PNDC 510
+// He is right, and this corrects an alarm I raised an hour earlier. I had built
+// src/model/nmgStores.js from NetSuite's `custentity_dc_location`, found it disagreed
+// with the official servicing list on 18 of 33 Neiman stores, and wrote that "freight
+// routed on the NetSuite field goes to the wrong building — a refused delivery and a
+// chargeback". That conclusion did not survive one query:
 //
-// NetSuite appears to hold a coarse east/west split that is not the real servicing
-// map. Freight sent on it goes to the wrong building. That is a refused delivery and
-// a chargeback, and the field looked authoritative because it is the field the rest
-// of the app already routes on.
+//   • 32 of the 39 old "Neiman Marcus - …" customers have NEVER had a sales order
+//   • the 6 that ever did last ordered 2025-03-11, eighteen months ago
+//   • the new entity is TWO records created 2026-09-04, and its only ship-to is
+//     "EXEMPLAR LUXURY - GLOBAL PNDC - 0077", dc 0510 — the official numbering
 //
-// ⚠️ SO THE STORE NUMBERS ARE ALSO NOT NETSUITE'S. NetSuite numbers Neiman stores
-// 1001-1111; Exemplar's are 0110 / 0210 / 0223. The carton label and the EDI
-// documents want EXEMPLAR's number — printing 1010 for Beverly Hills instead of
-// 0210 is fee code 41/301, "Store # and name missing/incorrect", $250 minimum.
+// So nothing ships through the old records at all. The disagreement is real and the
+// consequence I attached to it was invented: I measured a field, found it wrong, and
+// asserted a cost without checking whether anything used it. That is the same
+// mistake as reading a permission blind spot as absence — a number that looks alarming
+// is still only a number until you ask what depends on it.
 //
-// ⚠️ WHAT NETSUITE IS STILL GOOD FOR: the two-letter abbreviation. It appears in
-// both sources — NetSuite as "…- 1010 - LA", the servicing list as "Beverly Hills
-// (LA)" — and is what let me align the two lists and PROVE the 18 disagreements
-// rather than guess at them. It is the join key, not the authority.
-//
-// Sources, both supplied by Nima 2026-09-11 and both dated on their face:
-//   • Store Servicing DC List, 2026-06-10  → store → servicing DC (authoritative)
-//   • Saks Global EDI Store and DC codes, 2026-04-21 → DC addresses, store addresses
-// Registered in src/model/partnerDocuments.js.
+// ⚠️ WHAT THIS FILE IS FOR, THEREFORE: it is REFERENCE, not the routing authority.
+// The documents are Saks-Global-era (the ELG Manual records "formerly Saks Global"),
+// and the new entity has one ship-to so far. Use it to validate a store number and to
+// look up a DC address for a document; do NOT assume a store here has a live customer
+// record, and do not recreate the old numbering anywhere.
 
 export const SOURCE = {
   servicingList: { title: 'Saks Global Store Servicing DC List', dated: '2026-06-10' },
@@ -233,12 +228,16 @@ export function groupByDc(lines = []) {
 }
 
 /**
- * ⚠️ THE REGISTER OF WHERE NETSUITE DISAGREES, kept because it is the actionable
- * half. Each of these is a NetSuite customer record whose custentity_dc_location
- * sends freight to the wrong building. Measured 2026-09-11 by joining on the
- * abbreviation; `ns` is what NetSuite says, `official` what Exemplar says.
+ * ⚠️ DORMANT LEGACY RECORDS, NOT LIVE MIS-ROUTING. The old "Neiman Marcus - …"
+ * customers carry a custentity_dc_location that disagrees with the official
+ * servicing list, and NONE of them is in use: 32 have never had a sales order and
+ * the rest stopped 2025-03-11. Kept only so that if anyone ever reactivates one,
+ * the disagreement is already on the record — and so my original framing of this as
+ * a live chargeback risk is corrected in the place it was made.
+ *
+ * `netsuite` is the legacy value, `official` what the 2026-06-10 list says.
  */
-export const NETSUITE_DC_CONFLICTS = [
+export const LEGACY_DC_DISAGREEMENTS = [
   ['BH', 'Bal Harbour', '510', '560'], ['AT', 'Atlanta', '510', '560'],
   ['NB', 'Northbrook', '510', '560'], ['WC', 'Westchester', '510', '560'],
   ['OB', 'Oakbrook', '510', '560'], ['MA', 'Michigan Ave', '510', '560'],
@@ -248,17 +247,45 @@ export const NETSUITE_DC_CONFLICTS = [
   ['CG', 'Coral Gables', '510', '560'], ['TB', 'Tampa Bay', '510', '560'],
   ['OR', 'Orlando', '510', '560'], ['BR', 'Boca Raton', '510', '560'],
   ['CH', 'Charlotte', '510', '560'], ['RF', 'Roosevelt Field / Long Island', '510', '560'],
-].map(([abbrev, name, ns, official]) => ({ abbrev, name, netsuite: ns, official }))
+].map(([abbrev, name, ns, official]) => ({ abbrev, name, netsuite: ns, official, live: false }))
 
 /**
- * ⚠️ THREE NETSUITE STORES ARE ON NO CURRENT EXEMPLAR LIST. Boston (BN), Ala Moana
- * (AM) and Topanga (TP) are live customers in NetSuite and appear on neither the
- * servicing list nor the EDI codes list. Closed, renamed, or not EDI-enabled — a
- * question for Exemplar, not something to infer. An order to one of these has no
- * verifiable ship-to.
+ * ⚠️ THREE OLD RECORDS ARE ON NO CURRENT EXEMPLAR LIST. Boston (BN), Ala Moana (AM)
+ * and Topanga (TP) exist as legacy NetSuite customers and appear on neither
+ * document. Boston and Topanga are two of the six that ever shipped, both last on
+ * 2025-03-11. Closed, renamed, or never carried over to the new entity — a question
+ * for Exemplar, not something to infer.
  */
-export const NETSUITE_ONLY = [
+export const LEGACY_ONLY = [
   { abbrev: 'BN', name: 'Boston', netsuiteStore: '1020' },
   { abbrev: 'AM', name: 'Ala Moana', netsuiteStore: '1031' },
   { abbrev: 'TP', name: 'Topanga', netsuiteStore: '1105' },
 ]
+
+
+/**
+ * ⚠️ THE NEW ENTITY, AS IT ACTUALLY EXISTS IN NETSUITE — measured 2026-09-11.
+ *
+ * This is the list Nima means by "the new ones we made". It is very short, and that
+ * is the point: anything routed to Exemplar today goes to ONE ship-to. A second
+ * destination needs a customer record that does not exist yet, so an order for one
+ * would be a question, not a lookup.
+ */
+export const LIVE_ENTITY = {
+  name: 'Exemplar Luxury Group',
+  formerly: 'Saks Global',
+  createdInNetSuite: '2026-09-04',
+  parentCustomer: { entityid: '539', name: 'Exemplar Luxury Group' },
+  shipTos: [
+    { entityid: '541', name: 'EXEMPLAR LUXURY - GLOBAL PNDC - 0077', store: '0077', dc: '510', salesOrders: 1 },
+  ],
+  // ⚠️ Legacy records are NOT part of this entity. 39 "Neiman Marcus - …" customers
+  // remain active-but-unused in NetSuite; see LEGACY_DC_DISAGREEMENTS.
+  legacyCustomers: 39,
+}
+
+/** Is this store number one the new entity can actually ship to today? */
+export function isLiveShipTo(num) {
+  const p = pad4(num)
+  return LIVE_ENTITY.shipTos.some((s) => s.store === p)
+}
