@@ -28,7 +28,28 @@
 import PDFDocument from 'pdfkit'
 import { gs1BarcodePng, code128Png, xDimensionFor, X_MIN_IN } from '../src/model/code128.js'
 import { labelProblems, SHIP_FROM } from '../src/model/exemplarCartonLabel.js'
-import { DCS, dcAddressLines } from '../src/model/exemplarStores.js'
+import { DCS, dcAddressLines, storefrontFor } from '../src/model/exemplarStores.js'
+
+/**
+ * ⚠️ THE SHIP-TO COMPANY MUST MATCH THE STORE'S STOREFRONT.
+ *
+ * The carton labels derive it from storefrontFor(); the packing-slip script still had
+ * "Saks Fifth Avenue" typed in, so the two documents for the same shipment named
+ * different companies. Nima caught it: "i think packing slip needs Exemplar Luxury
+ * group instead of Saks Fifth Aveneu as ship to".
+ *
+ * "Saks Fifth Avenue" is Orderful's TRADING PARTNER name. Store 0077's STOREFRONT is
+ * "SAKS GLOBAL", renamed "EXEMPLAR LUXURY GROUP" effective 2026-09-21. So this throws
+ * rather than printing a mismatch — two documents in one pouch disagreeing about the
+ * consignee is exactly the kind of thing a receiver raises a discrepancy on.
+ */
+function checkStorefront(shipment, on) {
+  const want = storefrontFor(shipment.store, on)
+  if (!want || !shipment.operatingCompany) return
+  if (String(shipment.operatingCompany).toUpperCase() !== String(want).toUpperCase()) {
+    throw new Error(`ship-to says "${shipment.operatingCompany}" but store ${shipment.store}'s storefront on ${on || 'today'} is "${want}"`)
+  }
+}
 
 const PT = 72
 
@@ -176,7 +197,8 @@ export async function cartonLabelsPdf(cartons, size = 'half-sheet') {
  * convenience — putting an SSCC here would give a receiver two things that look like
  * the carton's identity.
  */
-export async function packingSlipPdf(shipment) {
+export async function packingSlipPdf(shipment, { on } = {}) {
+  checkStorefront(shipment, on)
   const doc = new PDFDocument({ size: 'LETTER', margin: 40 })
   const W = 612 - 80
   const dc = DCS[String(shipment.dc).replace(/^0+/, '')]
