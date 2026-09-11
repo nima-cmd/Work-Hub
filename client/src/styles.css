@@ -643,7 +643,14 @@ h2 .count { color: var(--hi); margin-left: 6px; }
 /* Art window — object-fit cover from the TOP so tall/full-body art shows the
    character (was getting cut off mid-frame before). */
 .tcArt { position: relative; flex: 1; min-height: 0; background: #0b0e14; }
-.tcArt img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+/* ⚠️ `contain`, NOT `cover`. The art box is ~228x202 (landscape) inside a fixed
+   2.5/3.5 card, while every portrait is 3:4 or taller — cover was throwing away
+   over 40% of each file's height and clipping heads. contain shows the WHOLE
+   image; .tcArtFill paints the leftover space with a blurred copy so there are no
+   bars. Anything relying on the old single-img selector must target .tcArtMain. */
+.tcArt img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+.tcArtMain { object-fit: contain; object-position: center; z-index: 1; }
+.tcArtFill { object-fit: cover; object-position: center; filter: blur(16px) saturate(0.85) brightness(0.75); transform: scale(1.15); }
 .tcArtFallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
   font-size: 42px; font-weight: 800; color: var(--accent); background: rgba(217,164,65,0.12); }
 .tcArtFade { position: absolute; left: 0; right: 0; bottom: 0; height: 40px;
