@@ -182,16 +182,21 @@ test('the guides folder is described but NOT created', () => {
   assert.match(GUIDES_ROOT.mirrors, /googleDrive\.js/)
 })
 
-test('⚠️ THE BLOOMINGDALE\'S DOCUMENTS ARE REGISTERED AND MARKED UNREAD', () => {
-  // Four Bloomingdale's orders shipped short the same day these arrived, and I could
-  // not say what that costs — Exemplar's §12.3 is Exemplar's and fee schedules do not
-  // transfer between partners. Registered so the gap is visible rather than implied.
-  for (const key of ['bloomingdales-routing', 'bloomingdales-vendor-standards', 'macys-store-dc-listing']) {
-    const d = DOCUMENTS.find((x) => x.key === key)
-    assert.ok(d, key)
-    assert.equal(d.rulesIn, null, `${key} is not read yet and must say so`)
+test('⚠️ ONE OF THE THREE IS NOW READ, AND THE OTHER TWO STILL SAY SO', () => {
+  // All three arrived unread the day four Bloomingdale's orders shipped short. The
+  // Vendor Standards has since been read — it is a Macy's 2023 document whose
+  // Appendix H prices a shortage at 50% of the merchandise — and rulesIn now points
+  // at the module. The other two are still unread, and the registry must keep saying
+  // that rather than implying the partner is covered.
+  const vs = DOCUMENTS.find((d) => d.key === 'bloomingdales-vendor-standards')
+  assert.equal(vs.rulesIn, 'src/model/macysStandards.js')
+  assert.equal(vs.editionDate, '2023-01-01')
+  assert.match(vs.governs, /Expense Offsets/)
+
+  for (const key of ['bloomingdales-routing', 'macys-store-dc-listing', 'macys-routing']) {
+    assert.equal(DOCUMENTS.find((x) => x.key === key).rulesIn, null, `${key} must still read as unread`)
   }
-  assert.ok(unreadDocuments().some((d) => d.key === 'bloomingdales-vendor-standards'))
+  assert.ok(unreadDocuments().some((d) => d.key === 'bloomingdales-routing'))
 })
 
 test('⚠️ TWO FILES SHARE A NAME WITH DOCUMENTS THAT ARE NOT THEM', () => {

@@ -289,12 +289,20 @@ export const DOCUMENTS = [
     partner: "Bloomingdale's",
     kind: 'vendor standards',
     title: 'Vendor Standards.pdf',
-    edition: 'unknown — supplied 2026-09-11, 1,906,026 bytes',
-    editionDate: null,
+    // ⚠️ IT IS A MACY'S DOCUMENT, AND IT NAMES ITS OWN EDITION. Every page footer
+    // reads "Macy's 2023 Vendor Standards". Bloomingdale's is a Macy's division, so
+    // it governs both — but the edition is 2023 while this repo's Macy's routing
+    // rules cite "rev 4/14/26". Confirm it is current before quoting a figure.
+    edition: "Macy's 2023 Vendor Standards",
+    editionDate: '2023-01-01',
+    lastChecked: '2026-09-11',
     driveId: null,
     folder: 'data',
-    rulesIn: null,
-    governs: "the chargeback schedule — the open question on today's four short shipments",
+    rulesIn: 'src/model/macysStandards.js',
+    // ⚠️ THEY ARE NOT CALLED CHARGEBACKS. Macy's term is EXPENSE OFFSET, and the
+    // schedule (Appendix H, pages 57-60) never uses the other word — so searching
+    // for "chargeback" finds passing portal references and misses everything priced.
+    governs: 'Appendix H — Expense Offsets: what non-compliance costs, including short shipments',
     // ⚠️ A file called exactly "Vendor Standards.pdf" already exists elsewhere in
     // Drive (1ZtsPuKBLI8JCwg-TSSCTS1FXh91OciK5, 1,294,548 bytes, 2024-03-15) and is a
     // DIFFERENT document. Matching this one by title alone would pick the wrong file.
