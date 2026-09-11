@@ -19,7 +19,7 @@
 // src/model/allocationPlan.js under an explicitly chosen rule.
 
 import PDFDocument from 'pdfkit'
-import { shortfall, allocate, invoiceAdjustments } from '../src/model/allocationPlan.js'
+import { shortfall, allocate, invoiceAdjustments, readyToFulfil } from '../src/model/allocationPlan.js'
 
 const PAGE = { w: 792, h: 612 }   // landscape letter — the split needs width
 const M = 36
@@ -35,6 +35,7 @@ export function bulkPickPdf(demand, available, { rule: ruleName, ruleOptions = {
   const short = shortfall(demand, available)
   const plan = allocate(demand, available, { rule: ruleName, ruleOptions })
   const adjustments = invoiceAdjustments(plan)
+  const ready = readyToFulfil(plan, available)
 
   const byOrder = new Map(plan.lines.map((l) => [`${l.order}|${l.sku}`, l]))
   const pos = [...new Set(demand.map((d) => String(d.po)))].sort()
@@ -106,6 +107,27 @@ export function bulkPickPdf(demand, available, { rule: ruleName, ruleOptions = {
   })
   y += 24
 
+  // ── ⚠️ THE GO / NO-GO, above the cut list ──
+  //
+  // "let me know when im gond to fulfille them". It sits before the cut list because
+  // it is the sentence that decides whether anyone reads the rest today.
+  if (y > PAGE.h - 120) { doc.addPage({ size: [PAGE.w, PAGE.h], margin: 0 }); y = M }
+  const ok = ready.ready && ready.warnings.length === 0
+  const bg = ready.ready ? (ready.warnings.length ? '#fff4e5' : '#eefaf0') : '#fdecec'
+  const fg = ready.ready ? (ready.warnings.length ? '#8a5a00' : '#1c6b3a') : '#a11'
+  const boxH = 20 + (ready.blocks.length + ready.warnings.length) * 11
+  doc.rect(M, y, PAGE.w - M * 2, boxH).fillAndStroke(bg, fg)
+  doc.fillColor(fg).fontSize(11).font('Helvetica-Bold').text(ready.verdict, M + 8, y + 6)
+  doc.fontSize(7.5).font('Helvetica')
+  let ly = y + 19
+  for (const b of ready.blocks) { doc.text('BLOCKED: ' + b, M + 8, ly, { width: PAGE.w - M * 2 - 16 }); ly += 11 }
+  for (const w of ready.warnings) { doc.text('- ' + w, M + 8, ly, { width: PAGE.w - M * 2 - 16 }); ly += 11 }
+  doc.fillColor('black')
+  y += boxH + 8
+  doc.fontSize(7.5).font('Helvetica').fillColor('#555')
+    .text(`${ready.shipping} units across ${ready.ordersShipping} orders · ${ready.ordersAdjusted} orders adjusted · ${ready.note}`, M, y, { width: PAGE.w - M * 2 })
+  doc.fillColor('black'); y += 22
+
   // ── ⚠️ The cut list, on the same sheet ──
   //
   // "make sure we know where we cut our units so we can adjust when we make our
@@ -135,5 +157,5 @@ export function bulkPickPdf(demand, available, { rule: ruleName, ruleOptions = {
       }
     }
   }
-  return { doc, shortfall: short, plan, adjustments }
+  return { doc, shortfall: short, plan, adjustments, ready }
 }

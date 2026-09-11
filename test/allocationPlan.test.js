@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos,
+  shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos, DECIDING_RULES,
 } from '../src/model/allocationPlan.js'
 
 // The one contended SKU: 137 wanted, 72 in the Bloomingdale's location.
@@ -49,7 +49,9 @@ test('⚠️ NO RULE INVENTS OR LOSES UNITS — but only some ship every one', (
   // existed. That rule legitimately strands units — once every line that FITS is
   // filled, the remainder is smaller than any unfilled line — so the invariant is
   // narrower than it was: shipped + stranded == stock, and shipped + cut == demand.
-  for (const rule of Object.keys(RULES)) {
+  // ⚠️ DECIDING_RULES, not every key in RULES — 'as-committed' reads NetSuite's
+  // answer back and has nothing to decide, so it has no invariant to satisfy here.
+  for (const rule of DECIDING_RULES) {
     const p = allocate(CASHMERE, AVAIL, { rule, ruleOptions: { order: ['1236132', '1236143'] } })
     const shipped = p.lines.reduce((a, l) => a + l.allocated, 0)
     const cut = p.lines.reduce((a, l) => a + l.cut, 0)
@@ -95,7 +97,7 @@ test('⚠️ PRO-RATA IS DETERMINISTIC — not dependent on row order', () => {
 
 test('no shortage means everyone is filled, whatever the rule', () => {
   const plenty = { 'SN03012LD-CASHMERE': 500 }
-  for (const rule of Object.keys(RULES)) {
+  for (const rule of DECIDING_RULES) {
     const p = allocate(CASHMERE, plenty, { rule, ruleOptions: { order: [] } })
     assert.equal(p.cuts.length, 0, rule)
     assert.equal(p.lines.every((l) => l.allocated === l.qty), true, rule)
@@ -261,4 +263,37 @@ test('the real demand set passes the check', () => {
   assert.equal(s.clean, true)
   assert.deepEqual(s.marked, [])
   assert.deepEqual(s.overlapping, [])
+})
+
+test("⚠️ 'as-committed' PRINTS NETSUITE'S DECISION, IT DOES NOT MAKE ONE", () => {
+  // Nima allocates by hand on the Order Allocation screen, and that screen is the
+  // system of record — what it commits is what will pick. The live commitment on
+  // 2026-09-11 for SN03012LD-CASHMERE: CFC 0 of 50, Boca Raton 4 of 10, Orlando 0
+  // of 2, Sherman Oaks 0 of 3, Soho 0 of 4; everything else full.
+  const lines = [
+    { po: '1236132', order: 'SO12577', store: '0231-CFC', sku: 'K', qty: 50, committed: 0 },
+    { po: '1236143', order: 'SO12601', store: '0002', sku: 'K', qty: 10, committed: 4 },
+    { po: '1236143', order: 'SO12588', store: '0058', sku: 'K', qty: 6, committed: 6 },
+  ]
+  const p = allocate(lines, { K: 72 }, { rule: 'as-committed' })
+  assert.equal(p.lines.find((l) => l.order === 'SO12577').cut, 50)
+  assert.equal(p.lines.find((l) => l.order === 'SO12601').allocated, 4)
+  assert.equal(p.lines.find((l) => l.order === 'SO12601').cut, 6)
+  assert.equal(p.lines.find((l) => l.order === 'SO12588').cut, 0)
+})
+
+test('⚠️ AND IT REPORTS A COMMITMENT THAT EXCEEDS STOCK RATHER THAN TRIMMING IT', () => {
+  // Silently clamping the ticket to what is on hand would hide a real NetSuite
+  // problem behind a tidy-looking piece of paper.
+  const lines = [{ po: 'P', order: 'S1', store: 'a', sku: 'K', qty: 100, committed: 100 }]
+  const p = allocate(lines, { K: 10 }, { rule: 'as-committed' })
+  assert.equal(p.lines[0].allocated, 100)
+  assert.deepEqual(p.overCommitted.K, { committed: 100, onHand: 10 })
+})
+
+test('as-committed never invents units beyond what was ordered', () => {
+  const lines = [{ po: 'P', order: 'S1', store: 'a', sku: 'K', qty: 5, committed: 99 }]
+  const p = allocate(lines, { K: 99 }, { rule: 'as-committed' })
+  assert.equal(p.lines[0].allocated, 5)
+  assert.equal(p.lines[0].cut, 0)
 })

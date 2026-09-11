@@ -115,6 +115,25 @@ export function shortfall(lines = [], available = {}) {
  */
 export const RULES = {
   /**
+   * ⚠️ NOT A RULE — THE ANSWER, READ BACK FROM NETSUITE.
+   *
+   * Nima allocates by hand on NetSuite's Order Allocation screen, and that screen is
+   * the system of record: what it commits is what will pick. So this takes each
+   * line's `committed` quantity as given and computes the cut from it, rather than
+   * deciding anything.
+   *
+   * Use it to PRINT what was decided. The computing rules are for deciding.
+   *
+   * ⚠️ It does not clamp to `units`, on purpose. If the commitments exceed what is on
+   * hand that is a real problem in NetSuite, and silently trimming the ticket would
+   * hide it — `overCommitted` on the plan reports it instead.
+   */
+  'as-committed': (lines) => lines.map((l) => {
+    const c = Math.min(int(l.committed), int(l.qty))
+    return { ...l, allocated: c, cut: int(l.qty) - c }
+  }),
+
+  /**
    * Proportional, using the largest-remainder method.
    *
    * ⚠️ ROUNDING IS THE WHOLE PROBLEM WITH PRO-RATA. Rounding each share
@@ -225,6 +244,15 @@ export const RULES = {
 }
 
 /**
+ * ⚠️ THE RULES THAT DECIDE, as opposed to 'as-committed' which reports.
+ *
+ * compareRules and any "what if" view must use THIS list. Putting a read-back of
+ * NetSuite's answer alongside three hypotheticals and calling them all rules invites
+ * comparing a decision against itself.
+ */
+export const DECIDING_RULES = Object.keys(RULES).filter((r) => r !== 'as-committed')
+
+/**
  * Allocate every SKU under one rule.
  *
  * ⚠️ THE RULE IS REQUIRED. See RULES — there is no sensible default for "who goes
@@ -244,6 +272,9 @@ export function allocate(lines = [], available = {}, { rule, ruleOptions = {} } 
   for (const [sku, group] of bySku) {
     const units = int(available[sku])
     const demand = group.reduce((a, l) => a + int(l.qty), 0)
+    // ⚠️ 'as-committed' is applied even when there is no shortage — it reports what
+    // NetSuite holds, and a line can be uncommitted for reasons other than stock.
+    if (rule === 'as-committed') { allocated.push(...RULES['as-committed'](group)); continue }
     // No shortage: everyone gets what they asked for, whatever the rule.
     if (units >= demand) {
       allocated.push(...group.map((l) => ({ ...l, allocated: int(l.qty), cut: 0 })))
@@ -262,8 +293,16 @@ export function allocate(lines = [], available = {}, { rule, ruleOptions = {} } 
     if (spareHere > 0 && demand > int(available[sku])) stranded[sku] = spareHere
   }
 
+  // ⚠️ COMMITTED MORE THAN EXISTS is a NetSuite problem, not a printing one.
+  const overCommitted = {}
+  for (const [sku] of bySku) {
+    const used = allocated.filter((l) => l.sku === sku).reduce((a, l) => a + l.allocated, 0)
+    if (used > int(available[sku])) overCommitted[sku] = { committed: used, onHand: int(available[sku]) }
+  }
+
   return {
     rule,
+    overCommitted,
     stranded,
     strandedUnits: Object.values(stranded).reduce((a, n) => a + n, 0),
     lines: allocated,
@@ -321,7 +360,7 @@ export function invoiceAdjustments(plan) {
  * absorbs it, which is the only thing worth deciding.
  */
 export function compareRules(lines, available, { priorityOrder = [] } = {}) {
-  return Object.keys(RULES).map((rule) => {
+  return DECIDING_RULES.map((rule) => {
     const plan = allocate(lines, available, { rule, ruleOptions: { order: priorityOrder } })
     return {
       rule,
@@ -343,4 +382,60 @@ export function compareRules(lines, available, { priorityOrder = [] } = {}) {
       byPo: plan.totals,
     }
   })
+}
+
+
+/**
+ * ⚠️ AM I CLEAR TO FULFIL? — Nima, 2026-09-11: "let me know when im gond to
+ * fulfille them".
+ *
+ * A go/no-go, with the reason on every no. The checks are the things that make an
+ * Item Fulfilment wrong rather than merely short:
+ *
+ *   over-committed   NetSuite holds more committed than exists. The IF will fail or
+ *                    take stock that is not there.
+ *   partial cuts     A line shipping some-but-not-all of a SKU. Nima's rule is ship
+ *                    minus a SKU, never short on one — so a partial is a deviation
+ *                    and he should see it before it goes out, not after.
+ *   nothing to ship  An order where every line came out zero: that is a cancellation
+ *                    conversation, not a fulfilment.
+ *   uncommitted      Lines still at zero that are NOT on the cut list — usually
+ *                    someone stopped half way through the allocation screen.
+ *
+ * ⚠️ IT DOES NOT CHECK THAT THE STOCK IS PHYSICALLY THERE. NetSuite's on-hand is a
+ * number in a database; the pick is what proves it. "Ready" here means the paperwork
+ * is coherent, not that 72 units are on the shelf.
+ */
+export function readyToFulfil(plan, available = {}) {
+  const blocks = []
+  const warnings = []
+
+  for (const [sku, o] of Object.entries(plan.overCommitted || {})) {
+    blocks.push(`${sku}: committed ${o.committed} but only ${o.onHand} on hand — fix the allocation before fulfilling.`)
+  }
+
+  const partials = plan.lines.filter((l) => l.allocated > 0 && l.cut > 0)
+  for (const p of partials) {
+    warnings.push(`${p.order} ${p.store ?? ''} ships ${p.allocated} of ${p.qty} ${p.sku} — a PARTIAL. The rule is ship minus a SKU, not short on one.`)
+  }
+
+  const nothing = invoiceAdjustments(plan).filter((o) => o.shipsNothing)
+  for (const o of nothing) {
+    warnings.push(`${o.order} ${o.store ?? ''} ships NOTHING — cancel it rather than fulfilling an empty order.`)
+  }
+
+  return {
+    ready: blocks.length === 0,
+    blocks,
+    warnings,
+    // What the fulfilment will actually contain, so it can be checked against the pick.
+    shipping: plan.lines.reduce((a, l) => a + l.allocated, 0),
+    cut: plan.lines.reduce((a, l) => a + l.cut, 0),
+    ordersShipping: new Set(plan.lines.filter((l) => l.allocated > 0).map((l) => l.order)).size,
+    ordersAdjusted: new Set(plan.lines.filter((l) => l.cut > 0).map((l) => l.order)).size,
+    verdict: blocks.length ? 'DO NOT FULFIL'
+      : warnings.length ? 'CLEAR TO FULFIL — with the notes below'
+        : 'CLEAR TO FULFIL',
+    note: 'On-hand is a number in NetSuite. This says the paperwork is coherent, not that the units are on the shelf — the pick proves that.',
+  }
 }
