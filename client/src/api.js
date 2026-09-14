@@ -1327,3 +1327,21 @@ export async function printSlipMarkings({ shipmentId, size = '2.25x1.25', carton
   if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
   return body
 }
+
+// The pallet placard (§12.6). ⚠️ `pallets` and the per-pallet split are facts from the
+// floor — nothing in our data knows them, so they are passed in and refused if absent.
+export const palletLabelPdfUrl = (shipmentId, { size = '4x6', pallets = 1, perPallet = null, copies = 1 } = {}) => {
+  const q = new URLSearchParams({ shipmentId, size, pallets: String(pallets), copies: String(copies) })
+  if (perPallet) q.set('perPallet', perPallet)
+  return `/api/exemplar/pallet-label.pdf?${q}`
+}
+
+export async function printPalletLabels({ shipmentId, size = '4x6', pallets = 1, perPallet = null, copies = 1 }) {
+  const res = await fetch('/api/exemplar/pallet-label/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipmentId, size, pallets, perPallet, copies }),
+  })
+  const body = await asJson(res, 'printing the pallet placards')
+  if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
+  return body
+}

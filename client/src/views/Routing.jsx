@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings, palletLabelPdfUrl, printPalletLabels,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES } from '../../../src/model/saksRouting.js'
@@ -1098,6 +1098,7 @@ function BolActions({ s }) {
              title={'The same six markings on 4x6 — tight on the 24x14x4 cartons.'}>
             ×6 on 4×6 ↗
           </a>
+          <PalletLabels shipmentId={s.id} cartons={g.cartons} />
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">
             ½ ↗
@@ -1694,4 +1695,65 @@ function PrintMarkingsButton({ shipmentId }) {
       {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
     </>
   )
+}
+
+
+// The pallet placard (§12.6, $250 minimum).
+//
+// ⚠️ THE PALLET COUNT IS ASKED FOR, NOT ASSUMED. Nothing in our data says how many
+// pallets a shipment was built onto — that is a fact from the floor — and with more
+// than one, nothing says which carton went on which either. The model refuses a split
+// it was not given rather than dividing 22 by 3 and printing a confident wrong count,
+// which is exactly what §12.6 charges for.
+function PalletLabels({ shipmentId, cartons }) {
+  const [pallets, setPallets] = useState(1)
+  const [perPallet, setPerPallet] = useState('')
+  const [state, setState] = useState(null)
+  const n = Math.max(1, Number(pallets) || 1)
+  const opts = { pallets: n, perPallet: n > 1 ? perPallet : null }
+
+  async function go() {
+    setState({ busy: true })
+    try {
+      const r = await printPalletLabels({ shipmentId, ...opts })
+      setState({ msg: `Sent ${r.pallets} placard${r.pallets === 1 ? '' : 's'} to ${r.printer}.`, ok: true })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+
+  return (
+    <span className="rt-pallet">
+      <label className="muted">Pallets
+        <input className="qtyInput" style={{ width: 44, marginLeft: 4 }} value={pallets}
+               onChange={(e) => setPallets(e.target.value)} />
+      </label>
+      {n > 1 && (
+        <label className="muted"> cartons each
+          <input className="qtyInput" style={{ width: 90, marginLeft: 4 }} value={perPallet}
+                 placeholder={`e.g. ${splitHint(cartons, n)}`}
+                 onChange={(e) => setPerPallet(e.target.value)} />
+        </label>
+      )}
+      <a className="btnGhost" href={palletLabelPdfUrl(shipmentId, opts)} target="_blank" rel="noreferrer"
+         title="The pallet placard — §12.6, p37. Preview before printing.">
+        Pallet label ↗
+      </a>
+      <button className="btnGhost" disabled={state?.busy} onClick={go}
+              title="Print the placards to the warehouse Zebra on 4x6 thermal stock.">
+        {state?.busy ? 'Printing…' : '🖨 → 4×6'}
+      </button>
+      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
+    </span>
+  )
+}
+
+// ⚠️ A HINT IN A PLACEHOLDER, NOT A DEFAULT IN THE FIELD. An even division is a
+// plausible guess and almost never how a pallet is actually built; offering it as
+// greyed-out example text keeps it a suggestion rather than something that gets
+// submitted unread.
+function splitHint(cartons, n) {
+  const total = Number(cartons) || 0
+  if (!total || n < 2) return ''
+  const base = Math.floor(total / n)
+  const out = Array.from({ length: n }, (_, i) => base + (i < total % n ? 1 : 0))
+  return out.join(',')
 }

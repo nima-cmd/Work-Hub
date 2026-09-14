@@ -8,6 +8,9 @@ import { manifestPdf } from './exemplarManifestPdf.js'
 import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
 import { cartonGuidePdf } from './cartonGuidePdf.js'
 import { slipMarkingPdf } from './slipMarkingPdf.js'
+import { palletLabelPdf } from './palletLabelPdf.js'
+import { palletPlan } from '../src/model/palletLabel.js'
+import { DCS } from '../src/model/exemplarStores.js'
 import { consigneeCompany } from '../src/model/exemplarStores.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
@@ -632,6 +635,58 @@ app.post('/api/exemplar/slip-marking/print', async (req, res) => {
     const { doc, plan } = await slipMarkingPdf({ box, size, po, carton })
     const out = await printPdfDoc(doc, size, `slip-marking-${po || 'carton'}`)
     res.json({ ...out, faces: plan ? plan.faces.length : 6, tight: plan ? plan.tight.length : 0 })
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// The pallet placard (§12.6, p37) — preview, and print to the warehouse Zebra.
+//
+// ⚠️ THE PALLET COUNT AND THE SPLIT COME FROM THE CALLER, because they are facts from
+// the floor. Nothing in our data says how many pallets a shipment was built onto or
+// which carton went on which — and a placard with the wrong carton count is precisely
+// what §12.6 charges $250 for.
+async function palletLabelsFor(query) {
+  const { cartons, shipment } = await getExemplarDocData(query.shipmentId, { on: query.on || null })
+  const head = cartons[0]
+  const pallets = Math.max(1, Number(query.pallets) || 1)
+  const perPallet = query.perPallet
+    ? String(query.perPallet).split(',').map((n) => Number(n.trim())).filter((n) => !Number.isNaN(n))
+    : null
+  const plan = palletPlan({
+    cartons: cartons.length, pallets, perPallet,
+    operatingCompany: head.operatingCompany, po: head.po, department: head.department,
+    store: head.store, storeAbbrev: head.storeAbbrev, dc: shipment.dc,
+    dcName: (DCS[String(shipment.dc).replace(/^0+/, '')] || {}).name || null,
+  })
+  if (!plan.ok) throw new Error(plan.why)
+  return { plan, head }
+}
+
+app.get('/api/exemplar/pallet-label.pdf', async (req, res) => {
+  try {
+    const { plan, head } = await palletLabelsFor(req.query)
+    const doc = await palletLabelPdf(plan.labels, { size: req.query.size || '4x6', copies: Number(req.query.copies) || 1 })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="pallet-labels-${head.po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Pallet label not available.\n\n${e.message}`)
+  }
+})
+
+// ⚠️ A CLICK, NEVER A SIDE EFFECT — the rule the carton labels taught. Nima asked for
+// this one to reach the 4x6 printer, and the preview link sits beside it.
+app.post('/api/exemplar/pallet-label/print', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const { plan } = await palletLabelsFor(b)
+    const size = b.size || '4x6'
+    const doc = await palletLabelPdf(plan.labels, { size, copies: Number(b.copies) || 1 })
+    const out = await printPdfDoc(doc, size, `pallet-labels-${plan.labels[0].po}`)
+    res.json({ ...out, pallets: plan.labels.length, copies: Number(b.copies) || 1 })
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
