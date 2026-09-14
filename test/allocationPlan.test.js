@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   shortfall, allocate, invoiceAdjustments, compareRules, RULES, supersededPos, DECIDING_RULES, wholeCutOptions,
+  RULE_DESCRIPTIONS, SELECTABLE_RULES,
 } from '../src/model/allocationPlan.js'
 
 // The one contended SKU: 137 wanted, 72 in the Bloomingdale's location.
@@ -359,4 +360,27 @@ test('no shortage means nothing to cut', () => {
   const r = wholeCutOptions([{ order: 'A', store: 'a', qty: 5 }], 0)
   assert.equal(r.exact, true)
   assert.deepEqual(r.options, [])
+})
+
+// ── The rule selector's contract ────────────────────────────────────────────
+
+test('⚠️ EVERY RULE IS DESCRIBED — an undescribed rule would reach the screen as a bare slug', () => {
+  // The rules refuse to have a default because choosing one decides who goes short.
+  // That refusal buys nothing if the selector shows five slugs with no consequence:
+  // the user picks the first, which is a default with extra steps.
+  for (const rule of Object.keys(RULES)) {
+    const d = RULE_DESCRIPTIONS[rule]
+    assert.ok(d, `rule "${rule}" has no description — add one before it can be offered`)
+    assert.ok(d.label && d.does && d.costs, `rule "${rule}" must say what it does AND what it costs`)
+  }
+})
+
+test('SELECTABLE_RULES leaves out any rule that needs something the screen cannot collect', () => {
+  // `priority` fills POs in a named order, and with no order every PO ranks equal —
+  // the answer then falls back to query order, an arbitrary commercial decision
+  // wearing the name of a rule. Offering it unarmed is worse than not offering it.
+  assert.ok(!SELECTABLE_RULES.includes('priority'))
+  assert.ok(SELECTABLE_RULES.includes('whole-line-smallest-first'))
+  assert.ok(SELECTABLE_RULES.includes('as-committed'))
+  for (const rule of SELECTABLE_RULES) assert.ok(RULES[rule], `"${rule}" is not a rule`)
 })

@@ -253,6 +253,53 @@ export const RULES = {
 export const DECIDING_RULES = Object.keys(RULES).filter((r) => r !== 'as-committed')
 
 /**
+ * ⚠️ WHAT EACH RULE DOES AND WHAT IT COSTS, IN WORDS, FOR THE PERSON CHOOSING ONE.
+ *
+ * The rules above refuse to have a default because picking one decides which customer
+ * is disappointed. That refusal is worth nothing if the screen offering them shows
+ * five slugs and no consequence — the user would pick the first, which is a default
+ * with extra steps. So every rule carries the sentence that would be said aloud
+ * before choosing it, and `needs` names what a rule cannot run without.
+ *
+ * A rule with no description is a rule that would appear on screen unexplained, so
+ * the test asserts every key of RULES has one.
+ */
+export const RULE_DESCRIPTIONS = {
+  'whole-line-smallest-first': {
+    label: 'Whole lines, smallest first',
+    does: 'Fills each line entirely or not at all, taking the smallest first — an order ships MINUS a SKU, never short on one.',
+    costs: 'Strands the remainder: once every line that fits is filled, what is left is smaller than any unfilled line.',
+  },
+  'fill-smallest-first': {
+    label: 'Fill smallest orders first',
+    does: 'Serves the most destinations — the greatest number of stores get something.',
+    costs: 'Guts the large orders, and the last order filled takes a PARTIAL cut on a SKU.',
+  },
+  'pro-rata': {
+    label: 'Pro rata',
+    does: 'Every order takes the same proportional hit, by largest remainder, so the total is exactly the stock available.',
+    costs: 'Every order is short on a SKU — it is the rule that produces the most partials.',
+  },
+  priority: {
+    label: 'Named priority order',
+    does: 'Fills the POs in an order you name, first PO complete before the next gets any.',
+    costs: 'Whoever is last gets nothing.',
+    // ⚠️ IT CANNOT RUN WITHOUT THE ORDER. With no list every PO ranks equal and the
+    // answer falls back to query order — an arbitrary commercial decision wearing the
+    // name of a rule. A surface that cannot collect the order must not offer this.
+    needs: 'the PO order to fill in — not yet enterable on this screen',
+  },
+  'as-committed': {
+    label: 'As committed in NetSuite',
+    does: 'Not a rule — it PRINTS what NetSuite already holds, so the sheet matches the Order Allocation screen.',
+    costs: 'Decides nothing. If nothing is committed it refuses rather than reading every line as zero.',
+  },
+}
+
+/** The rules a screen can offer today: described, and with nothing missing. */
+export const SELECTABLE_RULES = Object.keys(RULES).filter((r) => !RULE_DESCRIPTIONS[r]?.needs)
+
+/**
  * Allocate every SKU under one rule.
  *
  * ⚠️ THE RULE IS REQUIRED. See RULES — there is no sensible default for "who goes

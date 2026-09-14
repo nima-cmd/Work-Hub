@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { fetchBulkPick, bulkPickPdfUrl } from '../api.js'
+import { RULE_DESCRIPTIONS, SELECTABLE_RULES } from '../../../src/model/allocationPlan.js'
 
 // Bulk pick ticket — replaces the NetSuite "Bulk Pick & Ship Manifest" Suitelet.
 //
@@ -22,15 +23,26 @@ export default function BulkPick({ handoffPo, onHandoffPoTaken }) {
   // printing what someone has half-typed instead of what is on screen is the same
   // disagreement the PDF route exists to prevent.
   const [built, setBuilt] = useState('')
+  // The shortage plan, if one has been asked for. ⚠️ TWO PAIRS, NOT ONE. `rule`/`pool`
+  // are what the selects hold; `plan` is what the ticket on screen was actually built
+  // with. Printing from the selects would hand someone a sheet for a rule they had
+  // started choosing and not applied — the same disagreement `built` exists to prevent.
+  const [rule, setRule] = useState('')
+  const [pool, setPool] = useState('')
+  const [plan, setPlan] = useState(null)
 
-  const build = async (text) => {
+  const build = async (text, opts = null) => {
     setBusy(true); setErr(null)
     try {
-      setT(await fetchBulkPick(text))
-      setBuilt(text)
-    } catch (x) { setErr(x.message); setT(null); setBuilt('') } finally { setBusy(false) }
+      setT(await fetchBulkPick(text, opts || {}))
+      setBuilt(text); setPlan(opts)
+    } catch (x) { setErr(x.message); setT(null); setBuilt(''); setPlan(null) } finally { setBusy(false) }
   }
-  const run = (e) => { e?.preventDefault(); return build(pos) }
+  // ⚠️ BUILDING A PLAIN TICKET CLEARS THE PLAN. New POs mean a different pool of demand,
+  // and leaving last run's cuts on screen beside them would attribute one PO's shortage
+  // to another's orders.
+  const run = (e) => { e?.preventDefault(); setRule(''); setPool(''); return build(pos, null) }
+  const planRun = (e) => { e?.preventDefault(); return build(built, { rule, pool }) }
 
   // Arriving from a Kanban card: the PO is filled in AND the ticket is built, because
   // clicking a PO to come here IS the request for its ticket — landing on a filled box
@@ -68,7 +80,7 @@ export default function BulkPick({ handoffPo, onHandoffPoTaken }) {
               banners and all — to the printer and produced nothing usable. The ticket is
               a document; the server renders it (server/pickTicketPdf.js). */}
           {t && (
-            <a className="btnGhost" href={bulkPickPdfUrl(built)} target="_blank" rel="noreferrer">
+            <a className="btnGhost" href={bulkPickPdfUrl(built, plan || {})} target="_blank" rel="noreferrer">
               🖨 Print ticket
             </a>
           )}
@@ -77,7 +89,224 @@ export default function BulkPick({ handoffPo, onHandoffPoTaken }) {
 
       {err && <div className="banner error">⚠ {err}</div>}
       {t && <Ticket t={t} />}
+      {t && <Planner t={t} rule={rule} setRule={setRule} pool={pool} setPool={setPool}
+                     onPlan={planRun} busy={busy} plan={plan} />}
+      {t?.allocation && <Allocation a={t.allocation} />}
     </div>
+  )
+}
+
+// ── Choosing the plan ───────────────────────────────────────────────────────
+//
+// ⚠️ NEITHER SELECT HAS A DEFAULT, AND THAT IS THE POINT OF THE SCREEN. The pool
+// decides which stock may be used — "what we have in the warehouse for bloomingdaels
+// is all we can use" — and the rule decides which customer is disappointed. The model
+// refuses to guess either; a screen that pre-selected the first option would make both
+// decisions silently and then show the answer as though someone had chosen it.
+//
+// ⚠️ AND THE RULES ARE SHOWN WITH WHAT THEY COST, not as five slugs. A list of names
+// with no consequence gets the first one picked, which is a default with extra steps.
+function Planner({ t, rule, setRule, pool, setPool, onPlan, busy, plan }) {
+  const pools = t.stockColumns || []
+  // ⚠️ UNKNOWN STOCK CANNOT BE ALLOCATED. If the on-hand read failed the pools are all
+  // "?" — planning against them would allocate zero to everyone and call it a decision.
+  if (t.stockKnown === false) {
+    return (
+      <div className="banner error">
+        ⚠ No shortage plan while on-hand is unknown — allocating against a column that
+        could not be read would cut every order to nothing and present it as a decision.
+        Rebuild the ticket once NetSuite answers.
+      </div>
+    )
+  }
+  if (!pools.length) return null
+  const d = rule ? RULE_DESCRIPTIONS[rule] : null
+  return (
+    <form className="questComposer" onSubmit={onPlan} style={{ alignItems: 'flex-end', marginTop: 16 }}>
+      <label className="composerField" style={{ minWidth: 220 }}>Stock pool
+        <select className="qtyInput" style={{ width: '100%' }}
+                value={pool} onChange={(e) => setPool(e.target.value)}>
+          <option value="">— choose a pool —</option>
+          {pools.map((c) => (
+            <option key={c.id} value={c.name}>
+              {c.name}{c.isOrderLocation ? " (this order's own location)" : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="composerField" style={{ minWidth: 260 }}>Allocation rule
+        <select className="qtyInput" style={{ width: '100%' }}
+                value={rule} onChange={(e) => setRule(e.target.value)}>
+          <option value="">— choose a rule —</option>
+          {SELECTABLE_RULES.map((r) => (
+            <option key={r} value={r}>{RULE_DESCRIPTIONS[r].label}</option>
+          ))}
+        </select>
+      </label>
+      <div className="composerActions">
+        <button className="btn" disabled={busy || !rule || !pool}>
+          {busy ? 'Asking NetSuite…' : plan ? 'Re-plan' : 'Plan the shortage'}
+        </button>
+      </div>
+      {d && (
+        <div className="muted rt-sub" style={{ flexBasis: '100%' }}>
+          <b>{d.label}</b> — {d.does} <b>Costs:</b> {d.costs}
+        </div>
+      )}
+      {/* The rules that exist but cannot be armed from here, named rather than hidden —
+          a rule that silently disappears looks like one that does not exist. */}
+      {Object.entries(RULE_DESCRIPTIONS).filter(([, x]) => x.needs).map(([k, x]) => (
+        <div key={k} className="muted rt-sub" style={{ flexBasis: '100%' }}>
+          <i>{x.label}</i> is not offered here — it needs {x.needs}.
+        </div>
+      ))}
+    </form>
+  )
+}
+
+// ── The shortage, the cuts, and what is left in the building ────────────────
+function Allocation({ a }) {
+  const r = a.ready
+  return (
+    <>
+      <h3 style={{ marginTop: 24 }}>
+        Shortage plan <span className="muted">· {RULE_DESCRIPTIONS[a.rule]?.label || a.rule} · from {a.pool}</span>
+      </h3>
+
+      {/* ⚠️ THE VERDICT FIRST, AND A BLOCK IS NOT A WARNING. `blocks` means the
+          paperwork is incoherent — over-committed against on-hand — and fulfilling on
+          it makes a real mess in NetSuite. `warnings` are things to know while doing it. */}
+      <div className={'banner' + (r.ready ? '' : ' error')}>
+        <b>{r.verdict}</b> — {r.shipping} units shipping across {r.ordersShipping} order{r.ordersShipping === 1 ? '' : 's'},
+        {' '}{r.cut} cut across {r.ordersAdjusted}.
+        <div className="muted" style={{ marginTop: 4 }}>{r.note}</div>
+      </div>
+      {r.blocks.map((b, i) => <div key={i} className="banner error">⛔ {b}</div>)}
+      {r.warnings.map((w, i) => <div key={i} className="banner">⚠ {w}</div>)}
+
+      {/* ⚠️ STRANDED UNITS ARE REPORTED, NOT HIDDEN. Whole-line rules leave a remainder
+          smaller than any unfilled line. A pick of 67 against 72 on hand otherwise
+          reads as a counting error to whoever is holding the ticket. */}
+      {a.strandedUnits > 0 && (
+        <div className="banner">
+          ⚠ <b>{a.strandedUnits}</b> unit{a.strandedUnits === 1 ? '' : 's'} left in the building —{' '}
+          {Object.entries(a.stranded).map(([sku, n]) => `${sku}: ${n}`).join(' · ')}. That is the
+          cost of shipping whole lines, not a miscount.
+        </div>
+      )}
+
+      {/* ⚠️ "SHORT" NOW MEANS TWO DIFFERENT THINGS ON ONE SCREEN, AND IT HAS TO SAY SO.
+          The ticket above computes short against EVERY location it read; this table
+          computes it against the ONE pool that was chosen. Live on POs 1236143+1236132
+          that is 62 up there and 65 down here for the same SKU — 3 units sitting in
+          Warehouse that the Bloomingdale's pool may not draw on. Two numbers under the
+          same word with nothing between them is precisely the counter shape this repo
+          keeps finding: it counts something other than its label. */}
+      <h4>Demand against the pool</h4>
+      <div className="muted rt-sub">
+        ⚠ <b>Short here is short against <i>{a.pool}</i> alone</b>, which is why it can
+        exceed the ticket's own Short column above — that one counts stock in every
+        location, including ones this pool may not use.
+      </div>
+      <table className="cat-table">
+        <thead><tr>
+          <th>SKU</th><th className="num">Wanted</th><th className="num">In pool</th>
+          <th className="num">Short</th><th className="num">Spare</th>
+        </tr></thead>
+        <tbody>
+          {a.shortfall.rows.map((row) => (
+            <tr key={row.sku} className={row.short > 0 ? 'rowShort' : undefined}>
+              <td><b>{row.sku}</b></td>
+              <td className="num">{row.demand}</td>
+              <td className="num">{row.available}</td>
+              <td className="num">{row.short > 0 ? <b className="shortQty">{row.short}</b> : ''}</td>
+              <td className="num">{row.spare || ''}</td>
+            </tr>
+          ))}
+          <tr>
+            <td><b>Total</b></td>
+            <td className="num"><b>{a.shortfall.totalDemand}</b></td>
+            <td className="num" />
+            <td className="num"><b>{a.shortfall.totalShort || ''}</b></td>
+            <td className="num" />
+          </tr>
+        </tbody>
+      </table>
+      {/* ⚠️ SPARE IS NOT A SUBSTITUTION OFFER. Every partner guide here says do not
+          substitute; it is shown so it is visible, never as a way to close a shortage. */}
+      {!!a.shortfall.spareSkus.length && (
+        <div className="muted cat-imported">
+          Spare stock is shown because it is there, <b>not</b> as something to substitute —
+          every partner routing guide here forbids it.
+        </div>
+      )}
+
+      {/* ── What to cut, per order, keyed to the fulfilment ──────────────── */}
+      <h4 style={{ marginTop: 20 }}>
+        Cut list <span className="muted">· what to adjust on the invoice</span>
+      </h4>
+      {a.invoiceAdjustments.length === 0 ? (
+        <div className="rt-empty">Nothing is cut — every order ships complete from this pool.</div>
+      ) : (
+        <table className="cat-table">
+          <thead><tr>
+            <th>Order</th><th>Fulfilment</th><th>PO</th><th>Store</th>
+            <th>Cut</th><th className="num">Ordered</th><th className="num">Shipping</th><th className="num">Cut</th>
+          </tr></thead>
+          <tbody>
+            {a.invoiceAdjustments.map((o) => (
+              <tr key={o.order} className={o.shipsNothing ? 'rowShort' : undefined}>
+                <td><b>{o.order}</b></td>
+                {/* ⚠️ THE IF NUMBER, BECAUSE THE INVOICE AND THE ASN ARE RAISED AGAINST
+                    THE FULFILMENT. A short list keyed only on sales orders makes
+                    whoever is invoicing look every one of them up. */}
+                <td>{o.iff || <span className="muted">not fulfilled yet</span>}</td>
+                <td>{o.po}</td>
+                <td>{o.store}</td>
+                <td>{o.lines.map((l) => `${l.sku} −${l.cut}`).join(' · ')}</td>
+                <td className="num">{o.ordered}</td>
+                <td className="num">{o.shipping}</td>
+                <td className="num"><b className="shortQty">{o.cut}</b></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {a.invoiceAdjustments.some((o) => o.shipsNothing) && (
+        <div className="banner error">
+          ⚠ Highlighted orders ship <b>nothing</b> — cancel them rather than raising an
+          empty fulfilment and an invoice against it.
+        </div>
+      )}
+
+      {/* ── The whole-order cuts that cover the shortage exactly ─────────── */}
+      {Object.entries(a.options || {}).map(([sku, o]) => (
+        <div key={sku} style={{ marginTop: 16 }}>
+          <h4>Whole orders totalling exactly {o.target} of {sku}</h4>
+          {/* ⚠️ AN ALTERNATIVE TO THE CUT LIST ABOVE, NOT AN ADDITION TO IT. These sets
+              cover the shortage EXACTLY, so they strand nothing — which the rule above
+              cannot always manage. Read as extra cuts they would double the damage. */}
+          <div className="muted rt-sub">
+            Each is a <b>replacement</b> for the cut list above, not an addition — cutting
+            these whole orders covers the shortage exactly and strands nothing.
+          </div>
+          {/* ⚠️ "NO EXACT SET" IS AN ANSWER, NOT AN EMPTY LIST. It means a partial cut
+              or stranded units are unavoidable for this SKU, which is worth saying. */}
+          {!o.exact ? (
+            <div className="rt-empty">{o.note}</div>
+          ) : (
+            <ul className="muted">
+              {o.options.map((opt, i) => (
+                <li key={i}>
+                  <b>{opt.count} order{opt.count === 1 ? '' : 's'}</b>:{' '}
+                  {opt.orders.map((x) => `${x.order} ${x.store ?? ''} (${x.qty})`).join(' + ')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </>
   )
 }
 

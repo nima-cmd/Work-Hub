@@ -40,10 +40,14 @@ export async function clearTransferReceipt(toNumber) {
 // The bulk pick ticket. ⚠️ Reads NetSuite LIVE — a document someone walks the floor with
 // must not come from an hourly mirror, so this can be slow and can fail, and both are
 // better than a confidently stale pick sheet.
-export async function fetchBulkPick(pos) {
+// ⚠️ `rule` and `pool` TRAVEL TOGETHER AND NEITHER IS DEFAULTED HERE. The server
+// refuses one without the other rather than guessing, and this passes both through
+// as-is so that refusal reaches the screen instead of being pre-empted by a client
+// that invented an answer. Without them this is the ticket it has always been.
+export async function fetchBulkPick(pos, { rule = null, pool = null } = {}) {
   const res = await fetch('/api/bulk-pick', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pos }),
+    body: JSON.stringify({ pos, rule, pool }),
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(body.error || `API ${res.status}`)
@@ -53,7 +57,15 @@ export async function fetchBulkPick(pos) {
 // The pick ticket as a PDF. ⚠️ A URL, NOT A FETCH — the button opens this directly in the
 // click, because fetching the bytes and calling window.open() afterwards is what browsers
 // block as a popup. See the route in server/index.js.
-export const bulkPickPdfUrl = (pos) => `/api/bulk-pick/pdf?pos=${encodeURIComponent(pos)}`
+// ⚠️ THE PLAN HAS TO BE IN THE URL TOO. The PDF route is a SECOND BUILD, not a render
+// of what the screen holds — so a link carrying only the POs prints the plain ticket
+// while the screen beside it shows a shortage plan, and the sheet someone walks the
+// floor with is the one without the cuts on it.
+export const bulkPickPdfUrl = (pos, { rule = null, pool = null } = {}) => {
+  const q = new URLSearchParams({ pos })
+  if (rule && pool) { q.set('rule', rule); q.set('pool', pool) }
+  return `/api/bulk-pick/pdf?${q}`
+}
 
 // Hang tags. ⚠️ Three calls on purpose: read what CAN be tagged, get a PDF to LOOK at,
 // and print. A physical label is worth checking on screen before it goes to a roll.
