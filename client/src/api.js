@@ -1272,6 +1272,30 @@ export async function clearPreshipCheck({ dcPoKey, stepKey }) {
 // refusal arrives as plain text in the tab, which is what makes the refusal useful.
 export const manifestPdfUrl = (shipmentId) => `/api/exemplar/manifest.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
 
+// ⚠️ A 200 IS NOT A SUCCESS IF THE BODY IS NOT JSON, and every helper here used to
+// treat it as one: `await res.json().catch(() => ({}))` swallows an HTML body, `res.ok`
+// is true, and the caller reads undefined fields off `{}`.
+//
+// Live on 2026-09-14: the API on :3001 was running code from before the print route
+// existed, so Express fell through to the SPA catch-all and answered index.html with a
+// 200. The card said "Sent undefined markings to undefined" — reporting that six labels
+// had been printed when the printer had received nothing. A silent stale-server failure
+// that reads as a physical act completing is about the worst shape this can take.
+//
+// So the parse failure is named, and it names its own most likely cause.
+async function asJson(res, what) {
+  const text = await res.text()
+  let body
+  try { body = JSON.parse(text) } catch {
+    if (/^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text)) {
+      throw new Error(`${what}: the API returned a web page instead of an answer — the server is almost certainly running older code than this page. Restart it (npm run dev) and try again.`)
+    }
+    throw new Error(`${what}: the API returned something that is not JSON (${text.slice(0, 80)})`)
+  }
+  if (!res.ok) throw new Error(body.error || `${what}: API ${res.status}`)
+  return body
+}
+
 // The Exemplar packing slip (one per PO per store) and carton labels (one per carton).
 // ⚠️ URLs, not fetches — same popup rule; and a refusal arrives as readable text in
 // the tab, which is the useful half when a carton has no recorded contents.
@@ -1296,7 +1320,10 @@ export async function printSlipMarkings({ shipmentId, size = '2.25x1.25', carton
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ shipmentId, size, carton }),
   })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  const body = await asJson(res, 'printing the markings')
+  // ⚠️ AND THE ANSWER HAS TO LOOK LIKE ONE. Even valid JSON from the wrong handler
+  // would let the caller render "Sent undefined markings to undefined"; the button is
+  // claiming a physical act happened, so it checks that the server said which printer.
+  if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
   return body
 }

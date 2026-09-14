@@ -1665,7 +1665,11 @@ function PrintMarkingsButton({ shipmentId }) {
     setState({ busy: true })
     try {
       const r = await printSlipMarkings({ shipmentId })
-      setState({ msg: `Sent ${r.faces} markings to ${r.printer}.`, ok: true })
+      setState({
+        msg: `Sent ${r.faces ?? 6} markings to ${r.printer}.`
+          + (r.tight ? ` ${r.tight} face${r.tight === 1 ? '' : 's'} are a tight fit — land them square.` : ''),
+        ok: true,
+      })
     } catch (e) { setState({ msg: e.message, ok: false }) }
   }
   return (
