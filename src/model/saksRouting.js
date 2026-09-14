@@ -287,23 +287,23 @@ export const auditTriggerUnits = (poUnits) => Math.ceil((Number(poUnits) || 0) *
 /**
  * Where the routing actually gets done, for the instruction sheet.
  *
- * ⚠️ THE URLs ARE NULL AND THAT IS DELIBERATE. Nima asked for "a link to the portal to
- * route it" on 2026-09-14 and we do not hold one — the Routing Guide gives contacts,
- * not addresses, and the only hint is the TMS support mailbox's domain
- * (csrsupport@dynamiconline.com). A plausible-looking URL typed from that is exactly
- * the class of guess this file exists to refuse: a wrong link on a routing instruction
- * sends someone to the wrong system to book real freight, and a login page is the last
- * place to be improvising. The sheet prints the contact and says the link is not on
- * file until Nima pastes the bookmark he actually uses.
+ * ⚠️ THE TMS URL CAME FROM NIMA, NOT FROM THE GUIDE, AND THAT IS WHY IT IS RIGHT.
+ * The Routing Guide gives contacts, not addresses; the only hint we had was the domain
+ * of the TMS support mailbox (csrsupport@dynamiconline.com). The actual address is
+ * https://softweb.dynamiconline.com/softweb/ — the "softweb" host is not something that
+ * could have been inferred from that domain, which is the whole argument for having
+ * printed "NOT ON FILE" for a day instead of a plausible guess. A wrong link on a
+ * routing instruction sends someone to the wrong system to book real freight.
+ *
+ * ⚠️ IMS still has no URL and still prints as a gap.
  */
 export const PORTALS = {
   tms: {
     name: "Dynamic TMS",
     what: 'Book every truck shipment here, at least 3 business days before the cancel date. It returns the carrier, SCAC, ready date and the confirmation number the BOL needs.',
-    url: null,
-    urlSource: null,
+    url: 'https://softweb.dynamiconline.com/softweb/',
+    urlSource: 'Nima, 2026-09-14',
     support: 'csrsupport@dynamiconline.com',
-    hint: 'the support mailbox is on dynamiconline.com',
   },
   ims: {
     name: 'QLogitek IMS (Inbound Management System)',

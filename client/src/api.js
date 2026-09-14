@@ -1287,3 +1287,16 @@ export const cartonGuidePdfUrl = (shipmentId, size = '4x6') =>
 // The six "PACKING SLIP ATTACHED" markings for the carton carrying the slip.
 export const slipMarkingPdfUrl = (shipmentId, size = '4x6', carton = 1) =>
   `/api/exemplar/slip-marking.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}&carton=${carton}`
+
+// Print the six markings to the MUNBYN. ⚠️ The MUNBYN cannot be driven from a browser
+// print dialog — the app owns the queue, the media string and the background wash its
+// gap sensor needs. Fires only from a click; the PDF preview sits beside it.
+export async function printSlipMarkings({ shipmentId, size = '2.25x1.25', carton = 1 }) {
+  const res = await fetch('/api/exemplar/slip-marking/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipmentId, size, carton }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}

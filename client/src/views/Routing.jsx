@@ -4,10 +4,10 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
-import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
+import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES } from '../../../src/model/saksRouting.js'
 import { consolidateRouting, attachShipments } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
 import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
@@ -815,6 +815,24 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
           every partner's guide is different and so are the fees. The partner now
           resolves correctly for numeric Exemplar DCs — see src/model/dc.js, where every
           numeric DC used to answer "Nordstrom". */}
+      {/* ⚠️ THE ROUTING LINK ON THE CARD, because that is where the decision to route
+          is made — Nima, 2026-09-14: "thats the link to route btw to put ont he card".
+          It is his bookmark, not one inferred from the guide: the Routing Guide gives
+          contacts and no addresses, and "softweb" is not a host anyone would have
+          guessed from csrsupport@dynamiconline.com. */}
+      {g.partner === 'Exemplar' && PORTALS.tms.url && !s?.shippedAt && (
+        <div className="rt-tmsLink">
+          <a className="btnGhost" href={PORTALS.tms.url} target="_blank" rel="noreferrer"
+             title={`${PORTALS.tms.name} — ${PORTALS.tms.what}`}>
+            Route in {PORTALS.tms.name} ↗
+          </a>
+          {!s?.tmsConfirmation && (
+            <span className="muted"> — book at least {DEADLINES.tmsRouting.businessDaysBeforeCancel} business
+              days before the cancel date, then put the confirmation number on this card.</span>
+          )}
+        </div>
+      )}
+
       {g.partner === 'Exemplar' && <PreshipChecklist g={g} s={s} />}
 
       {/* ⚠️ THIS SHIPMENT WAS FOUND BY ITS FREIGHT, NOT BY ITS KEY. Its stored row still
@@ -1075,6 +1093,7 @@ function BolActions({ s }) {
              title={'Six "PACKING SLIP ATTACHED" markings on the MUNBYN 2.25x1.25 stock — one per face of the carton carrying the slip.'}>
             &quot;Slip attached&quot; ×6 ↗
           </a>
+          <PrintMarkingsButton shipmentId={s.id} />
           <a className="btnGhost" href={slipMarkingPdfUrl(s.id, '4x6', 1)} target="_blank" rel="noreferrer"
              title={'The same six markings on 4x6 — tight on the 24x14x4 cartons.'}>
             ×6 on 4×6 ↗
@@ -1632,3 +1651,30 @@ const PHASE_LABEL = {
 }
 
 
+
+
+// ⚠️ THE MUNBYN IS THE ONLY WAY TO MAKE THESE. It cannot be driven from a browser print
+// dialog — the queue, the paper size and the background wash its gap sensor needs all
+// live in the app (server/printLabel.js). So unlike the carton labels, which have no
+// print route at all because 22 adhesive labels get reviewed first, this one prints.
+//
+// ⚠️ It still only fires from a CLICK, and the preview link sits right beside it.
+function PrintMarkingsButton({ shipmentId }) {
+  const [state, setState] = useState(null)
+  async function go() {
+    setState({ busy: true })
+    try {
+      const r = await printSlipMarkings({ shipmentId })
+      setState({ msg: `Sent ${r.faces} markings to ${r.printer}.`, ok: true })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+  return (
+    <>
+      <button className="btnGhost" disabled={state?.busy} onClick={go}
+              title="Print the six markings to the MUNBYN (2.25x1.25). It cannot be printed from a browser dialog.">
+        {state?.busy ? 'Printing…' : '🖨 Markings → MUNBYN'}
+      </button>
+      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
+    </>
+  )
+}

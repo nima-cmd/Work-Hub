@@ -60,7 +60,7 @@ import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
 import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
-import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
+import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags, printPdfDoc } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
 import { renderPoRevisionTo } from './poRevisionPdf.js'
 import { poRevisionTicket } from '../src/ingest/poRevisionLive.js'
@@ -600,6 +600,41 @@ app.get('/api/exemplar/slip-marking.pdf', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).type('text/plain').send(`Markings not available.\n\n${e.message}`)
+  }
+})
+
+// Print the six markings to the MUNBYN, from the app.
+//
+// ⚠️ THE MUNBYN CANNOT BE DRIVEN FROM A BROWSER. Nima, 2026-09-14: "to print to the
+// munbyn printer we can just print normal at least not to my knowledge we need it sent
+// through the app." He is right, and printLabel.js has always said so — picking the
+// printer and the paper size in a print dialog is the thing that kept breaking, and the
+// stock needs a background wash or its gap sensor truncates the job. So the app owns
+// the queue, the media string and the wash.
+//
+// ⚠️ A BUTTON, NOT A SIDE EFFECT. The carton labels deliberately have NO print route
+// because he reviews 22 adhesive labels before they exist. These are six markings for
+// one carton and the MUNBYN is the only way to make them, so this route exists — but it
+// only ever fires from a click, and the PDF preview sits beside it.
+app.post('/api/exemplar/slip-marking/print', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const size = b.size || '2.25x1.25'
+    const carton = Number(b.carton) || 1
+    let box = b.box || null
+    let po = b.po || null
+    if (b.shipmentId) {
+      const { cartons } = await getExemplarDocData(b.shipmentId, { on: b.on || null })
+      const c = cartons.find((x) => x.carton === carton) || cartons[0]
+      box = box || c.box
+      po = po || c.po
+    }
+    const { doc, plan } = await slipMarkingPdf({ box, size, po, carton })
+    const out = await printPdfDoc(doc, size, `slip-marking-${po || 'carton'}`)
+    res.json({ ...out, faces: plan ? plan.faces.length : 6, tight: plan ? plan.tight.length : 0 })
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
   }
 })
 

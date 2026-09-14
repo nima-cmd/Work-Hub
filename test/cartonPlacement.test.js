@@ -4,6 +4,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { placementFor, parseBox, placementPlan, faces, markingPlan, SLIP_MARKING } from '../src/model/cartonPlacement.js'
 import { LABEL_PLACEMENT } from '../src/model/exemplarStandards.js'
+import { xDimensionFor, BAR_HEIGHT_MIN_IN } from '../src/model/code128.js'
+import { LABELS } from '../server/printLabel.js'
+import { PORTALS } from '../src/model/saksRouting.js'
 
 const L4x6 = { w: 4, h: 6 }
 
@@ -109,4 +112,45 @@ test('the top face is flagged for the pouch, because that is what the marking an
   const box = parseBox('22x16x7')
   const m = markingPlan(box, { w: 4, h: 6 }, placementFor(box, { w: 4, h: 6 }, LABEL_PLACEMENT))
   assert.match(m.faces.find((f) => f.face === 'top').note, /pouch/)
+})
+
+// ── The MUNBYN stock ────────────────────────────────────────────────────────
+
+test('⚠️ THE MUNBYN CANNOT CARRY THE GS1-128, FOR TWO INDEPENDENT REASONS', () => {
+  // 1. Its 2.25in stock gives an X-dimension under the conveyor recommendation, and
+  //    this PO is XDOCK.
+  const x = xDimensionFor(2.25 - 0.2)
+  assert.ok(x.meetsMinimum, 'it clears the absolute floor')
+  assert.ok(!x.meetsConveyor, 'but not the conveyor recommendation')
+  // 2. GS1 puts the SSCC bar height at 1.25in and the whole label IS 1.25in tall, so a
+  //    compliant symbol leaves nothing for §8.5's seven required markings.
+  assert.equal(BAR_HEIGHT_MIN_IN, 1.25)
+})
+
+test('but it is the BETTER stock for the slip marking — no barcode, and it always clears', () => {
+  for (const box of ['22x16x7', '24X14X4', '22x16x16']) {
+    const d = parseBox(box)
+    const m = markingPlan(d, { w: 2.25, h: 1.25 }, placementFor(d, { w: 4, h: 6 }, LABEL_PLACEMENT))
+    assert.equal(m.ok, true, box)
+    assert.deepEqual(m.tight, [], `${box} should have room to spare`)
+  }
+  // Where the 4x6 marking does not: zero clearance on four faces of the shallow carton.
+  const shallow = parseBox('24X14X4')
+  assert.equal(markingPlan(shallow, { w: 4, h: 6 }, placementFor(shallow, { w: 4, h: 6 }, LABEL_PLACEMENT)).tight.length, 4)
+})
+
+test('⚠️ THE MUNBYN STOCK IS THE ONE THAT NEEDS THE BACKGROUND WASH', () => {
+  // A pure-white page makes its gap sensor read the stock as the gap between labels and
+  // cut the job short. The Zebra has no such issue. One place knows which is which.
+  assert.ok(LABELS['2.25x1.25'].wash, 'the MUNBYN stock is washed')
+  assert.equal(LABELS['4x6'].wash, null, 'the Zebra stays clean white')
+})
+
+test('the TMS portal link is Nima\'s, and is recorded as his', () => {
+  // It could not have been inferred: the guide gives contacts and no addresses, and
+  // "softweb" is not a host anyone would guess from csrsupport@dynamiconline.com.
+  assert.equal(PORTALS.tms.url, 'https://softweb.dynamiconline.com/softweb/')
+  assert.match(PORTALS.tms.urlSource, /Nima/)
+  // IMS still has none, and still says so rather than borrowing this one.
+  assert.equal(PORTALS.ims.url, null)
 })

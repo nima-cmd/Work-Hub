@@ -14,6 +14,7 @@
 import PDFDocument from 'pdfkit'
 import { markingPlan, placementFor, parseBox, SLIP_MARKING } from '../src/model/cartonPlacement.js'
 import { LABEL_PLACEMENT } from '../src/model/exemplarStandards.js'
+import { LABELS } from './printLabel.js'
 
 const PT = 72
 const WARN = '#b42318'
@@ -55,6 +56,15 @@ export async function slipMarkingPdf({ box = null, size = '4x6', po, carton } = 
   for (const f of faceList) {
     doc.addPage({ size: [W, H], margin: 0 })
     const M = 0.15 * PT
+    // ⚠️ THE MUNBYN CUTS A PURE-WHITE JOB SHORT. Its gap sensor reads the blank stock
+    // as the gap between labels, so a white 2.25x1.25 page stops mid-print — proven in
+    // the sibling munbyn-label-printer repo and already baked into printLabel.js for
+    // the cargo tags. I built this sheet white and would have handed him a printer that
+    // silently truncates. The wash comes from LABELS so there is ONE place that knows
+    // which stock needs it; the Zebra's 4x6 has `wash: null` and stays clean white.
+    const cfg = LABELS[size]
+    if (cfg?.wash) doc.rect(0, 0, W, H).fill(cfg.wash)
+    doc.fillColor('black')
     doc.lineWidth(2).rect(M, M, W - M * 2, H - M * 2).stroke()
 
     // ⚠️ Rotated so the words run along the LONG axis of the stock. A 4x6 read
