@@ -109,3 +109,85 @@ export function placementPlan(cartons = [], label, rule) {
     ok: groups.every((g) => g.placement.ok),
   }
 }
+
+/**
+ * ⚠️ THE WORDING IS THE GUIDE'S, NOT OURS, AND IT IS ONE CONSTANT.
+ *
+ * Both source documents say "PACKING SLIP ATTACHED" — the Routing Guide's
+ * documentsRequired list and the Manual's §8.5 handling note. Nima said "enclosed" on
+ * 2026-09-14, which is the natural way to say it and may well be what the PDF reads;
+ * our extraction says ATTACHED in every place. It lives here so that if the manual is
+ * re-read and says otherwise, it is one edit rather than six.
+ */
+export const SLIP_MARKING = 'PACKING SLIP ATTACHED'
+
+/**
+ * Where the six "PACKING SLIP ATTACHED" markings go, and what they must not cover.
+ *
+ * ⚠️ FIVE FACES ARE FREE AND ONE IS NOT. The marking goes on all six sides of the
+ * carton carrying the slip — and one of those sides is the long side already carrying
+ * the GS1-128. §8.2's rule that a FedEx label may not cover the GS1-128 is the same
+ * principle: nothing goes over the symbol. So the marking on that face has to sit
+ * beside it, and this computes whether it can.
+ *
+ * ⚠️ IT ALSO MUST NOT COVER THE POUCH. The pouch is on the carton by definition — it
+ * is what the marking is announcing — so the recommendation is to keep the marking on
+ * the opposite half of the face from the pouch, and that is stated rather than drawn,
+ * because nothing in our data says where the pouch was stuck.
+ */
+export function markingPlan(box, markingSize, labelPlacement) {
+  const f = faces(box)
+  if (!f) return { ok: false, why: 'the carton has no recorded dimensions' }
+  // ⚠️ "FITS" WITH NO MARGIN IS NOT A FIT ON A LOADED CARTON. A 4in marking on a 4in
+  // face is arithmetically fine and physically hopeless — it has to land perfectly
+  // square with no overhang, on a box that is taped and may be bowed. Anything with
+  // less than half an inch to spare is reported as TIGHT rather than as ok, because
+  // an overhanging label peels and a peeled marking is a missing one.
+  const SNUG_IN = 0.5
+  const fits = (fw, fh) => {
+    for (const [w, h] of [[markingSize.w, markingSize.h], [markingSize.h, markingSize.w]]) {
+      if (w <= fw && h <= fh) {
+        const spare = Math.min(fw - w, fh - h)
+        return { w, h, spareIn: Number(spare.toFixed(2)), tight: spare < SNUG_IN }
+      }
+    }
+    return null
+  }
+
+  const out = []
+  const push = (name, fw, fh, note) => {
+    const f2 = fits(fw, fh)
+    out.push({ face: name, faceW: fw, faceH: fh, ok: !!f2, size: f2, note: note || null,
+      tight: !!f2?.tight,
+      why: f2
+        ? (f2.tight ? `only ${f2.spareIn}in to spare on a ${fw}x${fh}in face — it will overhang if it is not landed square` : null)
+        : `a ${markingSize.w}x${markingSize.h}in marking does not fit a ${fw}x${fh}in face` })
+  }
+
+  const [longSide, end] = f.sides
+  // The GS1 face: the marking has to clear the symbol.
+  const gs1 = labelPlacement?.ok ? (labelPlacement.options.find((o) => o.face === 'long side') || labelPlacement.options[0]) : null
+  if (gs1 && gs1.face === 'long side') {
+    const freeW = longSide.w - gs1.labelW
+    const f2 = fits(freeW, longSide.h)
+    out.push({
+      face: 'long side (with the GS1-128)', faceW: longSide.w, faceH: longSide.h,
+      ok: !!f2, size: f2, tight: !!f2?.tight,
+      note: `keep it clear of the GS1-128 — ${gs1.labelW}in of this face is taken by the symbol, leaving ${freeW.toFixed(1)}in beside it. Nothing may cover the barcode.`,
+      why: f2 ? null : `only ${freeW.toFixed(1)}in is free beside the GS1-128 on a ${longSide.w}in face`,
+    })
+  } else {
+    push('long side', longSide.w, longSide.h)
+  }
+  push('long side (opposite)', longSide.w, longSide.h)
+  push('end', end.w, end.h)
+  push('end (opposite)', end.w, end.h)
+  push('top', f.top.w, f.top.h, 'keep it clear of the packing-slip pouch')
+  push('bottom', f.top.w, f.top.h)
+
+  return {
+    ok: out.every((o) => o.ok),
+    tight: out.filter((o) => o.tight),
+    faces: out, marking: SLIP_MARKING, assumesUpright: f.assumesUpright,
+  }
+}

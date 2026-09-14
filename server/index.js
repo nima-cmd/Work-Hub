@@ -7,6 +7,7 @@ import express from 'express'
 import { manifestPdf } from './exemplarManifestPdf.js'
 import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
 import { cartonGuidePdf } from './cartonGuidePdf.js'
+import { slipMarkingPdf } from './slipMarkingPdf.js'
 import { consigneeCompany } from '../src/model/exemplarStores.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
@@ -572,6 +573,33 @@ app.get('/api/exemplar/carton-guide.pdf', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).type('text/plain').send(`Carton guide not available.\n\n${e.message}`)
+  }
+})
+
+// The six "PACKING SLIP ATTACHED" markings for the one carton that carries the slip.
+// ⚠️ Sized to the label stock, one per face, each naming its face — six identical
+// labels in a stack is how five end up on the same carton.
+app.get('/api/exemplar/slip-marking.pdf', async (req, res) => {
+  try {
+    const size = req.query.size || '4x6'
+    let box = req.query.box || null
+    let po = req.query.po || null
+    const carton = Number(req.query.carton) || 1
+    // When a shipment is named, take the box of the carton that will carry the slip,
+    // so the sheet can say which face shares a side with the barcode.
+    if (req.query.shipmentId) {
+      const { cartons } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+      const c = cartons.find((x) => x.carton === carton) || cartons[0]
+      box = box || c.box
+      po = po || c.po
+    }
+    const { doc } = await slipMarkingPdf({ box, size, po, carton })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="packing-slip-attached-${po || 'carton'}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Markings not available.\n\n${e.message}`)
   }
 })
 

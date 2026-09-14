@@ -284,6 +284,36 @@ export const AUDIT = {
 /** 2% of what? The trigger in units, for one PO. */
 export const auditTriggerUnits = (poUnits) => Math.ceil((Number(poUnits) || 0) * AUDIT.itemErrorRateTrigger)
 
+/**
+ * Where the routing actually gets done, for the instruction sheet.
+ *
+ * ⚠️ THE URLs ARE NULL AND THAT IS DELIBERATE. Nima asked for "a link to the portal to
+ * route it" on 2026-09-14 and we do not hold one — the Routing Guide gives contacts,
+ * not addresses, and the only hint is the TMS support mailbox's domain
+ * (csrsupport@dynamiconline.com). A plausible-looking URL typed from that is exactly
+ * the class of guess this file exists to refuse: a wrong link on a routing instruction
+ * sends someone to the wrong system to book real freight, and a login page is the last
+ * place to be improvising. The sheet prints the contact and says the link is not on
+ * file until Nima pastes the bookmark he actually uses.
+ */
+export const PORTALS = {
+  tms: {
+    name: "Dynamic TMS",
+    what: 'Book every truck shipment here, at least 3 business days before the cancel date. It returns the carrier, SCAC, ready date and the confirmation number the BOL needs.',
+    url: null,
+    urlSource: null,
+    support: 'csrsupport@dynamiconline.com',
+    hint: 'the support mailbox is on dynamiconline.com',
+  },
+  ims: {
+    name: 'QLogitek IMS (Inbound Management System)',
+    what: 'Compliance and chargeback disputes — 60-day window.',
+    url: null,
+    urlSource: null,
+    support: 'compliance@saks.com',
+  },
+}
+
 export const CONTACTS = {
   shippingAndRouting: 'sg-transportation@saks.com',
   compliance: 'compliance@saks.com',

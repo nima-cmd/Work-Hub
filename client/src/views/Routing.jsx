@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1066,6 +1066,18 @@ function BolActions({ s }) {
           <a className="btnGhost" href={cartonGuidePdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
              title="Where every label goes on the box, drawn to scale per box size. Internal sheet.">
             Where to stick it ↗
+          </a>
+          {/* ⚠️ MUNBYN FIRST for the markings, 4x6 second — the reverse of the carton
+              label, which the MUNBYN cannot carry at all. The 2.25x1.25 is text with no
+              barcode and clears all six faces of every box on the shipment; a 4x6
+              marking has ZERO spare on four faces of the 24x14x4 cartons. */}
+          <a className="btnGhost" href={slipMarkingPdfUrl(s.id, '2.25x1.25', 1)} target="_blank" rel="noreferrer"
+             title={'Six "PACKING SLIP ATTACHED" markings on the MUNBYN 2.25x1.25 stock — one per face of the carton carrying the slip.'}>
+            &quot;Slip attached&quot; ×6 ↗
+          </a>
+          <a className="btnGhost" href={slipMarkingPdfUrl(s.id, '4x6', 1)} target="_blank" rel="noreferrer"
+             title={'The same six markings on 4x6 — tight on the 24x14x4 cartons.'}>
+            ×6 on 4×6 ↗
           </a>
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">

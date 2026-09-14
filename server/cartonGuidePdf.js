@@ -16,6 +16,7 @@
 import PDFDocument from 'pdfkit'
 import { placementPlan } from '../src/model/cartonPlacement.js'
 import { LABEL_PLACEMENT, CARTON_MARKINGS, feeFor } from '../src/model/exemplarStandards.js'
+import { PORTALS, CONTACTS, DEADLINES } from '../src/model/saksRouting.js'
 import { PACKING_SLIP_HANDLING } from './exemplarDocsPdf.js'
 
 const PT = 72
@@ -62,6 +63,27 @@ export async function cartonGuidePdf(cartons, { label = { w: 4, h: 6 }, po, stor
   bullet(doc, 'The packing slip is ONE per PO per store — it does NOT go on every box.')
   for (const h of PACKING_SLIP_HANDLING) bullet(doc, h)
   bullet(doc, 'This shipment is LTL/palletised, so the every-carton slip rule (FedEx/UPS) does not apply.')
+  doc.moveDown(0.8)
+
+  // ── Before it ships: where to route it, and where the slip is emailed ──
+  //
+  // ⚠️ BOTH OF THESE ARE PRINTED AS GAPS, NOT GUESSES. Nima asked for a portal link and
+  // the packing-slip email on 2026-09-14 and we hold neither. The Routing Guide gives
+  // CONTACTS, not addresses; the nearest thing to a TMS URL is the domain of its
+  // support mailbox. A plausible link on a routing instruction sends someone to the
+  // wrong system to book real freight, and "emailed IN ADVANCE to the DC contact
+  // office" is not an address. So the sheet names what we have and says what is
+  // missing, which is the thing that actually gets it filled in.
+  doc.fontSize(10).font('Helvetica-Bold').fillColor(INK).text('Before it ships', 40, doc.y)
+  doc.fontSize(8.5).font('Helvetica')
+  const tms = PORTALS.tms
+  bullet(doc, `${tms.name} — ${tms.what}`)
+  bullet(doc, tms.url
+    ? `Portal: ${tms.url}`
+    : `Portal link: NOT ON FILE. Support ${tms.support} (${tms.hint}). Paste the bookmark you use and this sheet will carry it.`)
+  bullet(doc, `Routing must be booked at least ${DEADLINES.tmsRouting.businessDaysBeforeCancel} business days before the cancel date (p${DEADLINES.tmsRouting.page}).`)
+  bullet(doc, 'Packing-slip email: NOT ON FILE. The guide says "emailed IN ADVANCE to the DC contact office" '
+    + `and gives no address for ${dc}. The nearest contact we hold is ${CONTACTS.shippingAndRouting} — confirm with them before relying on it.`)
   doc.moveDown(0.8)
 
   // ── A drawing per box size ──

@@ -1283,3 +1283,7 @@ export const cartonLabelsPdfUrl = (shipmentId, size = 'half-sheet') =>
 // The application guide — where each label goes on the physical box. Internal sheet.
 export const cartonGuidePdfUrl = (shipmentId, size = '4x6') =>
   `/api/exemplar/carton-guide.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`
+
+// The six "PACKING SLIP ATTACHED" markings for the carton carrying the slip.
+export const slipMarkingPdfUrl = (shipmentId, size = '4x6', carton = 1) =>
+  `/api/exemplar/slip-marking.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}&carton=${carton}`

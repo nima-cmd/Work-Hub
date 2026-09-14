@@ -2,7 +2,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { placementFor, parseBox, placementPlan, faces } from '../src/model/cartonPlacement.js'
+import { placementFor, parseBox, placementPlan, faces, markingPlan, SLIP_MARKING } from '../src/model/cartonPlacement.js'
 import { LABEL_PLACEMENT } from '../src/model/exemplarStandards.js'
 
 const L4x6 = { w: 4, h: 6 }
@@ -67,4 +67,46 @@ test('a non-dimensional box name is reported rather than skipped', () => {
   const p = placementPlan([{ carton: 1, box: 'CUSTOM' }], L4x6, LABEL_PLACEMENT)
   assert.equal(p.ok, false)
   assert.match(p.blocked[0].placement.why, /not a dimensional box name/)
+})
+
+// ── The six "PACKING SLIP ATTACHED" markings ────────────────────────────────
+
+test('⚠️ THE WORDING IS THE GUIDE\'S, IN ONE PLACE', () => {
+  // Both source documents say ATTACHED. Nima said "enclosed" on 2026-09-14, which is
+  // the natural way to say it; if the manual is re-read and disagrees, this is the
+  // single edit rather than six scattered strings.
+  assert.equal(SLIP_MARKING, 'PACKING SLIP ATTACHED')
+})
+
+test('all six faces are planned, and the one sharing a side with the barcode says so', () => {
+  const box = parseBox('22x16x7')
+  const lab = placementFor(box, { w: 4, h: 6 }, LABEL_PLACEMENT)
+  const m = markingPlan(box, { w: 4, h: 6 }, lab)
+  assert.equal(m.faces.length, 6)
+  const gs1Face = m.faces.find((f) => /GS1/.test(f.face))
+  assert.ok(gs1Face, 'the GS1 face is called out by name')
+  assert.match(gs1Face.note, /Nothing may cover the barcode/)
+})
+
+test('⚠️ A MARKING WITH NO MARGIN IS "TIGHT", NOT "FITS"', () => {
+  // 24x14x4: a 4in marking on a 4in face is arithmetically fine and physically
+  // hopeless — it has to land perfectly square on a taped, possibly bowed box, and an
+  // overhanging label peels. A peeled marking is a missing one.
+  const box = parseBox('24X14X4')
+  const m = markingPlan(box, { w: 4, h: 6 }, placementFor(box, { w: 4, h: 6 }, LABEL_PLACEMENT))
+  assert.equal(m.tight.length, 4)
+  assert.match(m.tight[0].why, /0in to spare/)
+  assert.ok(m.tight.every((f) => f.ok), 'tight is still ok — it is a warning, not a refusal')
+})
+
+test('a roomy carton reports no tight faces', () => {
+  const box = parseBox('22x16x16')
+  const m = markingPlan(box, { w: 4, h: 6 }, placementFor(box, { w: 4, h: 6 }, LABEL_PLACEMENT))
+  assert.deepEqual(m.tight, [])
+})
+
+test('the top face is flagged for the pouch, because that is what the marking announces', () => {
+  const box = parseBox('22x16x7')
+  const m = markingPlan(box, { w: 4, h: 6 }, placementFor(box, { w: 4, h: 6 }, LABEL_PLACEMENT))
+  assert.match(m.faces.find((f) => f.face === 'top').note, /pouch/)
 })
