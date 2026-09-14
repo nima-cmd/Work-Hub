@@ -179,7 +179,14 @@ function render(doc, shipment, kind) {
   boxOutline(doc, M, y + 11, half, midH - 11)
   addrLines(doc, M, y + 13, half, shipTo, missing, true)
   fob(doc, M + half - 42, y + midH - 12)
-  doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
+  // ⚠️ CID# WAS A LABEL WITH NOTHING IN IT, on ours AND on Exemplar's own TMS-generated
+  // BOL. The Routing Guide (p23) requires the TMS confirmation number in CID# **AND**
+  // Special Instructions — two places, deliberately, because they are read by different
+  // people. We printed it in neither until bolAuthLine learned about Exemplar, and in
+  // only one until now.
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12, { continued: true })
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(shipment.tmsConfirmation ? RED : '#000')
+    .text('  ' + (shipment.tmsConfirmation || ''))
   boxOutline(doc, rX, y + 11, half, midH - 11)
   const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', shipment.proNumber || ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
   let cy = y + 13
@@ -214,7 +221,12 @@ function render(doc, shipment, kind) {
   y += tpH + 3
 
   // ── Special Instructions ─────────────────────────────────────────────────
-  const siH = isMaster ? 34 : 24
+  // ⚠️ THE BOX GROWS WITH WHAT GOES IN IT. It was a fixed 24pt sized for one auth line,
+  // so adding the department line pushed "Dept 0118" straight through the CUSTOMER
+  // ORDER INFORMATION bar below — half a required field, visibly clipped. A box whose
+  // height is a constant is fine right up until the day something else has to go in it.
+  const siLines = [bolAuthLine(shipment), shipment.department, isMaster ? 'master' : null].filter(Boolean).length
+  const siH = Math.max(isMaster ? 34 : 24, 14 + siLines * 11)
   boxOutline(doc, M, y, W, siH)
   doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000').text('SPECIAL INSTRUCTIONS:', M + 4, y + 3)
   // Lines are laid out in sequence rather than at fixed offsets, so a Nordstrom
@@ -226,6 +238,20 @@ function render(doc, shipment, kind) {
   if (authLine) {
     doc.font('Helvetica-Bold').fontSize(9).fillColor(RED).text(authLine, M + 4, siY)
     siY += 11
+  }
+  // ⚠️ THE DEPARTMENT NUMBER, which BOL_FIELDS requires and which was on NEITHER our
+  // BOL nor Exemplar's own. It is per PO and joined rather than picked, so a
+  // consolidated shipment shows both instead of quietly showing one.
+  //
+  // Pallet count alongside it because Exemplar's TMS BOL prints "Pallets: 1" there and
+  // a document that has to be read against theirs should not make someone hunt.
+  const siBits = [
+    shipment.department ? `Dept ${shipment.department}` : null,
+    palletWeight(shipment).hu ? `Pallets: ${palletWeight(shipment).hu}` : null,
+  ].filter(Boolean)
+  if (siBits.length) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor('#000').text(siBits.join('     '), M + 4, siY)
+    siY += 10
   }
   if (isMaster) doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(L.masterNote, M + 4, siY)
   y += siH + 3
@@ -241,7 +267,13 @@ function render(doc, shipment, kind) {
   let ry = y + 11 + 15
   for (let i = 0; i < rowsN; i++) {
     const it = items[i]
-    gridRow(doc, M, ry, cCols, [it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '', it ? 'Y        N' : '', ''], false, RED)
+    // ⚠️ "Y        N" IS NOT AN ANSWER, and BOL_FIELDS says so outright: the pallet /
+    // slip indicator "must be INDICATED — a printed 'Y N' is not an answer". When we
+    // know the shipment is palletised we say Y; when we do not, the choice is printed
+    // for someone to circle rather than guessed.
+    const palletised = !!palletWeight(shipment).hu
+    const psCell = it ? (palletised ? 'Y   (pallet)' : 'Y        N') : ''
+    gridRow(doc, M, ry, cCols, [it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '', psCell, it && shipment.department ? `Dept ${shipment.department}` : ''], false, RED)
     ry += 15
   }
   gridRow(doc, M, ry, cCols, ['GRAND TOTAL', String(shipment.cartons ?? ''), String(shipment.weightLb ?? ''), '', ''], true, RED)

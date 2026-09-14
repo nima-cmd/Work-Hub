@@ -4041,7 +4041,32 @@ async function withLineItems(shipment) {
 export async function streamShipmentBol(res, id) {
   const shipment = await withLineItems(await fetchRoutingShipmentById(id))
   if (!shipment) throw new Error('shipment not found')
-  await renderBolTo(res, shipment)
+  await renderBolTo(res, await withBolExtras(shipment))
+}
+
+/**
+ * The fields the VICS form has boxes for and the shipment row does not carry.
+ *
+ * ⚠️ THE DEPARTMENT NUMBER IS REQUIRED ON THE BOL and was on neither our document nor
+ * Exemplar's own TMS-generated one. `BOL_FIELDS` lists it — "the 850's REF*DP*" — and
+ * it has been in edi_transactions since the REF segments were finally ingested this
+ * morning. It just had no way of reaching the page.
+ *
+ * ⚠️ IT IS PER PO, so a consolidated shipment can carry several. They are joined
+ * rather than picking the first: two departments on one BOL is a fact worth printing,
+ * and silently showing one of them is how a receiver books freight against the wrong
+ * department.
+ */
+async function withBolExtras(shipment) {
+  const pos = shipment.memberPos || []
+  if (!pos.length) return shipment
+  const { rows } = await pool.query(
+    `SELECT DISTINCT department FROM edi_transactions
+      WHERE type = '850_PURCHASE_ORDER' AND department IS NOT NULL
+        AND (business_number = ANY($1) OR ltrim(business_number,'0') = ANY($2))`,
+    [pos, pos.map((p) => String(p).replace(/^0+/, ''))])
+  const departments = rows.map((r) => r.department).filter(Boolean).sort()
+  return { ...shipment, department: departments.join(', ') || null }
 }
 
 /**

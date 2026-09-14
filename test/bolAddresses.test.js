@@ -13,7 +13,25 @@ test('⚠️ AN EXEMPLAR BOL MUST NOT SAY "MACY\'S" — the last branch was acti
   // name on the BOL, the exact objection Nima raised in August about Nordstrom BOLs.
   const { block } = shipToFor('Exemplar', '0510', 'PNDC (0510)', { direct: true })
   assert.doesNotMatch(block.name, /Macy/i)
-  assert.match(block.name, /PNDC/)
+  // ⚠️ It names the TMS LANE now, not our own DC label. Exemplar's own BOL for 8928906
+  // reads "ELG-Neiman/Saks DC 510 % Linear" — the string the carrier's dispatch system
+  // holds — and two documents at one pickup should name the consignee the same way.
+  assert.match(block.name, /DC 510/)
+})
+
+test('⚠️ THE LANE NAME IS THE LABEL; THE ADDRESS IS STILL EXEMPLAR\'S DC LIST', () => {
+  // Their BOL prints the lane name against 4123 Pinnacle Point. The lane is a label, not
+  // a location, and the DC List is the source this repo trusts for the address.
+  const { block, missing } = shipToFor('Exemplar', '0510', 'x', { direct: true })
+  assert.equal(block.name, 'ELG-Neiman/Saks DC 510 % Linear')
+  assert.equal(block.street, '4123 Pinnacle Point')
+  assert.deepEqual(missing, [])
+})
+
+test('a DC with no confirmed TMS lane keeps our own naming', () => {
+  // 517 has a lookup pairing but nothing confirmed against a completed routing, so it
+  // does not borrow 510's. See TMS_CONSIGNEE.
+  assert.match(shipToFor('Exemplar', '0517', 'x', { direct: true }).block.name, /SAKS WCSC/)
 })
 
 test('an Exemplar DC is addressed from their own DC List, padded or bare', () => {
