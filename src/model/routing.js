@@ -119,3 +119,61 @@ function intOf(v) {
 function round2(n) {
   return Math.round(n * 100) / 100
 }
+
+/**
+ * Attach each stored shipment to the group whose freight it is.
+ *
+ * ⚠️ THE PARTNER IS PART OF THE STORED KEY AND THE PARTNER IS DERIVED. `dc_po_key` is
+ * `partner|dc|POs`, and the partner comes from partnerForDc(), not from a person. So
+ * every correction to that function orphans the shipments it reclassifies: the feed
+ * builds the new key, matches nothing, and offers "Assign BOL" on freight that already
+ * holds one — minting a second BOL number for one shipment.
+ *
+ * It has happened twice. ShopBop's SBX2 was reclassified 2026-08-11, leaving
+ * `Bloomingdale's|SBX2|POJ00384244` (BOL NB1731262) detached ever since; Exemplar's
+ * numeric DCs were reclassified 2026-09-14, orphaning `Nordstrom|0510|8928906`
+ * (BOL NB1731288).
+ *
+ * So the exact key is tried first, and a miss falls back to the part of the key that is
+ * NOT derived: the DC and the POs, which are the freight itself.
+ *
+ * ⚠️ AND IT LIVES HERE BECAUSE IT WAS WRITTEN TWICE. server/queries.js and
+ * client/src/views/Routing.jsx each built the key and matched on it, so the client kept
+ * the old behaviour — and the card still offered "Assign BOL" — after the server was
+ * fixed. Untested logic in a .jsx file is the shape this repo has been bitten by before.
+ *
+ * ⚠️ A FALLBACK MATCH IS REPORTED, NEVER SILENT. `refiledFrom` says the stored row
+ * still carries a partner name this DC no longer maps to, so it gets re-filed
+ * (scripts/rekey-shipment-partners.js) instead of quietly working forever.
+ */
+export function attachShipments(groups = [], shipments = []) {
+  const byKey = new Map()
+  for (const s of shipments) byKey.set(s.dcPoKey, s)
+
+  const freightKey = (dc, pos) => `${dc}|${[...(pos || [])].sort().join(',')}`
+  const byFreight = new Map()
+  for (const s of shipments) {
+    const f = freightKey(s.dc, s.memberPos)
+    // First writer wins; a genuine collision is the re-file script's to report, not
+    // something to resolve by whichever row the query happened to return first.
+    if (!byFreight.has(f)) byFreight.set(f, s)
+  }
+
+  const attached = groups.map((g) => {
+    const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
+    const exact = byKey.get(dcPoKey) || null
+    const fallback = exact ? null : byFreight.get(freightKey(g.dc, g.memberPos)) || null
+    return {
+      ...g,
+      dcPoKey,
+      shipment: exact || fallback,
+      refiledFrom: fallback ? { key: fallback.dcPoKey, partner: fallback.partner } : null,
+    }
+  })
+
+  // ⚠️ KEYED ON THE SHIPMENT'S OWN KEY, NOT THE GROUP'S. A row found by the fallback
+  // carries the OLD key, so checking group keys would report it as detached as well as
+  // attached — one shipment in two places, with a BOL apparently both live and orphaned.
+  const matched = new Set(attached.map((g) => g.shipment?.dcPoKey).filter(Boolean))
+  return { groups: attached, detached: shipments.filter((s) => !matched.has(s.dcPoKey)) }
+}

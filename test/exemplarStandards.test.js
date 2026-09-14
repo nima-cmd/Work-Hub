@@ -115,3 +115,32 @@ test('the specs match the Manual, not memory', () => {
   assert.equal(SOURCE.formerly, 'Saks Global')
   assert.equal(SOURCE.edition, 'August 2026')
 })
+
+// ── The checklist is ticked off and stored, so its keys are a contract ──────
+
+test('⚠️ EVERY STEP HAS A UNIQUE KEY — a tick is stored against it, not against the wording', () => {
+  for (const opts of [
+    {}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true },
+    { dts: true, mode: 'TL', asnWillBeSent: true },
+  ]) {
+    const keys = shipmentChecklist(opts).steps.map((s) => s.key)
+    assert.ok(keys.every(Boolean), `a step has no key under ${JSON.stringify(opts)}`)
+    assert.equal(new Set(keys).size, keys.length, `duplicate key under ${JSON.stringify(opts)}`)
+  }
+})
+
+test('the ASN step and the packing-slip step are DIFFERENT keys, because they are alternatives', () => {
+  // Sharing a key would carry a tick for "ASN transmitted" across to "packing slip
+  // attached" the moment the EDI lane was switched on — two different physical acts.
+  const edi = shipmentChecklist({ asnWillBeSent: true }).steps.map((s) => s.key)
+  const non = shipmentChecklist({ asnWillBeSent: false }).steps.map((s) => s.key)
+  assert.ok(edi.includes('asn-856') && !edi.includes('packing-slip'))
+  assert.ok(non.includes('packing-slip') && !non.includes('asn-856'))
+})
+
+test('a conditional step appears only when it applies, and keeps its key when it does', () => {
+  assert.ok(!shipmentChecklist({}).steps.some((s) => s.key === 'dts-auth'))
+  assert.ok(shipmentChecklist({ dts: true }).steps.some((s) => s.key === 'dts-auth'))
+  assert.ok(!shipmentChecklist({}).steps.some((s) => s.key === 'bolt-seal'))
+  assert.ok(shipmentChecklist({ mode: 'TL' }).steps.some((s) => s.key === 'bolt-seal'))
+})

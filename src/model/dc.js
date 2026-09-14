@@ -10,6 +10,8 @@
 // Nima's warehouse abbreviations (2026-07-21). Bloomingdale's DCs get 2-letter
 // codes; Nordstrom DCs are already numeric (DC 584 → "584", FC 569 → "569") so
 // they abbreviate to the number itself — no map entry needed.
+import { DCS as EXEMPLAR_DC_TABLE } from './exemplarStores.js'
+
 export const DC_ABBREV = {
   'Secaucus': 'SC',
   'Stone Mountain': 'ST',
@@ -77,6 +79,11 @@ export function dcLabel(code) {
   const c = String(code || '').trim()
   if (!c) return ''
   if (CODE_TO_NAME[c]) return CODE_TO_NAME[c]
+  // ⚠️ AN EXEMPLAR DC IS NAMED, NOT NUMBERED. "DC 0510" on a routing card tells
+  // whoever is booking it nothing, and reads exactly like a Nordstrom DC — which is
+  // how the mislabel above stayed invisible on screen.
+  const ex = EXEMPLAR_DC_TABLE[c] || EXEMPLAR_DC_TABLE[c.replace(/^0+/, '')]
+  if (ex) return `${ex.name} (${c})`
   if (/^\d+$/.test(c)) return `DC ${c}`
   return c
 }
@@ -98,8 +105,29 @@ export function dcLabel(code) {
 // next partner's codes would look the same and inherit the wrong name again.
 const SHOPBOP_FCS = new Set(['SBX2', 'SDF4', 'ABE2', 'PHX3', 'MSN5'])
 
+// ⚠️ AND "NUMERIC MEANS NORDSTROM" WAS THE SAME GUESS ONE LEVEL UP, WHICH THE
+// COMMENT ABOVE PREDICTED IN WRITING: "the next partner's codes would look the same
+// and inherit the wrong name again." Exemplar's DCs are 510, 517, 550, 560 and 577 —
+// numeric — so PO 8928906 to DC 0510 came back as **Nordstrom**, and the live routing
+// feed consolidated it under `Nordstrom|0510` (found 2026-09-14, while wiring the
+// Exemplar pre-ship checklist). Routing it as Nordstrom means Nordstrom's BOL,
+// Nordstrom's portal and Nordstrom's deadline on freight bound for Exemplar, and the
+// Exemplar rules would never be shown for it at all.
+//
+// Named explicitly, like the ShopBop FCs and for the same reason — and these names
+// are DECLARED, not pattern-matched: they come from exemplarStores.DCS, which is read
+// from Exemplar's own Store Servicing DC List.
+//
+// ⚠️ ZERO-PADDED IN EDI, BARE IN THE GUIDE. The 850 carries `0510`; the DC list says
+// `510`. Matched both ways, because a lookup that misses falls through to the numeric
+// branch and silently says Nordstrom again — which is this bug.
+const EXEMPLAR_DCS = new Set(Object.keys(EXEMPLAR_DC_TABLE))
+
+const isExemplarDc = (c) => EXEMPLAR_DCS.has(c) || EXEMPLAR_DCS.has(c.replace(/^0+/, ''))
+
 export function partnerForDc(code) {
   const c = String(code || '').trim()
+  if (isExemplarDc(c)) return 'Exemplar'
   if (/^\d+$/.test(c)) return 'Nordstrom'
   if (SHOPBOP_FCS.has(c.toUpperCase())) return 'Shopbop'
   return "Bloomingdale's"

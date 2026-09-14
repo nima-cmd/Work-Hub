@@ -42,6 +42,7 @@ import {
   recordFulfillmentBox, getCustodyRegister, getCustodyState, clearCustodyItem, deleteCustodyScan,
   loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
   markTransferReceived, unmarkTransferReceipt, getBulkPick, getHangTags, hangTagsFor,
+  getPreshipChecks, setPreshipCheck, clearPreshipCheck,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -493,6 +494,39 @@ app.all('/api/bulk-pick/pdf', async (req, res) => {
     const rule = b.rule || req.query.rule || null
     const pool = b.pool || req.query.pool || null
     await renderPickTicketTo(res, await getBulkPick(pos, { rule, pool }))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// ── The Exemplar pre-ship checklist ─────────────────────────────────────────
+// ⚠️ THE STEPS ARE NOT SERVED FROM HERE. `shipmentChecklist()` is a pure module and the
+// client imports it directly, like every other rule surface in this app — the server
+// only owns what it stores, which is the TICKS. Sending the steps over the wire too
+// would give the same checklist two sources that could disagree about what is on it.
+app.get('/api/preship-checks', async (req, res) => {
+  try {
+    res.json(await getPreshipChecks(req.query.dcPoKey))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.post('/api/preship-checks', async (req, res) => {
+  try {
+    res.json(await setPreshipCheck(req.body || {}))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.delete('/api/preship-checks', async (req, res) => {
+  try {
+    const b = { ...(req.body || {}), ...req.query }
+    res.json(await clearPreshipCheck(b))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })

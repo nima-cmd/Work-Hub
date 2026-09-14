@@ -16,6 +16,7 @@ import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
+import { shipmentChecklist } from '../src/model/exemplarStandards.js'
 import {
   shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
 } from '../src/model/allocationPlan.js'
@@ -109,7 +110,7 @@ import { reconcileShipment, priceAnomalies, reconcileWarnings } from '../src/mod
 export { toCsv }
 import { INTEGRATIONS, computeIntegrationHealth, overallHealth } from '../src/model/health.js'
 import { skuKeyOf, skuColorNorm } from '../src/ingest/savedSearches.js'
-import { consolidateRouting, netsuiteShippedVerdict } from '../src/model/routing.js'
+import { consolidateRouting, netsuiteShippedVerdict, attachShipments } from '../src/model/routing.js'
 import { computeEdiDeliveryGaps } from '../src/model/ediDelivery.js'
 import { asnCheckDue, asnSummary, ASN_CHECK_MIN_HOURS, ASN_CHECK_WINDOW_DAYS } from '../src/model/asnCartonCheck.js'
 import { buildBolPdf, renderBolTo } from './bolPdf.js'
@@ -3146,22 +3147,21 @@ export async function getRouting() {
   // See src/model/manhattanTender.js.
   await annotateTenders(shipments)
 
-  const byKey = new Map()
-  for (const s of shipments) byKey.set(s.dcPoKey, s)
-
   // Pack check (Nima, 2026-08-02): every unit on a fulfilment must be in a
   // carton before its group can ship. Keyed by PO-DC so a group covering several
   // POs picks up each one's fulfilments.
   const packByPoDc = await fetchFulfilmentPack()
 
-  const consolidated = groups.map((g) => {
-    const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
+  // ⚠️ THE SHARED MATCHER. This used to build `partner|dc|POs` and look it up inline,
+  // and so did client/src/views/Routing.jsx — two copies, so fixing one left the other
+  // offering "Assign BOL" on freight that already held a BOL. attachShipments() owns
+  // both the key and the fallback for a renamed partner, and is tested.
+  const matched = attachShipments(groups, shipments)
+  const consolidated = matched.groups.map((g) => {
     const members = g.memberPos.flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
-    return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
+    return { ...g, pack: checkGroupPack(members) }
   })
-
-  const liveKeys = new Set(consolidated.map((g) => g.dcPoKey))
-  const detached = shipments.filter((s) => !liveKeys.has(s.dcPoKey))
+  const detached = matched.detached
 
   const gaps = await computeRoutingGaps({ packages: active, shipments })
 
@@ -6203,3 +6203,65 @@ export async function hangTagsFor(items = []) {
   for (const t of tags) for (let i = 0; i < (wanted.get(String(t.skuKey).toUpperCase()) || 1); i++) out.push(t)
   return out
 }
+
+// ── The Exemplar pre-ship checklist ─────────────────────────────────────────
+//
+// ⚠️ THE APP STORES THE TICK, THE MODEL OWNS THE STEPS. `shipmentChecklist()` decides
+// what has to be true and in what order; this only records that a person said one of
+// those things IS true. Nothing here computes a tick — see db/schema.sql.
+export async function getPreshipChecks(dcPoKey) {
+  const key = String(dcPoKey || '').trim()
+  if (!key) throw new Error('a shipment key is required')
+  const { rows } = await pool.query(
+    'SELECT step_key AS "stepKey", checked_by AS "checkedBy", note, checked_at AS "checkedAt"'
+    + ' FROM preship_check WHERE dc_po_key = $1', [key])
+  return { dcPoKey: key, checks: rows }
+}
+
+/**
+ * Tick one step.
+ *
+ * ⚠️ `by` IS REQUIRED AND IS NOT DEFAULTED. The whole value of this row is that a
+ * NAMED person asserts they looked at a physical carton. "system" or an empty string
+ * would turn an accountable statement into an anonymous one, which is the same thing
+ * as no statement at all.
+ *
+ * ⚠️ AND THE STEP KEY IS VALIDATED AGAINST THE MODEL. A typo'd key would store a tick
+ * that no checklist ever renders — invisible on screen, and counted as unverified
+ * forever while looking, to whoever wrote it, like it had been done.
+ */
+export async function setPreshipCheck({ dcPoKey, stepKey, by, note = null } = {}) {
+  const key = String(dcPoKey || '').trim()
+  const step = String(stepKey || '').trim()
+  const who = String(by || '').trim()
+  if (!key) throw new Error('a shipment key is required')
+  if (!step) throw new Error('a step key is required')
+  if (!who) throw new Error('a pre-ship check must record WHO verified it — it is a statement by a person, not an observation the app can make')
+  if (!ALL_PRESHIP_STEP_KEYS.has(step)) {
+    throw new Error(`"${step}" is not a step in the Exemplar checklist — a tick stored under an unknown key is invisible on screen and counts as unverified forever`)
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO preship_check (dc_po_key, step_key, checked_by, note)
+          VALUES ($1,$2,$3,$4)
+     ON CONFLICT (dc_po_key, step_key)
+       DO UPDATE SET checked_by = EXCLUDED.checked_by, note = EXCLUDED.note, checked_at = now()
+       RETURNING step_key AS "stepKey", checked_by AS "checkedBy", note, checked_at AS "checkedAt"`,
+    [key, step, who, note || null])
+  return rows[0]
+}
+
+/** Un-tick. ⚠️ A DELETE, not a false — see db/schema.sql for why there is no boolean. */
+export async function clearPreshipCheck({ dcPoKey, stepKey } = {}) {
+  const key = String(dcPoKey || '').trim()
+  const step = String(stepKey || '').trim()
+  if (!key || !step) throw new Error('a shipment key and a step key are required')
+  const { rowCount } = await pool.query(
+    'DELETE FROM preship_check WHERE dc_po_key = $1 AND step_key = $2', [key, step])
+  return { cleared: rowCount }
+}
+
+// Every key the checklist can ever issue, across all its conditional branches, so a
+// stored tick can be validated without knowing this shipment's shape.
+const ALL_PRESHIP_STEP_KEYS = new Set(
+  [{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
+    .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)))

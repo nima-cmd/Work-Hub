@@ -2125,3 +2125,31 @@ CREATE TABLE IF NOT EXISTS inbound_shipment (
 );
 CREATE INDEX IF NOT EXISTS inbound_shipment_arrived ON inbound_shipment (arrived_on);
 CREATE INDEX IF NOT EXISTS inbound_shipment_eta ON inbound_shipment (eta_on);
+
+-- preship_check (2026-09-14): the Exemplar pre-ship checklist, ticked off before a
+-- shipment leaves. Nima: "we need to make sure we are adhering to every single
+-- requirments they have pheraps if theres a check box of things we need to verify
+-- before we ship."
+--
+-- ⚠️ AN ENTERED FACT, NOT AN OBSERVED ONE. A tick means a person says they verified
+-- something on a physical carton; the app cannot see a security tape seal or a pallet
+-- wrap. So it records WHO and WHEN, and it is schema-distinguishable from anything the
+-- app derives — nothing computes a row in here.
+--
+-- ⚠️ KEYED ON step_key, WHICH IS ISSUED BY shipmentChecklist() AND NEVER REUSED.
+-- Keying on the step's display text would un-tick a cleared shipment on the next
+-- wording change. `asn-856` and `packing-slip` are deliberately separate keys.
+--
+-- ⚠️ NO ROW MEANS NOT VERIFIED. There is no `checked BOOLEAN` — un-ticking DELETEs,
+-- so a row is only ever an affirmative statement by a named person. A false row would
+-- be indistinguishable from "nobody has looked at this yet", and those are different
+-- things on a shipment about to leave.
+CREATE TABLE IF NOT EXISTS preship_check (
+  dc_po_key   TEXT NOT NULL,
+  step_key    TEXT NOT NULL,
+  checked_by  TEXT NOT NULL,
+  note        TEXT,
+  checked_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (dc_po_key, step_key)
+);
+CREATE INDEX IF NOT EXISTS preship_check_shipment ON preship_check (dc_po_key);
