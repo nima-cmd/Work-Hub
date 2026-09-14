@@ -4,6 +4,7 @@
 
 import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
+import { manifestPdf } from './exemplarManifestPdf.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -43,6 +44,7 @@ import {
   loadCalendarCandidates, loadHeldCandidates, loadTransferCandidates, loadTransferCandidatesWithScans, getTransferCards, getSyncMeta, setSyncMeta,
   markTransferReceived, unmarkTransferReceipt, getBulkPick, getHangTags, hangTagsFor,
   getPreshipChecks, setPreshipCheck, clearPreshipCheck,
+  getManifestCartons,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -497,6 +499,29 @@ app.all('/api/bulk-pick/pdf', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// ── The Exemplar Master Manifest ────────────────────────────────────────────
+// Guide p13 — required for ALL shipments, handed to the carrier at pick-up. The one
+// required document this app has never produced.
+app.get('/api/exemplar/manifest.pdf', async (req, res) => {
+  try {
+    const { shipment, cartons } = await getManifestCartons(req.query.shipmentId)
+    const doc = await manifestPdf(cartons, {
+      dc: shipment.dc,
+      bolNumber: shipment.bolNumber,
+      shipment: { cartons: shipment.cartons, units: shipment.units },
+    })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="manifest-${shipment.bolNumber || shipment.id}.pdf"`)
+    doc.pipe(res)
+    doc.end()
+  } catch (e) {
+    console.error(e)
+    // ⚠️ A REFUSAL IS THE POINT, so it must arrive as readable text rather than a
+    // broken PDF in a new tab. See exemplarManifestPdf.js for what it refuses.
+    res.status(400).type('text/plain').send(`Manifest not printable.\n\n${e.message}`)
   }
 })
 

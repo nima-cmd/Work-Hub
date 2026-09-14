@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1041,6 +1041,16 @@ function BolActions({ s }) {
   return (
     <div className="rt-bolActions">
       <a className="btnGhost" href={bolPdfUrl(s.id)} target="_blank" rel="noreferrer">BOL PDF ↗</a>
+      {/* ⚠️ EXEMPLAR ONLY — it is their document, from their guide (p13). A link, not
+          a fetch, for the same reason the pick ticket is: opening a PDF after an await
+          is what browsers block as a popup. A refusal comes back as plain text in the
+          tab, which is the whole point of refusing. */}
+      {s.partner === 'Exemplar' && (
+        <a className="btnGhost" href={manifestPdfUrl(s.id)} target="_blank" rel="noreferrer"
+           title="Master Manifest & Packing List — hand this to the carrier at pick-up (Routing Guide p13)">
+          Manifest ↗
+        </a>
+      )}
       <button className="btnGhost" disabled={state?.busy} onClick={file}>
         {state?.busy ? 'Filing…' : '⤒ File to Drive'}
       </button>
@@ -1235,11 +1245,13 @@ function RefEditor({ s, auths, busy, onSave }) {
     consignedTo: s.consignedTo || '',
     trackingNumbers: (s.trackingNumbers || []).join(', '),
     routingRequestNumber: s.routingRequestNumber || '',
+    tmsConfirmation: s.tmsConfirmation || '',
     routingRequestLine: s.routingRequestLine || '',
     proNumber: s.proNumber || '',
   })
   const isBloomies = s.partner === "Bloomingdale's"
   const isNordstrom = s.partner === 'Nordstrom'
+  const isExemplar = s.partner === 'Exemplar'
   const set = (k) => (e) => setD({ ...d, [k]: e.target.value })
 
   // The Bloomingdale's auth # comes from the routing email — typed in directly.
@@ -1322,6 +1334,17 @@ function RefEditor({ s, auths, busy, onSave }) {
               placeholder="RRL7854657822930187974" />
           </label>
         </div>
+      )}
+      {/* ⚠️ EXEMPLAR'S NUMBER IS THE TMS CONFIRMATION, NOT A MACY'S AUTH. Dynamic's
+          TMS returns it when the shipment is booked, and the Routing Guide (p23)
+          requires it in CID# AND Special Instructions on the BOL — which is where
+          bolAuthLine() now prints it. Its own field, because sharing auth_number is
+          how "Macy's Auth / Appt #" became the label printed for both. */}
+      {isExemplar && (
+        <label>TMS confirmation #
+          <input value={d.tmsConfirmation} onChange={set('tmsConfirmation')}
+            placeholder="from Dynamic TMS when you book" />
+        </label>
       )}
       <div className="rt-editRow">
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>

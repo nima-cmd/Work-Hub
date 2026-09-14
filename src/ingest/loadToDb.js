@@ -834,6 +834,7 @@ export async function fetchRoutingShipments(db = pool) {
             fedex_pickup_number AS "fedexPickupNumber", shipped_at AS "shippedAt",
             ship_direct AS "shipDirect", consigned_to AS "consignedTo",
             tracking_numbers AS "trackingNumbers",
+            tms_confirmation_number AS "tmsConfirmation",
             routing_request_number AS "routingRequestNumber",
             routing_request_line AS "routingRequestLine",
             bill_to_account AS "billToAccount", freight_terms AS "freightTerms",
@@ -1035,7 +1036,12 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             -- show a shipment as DC-direct while its printed BOL consigned it to the
             -- merge center, with no layer disagreeing out loud. Fixing shipToFor
             -- alone changed nothing until this column was asked for.
-            ship_direct AS "shipDirect", consigned_to AS "consignedTo"
+            ship_direct AS "shipDirect", consigned_to AS "consignedTo",
+            -- ⚠️ AND THE SAME TRAP AGAIN, one comment further down the same query.
+            -- bolAuthLine() now prints the TMS confirmation for Exemplar (guide p23,
+            -- CID# AND Special Instructions); without selecting it here the line would
+            -- render its blank forever no matter what was typed on the card.
+            tms_confirmation_number AS "tmsConfirmation"
      FROM routing_shipment WHERE id = $1`,
     [id],
   )
@@ -1115,6 +1121,12 @@ const SHIPMENT_REF_COLS = {
   shipDirect: 'ship_direct',
   consignedTo: 'consigned_to',
   trackingNumbers: 'tracking_numbers',
+  // Exemplar's Dynamic TMS confirmation (Nima, 2026-09-14) — its OWN column, never
+  // auth_number: a Macy's auth/appointment and a TMS confirmation are different
+  // mechanisms from different partners, and sharing one is how "Macy's Auth / Appt #"
+  // became the label printed for both. Guide p23 wants it in CID# AND Special
+  // Instructions.
+  tmsConfirmationNumber: 'tms_confirmation_number',
   // Nordstrom's portal references (Nima, 2026-08-05) — see db/schema.sql.
   routingRequestNumber: 'routing_request_number',
   routingRequestLine: 'routing_request_line',

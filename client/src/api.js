@@ -1266,3 +1266,8 @@ export async function clearPreshipCheck({ dcPoKey, stepKey }) {
   if (!res.ok) throw new Error(body.error || `API ${res.status}`)
   return body
 }
+
+// The Exemplar Master Manifest (Routing Guide p13) — handed to the carrier at pick-up.
+// ⚠️ A URL, not a fetch: same popup-blocker rule as the pick ticket and the BOL. A
+// refusal arrives as plain text in the tab, which is what makes the refusal useful.
+export const manifestPdfUrl = (shipmentId) => `/api/exemplar/manifest.pdf?shipmentId=${encodeURIComponent(shipmentId)}`

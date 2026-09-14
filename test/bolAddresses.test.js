@@ -2,7 +2,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shipToFor } from '../src/model/bolAddresses.js'
+import { shipToFor, bolAuthLine } from '../src/model/bolAddresses.js'
 
 // ── Exemplar ships direct to its own DC, and is not Macy's ─────────────────
 
@@ -37,4 +37,24 @@ test('⚠️ AN UNKNOWN EXEMPLAR DC IS NAMED, NEVER ADDRESSED', () => {
 test('the other partners are untouched by the new branch', () => {
   assert.match(shipToFor('Nordstrom', '584', 'x', { direct: true }).block.name, /Nordstrom DC #584/)
   assert.match(shipToFor("Bloomingdale's", 'SC', 'x', { direct: true }).block.name, /Macy's Secaucus/)
+})
+
+test('⚠️ AND THE AUTH LINE WAS THE SECOND MACY\'S DEFAULT', () => {
+  // Exemplar routes through Dynamic's TMS, which returns a confirmation number — a
+  // different mechanism from a Macy's auth/appointment. The guide (p23) wants that
+  // number in CID# and Special Instructions; the old line named a competitor AND
+  // asked for the wrong number.
+  const line = bolAuthLine({ partner: 'Exemplar', tmsConfirmation: 'ABC123' })
+  assert.doesNotMatch(line, /Macy/i)
+  assert.match(line, /TMS Confirmation # ABC123/)
+})
+
+test('⚠️ AN UNKNOWN TMS NUMBER LEAVES THE BLANK BLANK', () => {
+  // A blank is a prompt; a plausible number is a wrong document.
+  assert.match(bolAuthLine({ partner: 'Exemplar' }), /TMS Confirmation # _+/)
+})
+
+test('the other partners keep their own auth line', () => {
+  assert.equal(bolAuthLine({ partner: 'Nordstrom' }), null)
+  assert.match(bolAuthLine({ partner: "Bloomingdale's", authNumber: 'X1' }), /Macy's Auth \/ Appt # X1/)
 })
