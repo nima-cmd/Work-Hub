@@ -3489,3 +3489,4 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .rt-preshipNever { font-size: 11px; line-height: 1.5; padding: 2px 0; }
 .rt-tmsLink { margin: 8px 0; font-size: 11px; line-height: 1.6; }
 .rt-pallet { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.rt-consigneePick { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); font-size: 11px; line-height: 1.5; }

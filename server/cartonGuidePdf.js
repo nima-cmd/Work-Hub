@@ -16,7 +16,7 @@
 import PDFDocument from 'pdfkit'
 import { placementPlan } from '../src/model/cartonPlacement.js'
 import { LABEL_PLACEMENT, CARTON_MARKINGS, feeFor } from '../src/model/exemplarStandards.js'
-import { PORTALS, CONTACTS, DEADLINES } from '../src/model/saksRouting.js'
+import { PORTALS, CONTACTS, DEADLINES, TMS_CONSIGNEE, tmsConsigneeFor } from '../src/model/saksRouting.js'
 import { PACKING_SLIP_HANDLING } from './exemplarDocsPdf.js'
 
 const PT = 72
@@ -82,6 +82,12 @@ export async function cartonGuidePdf(cartons, { label = { w: 4, h: 6 }, po, stor
     ? `Route it at: ${tms.url}   (support ${tms.support})`
     : `Portal link: NOT ON FILE. Support ${tms.support}. Paste the bookmark you use and this sheet will carry it.`)
   bullet(doc, `Routing must be booked at least ${DEADLINES.tmsRouting.businessDaysBeforeCancel} business days before the cancel date (p${DEADLINES.tmsRouting.page}).`)
+  // ⚠️ The consignee trap, on the sheet because it is the step that actually stops you.
+  const cons = tmsConsigneeFor(dc)
+  if (cons) {
+    bullet(doc, `Consignee: search "${TMS_CONSIGNEE.searchTerm}" and pick exactly "${cons.select}".`)
+    bullet(doc, `NOT "${cons.decoy}" — it looks right and will not let the routing finish. ${TMS_CONSIGNEE.searchNote}`)
+  }
   bullet(doc, 'Packing-slip email: NOT ON FILE. The guide says "emailed IN ADVANCE to the DC contact office" '
     + `and gives no address for ${dc}. The nearest contact we hold is ${CONTACTS.shippingAndRouting} — confirm with them before relying on it.`)
   doc.moveDown(0.8)

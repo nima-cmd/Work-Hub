@@ -314,6 +314,52 @@ export const PORTALS = {
   },
 }
 
+/**
+ * WHICH CONSIGNEE TO PICK IN THE DYNAMIC TMS.
+ *
+ * ⚠️ THIS COST NIMA AN AFTERNOON AND THE ERROR NEVER SAID SO. The TMS consignee lookup
+ * returns SIX entries for "elg", and two of them are DC 510:
+ *
+ *     ELG- Neiman/Saks DC 510              ← looks right, and the routing will not finish
+ *     ELG-Neiman/Saks DC 510 % Linear      ← the one to pick
+ *
+ * Choosing the first simply would not let him complete the pickup. No message named the
+ * consignee; the screen just refused to move on. The same pairing exists for the other
+ * DCs — a plain entry and a "% Linear" one.
+ *
+ * ⚠️ ONLY DC 510 IS CONFIRMED. Nima verified 510 on 2026-09-14. The "% Linear" pattern
+ * OBVIOUSLY generalises and that is exactly why it is not written down as if it did —
+ * the same call as leaving 0073's banner alone when he named only 0077. An unconfirmed
+ * consignee that looks authoritative is how the wrong one gets picked with confidence.
+ *
+ * ⚠️ And the vendor note on that screen matters on its own: "For vendors entering Saks
+ * or Neiman Marcus or Bergdorf Goodman shipments please type ELG for consignee search."
+ * Searching the banner name finds nothing.
+ */
+export const TMS_CONSIGNEE = {
+  searchTerm: 'elg',
+  searchNote: 'Search "elg" — searching Saks, Neiman Marcus or Bergdorf Goodman finds nothing.',
+  byDc: {
+    510: {
+      select: 'ELG-Neiman/Saks DC 510 % Linear',
+      decoy: 'ELG- Neiman/Saks DC 510',
+      confirmed: 'Nima, 2026-09-14 — picking the decoy would not let the routing finish',
+    },
+  },
+  // Seen in the lookup, NOT confirmed against a completed routing. Listed so the pairing
+  // is visible without asserting which half is right for these DCs.
+  unconfirmed: {
+    '517/577': ['ELG- Neiman/Saks DC 517/577', 'ELG- Neiman/Saks DC 517/577% Linear'],
+    560: ['ELG- Neiman/Saks/BG DC 560', 'ELG- Neiman/Saks/BG DC 560 % Linear'],
+  },
+}
+
+/** The exact consignee string for a DC, or null when we have not confirmed one. */
+export function tmsConsigneeFor(dc) {
+  const key = String(dc ?? '').replace(/^0+/, '')
+  return TMS_CONSIGNEE.byDc[key] || null
+}
+
 export const CONTACTS = {
   shippingAndRouting: 'sg-transportation@saks.com',
   compliance: 'compliance@saks.com',

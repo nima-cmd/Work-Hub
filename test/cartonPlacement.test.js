@@ -6,7 +6,7 @@ import { placementFor, parseBox, placementPlan, faces, markingPlan, SLIP_MARKING
 import { LABEL_PLACEMENT } from '../src/model/exemplarStandards.js'
 import { xDimensionFor, BAR_HEIGHT_MIN_IN } from '../src/model/code128.js'
 import { LABELS } from '../server/printLabel.js'
-import { PORTALS } from '../src/model/saksRouting.js'
+import { PORTALS, TMS_CONSIGNEE, tmsConsigneeFor } from '../src/model/saksRouting.js'
 
 const L4x6 = { w: 4, h: 6 }
 
@@ -153,4 +153,37 @@ test('the TMS portal link is Nima\'s, and is recorded as his', () => {
   assert.match(PORTALS.tms.urlSource, /Nima/)
   // IMS still has none, and still says so rather than borrowing this one.
   assert.equal(PORTALS.ims.url, null)
+})
+
+// ── The TMS consignee trap ─────────────────────────────────────────────────
+
+test('⚠️ DC 510 HAS A DECOY CONSIGNEE, AND THE DECOY IS THE PLAUSIBLE ONE', () => {
+  // The lookup returns two near-identical entries and the wrong one silently refuses to
+  // let the routing finish — no message names the consignee. Nima, 2026-09-14: "the
+  // last one ELG linear is the one that we need to pick that was why it wasn't letting
+  // us finish the routing."
+  const c = tmsConsigneeFor('0510')
+  assert.equal(c.select, 'ELG-Neiman/Saks DC 510 % Linear')
+  assert.equal(c.decoy, 'ELG- Neiman/Saks DC 510')
+  assert.notEqual(c.select, c.decoy)
+  assert.match(c.confirmed, /Nima/)
+})
+
+test('padded and bare DC codes both resolve', () => {
+  assert.deepEqual(tmsConsigneeFor('0510'), tmsConsigneeFor('510'))
+})
+
+test('⚠️ THE OTHER DCs ARE NOT GUESSED, THOUGH THE PATTERN IS OBVIOUS', () => {
+  // Every DC in the lookup has a plain and a "% Linear" entry, so extending the rule is
+  // tempting and unverified. Nima confirmed 510 and only 510. An unconfirmed consignee
+  // that looks authoritative is how the wrong one gets picked with confidence — the
+  // same call as leaving store 0073's banner alone when he named only 0077.
+  assert.equal(tmsConsigneeFor('560'), null)
+  assert.equal(tmsConsigneeFor('517'), null)
+  assert.ok(TMS_CONSIGNEE.unconfirmed['560'].length === 2, 'the pairing is still visible')
+})
+
+test('the search term is recorded, because the banner names find nothing', () => {
+  assert.equal(TMS_CONSIGNEE.searchTerm, 'elg')
+  assert.match(TMS_CONSIGNEE.searchNote, /finds nothing/)
 })

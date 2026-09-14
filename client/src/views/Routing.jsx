@@ -7,7 +7,7 @@ import {
   fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings, palletLabelPdfUrl, printPalletLabels,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
-import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES } from '../../../src/model/saksRouting.js'
+import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES, TMS_CONSIGNEE, tmsConsigneeFor } from '../../../src/model/saksRouting.js'
 import { consolidateRouting, attachShipments } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
 import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
@@ -829,6 +829,19 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
           {!s?.tmsConfirmation && (
             <span className="muted"> — book at least {DEADLINES.tmsRouting.businessDaysBeforeCancel} business
               days before the cancel date, then put the confirmation number on this card.</span>
+          )}
+          {/* ⚠️ THE CONSIGNEE TRAP. The lookup returns two near-identical entries per DC
+              and the wrong one silently refuses to let the routing finish — no message
+              names the consignee. This cost an afternoon on 2026-09-14. */}
+          {tmsConsigneeFor(g.dc) && (
+            <div className="rt-consigneePick">
+              Search <code>{TMS_CONSIGNEE.searchTerm}</code> and pick exactly:{' '}
+              <b>{tmsConsigneeFor(g.dc).select}</b>
+              <div className="muted">
+                NOT <s>{tmsConsigneeFor(g.dc).decoy}</s> — it looks right and will not let the routing finish.
+                {' '}{TMS_CONSIGNEE.searchNote}
+              </div>
+            </div>
           )}
         </div>
       )}
