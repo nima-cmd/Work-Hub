@@ -17,6 +17,7 @@ import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
 import { shipmentChecklist } from '../src/model/exemplarStandards.js'
+import { macysShipmentChecklist } from '../src/model/macysStandards.js'
 import { servicingDc, consigneeCompany } from '../src/model/exemplarStores.js'
 import { fetchCartonContents } from '../src/ingest/exemplarCartonFetch.js'
 import {
@@ -6287,11 +6288,20 @@ export async function clearPreshipCheck({ dcPoKey, stepKey } = {}) {
   return { cleared: rowCount }
 }
 
-// Every key the checklist can ever issue, across all its conditional branches, so a
-// stored tick can be validated without knowing this shipment's shape.
-const ALL_PRESHIP_STEP_KEYS = new Set(
-  [{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
-    .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)))
+// Every key EITHER checklist can ever issue, across all conditional branches, so a
+// stored tick can be validated without knowing this shipment's shape or partner.
+//
+// ⚠️ THE MACY'S KEYS HAD TO BE ADDED HERE OR EVERY TICK ON THAT CHECKLIST WOULD BE
+// REFUSED. setPreshipCheck validates against this set on purpose — a tick under an
+// unknown key is invisible on screen and counts as unverified forever — so a second
+// checklist is not just a UI addition. The guard would have rejected it correctly and
+// looked like a broken button.
+const ALL_PRESHIP_STEP_KEYS = new Set([
+  ...[{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
+    .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)),
+  ...[{ asnWillBeSent: true }, { asnWillBeSent: false }]
+    .flatMap((o) => macysShipmentChecklist(o).steps.map((s) => s.key)),
+])
 
 // ── The Exemplar Master Manifest ────────────────────────────────────────────
 //

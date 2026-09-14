@@ -7,6 +7,7 @@ import {
   fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings, palletLabelPdfUrl, printPalletLabels,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
+import { macysShipmentChecklist, PORTAL as MACYS_PORTAL } from '../../../src/model/macysStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES, TMS_CONSIGNEE, tmsConsigneeFor } from '../../../src/model/saksRouting.js'
 import { consolidateRouting, attachShipments } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
@@ -820,6 +821,20 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
           It is his bookmark, not one inferred from the guide: the Routing Guide gives
           contacts and no addresses, and "softweb" is not a host anyone would have
           guessed from csrsupport@dynamiconline.com. */}
+      {/* ⚠️ THE MACY'S PORTAL, WITH THE BROWSER NOTE. Nima, 2026-09-14: "macysnet.com is
+          the link to the portal and that needs to be opned in safari if possible." That
+          is his instruction, recorded as his — not a compatibility fact we established —
+          and it is on the card so nobody loses twenty minutes to a portal that
+          half-works in Chrome. */}
+      {/^(Bloomingdale|Macy)/i.test(g.partner || '') && !s?.shippedAt && (
+        <div className="rt-tmsLink">
+          <a className="btnGhost" href={MACYS_PORTAL.url} target="_blank" rel="noreferrer"
+             title={MACYS_PORTAL.holds}>
+            {MACYS_PORTAL.name} ↗
+          </a>
+          <span className="muted"> — open it in <b>{MACYS_PORTAL.browser}</b> if you can.</span>
+        </div>
+      )}
       {g.partner === 'Exemplar' && PORTALS.tms.url && !s?.shippedAt && (
         <div className="rt-tmsLink">
           <a className="btnGhost" href={PORTALS.tms.url} target="_blank" rel="noreferrer"
@@ -847,6 +862,8 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
       )}
 
       {g.partner === 'Exemplar' && <PreshipChecklist g={g} s={s} />}
+      {/* Macy's divisions share one Vendor Standards and one Appendix H. */}
+      {/^(Bloomingdale|Macy)/i.test(g.partner || '') && <PreshipChecklist g={g} s={s} partner={g.partner} />}
 
       {/* ⚠️ THIS SHIPMENT WAS FOUND BY ITS FREIGHT, NOT BY ITS KEY. Its stored row still
           carries a partner name this DC no longer maps to. Nothing is broken — the BOL
@@ -1519,7 +1536,7 @@ function Cell({ label, v, big }) {
 // ⚠️ AND THIS DOES NOT BLOCK SHIPPING. It is a checklist, not a gate — the person on
 // the floor can see something the app cannot, and an app that refuses to let a real
 // truck leave gets worked around, which costs more than the fee it was preventing.
-function PreshipChecklist({ g, s }) {
+function PreshipChecklist({ g, s, partner = 'Exemplar' }) {
   const dcPoKey = g.dcPoKey
   const [open, setOpen] = useState(false)
   const [checks, setChecks] = useState(null)
@@ -1546,13 +1563,31 @@ function PreshipChecklist({ g, s }) {
   // drives the per-PO fees, and `asnWillBeSent` decides whether the document step is
   // the 856 or the packing slip — EDI_STATUS records that our last delivered 856 to
   // this partner was 2024-11-01, so the non-ASN branch is the live one.
-  const list = shipmentChecklist({
-    asnWillBeSent: EDI_STATUS.asnTransmitted,
-    cartons: g.cartons || 1,
-    pos: (g.memberPos || []).length || 1,
-    mode: s?.mode || null,
-    dts: false,
-  })
+  // ⚠️ THE TWO PARTNERS' CHECKLISTS ARE NOT THE SAME DOCUMENT AND MUST NOT LOOK IT.
+  // Exemplar's covers routing, packing, labelling, documents, palletising and after-ship
+  // because BOTH its Routing Guide and its Manual were read. Macy's covers what Appendix
+  // H prices, because three of the four Macy's-side documents are still unread — and it
+  // carries `notCovered` saying exactly which. Same widget, honestly different contents.
+  const isMacys = partner !== 'Exemplar'
+  const list = isMacys
+    ? macysShipmentChecklist({
+      cartons: g.cartons || 1,
+      receipts: (g.memberPos || []).length || 1,
+      units: g.units || 0,
+      // ⚠️ Merchandise value is NOT guessed. The dominant line — shortages — is a
+      // receipt fee PLUS half the merchandise, and offsetFor returns `unknown` with the
+      // flat part rather than an estimate when the value is missing. A number invented
+      // here would be the one someone quotes.
+      merchandiseUsd: null,
+      asnWillBeSent: true,
+    })
+    : shipmentChecklist({
+      asnWillBeSent: EDI_STATUS.asnTransmitted,
+      cartons: g.cartons || 1,
+      pos: (g.memberPos || []).length || 1,
+      mode: s?.mode || null,
+      dts: false,
+    })
   const done = new Set((checks || []).map((c) => c.stepKey))
   const byKey = Object.fromEntries((checks || []).map((c) => [c.stepKey, c]))
   const shipped = !!s?.shippedAt
@@ -1581,7 +1616,7 @@ function PreshipChecklist({ g, s }) {
   return (
     <div className="rt-preship">
       <button className="rt-preshipHead" onClick={() => setOpen((o) => !o)}>
-        {open ? '▾' : '▸'} Exemplar pre-ship checks
+        {open ? '▾' : '▸'} {isMacys ? "Macy's / Bloomingdale's" : 'Exemplar'} pre-ship checks
         <span className="muted">
           {checks === null ? ' · not loaded' : ` · ${done.size} of ${list.steps.length} verified`}
           {checks !== null && atRisk > 0 && ` · $${atRisk.toLocaleString()} unverified`}
@@ -1593,13 +1628,30 @@ function PreshipChecklist({ g, s }) {
           {err && <div className="banner error">⚠ {err}</div>}
 
           <div className="muted rt-sub">
-            {/* ⚠️ THE MANUAL IS EDITIONED AND THE GUIDE IS REVISIONED — they are two
-                different documents with two different versioning schemes, and reading
-                `revision` off the manual printed "rev" followed by nothing. */}
-            {list.source.manual}, {list.source.edition} edition · {SAKS_SOURCE.guide} rev{' '}
-            {SAKS_SOURCE.revision}, {SAKS_SOURCE.updated}. Every step cites its page.
-            {' '}<b>Non-ASN lane</b> — {EDI_STATUS.consequence}.
+            {isMacys ? (
+              <>
+                {list.source.document}, Appendix {list.source.appendix} (pp {list.source.pages}).
+                {' '}<b>{list.caveat}</b>
+              </>
+            ) : (
+              <>
+                {/* ⚠️ THE MANUAL IS EDITIONED AND THE GUIDE IS REVISIONED — two documents,
+                    two versioning schemes; reading `revision` off the manual printed
+                    "rev" followed by nothing. */}
+                {list.source.manual}, {list.source.edition} edition · {SAKS_SOURCE.guide} rev{' '}
+                {SAKS_SOURCE.revision}, {SAKS_SOURCE.updated}. Every step cites its page.
+                {' '}<b>Non-ASN lane</b> — {EDI_STATUS.consequence}.
+              </>
+            )}
           </div>
+          {/* ⚠️ WHAT THIS CHECKLIST HAS NOT READ, on the checklist. A list that looks
+              complete is worse than a short one that admits its gaps. */}
+          {list.notCovered && (
+            <div className="rt-preshipPhase">
+              <div className="rt-preshipPhaseName">Not covered — these documents are unread</div>
+              {list.notCovered.map((n, i) => <div key={i} className="rt-preshipNever">· {n}</div>)}
+            </div>
+          )}
 
           {/* ⚠️ NO TICK WITHOUT A NAME. The server refuses an unnamed check; saying so
               here means the refusal is a prompt rather than an error after the click. */}
@@ -1632,9 +1684,15 @@ function PreshipChecklist({ g, s }) {
                       <div>
                         <div className="rt-preshipWhat">
                           {x.what}
-                          {x.fee?.cost?.startsWith('$') && (
-                            <span className="rt-preshipFee" title={x.fee.rule || ''}>{x.fee.cost}</span>
+                          {(x.fee?.cost || x.offset?.cost) && (
+                            <span className="rt-preshipFee" title={x.fee?.rule || x.offset?.what || ''}>
+                              {x.fee?.cost || x.offset?.cost}
+                            </span>
                           )}
+                          {/* The shortage line is the one that dominates the exposure —
+                              a receipt fee PLUS half the merchandise — so it is marked
+                              rather than left to look like the others. */}
+                          {x.theExpensiveOne && <span className="rt-preshipApp" title="Receipt fee plus 50% of the merchandise value">the expensive one</span>}
                           {/* The handful of steps the app can check for itself, named as
                               such — it still needs a person to confirm, but it is worth
                               knowing which ones have a second pair of eyes. */}
@@ -1658,7 +1716,7 @@ function PreshipChecklist({ g, s }) {
           {/* ⚠️ THE PROHIBITIONS ARE NOT STEPS AND ARE NOT TICKABLE. They are things
               never to do, not things to confirm you did — a checkbox beside "do not
               floor-load the trailer" invites reading it as an instruction. */}
-          <div className="rt-preshipPhase">
+          <div className="rt-preshipPhase" hidden={isMacys}>
             <div className="rt-preshipPhaseName">Never — each one is a chargeback</div>
             {PROHIBITED.map((p, i) => (
               <div key={i} className="rt-preshipNever">
