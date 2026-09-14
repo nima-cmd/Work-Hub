@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, printCartonLabels,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1055,15 +1055,22 @@ function BolActions({ s }) {
              title="One per PO per store. Email it to Exemplar IN ADVANCE, and pouch a copy to one carton.">
             Packing slip ↗
           </a>
-          {/* Both label stocks, because the 3x6 is only conveyor-legal at a quarter-inch
-              margin and that is encoded in the layout, not left to the printer dialog. */}
+          {/* ⚠️ 4x6 FIRST — it is the stock on the warehouse Zebra (Nima, 2026-09-14).
+              The other two stay because they exist; 3x6 is only conveyor-legal at a
+              quarter-inch margin, which is why the margin is part of the layout rather
+              than something chosen in a print dialog. */}
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. 4x6 — the warehouse Zebra's stock.">
+            Labels 4×6 ↗
+          </a>
+          <PrintLabelsButton shipmentId={s.id} />
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">
-            Labels ½ ↗
+            ½ ↗
           </a>
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '3x6')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. 3x6 stock — quarter-inch margins keep the SSCC conveyor-scannable.">
-            Labels 3×6 ↗
+            3×6 ↗
           </a>
         </>
       )}
@@ -1607,4 +1614,28 @@ const PHASE_LABEL = {
   documents: '5 · Documents',
   pallet: '6 · Palletising',
   after: '7 · After it ships',
+}
+
+
+// Straight to the warehouse Zebra, no browser dialog — the same path the cargo tags
+// take. ⚠️ The queue lives on the warehouse iMac, so this fails by NAME on any other
+// machine rather than looking like a broken button.
+function PrintLabelsButton({ shipmentId }) {
+  const [state, setState] = useState(null)
+  async function go() {
+    setState({ busy: true })
+    try {
+      const r = await printCartonLabels(shipmentId)
+      setState({ msg: `Sent to ${r.printer}.`, ok: true })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+  return (
+    <>
+      <button className="btnGhost" disabled={state?.busy} onClick={go}
+              title="Print all carton labels to the warehouse Zebra on 4x6 thermal stock">
+        {state?.busy ? 'Printing…' : '🖨 Print 4×6'}
+      </button>
+      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
+    </>
+  )
 }

@@ -6,6 +6,7 @@ import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { manifestPdf } from './exemplarManifestPdf.js'
 import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
+import { storefrontFor } from '../src/model/exemplarStores.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -57,7 +58,7 @@ import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
 import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
-import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
+import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags, printPdfDoc } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
 import { renderPoRevisionTo } from './poRevisionPdf.js'
 import { poRevisionTicket } from '../src/ingest/poRevisionLive.js'
@@ -512,7 +513,11 @@ app.all('/api/bulk-pick/pdf', async (req, res) => {
 app.get('/api/exemplar/carton-labels.pdf', async (req, res) => {
   try {
     const { cartons } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
-    const doc = await cartonLabelsPdf(cartons, req.query.size || 'half-sheet')
+    // ⚠️ 4x6 IS THE DEFAULT BECAUSE IT IS THE STOCK ON THE WAREHOUSE ZEBRA. Nima,
+    // 2026-09-14: "for the labels we can have 4x6 as our paper size." The half-sheet
+    // and 3x6 layouts stay available; 3x6 is only conveyor-legal at a quarter-inch
+    // margin, which is why the margin is part of the layout and not a print setting.
+    const doc = await cartonLabelsPdf(cartons, req.query.size || '4x6')
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `inline; filename="carton-labels-${cartons[0].po}.pdf"`)
     doc.pipe(res); doc.end()
@@ -541,15 +546,38 @@ app.get('/api/exemplar/packing-slip.pdf', async (req, res) => {
   }
 })
 
+// Straight to the warehouse Zebra, no browser dialog — the same `lp` path the cargo
+// tags use (server/printLabel.js), on the same 4x6 thermal stock.
+//
+// ⚠️ IT PRINTS A PDF, NOT ZPL. `cartonLabelZpl()` exists in the model and renders a
+// 4x6 at 203dpi, but nothing in this app has ever sent raw ZPL — the Zebra is a CUPS
+// queue here and takes the PDF. Two ways to make the same label is how they drift, so
+// the PDF is the one that prints and the ZPL stays unwired until something needs it.
+app.post('/api/exemplar/carton-labels/print', async (req, res) => {
+  try {
+    const { cartons } = await getExemplarDocData(req.body?.shipmentId, { on: req.body?.on || null })
+    const doc = await cartonLabelsPdf(cartons, '4x6')
+    res.json(await printPdfDoc(doc, '4x6', `carton-labels-${cartons[0].po}`))
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
 // ── The Exemplar Master Manifest ────────────────────────────────────────────
 // Guide p13 — required for ALL shipments, handed to the carrier at pick-up. The one
 // required document this app has never produced.
 app.get('/api/exemplar/manifest.pdf', async (req, res) => {
   try {
     const { shipment, cartons } = await getManifestCartons(req.query.shipmentId)
+    // ⚠️ THE SAME CONSIGNEE NAME THE OTHER TWO DOCUMENTS USE. Date-driven, because the
+    // storefront renames on 2026-09-21 — so all three agree with each other AND with
+    // the day the freight leaves.
+    const on = req.query.on || (shipment.shipDate ? String(shipment.shipDate).slice(0, 10) : null)
     const doc = await manifestPdf(cartons, {
       dc: shipment.dc,
       bolNumber: shipment.bolNumber,
+      operatingCompany: storefrontFor(cartons[0].store, on),
       shipment: { cartons: shipment.cartons, units: shipment.units },
     })
     res.setHeader('Content-Type', 'application/pdf')

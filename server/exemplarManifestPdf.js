@@ -19,7 +19,7 @@ import { dcAddressLines } from '../src/model/exemplarStores.js'
 
 const line = (doc, x, y, w) => doc.moveTo(x, y).lineTo(x + w, y).lineWidth(0.5).strokeColor('#999').stroke()
 
-export async function manifestPdf(cartons, { dc, bolNumber = null, shipment = null } = {}) {
+export async function manifestPdf(cartons, { dc, bolNumber = null, shipment = null, operatingCompany = null } = {}) {
   const built = buildManifests(cartons, { dc })
   if (!built.printable) {
     throw new Error(`the manifest is not printable — ${built.problems.join(' · ')}`)
@@ -49,7 +49,16 @@ export async function manifestPdf(cartons, { dc, bolNumber = null, shipment = nu
     doc.font('Helvetica').fontSize(8.5)
       .text([...SHIP_FROM.lines, `${SHIP_FROM.city}, ${SHIP_FROM.state} ${SHIP_FROM.zip}`].join('\n'), 40, top + 22)
     doc.fontSize(7).font('Helvetica').text('SHIP TO', 320, top)
-    doc.fontSize(9).font('Helvetica-Bold').text(`${m.bannerName} — ${m.dcName}`, 320, top + 10)
+    // ⚠️ THE CONSIGNEE IS THE OPERATING COMPANY, NOT THE BANNER — and the first
+    // version of this file got it wrong. The banner ("Saks Fifth Avenue") belongs on
+    // the heading, because p13 says label the manifest with the banner name. The
+    // SHIP TO is a consignee, and it has to read the same as the packing slip and the
+    // carton labels, which use the storefront ("SAKS GLOBAL", "EXEMPLAR LUXURY GROUP"
+    // from 2026-09-21). Live on PO 8928906 the manifest said "Saks Fifth Avenue —
+    // PNDC" while the slip beside it said "SAKS GLOBAL — PNDC": three documents in one
+    // shipment, two consignee names, which is exactly the discrepancy checkStorefront
+    // exists to stop inside the other two.
+    doc.fontSize(9).font('Helvetica-Bold').text(`${operatingCompany || m.bannerName} — ${m.dcName}`, 320, top + 10)
     doc.font('Helvetica').fontSize(8.5).text(dcAddressLines(m.dc).join('\n'), 320, top + 22)
     doc.y = top + 66
 

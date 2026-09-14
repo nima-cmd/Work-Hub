@@ -1278,3 +1278,14 @@ export const manifestPdfUrl = (shipmentId) => `/api/exemplar/manifest.pdf?shipme
 export const packingSlipPdfUrl = (shipmentId) => `/api/exemplar/packing-slip.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
 export const cartonLabelsPdfUrl = (shipmentId, size = 'half-sheet') =>
   `/api/exemplar/carton-labels.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`
+
+// Print every carton label straight to the warehouse Zebra (4x6 thermal), no dialog.
+export async function printCartonLabels(shipmentId) {
+  const res = await fetch('/api/exemplar/carton-labels/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipmentId }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}

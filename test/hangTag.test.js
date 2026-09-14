@@ -131,8 +131,11 @@ test('⚠️ HANG TAGS TRANSMIT EXACTLY AS THE QR CARGO TAGS DO', () => {
   const src = readFileSync(new URL('../server/printLabel.js', import.meta.url), 'utf8')
   const lpCalls = [...src.matchAll(/execFile\(\s*\n?\s*'lp',\s*\[([^\]]+)\]/g)].map((m) =>
     m[1].replace(/\s+/g, ' ').trim())
-  // Three printers on this surface: the tag sheet, the single cargo tag, and hang tags.
-  assert.equal(lpCalls.length, 3, 'every lp invocation must be accounted for')
+  // Four printers on this surface: the tag sheet, the single cargo tag, hang tags,
+  // and (2026-09-14) the Exemplar carton labels, which go to the same warehouse Zebra
+  // on the same 4x6 thermal stock. The count is deliberately hardcoded — it is what
+  // makes a new printer prove it passes the same flags instead of quietly appearing.
+  assert.equal(lpCalls.length, 4, 'every lp invocation must be accounted for')
   for (const call of lpCalls) {
     assert.match(call, /'-d', cfg\.queue/, 'names the queue explicitly')
     assert.match(call, /'-o', cfg\.media/, 'sets the page size explicitly')

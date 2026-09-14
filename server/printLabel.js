@@ -509,3 +509,37 @@ export async function printHangTags(tags = [], size = '2.25x1.25') {
   ))
   return { path, printed: drawn.length, queue: cfg.queue, size }
 }
+
+/**
+ * Send an already-built pdfkit document straight to one of the label queues.
+ *
+ * ⚠️ THE SAME `lp` PATH AS THE CARGO TAGS, deliberately. Picking a printer and a paper
+ * size in a browser dialog is the thing that kept breaking; the queue and its media
+ * string live in LABELS above and nothing downstream gets to choose them.
+ *
+ * ⚠️ AND AN ABSENT QUEUE IS SAID OUT LOUD. Both queues live on the warehouse iMac —
+ * the cloud deploy has neither. `lp` against a missing queue fails in a way that reads
+ * like a broken feature, so it is checked first and named.
+ */
+export async function printPdfDoc(doc, size = '4x6', basename = 'labels') {
+  const cfg = LABELS[size]
+  if (!cfg) throw new Error(`unknown label size: ${size}`)
+  if (!(await queueExists(cfg.queue))) {
+    throw new Error(`the ${size} printer queue "${cfg.queue}" is not on this machine — print from the warehouse iMac, or open the PDF and print it by hand`)
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'exemplar-labels-'))
+  const path = join(dir, `${basename}.pdf`)
+  await new Promise((resolve, reject) => {
+    const out = createWriteStream(path)
+    doc.pipe(out)
+    out.on('finish', resolve)
+    out.on('error', reject)
+    doc.end()
+  })
+  return new Promise((resolve, reject) => {
+    execFile('lp', ['-d', cfg.queue, '-o', cfg.media, '-o', 'print-scaling=none', path], (error, stdout, stderr) => {
+      if (error) return reject(new Error(stderr || error.message))
+      resolve({ ok: true, size, printer: cfg.queue, detail: stdout.trim() })
+    })
+  })
+}
