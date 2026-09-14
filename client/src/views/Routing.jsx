@@ -1111,7 +1111,12 @@ function BolActions({ s }) {
              title={'The same six markings on 4x6 — tight on the 24x14x4 cartons.'}>
             ×6 on 4×6 ↗
           </a>
-          <PalletLabels shipmentId={s.id} cartons={g.cartons} />
+          {/* ⚠️ `s`, NOT `g` — BolActions is passed the SHIPMENT and has no group in
+              scope. `g.cartons` threw ReferenceError on render, and because it threw
+              inside the component tree it took the WHOLE ROUTING YARD to a blank screen
+              rather than breaking one button. The shipment row carries the carton count
+              itself, which is what this needed all along. */}
+          <PalletLabels shipmentId={s.id} cartons={s.cartons} />
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">
             ½ ↗
