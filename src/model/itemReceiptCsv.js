@@ -97,10 +97,24 @@ export function indexPoLines(poLines = []) {
  *
  * @param container the parsed slip (needs containerNum, containerDate, skuTotals)
  * @param poLines   live PO lines from NetSuite (see indexPoLines)
- * @returns { csv, filename, rows, poCount, overReceives, unknownPOs,
- *            unmatchedLines, duplicateSkus, excluded, excludedPOs, blocked }
+ * @param opts.acceptExcess  deliberately receive MORE than the PO line has left, when
+ *   the factory genuinely shipped extra. It never lifts the duplicate block — see
+ *   `kind` below. Off by default: an over-receive must be a decision.
+ *
+ *   ⚠️ IT TAKES A LIST OF `PO|SKU` KEYS; `true` (every over-receive on the container)
+ *   survives only for the callers that predate the decision layer. Nima, 2026-09-14:
+ *   "we would like the ability to choose what to do". One boolean said yes to every
+ *   line at once, so a container with a deliberate +1 on one PO and a genuine mistake
+ *   on another was accepted wholesale by a single click. A resolution is per line, and
+ *   this is the half of it that reaches the file.
+ *
+ * @returns { csv, filename, rows, poCount, overReceives, blockingOverReceives,
+ *            excessShipped, acceptedExcess, unknownPOs, unmatchedLines,
+ *            duplicateSkus, excluded, excludedPOs, blocked }
  */
-export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT_NOTRACK_KEYWORDS } = {}) {
+export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT_NOTRACK_KEYWORDS, acceptExcess = false } = {}) {
+  const acceptedKeys = Array.isArray(acceptExcess) ? new Set(acceptExcess) : null
+  const isAccepted = (o) => (acceptedKeys ? acceptedKeys.has(`${o.poNumber}|${o.sku}`) : acceptExcess === true)
   const label = containerLabel(container)
   const date = slipDateToUs(container.containerDate)
   const { byPo, duplicateSkus } = indexPoLines(poLines)
@@ -189,6 +203,31 @@ export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT
         overReceives.push({
           poNumber: po, sku, shipped: qty, remaining: line.remaining,
           ordered: line.ordered, received: line.received, excess: qty - line.remaining,
+          // ⚠️ TWO DIFFERENT THINGS LOOK IDENTICAL HERE, AND ONLY ONE IS DANGEROUS.
+          //
+          // Nima, 2026-09-11: "can we also receive the extra unit on the ir and use
+          // it on the transfer and keep the PO the same showing the overrage in
+          // receipt." Yes — but only for the benign shape.
+          //
+          //   remaining > 0 and shipped slightly over  -> the factory made one extra.
+          //                                               Receiving it records what
+          //                                               physically arrived and
+          //                                               leaves the PO honest at
+          //                                               "received 101 of 100".
+          //
+          //   remaining === 0                          -> the line has nothing left,
+          //                                               which is what EVERY line
+          //                                               looks like once this
+          //                                               container's receipt has
+          //                                               already been imported. That
+          //                                               is a DUPLICATE, and
+          //                                               importing it again doubles
+          //                                               the stock silently.
+          //
+          // PO1747 on container "59 cartons LCL to LA" is the first shape: 53
+          // remaining, 54 shipped, one unit over. The four over-receives of 2026-09-08
+          // were the second, and are why this block exists at all.
+          kind: line.remaining > 0 ? 'excess-shipped' : 'nothing-remaining',
         })
       }
     }
@@ -214,10 +253,21 @@ export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT
     // Reported so the operator knows these POs are missing from the receipt.
     // ⚠️ NOT a Transfer exclusion — see Guard 1.
     excludedPOs: [...excludedPOs],
-    // ⚠️ AN OVER-RECEIVE OR A DUPLICATE SKU BLOCKS THE EXPORT. Both put units on a
-    // PO line that cannot hold them, and both are silent in NetSuite until a count
-    // disagrees weeks later. The caller must not offer the file for download while
-    // this is true.
-    blocked: overReceives.length > 0 || duplicateSkus.length > 0,
+    // ⚠️ ONLY THE DUPLICATE SHAPE BLOCKS OUTRIGHT NOW.
+    //
+    // `nothing-remaining` is indistinguishable from re-importing a container whose
+    // receipt already landed, and that doubles stock silently — it blocks, always,
+    // and there is no option to override it.
+    //
+    // `excess-shipped` means the factory sent more than was ordered against a line
+    // that still had room. Receiving it is the honest record of what arrived, so it
+    // blocks by DEFAULT but can be accepted deliberately with `acceptExcess: true`.
+    // The PO stays as it was and reads "received 101 of 100", which is true.
+    blockingOverReceives: overReceives.filter((o) => o.kind === 'nothing-remaining'),
+    excessShipped: overReceives.filter((o) => o.kind === 'excess-shipped'),
+    acceptedExcess: overReceives.filter((o) => o.kind === 'excess-shipped' && isAccepted(o)),
+    blocked: overReceives.some((o) => o.kind === 'nothing-remaining')
+      || overReceives.some((o) => o.kind === 'excess-shipped' && !isAccepted(o))
+      || duplicateSkus.length > 0,
   }
 }

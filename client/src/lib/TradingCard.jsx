@@ -31,7 +31,11 @@ export default function TradingCard({ card }) {
   const s = card.stats || { agility: 0, strength: 0, intelligence: 0 }
 
   return (
-    <div className={'tcard' + (flipped ? ' flipped' : '')} onClick={() => setFlipped((f) => !f)} title="Click to flip">
+    <div
+      className={'tcard' + (flipped ? ' flipped' : '') + (card.unearned ? ' tcUnearned' : '')}
+      onClick={() => setFlipped((f) => !f)}
+      title={card.unearned ? 'No missions together yet — click to flip' : 'Click to flip'}
+    >
       <div className="tcardInner">
         {/* FRONT */}
         <div className="tcardFace tcardFront">
@@ -39,10 +43,23 @@ export default function TradingCard({ card }) {
             <span className="tcName">{name}</span>
             <span className="tcTier">L{card.level.tier}</span>
           </div>
+          {/* ⚠️ THE ART WINDOW IS LANDSCAPE AND THE ART IS PORTRAIT. .tcard is a
+              fixed 2.5/3.5 trading card, so after the top bar and the footer the
+              art box measures ~228x202 — aspect 1.13. Every portrait is 3:4 or
+              taller, so `object-fit: cover` was discarding 40%+ of each file and
+              clipping heads (Nima: "overly croped in some"). The file was never the
+              problem; the box was.
+
+              So the portrait is `contain` — nothing is cropped, ever — and the
+              letterbox is filled by a blurred, scaled copy of the same image rather
+              than bars. Same trick as .holoWarpBand above. */}
           <div className="tcArt">
-            {imgs.length
-              ? <img src={imgs[0]} alt={name} />
-              : <div className="tcArtFallback">{initials(name)}</div>}
+            {imgs.length ? (
+              <>
+                <img className="tcArtFill" src={imgs[0]} alt="" aria-hidden="true" />
+                <img className="tcArtMain" src={imgs[0]} alt={name} />
+              </>
+            ) : <div className="tcArtFallback">{initials(name)}</div>}
             <div className="tcArtFade" />
           </div>
           <div className="tcFrontFoot">

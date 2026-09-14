@@ -46,6 +46,12 @@ export function bulkPickSql(pos = []) {
                  BUILTIN.DF(t.entity) AS customer, BUILTIN.DF(tl.item) AS sku,
                  tl.item AS item_id,
                  tl.itemtype, tl.quantity, tl.isclosed,
+                 -- ⚠️ COMMITTED IS WHAT THE 'as-committed' ALLOCATION READS. Without it
+                 -- every line came back undefined, which int()s to 0, and the pick
+                 -- ticket printed "ships NOTHING — cancel it" for all 25 orders while
+                 -- stranding the entire pool. Caught by rendering the sheet, not by
+                 -- reading the code.
+                 tl.quantitycommitted AS committed,
                  tl.location AS location_id, l.fullname AS location_name
             FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
             LEFT JOIN location l ON l.id = tl.location
@@ -82,6 +88,7 @@ export function normaliseRow(row = {}) {
     // the shape that has cost this repo before (fullname vs leaf, sku_key vs product_id).
     itemId: get('item_id'),
     itemtype: get('itemtype'),
+    committed: get('committed'),
     quantity: get('quantity'),
     isclosed: get('isclosed'),
     // ⚠️ THE ORDER'S OWN LOCATION, AND IT IS NOT "Warehouse". Measured live 2026-09-01:
@@ -207,5 +214,63 @@ export async function fetchPickStock(itemIds = [], locationIds = [], { run = run
     return { rows: rows.map(normaliseStockRow), ok: true }
   } catch (e) {
     return { rows: [], ok: false, error: e.message }
+  }
+}
+
+
+/**
+ * Order -> fulfilment number, for the POs on a ticket.
+ *
+ * ⚠️ THE SHORT LIST IS ACTED ON AT INVOICING, AND AN INVOICE IS RAISED AGAINST THE
+ * FULFILMENT. Without this the IF column printed "-" and whoever is billing has to
+ * look up 25 orders by hand — which is the manual step this feature exists to remove.
+ *
+ * ⚠️ An order with no fulfilment yet is simply absent, not an error. The pick ticket
+ * is normally printed BEFORE anything is fulfilled; the IF column fills in on a
+ * reprint afterwards.
+ */
+export function fulfilmentSql(pos = []) {
+  const list = pos.map((p) => `'${String(p).toUpperCase().replace(/'/g, "''")}'`).join(', ')
+  if (!list) return null
+  return `SELECT so.tranid AS ord, t.tranid AS iff
+            FROM transaction t
+            JOIN nexttransactionlink ntl ON ntl.nextdoc = t.id
+            JOIN transaction so ON so.id = ntl.previousdoc
+           WHERE t.type = 'ItemShip' AND so.type = 'SalesOrd'
+             AND UPPER(so.otherrefnum) IN (${list})`
+}
+
+export async function fetchFulfilments(pos = [], { run = runSuiteQL } = {}) {
+  const sql = fulfilmentSql(pos)
+  if (!sql) return {}
+  // ⚠️ The configured check applies to the DEFAULT runner only. Gating on it
+  // unconditionally defeats the injected `run` that exists to make this testable —
+  // every test returned {} against a stub that was working perfectly.
+  if (run === runSuiteQL && !netsuiteConfigured()) return {}
+  try {
+    // ⚠️ runSuiteQL RESOLVES TO { ok, rows }, NOT AN ARRAY. I iterated the wrapper and
+    // got nothing — the IF column printed "-" on every row of a sheet whose whole
+    // purpose was to carry those numbers to the invoice. The same unwrap the other
+    // fetchers in this file already do.
+    const r = await run(sql)
+    const rows = r?.items || r?.rows || (Array.isArray(r) ? r : [])
+    const map = {}
+    // ⚠️ Keys read case-insensitively — SuiteQL lowercases every alias, the same trap
+    // normaliseRow exists for. `AS iff` can come back as `iff` or `IFF` depending on
+    // the driver, and the difference is a silently empty column.
+    const pick = (row, name) => {
+      const k = Object.keys(row).find((x) => x.toLowerCase() === name)
+      return k === undefined ? null : row[k]
+    }
+    for (const r of rows || []) {
+      const ord = pick(r, 'ord')
+      const iff = pick(r, 'iff')
+      if (ord && iff) map[String(ord).trim()] = String(iff).trim()
+    }
+    return map
+  } catch {
+    // ⚠️ ALLOWED TO FAIL. The pick ticket is the deliverable; the IF number is an
+    // annotation. A dead lookup must not take the sheet down with it.
+    return {}
   }
 }

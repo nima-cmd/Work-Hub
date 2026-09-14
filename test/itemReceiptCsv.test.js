@@ -56,8 +56,49 @@ test('⚠️ OVER-RECEIVE IS MEASURED AGAINST REMAINING, NOT GROSS ORDERED', () 
   assert.deepEqual(r.overReceives[0], {
     poNumber: 'PO1785', sku: 'SN13012LD-CERISE', shipped: 50,
     remaining: 40, ordered: 60, received: 20, excess: 10,
+    // ⚠️ The line still HAS room (40 remaining), so this is extra shipped rather
+    // than a re-import of a container already received.
+    kind: 'excess-shipped',
   })
-  assert.equal(r.blocked, true, 'and it BLOCKS the export')
+  assert.equal(r.blocked, true, 'and it BLOCKS the export by default')
+})
+
+test('⚠️ EXTRA SHIPPED AND A DUPLICATE IMPORT LOOK IDENTICAL, AND ARE NOT', () => {
+  // Nima, 2026-09-11: "can we also receive the extra unit on the ir and use it on the
+  // transfer and keep the PO the same showing the overrage in receipt."
+  //
+  // Yes — for the benign shape only. A line with room left that receives a few more
+  // units than ordered is the factory making extras, and receiving them records what
+  // physically arrived. A line with NOTHING remaining is what every line looks like
+  // once this container's receipt has already been imported, and importing it again
+  // doubles the stock silently. That was the four over-receives of 2026-09-08.
+  const excess = buildItemReceiptCsv(slip([{ poNumber: '1785', sku: 'SN13012LD-CERISE', units: 41 }]), PO_LINES)
+  assert.equal(excess.excessShipped.length, 1)
+  assert.equal(excess.excessShipped[0].excess, 1)
+  assert.equal(excess.blockingOverReceives.length, 0)
+  assert.equal(excess.blocked, true, 'still blocks until someone decides')
+
+  // ⚠️ acceptExcess is an explicit decision, and it lets ONLY this shape through.
+  const accepted = buildItemReceiptCsv(
+    slip([{ poNumber: '1785', sku: 'SN13012LD-CERISE', units: 41 }]), PO_LINES, { acceptExcess: true })
+  assert.equal(accepted.blocked, false)
+  assert.equal(accepted.acceptedExcess.length, 1)
+  // The receipt carries the FULL shipped quantity, so the PO reads "received 61 of 60".
+  assert.ok(accepted.csv.includes(',41,'), 'the extra unit is on the receipt')
+})
+
+test('⚠️ acceptExcess NEVER LIFTS THE DUPLICATE BLOCK', () => {
+  // A fully-received line has nothing remaining. Letting acceptExcess through here
+  // would re-import a container that already landed and double the stock — the exact
+  // failure the block exists for, reached by the door meant for the other case.
+  // SN13011QJ-LINEN is 40 ordered, 40 received — nothing remaining. Shipping it
+  // again is precisely what a re-imported container looks like.
+  const dup = buildItemReceiptCsv(
+    slip([{ poNumber: '1785', sku: 'SN13011QJ-LINEN', units: 40 }]), PO_LINES, { acceptExcess: true })
+  assert.equal(dup.blockingOverReceives.length, 1)
+  assert.equal(dup.blockingOverReceives[0].kind, 'nothing-remaining')
+  assert.equal(dup.blocked, true, 'acceptExcess must not open this door')
+  assert.deepEqual(dup.acceptedExcess, [])
 })
 
 test('a shipment inside the remaining balance is not flagged', () => {
@@ -180,4 +221,24 @@ test('⚠️ AND SHIPPING AGAINST A CLOSED LINE IS AN OVER-RECEIVE', () => {
   assert.equal(r.overReceives.length, 1)
   assert.equal(r.overReceives[0].remaining, 0)
   assert.equal(r.blocked, true)
+})
+
+test('⚠️ THE ACCEPTED EXTRA UNIT REACHES THE TRANSFER TOO', async () => {
+  // "receive the extra unit on the ir and use it on the transfer" — a receipt that
+  // takes 41 and a transfer that moves 40 would leave one unit received in China and
+  // never moved, which is worse than not receiving it at all.
+  const { buildNetsuiteExport } = await import('../src/model/inventoryTransferCsv.js')
+  const out = await buildNetsuiteExport(
+    slip([{ poNumber: '1785', sku: 'SN13012LD-CERISE', units: 41 }]), PO_LINES, { acceptExcess: true })
+  assert.equal(out.itemReceipt.blocked, false)
+  assert.ok(out.itemReceipt.csv.includes(',41,'), 'the receipt takes all 41')
+  assert.ok(out.transfer.csv.includes('41'), 'and the transfer moves all 41')
+})
+
+test('⚠️ WITHOUT THE DECISION, NEITHER FILE IS OFFERED', () => {
+  // The default has to stay refusing. An over-receive that happens because nobody
+  // looked is the failure this block was built for.
+  const r = buildItemReceiptCsv(slip([{ poNumber: '1785', sku: 'SN13012LD-CERISE', units: 41 }]), PO_LINES)
+  assert.equal(r.blocked, true)
+  assert.deepEqual(r.acceptedExcess, [])
 })

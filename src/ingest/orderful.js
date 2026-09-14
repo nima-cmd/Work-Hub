@@ -8,7 +8,7 @@ import { pool } from '../db.js'
 import { extractStoreQuantities, extractShipTo } from '../model/ediPoDiff.js'
 import { extractPoDates, extractPoLines, summarizePoLines, extractPoPurpose } from './orderfulDates.js'
 
-export { extractPoDates, extractPoLines, extractPoPurpose } from './orderfulDates.js'
+export { extractPoDates, extractPoLines, extractPoPurpose, extractPoReferences } from './orderfulDates.js'
 
 const API_BASE = 'https://api.orderful.com/v3/transactions'
 
@@ -121,7 +121,13 @@ export async function fetchOrderfulMessage(apiKey, id) {
 //       every 850 already stored is re-read once, so the cancellation of PO
 //       50073678 — and every past cancel/change nobody was told about — gets its
 //       code filled in rather than staying NULL and looking like an absence.
-export const PO_PARSE_VERSION = 3
+//   4 — header REF segments: department (DP), vendor number (VR), internal vendor
+//       number (IA), product group (PG)  (2026-09-11). Exemplar's Manual requires
+//       the DEPARTMENT on every carton marking, and I had reported it as
+//       uncaptured — it was in the 850 body all along. The bump re-reads every
+//       stored 850 once so historical POs get theirs too, instead of only new ones
+//       having it and the rest reading as partners who do not send it.
+export const PO_PARSE_VERSION = 4
 
 export async function backfillPo850Details(apiKey, db = pool) {
   const { rows } = await db.query(

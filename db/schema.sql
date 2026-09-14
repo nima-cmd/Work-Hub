@@ -2019,6 +2019,19 @@ CREATE TABLE IF NOT EXISTS packing_slip (
 );
 CREATE INDEX IF NOT EXISTS packing_slip_num ON packing_slip (container_num);
 
+-- ⚠️ THE FINGERPRINT THAT CATCHES THE SAME CONTAINER UNDER A DIFFERENT NAME. The
+-- label is the identity and cannot be otherwise (NetSuite holds it inside every
+-- External ID), but it is assembled from a number and a date a person types — so
+-- `11 Air ... carton`, `11 Air ... carton 2026.9.7` and `11 air carton 2026.9.9` are
+-- three rows and one shipment. Neither column below is an identity; they exist so
+-- src/model/containerDuplicate.js can ASK before a fourth one is created.
+--   content_hash  sha256 of the raw document — the same bytes under two names
+--   line_key      sorted PO|SKU|qty over every line — the same shipment, reissued
+ALTER TABLE packing_slip ADD COLUMN IF NOT EXISTS content_hash TEXT;
+ALTER TABLE packing_slip ADD COLUMN IF NOT EXISTS line_key     TEXT;
+CREATE INDEX IF NOT EXISTS packing_slip_content_hash ON packing_slip (content_hash);
+CREATE INDEX IF NOT EXISTS packing_slip_line_key ON packing_slip (line_key);
+
 -- One row per PO+SKU — what the NetSuite Item Receipt and Transfer are built from.
 CREATE TABLE IF NOT EXISTS packing_slip_line (
   container_label TEXT NOT NULL REFERENCES packing_slip(container_label) ON DELETE CASCADE,
@@ -2065,3 +2078,50 @@ CREATE TABLE IF NOT EXISTS packing_slip_revision (
   note           TEXT
 );
 CREATE INDEX IF NOT EXISTS packing_slip_revision_container ON packing_slip_revision (container_label);
+
+-- ⚠️ THE VESSEL, WHICH IS THE ONE THING NOTHING ELSE MODELS. Nima, 2026-09-09: "we
+-- want to track thsi as one entitty the 11 airshipment ... We want to keep track so we
+-- know where theses vessels are and when to expect them".
+--
+-- The container already exists as a packing slip, some POs, some Item Receipts and
+-- some Transfer Orders. In none of them is it a thing IN TRANSIT between two dates.
+--
+-- ⚠️ AND `arrived_on` IS NOT `arrived_recorded_at`. The day it landed and the day we
+-- found out are different facts, and conflating them is exactly the mistake this
+-- table exists to stop: before it, the only available "arrival" was an Item Receipt's
+-- createddate — the day someone typed it in. Across all 64 generated container
+-- records that reads air 2 days and sea 6-31, but container `321` shipped 7/10 and
+-- was entered 8/10, and one PO of container `264` was entered 28 days after its
+-- siblings on the same vessel. Estimating transit from that predicts our own
+-- paperwork. See src/model/inboundShipment.js.
+CREATE TABLE IF NOT EXISTS inbound_shipment (
+  -- Same identity as the packing slip, so the vessel and its contents are one thing.
+  container_label TEXT PRIMARY KEY REFERENCES packing_slip(container_label) ON DELETE CASCADE,
+  mode            TEXT,        -- 'air' | 'sea' | NULL when nobody has said
+  -- ⚠️ NULL, not inferred-and-stored. inferMode() reads "air" out of the label and is
+  -- usually right, but mode selects which transit median applies, so a stored guess
+  -- would be indistinguishable from a decision. The guess stays in the model layer
+  -- and is shown as a suggestion.
+  mode_source     TEXT,        -- 'entered' when a person chose it
+
+  departed_on     DATE,        -- from the slip's own printed date: observed
+  eta_on          DATE,
+  -- ⚠️ EVERY DATE CARRIES ITS SOURCE. 'entered' | 'estimate' | 'email' | 'tracking'.
+  -- An estimate that looks entered is [[default-is-not-an-answer]] with a calendar
+  -- attached — someone plans a week around a date nobody promised. An estimate may
+  -- fill a gap and may never overwrite a stronger source.
+  eta_source      TEXT,
+  eta_note        TEXT,        -- the estimate's basis, verbatim, e.g. "median of 4 sea arrivals (16-21 days)"
+
+  arrived_on      DATE,        -- the day it ARRIVED
+  arrived_source  TEXT,        -- 'marked' today; 'email' / 'tracking' once those exist
+  arrived_recorded_at TIMESTAMPTZ, -- the day we FOUND OUT. Never the same column.
+
+  carrier         TEXT,
+  tracking_number TEXT,        -- AWB or container number, for when a lookup exists
+  notes           TEXT,
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS inbound_shipment_arrived ON inbound_shipment (arrived_on);
+CREATE INDEX IF NOT EXISTS inbound_shipment_eta ON inbound_shipment (eta_on);

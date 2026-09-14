@@ -19,19 +19,40 @@ import { readPackingSlip } from '../src/ingest/packingSlipFile.js'
 import { buildNetsuiteExport } from '../src/model/inventoryTransferCsv.js'
 import { containerLabel, suggestContainerFields } from '../src/model/containerIdentity.js'
 import { slipRevision } from '../src/model/packingSlipRevision.js'
-import { savePackingSlip } from '../src/ingest/packingSlipLoad.js'
-import { warehousePoLineSql, mapWarehousePoLines } from '../src/ingest/warehouseFeed.js'
+import { savePackingSlip, fetchPackingSlip } from '../src/ingest/packingSlipLoad.js'
+import { verifyContainer, expectedKeys } from '../src/model/containerVerify.js'
+import { fetchContainerRecords } from '../src/ingest/containerVerifyLive.js'
+import { findDuplicates, duplicateVerdict, slipFingerprint } from '../src/model/containerDuplicate.js'
+import { importPreflight, explainOverReceives } from '../src/model/importPreflight.js'
+import { listPackingSlips } from '../src/ingest/packingSlipLoad.js'
+import { createHash } from 'node:crypto'
+import { warehousePoLineSql, mapWarehousePoLines, PACKING_SLIP_PO_STATUS_CODES } from '../src/ingest/warehouseFeed.js'
 import { runSuiteQL } from '../src/ingest/netsuiteApi.js'
 import { pool } from '../src/db.js'
 
-/** The live open-PO lines both CSVs are built against. */
+/**
+ * The live PO lines both CSVs are built against.
+ *
+ * ⚠️ A WIDER STATUS SCOPE THAN THE WAREHOUSE FEED'S, and that difference is the
+ * whole point. The dock's feed asks for B/D only, so the moment an Item Receipt is
+ * imported the PO moves to E and vanishes from it — which on 2026-09-09 made a
+ * regenerated Transfer lose its destination entirely. See
+ * PACKING_SLIP_PO_STATUS_CODES.
+ */
 async function livePoLines() {
-  const raw = await runSuiteQL(warehousePoLineSql())
+  const raw = await runSuiteQL(warehousePoLineSql(PACKING_SLIP_PO_STATUS_CODES))
   const { rows } = mapWarehousePoLines(raw.rows || raw)
   return rows
 }
 
 const toBytes = (base64) => new Uint8Array(Buffer.from(String(base64 || ''), 'base64'))
+
+// ⚠️ HASHED FROM THE RAW DOCUMENT, not from the parse. Two labels over identical
+// bytes is the duplicate that actually happened on 2026-09-09, and only the bytes
+// can prove it — a re-parse of the same file under a different container number
+// produces a different-looking container.
+const contentHashOf = (base64, text) =>
+  createHash('sha256').update(text != null ? String(text) : Buffer.from(String(base64 || ''), 'base64')).digest('hex')
 
 /**
  * Parse a slip, build both CSVs, and report everything that looks wrong — storing
@@ -42,7 +63,19 @@ const toBytes = (base64) => new Uint8Array(Buffer.from(String(base64 || ''), 'ba
  * @param containerNum   the bare number; falls back to the filename guess
  * @param containerDate  as printed, "2026.9.7"
  */
-export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null } = {}) {
+/**
+ * @param opts.decisions  `{ [exceptionKey]: resolutionId }` — one answer per thing the
+ *   slip says that we cannot simply act on. Nima, 2026-09-14: "we dont want to
+ *   automate the reponses but we want to account for them so we can fix them in the
+ *   app." See src/model/slipExceptions.js for the exceptions and what each resolution
+ *   does to each file.
+ *
+ *   ⚠️ IT IS ALWAYS AN OBJECT, EVEN WHEN EMPTY, and that is what opts this screen into
+ *   the decision layer: `{}` means "a person is being asked and has answered nothing
+ *   yet", which blocks. `null` would mean the old behaviour, where a strap was dropped
+ *   and an over-receive refused with nobody deciding either.
+ */
+export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null, decisions = {} } = {}) {
   if (!base64 && !text) throw new Error('base64 or text is required')
   const suggested = suggestContainerFields(filename || '')
   const num = String(containerNum ?? suggested.containerNum ?? '').trim()
@@ -60,7 +93,33 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
   const wanted = new Set((container.poNumbers || []).map((p) => `PO${String(p).replace(/^PO/i, '')}`.toUpperCase()))
   const mine = poLines.filter((l) => wanted.has(`PO${String(l.po_number).replace(/^PO/i, '')}`.toUpperCase()))
 
-  const { itemReceipt, transfer, importOrder } = await buildNetsuiteExport(container, mine)
+  const built = await buildNetsuiteExport(container, mine, { decisions: decisions || {} })
+  const { itemReceipt, transfer, importOrder, exceptions, unresolved, adjustments, adjustedUnitCount } = built
+
+  // ── the checks Nima asked for, 2026-09-09 ──────────────────────────────────
+  // "we want check balacnces we want to make sure we dont doulbe import anything
+  //  we want to make sure were warned if something is off"
+
+  // 1. Is this shipment already here under a DIFFERENT name?
+  const contentHash = contentHashOf(base64, text)
+  const storedSlips = await listPackingSlips()
+  const duplicates = duplicateVerdict(findDuplicates(
+    { ...container, containerLabel: label, contentHash },
+    storedSlips.map((s) => ({ containerLabel: s.containerLabel, contentHash: s.contentHash ?? null,
+                         unitCount: s.unitCount, cartonCount: s.cartonCount, poNumbers: s.poNumbers,
+                         lineKey: s.lineKey ?? null })),
+  ))
+
+  // 2. Has either file ALREADY been imported into NetSuite? Asked directly, by the
+  //    External IDs this container computes — rather than left to be inferred from a
+  //    wall of over-receives, which is how tonight's re-run read.
+  const keys = (container.poNumbers || []).flatMap((po) => {
+    const k = expectedKeys({ ...container, containerLabel: label }, po)
+    return [k.itemReceipt, k.transfer]
+  })
+  const { byExternalId } = await fetchContainerRecords(keys)
+  const preflight = importPreflight({ ...container, containerLabel: label }, container.poNumbers || [], byExternalId)
+  const overReceiveCause = explainOverReceives(preflight, itemReceipt.overReceives)
 
   // What a commit would say about a container we already hold.
   const { rows: [stored] } = await pool.query(
@@ -76,7 +135,11 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     suggested,
     sourceFilename: filename,
     format: container.format,
+    // ⚠️ The parse's own figure, and BESIDE it what the files actually carry once the
+    // decisions are applied. Showing only one of them is how a screen reads 1,482 next
+    // to two files that move 1,477.
     unitCount: container.unitCount,
+    adjustedUnitCount,
     cartonCount: container.cartonCount,
     poNumbers: container.poNumbers,
     skuTotals: container.skuTotals,
@@ -86,6 +149,13 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     cartons: container.cartons,
     skipped: container.skipped || [],
     revision,
+    contentHash,
+    duplicates,
+    preflight,
+    // ⚠️ Sits ABOVE the over-receive list on the screen. Four findings with one cause
+    // read as four quantity problems, and that is what sent me hunting for a
+    // quantity problem that did not exist.
+    overReceiveCause,
     importOrder,
     itemReceipt: csvSummary(itemReceipt),
     transfer: csvSummary(transfer),
@@ -93,7 +163,24 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     // blocks on an over-receive or a duplicate SKU; both put units on a PO line that
     // cannot hold them, and both are silent in NetSuite until a count disagrees
     // weeks later. The screen must not offer a download while this is true.
-    blocked: itemReceipt.blocked,
+    //
+    // ⚠️ AND THE TRANSFER GETS A VOTE. It blocks when a PO has no destination at
+    // all — previously that produced a file routing stock to a hardcoded
+    // "Warehouse", which is how 150 units went to the wrong location on 2026-09-09.
+    //
+    // ⚠️ AND AN UNANSWERED EXCEPTION BLOCKS TOO. `built.blocked` carries that; the two
+    // builders' own flags cannot, because a strap left off both files produces two
+    // perfectly clean files and one undecided question.
+    blocked: built.blocked,
+    // Surfaced so the screen can OFFER the decision rather than only refusing.
+    exceptions,
+    unresolved,
+    adjustments,
+    decisions: decisions || {},
+    excessShipped: itemReceipt.excessShipped ?? [],
+    blockingOverReceives: itemReceipt.blockingOverReceives ?? [],
+    acceptedExcess: itemReceipt.acceptedExcess ?? [],
+    nonMerchandise: container.nonMerchandise ?? [],
   }
 }
 
@@ -133,6 +220,24 @@ export async function commitPackingSlip(body = {}) {
     containerNum: preview.containerNum,
     containerDate: preview.containerDate,
   })
-  const saved = await savePackingSlip(container, { sourceFilename: body.filename ?? null })
+  const saved = await savePackingSlip(container, { sourceFilename: body.filename ?? null, contentHash: preview.contentHash })
   return { ...saved, blocked: preview.blocked }
+}
+
+/**
+ * Verify one stored container against NetSuite.
+ *
+ * ⚠️ THE STORED SLIP IS THE EXPECTATION, and it has to be — the file on someone's
+ * laptop is not evidence, and NetSuite alone cannot say what was supposed to arrive.
+ * This is the payoff for storing the slip rather than translating and forgetting it.
+ */
+export async function verifyStoredContainer(label) {
+  const slip = await fetchPackingSlip(label)
+  if (!slip) return null
+  const keys = (slip.poNumbers || []).flatMap((po) => {
+    const k = expectedKeys(slip, po)
+    return [k.itemReceipt, k.transfer]
+  })
+  const { byExternalId, blindSpot } = await fetchContainerRecords(keys)
+  return { ...verifyContainer(slip, { byExternalId }), blindSpot, containerDate: slip.containerDate }
 }

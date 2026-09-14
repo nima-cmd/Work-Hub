@@ -15,9 +15,12 @@ import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartn
 import { transferCard } from '../src/model/transferCard.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
-import { bulkPick, parsePoInput } from '../src/model/bulkPick.js'
+import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
+import {
+  shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
+} from '../src/model/allocationPlan.js'
 import { withStock, stockLocationIds } from '../src/model/pickStock.js'
-import { fetchBulkPickLines, fetchPickStock, STOCK_LOCATIONS } from '../src/ingest/bulkPickFetch.js'
+import { fetchBulkPickLines, fetchPickStock, fetchFulfilments, STOCK_LOCATIONS } from '../src/ingest/bulkPickFetch.js'
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
@@ -6077,7 +6080,7 @@ export async function unmarkTransferReceipt(body = {}) {
 //
 // ⚠️ LIVE FROM NETSUITE, not from our own tables — see src/ingest/bulkPickFetch.js for
 // why a document someone walks the floor with must not come from an hourly mirror.
-export async function getBulkPick(poText) {
+export async function getBulkPick(poText, { rule = null, pool = null } = {}) {
   const pos = parsePoInput(poText)
   if (!pos.length) throw new Error('enter at least one PO number')
   // ⚠️ Bounded. A paste of the whole PO book would be one enormous SuiteQL IN list and a
@@ -6092,7 +6095,61 @@ export async function getBulkPick(poText) {
   const locIds = stockLocationIds(ticket.orderLocations, STOCK_LOCATIONS)
   const stock = itemIds.length ? await fetchPickStock(itemIds, locIds) : { rows: [], ok: true }
   const withQty = withStock(ticket, stock.rows, { locations: STOCK_LOCATIONS, ok: stock.ok, error: stock.error })
-  return { ...withQty, asked: pos, fetchedAt: new Date().toISOString() }
+
+  // ── ⚠️ THE SHORTAGE HALF — only when a rule AND a pool are asked for ────────
+  //
+  // Nima, 2026-09-11: "can we make this a feature if i want to do multiple PO in one
+  // bulk and also account for shortages like this." The ticket above has always
+  // totalled units per SKU across POs; what it could not do is say who goes without
+  // when there are not enough, which is the half he did by hand on POs 1236143 +
+  // 1236132.
+  //
+  // ⚠️ BOTH ARGUMENTS ARE REQUIRED, AND NEITHER GETS A DEFAULT. The rule decides
+  // which customer is disappointed (see allocationPlan.js), and the pool decides
+  // which stock may be used — "what we have in the warehouse for bloomingdaels is all
+  // we can use". Defaulting either would make a commercial decision silently, and
+  // defaulting the pool to "all locations" would allocate stock sitting in China.
+  let allocation = null
+  if (rule || pool) {
+    if (!rule || !pool) {
+      throw new Error('a shortage plan needs BOTH a rule and a stock pool — a rule with no pool would allocate every location, and a pool with no rule has no way to choose who goes short')
+    }
+    const demand = demandLines(lines, pos)
+    // The IF number per order, so the short list is usable at invoicing time.
+    const iffs = await fetchFulfilments(pos)
+    for (const d of demand) d.iff = iffs[d.order] || null
+    // ⚠️ From the TICKET, not the raw stock rows — those are keyed by item id, so
+    // reading them by SKU silently produced an empty pool. See poolFor().
+    const available = poolFor(withQty, pool)
+    if (!available) {
+      throw new Error(`no location matching "${pool}" on this ticket — available pools: ${
+        poolNames(withQty).map((p) => p.leaf).join(', ')}`)
+    }
+    // ⚠️ 'as-committed' PRINTS NETSUITE'S ANSWER, SO NETSUITE HAS TO HAVE GIVEN ONE.
+    // When the line fetch did not carry quantitycommitted every line read as zero and
+    // the sheet said all 25 orders ship nothing and the whole pool is stranded — a
+    // confident, entirely wrong document. If nothing is committed, say so.
+    if (rule === 'as-committed' && !demand.some((d) => d.committed != null)) {
+      throw new Error('rule "as-committed" needs committed quantities and none came back from NetSuite — use a computing rule, or check that the allocation has been saved')
+    }
+    const short = shortfall(demand, available)
+    const plan = allocate(demand, available, { rule })
+    allocation = {
+      rule, pool, available,
+      shortfall: short,
+      lines: plan.lines,
+      cuts: plan.cuts,
+      stranded: plan.stranded,
+      strandedUnits: plan.strandedUnits,
+      invoiceAdjustments: invoiceAdjustments(plan),
+      ready: readyToFulfil(plan, available),
+      options: short.totalShort > 0
+        ? Object.fromEntries(short.shortSkus.map((r) => [r.sku,
+          wholeCutOptions(demand.filter((d) => d.sku === r.sku), r.short)]))
+        : {},
+    }
+  }
+  return { ...withQty, allocation, asked: pos, fetchedAt: new Date().toISOString() }
 }
 
 // ── Hang tags ───────────────────────────────────────────────────────────────

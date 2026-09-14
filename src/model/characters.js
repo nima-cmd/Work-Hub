@@ -22,6 +22,46 @@ export const CHARACTERS = [
   { id: 'yor-forger', name: 'Yor Forger', universe: 'Spy x Family' },
   { id: 'anya-forger', name: 'Anya Forger', universe: 'Spy x Family' },
   { id: 'bb8', name: 'BB-8', universe: 'Star Wars' },
+
+  // ── Added 2026-09-11, from the Drive Characters folder ─────────────────────
+  // Portraits are in client/src/assets/characters/<id>-1.jpeg, discovered by
+  // import.meta.glob — no map to maintain, so an id here and a filename there are
+  // the whole integration.
+  { id: 'ai-hayasaka', name: 'Ai Hayasaka', universe: 'Kaguya-sama: Love Is War' },
+  { id: 'chika-fujiwara', name: 'Chika Fujiwara', universe: 'Kaguya-sama: Love Is War' },
+  { id: 'kaguya-shinomiya', name: 'Kaguya Shinomiya', universe: 'Kaguya-sama: Love Is War' },
+  { id: 'miko-iino', name: 'Miko Iino', universe: 'Kaguya-sama: Love Is War' },
+  { id: 'aqua', name: 'Aqua', universe: 'KonoSuba' },
+  { id: 'darkness', name: 'Darkness', universe: 'KonoSuba' },
+  { id: 'wiz', name: 'Wiz', universe: 'KonoSuba' },
+  { id: 'yunyun', name: 'Yunyun', universe: 'KonoSuba' },
+  { id: 'olivier-mira-armstrong', name: 'Olivier Mira Armstrong', universe: 'Fullmetal Alchemist' },
+  { id: 'riza-hawkeye', name: 'Riza Hawkeye', universe: 'Fullmetal Alchemist' },
+  { id: 'winry-rockbell', name: 'Winry Rockbell', universe: 'Fullmetal Alchemist' },
+  { id: 'chisato-nishikigi', name: 'Chisato Nishikigi', universe: 'Lycoris Recoil' },
+  { id: 'takina-inoue', name: 'Takina Inoue', universe: 'Lycoris Recoil' },
+  { id: 'anisphia-wynn', name: 'Anisphia Wynn', universe: 'The Magical Revolution of the Reincarnated Princess' },
+  { id: 'euphyllia-magenta', name: 'Euphyllia Magenta', universe: 'The Magical Revolution of the Reincarnated Princess' },
+  { id: 'marin-kitagawa', name: 'Marin Kitagawa', universe: "My Dress-Up Darling" },
+  { id: 'momo-ayase', name: 'Momo Ayase', universe: 'Dandadan' },
+  { id: 'maomao', name: 'Maomao', universe: 'The Apothecary Diaries' },
+  { id: 'emilia', name: 'Emilia', universe: 'Re:Zero' },
+
+  // ── Identified by Nima, 2026-09-11 ────────────────────────────────────────
+  // These five were added with `universe: null` because I could not name the series
+  // from the art, and `universe` prints on the trading card and the hologram — a
+  // plausible wrong franchise would have read as a fact. Nima supplied them.
+  { id: 'alicia-glenfall', name: 'Alicia Glenfall', universe: 'Clevatess' },
+  // Clen is Clevatess himself — the title character, and Alicia's master.
+  { id: 'clen', name: 'Clen', universe: 'Clevatess' },
+  { id: 'coco', name: 'Coco', universe: 'Witch Hat Atelier' },
+  // ⚠️ THE HEDGE CAME OFF ON EVIDENCE, NOT ON REPETITION. These two were recorded
+  // as attribution: 'believed' because Nima said "i believe are from Witch watch".
+  // His later description of Nemu names her friends — Nico, Morihito, Keigo, Kanshi
+  // and Miharu — which is the Witch Watch cast, and places BOTH of them in it. So
+  // the hedge is resolved by corroborating detail, not by having been said twice.
+  { id: 'nemu-miyao', name: 'Nemu Miyao', universe: 'Witch Watch' },
+  { id: 'nico-wakatsuki', name: 'Nico Wakatsuki', universe: 'Witch Watch' },
 ]
 
 export function getCharacterById(id) {

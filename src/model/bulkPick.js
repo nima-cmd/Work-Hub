@@ -189,3 +189,82 @@ export function storeOf(customer) {
 /** One line per SKU, for a printed sheet. */
 export const pickLines = (ticket) =>
   ticket.skus.map((s) => ({ sku: s.sku, qty: s.total }))
+
+
+/**
+ * The per-ORDER demand rows an allocation needs, filtered by exactly the same rules
+ * the ticket totals use.
+ *
+ * Nima, 2026-09-11: "can we make this a feature if i want to do multiple PO in one
+ * bulk and also account for shortages like this.. is this something we can build in
+ * the app so we dont have to do it like this."
+ *
+ * ⚠️ IT REUSES isGoodsLine AND isClosedLine RATHER THAN RE-FILTERING. The pick ticket
+ * drops closed lines and non-goods types; if the allocation applied its own rules the
+ * two halves of one sheet would disagree about what is being shipped — the ticket
+ * would total 684 and the cut list would reconcile to something else, with no way to
+ * tell which was right.
+ */
+/** "Naghedi : Bloomingdale's" -> "Bloomingdale's". NetSuite location names are paths. */
+export const leafLocation = (name) => {
+  const raw = norm(name)
+  return raw.includes(' : ') ? norm(raw.split(' : ').pop()) : raw
+}
+
+export function demandLines(lines = [], asked = []) {
+  const wanted = asked.length ? new Set(asked.map(key)) : null
+  return lines
+    .filter((l) => (!wanted || wanted.has(key(l.po))) && isGoodsLine(l) && !isClosedLine(l.isclosed))
+    .map((l) => ({
+      po: norm(l.po),
+      order: norm(l.tranid),
+      store: storeOf(l.customer) || norm(l.customer),
+      sku: norm(l.sku),
+      itemId: norm(l.itemId) || null,
+      qty: units(l.quantity),
+      // ⚠️ null, not 0, when NetSuite did not send it. Zero is a real commitment
+      // meaning "this line ships nothing"; absent means "nobody asked". Collapsing
+      // the two is what printed a cancel-everything pick ticket.
+      committed: l.committed == null || l.committed === '' ? null : units(l.committed),
+    }))
+    .filter((l) => l.sku && l.qty > 0)
+}
+
+/**
+ * Stock for ONE named pool, read from the ticket withStock() already built.
+ *
+ * ⚠️ ONE POOL, BY NAME, AND IT MUST BE CHOSEN. Nima: "what we have in the warehouse
+ * for bloomingdaels is all we can use." Summing every location would allocate stock
+ * sitting in Offsite Storage or the Virtual Warehouse — the shortage would read
+ * smaller than it is and the pick would send someone to find units elsewhere.
+ *
+ * ⚠️ IT READS THE TICKET, NOT THE RAW STOCK ROWS, AND THAT WAS A REAL BUG. My first
+ * version walked `stock.rows` looking for `r.sku` — but those rows are keyed by
+ * ITEM ID (`{ itemId, locationId, locationName, onHand }`), so every lookup returned
+ * undefined and the pool came back empty. Live, that surfaced as "no stock rows for
+ * pool Bloomingdale's" on a ticket that was visibly printing a Bloomingdale's column
+ * with 72 in it. withStock() has already done the itemId→sku join and keyed on-hand
+ * by location id, so use that.
+ *
+ * ⚠️ AND THE MATCH IS ON THE LEAF. The live location is named
+ * "Warehouse Bulk : Bloomingdale's" — NetSuite location names are PATHS, which this
+ * repo already records as the fullname-vs-leaf trap.
+ */
+export function poolFor(ticket = {}, poolName) {
+  const want = leafLocation(poolName).toLowerCase()
+  if (!want) return null
+  const col = (ticket.stockColumns || []).find((c) => leafLocation(c.name).toLowerCase() === want)
+  if (!col) return null
+  const pool = {}
+  for (const s of ticket.skus || []) {
+    const sku = norm(s.sku)
+    if (!sku) continue
+    pool[sku] = Number((s.onHand || {})[col.id]) || 0
+  }
+  return pool
+}
+
+/** The pool names a ticket could actually be allocated from. */
+export const poolNames = (ticket = {}) =>
+  (ticket.stockColumns || []).map((c) => ({ id: c.id, name: c.name, leaf: leafLocation(c.name), isOrderLocation: !!c.isOrderLocation }))
+

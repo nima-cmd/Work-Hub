@@ -382,6 +382,509 @@ export const DIALOGUE = {
     reminder: ['Scheduled task — due again today.'],
     done: ['Task complete.'],
   },
+
+  // ── Added 2026-09-11 with the Drive Characters batch ───────────────────────
+  // Original flavour text in each character's voice — no lines lifted from any
+  // show. Same four contexts; the roster test in test/model.test.js is what
+  // requires an entry here for every id in characters.js.
+
+  // Kaguya-sama: Love Is War
+  'ai-hayasaka': {
+    greeting: [
+      'I have prepared the task, the context, and three contingencies. You need only begin.',
+      'Filed, sorted, and placed in front of you. I would rather you not make me chase it.',
+      'A new assignment. I have already handled the parts you would have forgotten.',
+    ],
+    urgent: [
+      'Drop the pretence of a schedule. This one is now.',
+      'I am telling you plainly, without the polite version: handle this first.',
+    ],
+    reminder: [
+      'The usual round. I keep it on the list precisely because it is easy to skip.',
+      'Same duty as yesterday. Competence is mostly repetition.',
+    ],
+    done: [
+      'Completed and logged. I will pretend I was never worried.',
+      'Well handled. I have already moved on to the next thing.',
+    ],
+  },
+  'chika-fujiwara': {
+    greeting: [
+      'Ooh, a new one! Let us make it a game — you against the clock, me cheering.',
+      'Task delivery! I added no rules, which means I win by default.',
+      'Something new landed on the pile. I say we do it loudly.',
+    ],
+    urgent: [
+      'No no no, this one is beeping! Do it now and I will applaud!',
+      'Emergency! Well — urgent. Which is nearly as fun.',
+    ],
+    reminder: [
+      'The daily one again! I have decided it counts as a warm-up.',
+      'Round and round it comes. Hello, familiar task.',
+    ],
+    done: [
+      'Victory! I am awarding you imaginary points, and there are many.',
+      'Finished! That deserves a snack. I will supervise.',
+    ],
+  },
+  'kaguya-shinomiya': {
+    greeting: [
+      'A task, and it appears it is yours. I trust that is acceptable.',
+      'This requires doing properly. I would not have brought it otherwise.',
+      'I considered handling it myself. I have decided to let you.',
+    ],
+    urgent: [
+      'I will not dress this up. It is urgent, and waiting would be a mistake.',
+      'This one first. I am not in the habit of repeating myself.',
+    ],
+    reminder: [
+      'The recurring obligation. Elegance is doing the dull part without complaint.',
+      'Again today. Standards are not standards if they lapse.',
+    ],
+    done: [
+      'Precisely as it should have been done. I am... satisfied.',
+      'Complete. I had no real doubt, whatever my expression suggested.',
+    ],
+  },
+  'miko-iino': {
+    greeting: [
+      'A new task, properly logged and within the rules. Please proceed.',
+      'This has been assigned correctly, so there is no reason to delay it.',
+      'I have checked this against procedure. It is in order and it is yours.',
+    ],
+    urgent: [
+      'This is a priority and postponing it would be genuinely wrong.',
+      'Please — this one cannot slip. I would not raise my voice otherwise.',
+    ],
+    reminder: [
+      'The scheduled duty. Rules kept only when convenient are not rules.',
+      'It recurs today. I intend to keep recording it honestly.',
+    ],
+    done: [
+      'Completed, and completed correctly. That is worth noting.',
+      'Done. I have marked it, with no asterisk required.',
+    ],
+  },
+
+  // KonoSuba
+  aqua: {
+    greeting: [
+      'A task! For you, obviously. I am a goddess, and goddesses delegate.',
+      'Here. Take it. I would do it myself but my hands are... divine.',
+      'Someone has to handle this and I have decided it is not me.',
+    ],
+    urgent: [
+      'This is bad! Very bad! Fix it before I start crying about it!',
+      'Urgent! Do something! Why is everyone looking at me?',
+    ],
+    reminder: [
+      'The boring one again. Even divinity has paperwork, apparently.',
+      'It came back. Things I ignore always come back.',
+    ],
+    done: [
+      'Naturally it went well. I supervised spiritually.',
+      'Done! I shall accept credit on behalf of the heavens.',
+    ],
+  },
+  darkness: {
+    greeting: [
+      'A task! Hand it here — I shall meet it head on and without hesitation.',
+      'Duty calls, and I answer. Point me at the difficult part.',
+      'Give me the one nobody else wants. That is what a crusader is for.',
+    ],
+    urgent: [
+      'Then there is no time for caution! Straight at it!',
+      'Urgent? Excellent. I do my finest work when there is no time to think.',
+    ],
+    reminder: [
+      'The daily trial returns! I welcome it as I welcome all trials.',
+      'Again today. Endurance is its own kind of valour.',
+    ],
+    done: [
+      'Magnificent! Struck true and finished properly!',
+      'Complete! I felt every moment of it, and I regret nothing.',
+    ],
+  },
+  wiz: {
+    greeting: [
+      'Oh — a new task! Do take it, you are so much better at these than I am.',
+      'Here you are. I would help, though I usually make things costlier.',
+      'Something needs doing. I have every confidence in you, truly.',
+    ],
+    urgent: [
+      'Oh dear, this one is urgent. Please go — I will fret quietly here.',
+      'I am so sorry to rush you, but this really cannot wait.',
+    ],
+    reminder: [
+      'The regular one again. I find comfort in things that come back.',
+      'It is due today. The steady tasks are the kind ones.',
+    ],
+    done: [
+      'You finished it! And at no loss, which is more than I manage.',
+      'Wonderfully done. I am genuinely relieved.',
+    ],
+  },
+  yunyun: {
+    greeting: [
+      'Um — I brought you a task! We could... do it together? If you wanted?',
+      'Hello! I have an assignment for you. I practised saying that.',
+      'A new one came in. I thought of you first, which is not strange, is it?',
+    ],
+    urgent: [
+      'This one is urgent! Please — I do not want to be the one who let it slide.',
+      'Quickly! I will stay right here in case you need anything.',
+    ],
+    reminder: [
+      'It is the daily one. I like that it always comes back.',
+      'Same task today. Reliable things are nice.',
+    ],
+    done: [
+      'You did it! Can I... count that as us finishing it together?',
+      'Finished! I am so glad. Really.',
+    ],
+  },
+
+  // Fullmetal Alchemist
+  'olivier-mira-armstrong': {
+    greeting: [
+      'A task. You will take it, and you will not require supervision.',
+      'This is yours now. I expect it handled, not discussed.',
+      'Orders. I have no interest in whether they are convenient.',
+    ],
+    urgent: [
+      'Now. Not after whatever you had planned. Now.',
+      'This one decides whether the rest holds. Move.',
+    ],
+    reminder: [
+      'The standing duty. Discipline is what you do when nobody checks.',
+      'Again today. A fortress falls through the unwatched gate.',
+    ],
+    done: [
+      'Acceptable. That is high praise and you will not hear more.',
+      'Done properly. Continue.',
+    ],
+  },
+  'riza-hawkeye': {
+    greeting: [
+      'New assignment. Read it through before you start moving.',
+      'This is yours. I have checked it twice; you should check it once.',
+      'A task came down. Straightforward, which is when people get careless.',
+    ],
+    urgent: [
+      'Priority. Everything else waits, including the comfortable things.',
+      'This one now. I will not ask a second time.',
+    ],
+    reminder: [
+      'The routine check. Routine is what keeps anyone standing.',
+      'Due again. I log these whether or not anyone reads them.',
+    ],
+    done: [
+      'Clean work. Noted.',
+      'Complete, and no loose ends. That is the part that matters.',
+    ],
+  },
+  'winry-rockbell': {
+    greeting: [
+      'Got a job for you! Treat it properly and it will treat you properly.',
+      'New task — and no shortcuts. I can always tell.',
+      'Here. Do it right the first time and nobody has to come back to it.',
+    ],
+    urgent: [
+      'This one is breaking! Go fix it before it takes something else with it.',
+      'Urgent — and do not you dare bodge it to save five minutes.',
+    ],
+    reminder: [
+      'Maintenance day. Things last because someone bothers.',
+      'The regular service. Neglect is just damage on a delay.',
+    ],
+    done: [
+      'Now that is good work. I would sign my name to that.',
+      'Finished, and finished well. Do not make me regret the compliment.',
+    ],
+  },
+
+  // Lycoris Recoil
+  'chisato-nishikigi': {
+    greeting: [
+      'New job! Do not worry, these always look worse than they are.',
+      'Something came in — and I already have a plan where nobody gets hurt.',
+      'Task for you! I will handle the awkward half if you handle the tedious one.',
+    ],
+    urgent: [
+      'Okay, this one is actually urgent — but we still do it without panicking.',
+      'Go! I have got everything behind you covered.',
+    ],
+    reminder: [
+      'The usual round! I genuinely like these ones.',
+      'Same job, new day. Feels a bit like home, does it not?',
+    ],
+    done: [
+      'See? Nobody got hurt and it still got done. My favourite outcome.',
+      'All finished! I am counting that as a good day.',
+    ],
+  },
+  'takina-inoue': {
+    greeting: [
+      'Assignment received. I have summarised it; read the summary.',
+      'A task. The efficient order is written at the top — follow it.',
+      'This is yours. I see no reason to discuss it further.',
+    ],
+    urgent: [
+      'This takes precedence. Reassign everything else.',
+      'Urgent. Improvising here would be worse than being late.',
+    ],
+    reminder: [
+      'Scheduled task. Repetition is not a reason to do it poorly.',
+      'It recurs today. I have logged it as I always do.',
+    ],
+    done: [
+      'Objective complete. The result is what I expected.',
+      'Done. That was the correct approach.',
+    ],
+  },
+
+  // The Magical Revolution of the Reincarnated Princess
+  'anisphia-wynn': {
+    greeting: [
+      'A task! Which means data! Which means I am already interested!',
+      'Ooh, something new to take apart. Do you mind if I experiment slightly?',
+      'New assignment! I have four ideas and only one of them is dangerous.',
+    ],
+    urgent: [
+      'No time for the elegant version — we do the version that works! Go!',
+      'Urgent! Perfect. Constraints are where the good ideas live.',
+    ],
+    reminder: [
+      'The recurring one! Every repeat is another measurement, really.',
+      'Back again. I am starting to see the pattern in it.',
+    ],
+    done: [
+      'It worked! And almost exactly the way I predicted, which is thrilling.',
+      'Finished! Write down what you did — that part matters.',
+    ],
+  },
+  'euphyllia-magenta': {
+    greeting: [
+      'A new task, prepared carefully for you. Please take your time with it.',
+      'This has been entrusted to you, and I think rightly so.',
+      'Something requires attention. I have set it out clearly.',
+    ],
+    urgent: [
+      'This one is pressing. Please see to it before the rest.',
+      'I would not hurry you without cause — but there is cause.',
+    ],
+    reminder: [
+      'The customary duty. There is a quiet dignity in doing it again.',
+      'Due today, as always. Constancy is not a small virtue.',
+    ],
+    done: [
+      'Beautifully done. I am glad it was you.',
+      'Complete, and with care. That is what I hoped for.',
+    ],
+  },
+
+  // My Dress-Up Darling
+  'marin-kitagawa': {
+    greeting: [
+      'Okay so — new task, and I am already excited about it! Is that weird?',
+      'This one came in and I thought, yes, that is a you job!',
+      'New thing to do! We are going to make it look good, obviously.',
+    ],
+    urgent: [
+      'Wait wait wait — this one is urgent! Go go go, I believe in you!',
+      'Deadline! Okay. Okay! You have got this, seriously.',
+    ],
+    reminder: [
+      'The regular one! Honestly the routine stuff is kind of comforting.',
+      'It is back! Hi, task. We meet again.',
+    ],
+    done: [
+      'AAAH you finished it! That is so good, I am genuinely proud!',
+      'Done! Okay, what is next, I am fully invested now.',
+    ],
+  },
+
+  // Dandadan
+  'momo-ayase': {
+    greeting: [
+      'Here, take this one. And do not make it weird — it is just a task.',
+      'New job. Looks normal, which around here means nothing.',
+      'This needs doing. I would do it myself but I am handling something worse.',
+    ],
+    urgent: [
+      'Move! This one is going sideways if you stand there thinking.',
+      'Urgent. I am not explaining twice, just go.',
+    ],
+    reminder: [
+      'The usual one. Boring is honestly a nice change.',
+      'Again today. I will take dull over strange any day.',
+    ],
+    done: [
+      'Nice. Handled, no drama. That is how it should go.',
+      'Done? Good. Do not let it go to your head.',
+    ],
+  },
+
+  // The Apothecary Diaries
+  maomao: {
+    greeting: [
+      'A task. Interesting — though most things are, if you look properly.',
+      'Here. I have noted what is odd about it, which is usually the useful part.',
+      'This needs doing. I would start by asking why it exists at all.',
+    ],
+    urgent: [
+      'This one is time-sensitive. Delay is itself a decision, and a poor one.',
+      'Handle it now. Whatever is causing it will not improve on its own.',
+    ],
+    reminder: [
+      'The recurring one. Repetition is how you learn what normal looks like.',
+      'Due again. I keep records so the exception is obvious when it comes.',
+    ],
+    done: [
+      'Done. And now we know something we did not know before.',
+      'Complete. I have written down what actually happened, not what was expected.',
+    ],
+  },
+
+  // Re:Zero
+  emilia: {
+    greeting: [
+      'I brought you a task! I am sure you will manage it kindly and well.',
+      'Something new needs doing. I will help however I can, truly.',
+      'Here is your next one. I thought it suited you.',
+    ],
+    urgent: [
+      'Oh — this one is urgent. Please hurry, but please also be careful.',
+      'It cannot wait. I will stay and keep watch over the rest.',
+    ],
+    reminder: [
+      'The everyday one is back. I find those comforting, honestly.',
+      'It is due again today. Small promises are still promises.',
+    ],
+    done: [
+      'You finished it! I am so glad, really I am.',
+      'All done. Thank you — I mean that properly.',
+    ],
+  },
+
+  // ── Voices revisited 2026-09-11, once Nima named the series ───────────────
+  // All five are now written in voice. Alicia, Clen and Nemu were deliberately left
+  // warm-and-neutral while I could not place them; Nima then described Clevatess's
+  // personality and Nemu's in detail, so these are written from HIS description
+  // rather than from a series I had guessed at.
+
+  // Witch Hat Atelier — Coco: earnest, wonder-struck, told once she could never
+  // be a witch and quietly determined to prove otherwise.
+  coco: {
+    greeting: [
+      'Oh! A new task — I want to understand it properly before I touch it.',
+      'Something to do! Can I ask what it is *for*? I always want to know that part.',
+      'A fresh one. I will draw out the steps first, so I can see the whole shape.',
+    ],
+    urgent: [
+      'This one cannot wait! I will be careful, but I will be quick.',
+      'Please hurry — but do not skip the step that makes it safe.',
+    ],
+    reminder: [
+      'The everyday one again. I do not mind; that is how you get good at something.',
+      'It came back around! Practice is not the boring part, I think.',
+    ],
+    done: [
+      'We did it! And I know *why* it worked, which is the best bit.',
+      'Finished! I am going to write down how, so I never lose it.',
+    ],
+  },
+
+  // Witch Watch — Nico: cheerful witch, fond of pranks, magic that overshoots.
+  'nico-wakatsuki': {
+    greeting: [
+      'New task! I could do it with magic, but you know how that usually ends.',
+      'Ta-da! A job for you. I have deliberately not enchanted it. Probably.',
+      'Here you go! I tried helping earlier and made it slightly worse, so — yours!',
+    ],
+    urgent: [
+      'Eep, this one is urgent! Go, go! I will not cast anything, I promise!',
+      'Hurry! And if something starts glowing, that was not me.',
+    ],
+    reminder: [
+      'The daily one is back! I like the ones that keep coming round.',
+      'Same task, same time. Cosy, right?',
+    ],
+    done: [
+      'Yaaay! Finished, and nothing exploded! Best kind of day.',
+      'Done! I am counting that as a win for both of us.',
+    ],
+  },
+
+  // ── Clevatess ─────────────────────────────────────────────────────────────
+  // Clen IS Clevatess: cold, apathetic, contemptuous of humans to the point of
+  // finding conversation with them embarrassing, and genuinely ignorant of human
+  // society — he did not know that only women who have given birth produce milk,
+  // and does not know what money is. Caring for the baby Luna has begun to shift
+  // him slightly, so the warmth is grudging and never admitted.
+  clen: {
+    greeting: [
+      'A task. I neither understand why it matters nor intend to ask. It is yours.',
+      'Your kind has produced another obligation. See to it.',
+      'This requires doing. Do not explain the purpose to me — I will not retain it.',
+    ],
+    urgent: [
+      'I am told this one is "urgent". Apparently that means your kind panics if it waits.',
+      'Attend to it now. Their distress is tedious to sit through.',
+    ],
+    reminder: [
+      'It has returned. Humans build their days out of repetition. Baffling.',
+      'The same duty again. I have stopped asking why it does not simply stay done.',
+    ],
+    done: [
+      'It is finished. I will not praise you. ...It was adequate.',
+      'Done, and without supervision. I note this. I am saying nothing further.',
+    ],
+  },
+  // Alicia Glenfall — his servant, raised again on his blood and then asked to wet-nurse
+  // a child she had not borne. She is the one he demands explanations from, so her voice
+  // is the patience of someone who explains the world for a living.
+  'alicia-glenfall': {
+    greeting: [
+      'A task, my lord— forgive me. A task, for you. I have written down the parts that need no explaining.',
+      'This one is straightforward. I have learned to be grateful for straightforward.',
+      'Here. I have already anticipated the questions someone will ask me about it.',
+    ],
+    urgent: [
+      'This cannot wait. Please — I have spent most of my patience already today.',
+      'Urgent, and yes, I checked. Twice. Go.',
+    ],
+    reminder: [
+      'The same duty as yesterday. I find the routine restful, honestly.',
+      'It comes round again today, as it always does. Small mercies.',
+    ],
+    done: [
+      'Finished, and properly. Thank you — it is nice to simply be able to say that.',
+      'Complete. Nobody required anything explained to them. A good day.',
+    ],
+  },
+  // Witch Watch — Nemu: shy, taught by her mother never to show what she felt, so she
+  // poured it into study instead and knows rare magic and the fundamentals cold. Nico
+  // and the others taught her how to be around people; she is still practising.
+  'nemu-miyao': {
+    greeting: [
+      'Um — a task for you. I looked up the proper way to do it first. I hope that is alright.',
+      'I have a job for you. I... wrote notes. Rather a lot of notes.',
+      'Here. I checked it against the fundamentals before bringing it, so it should hold.',
+    ],
+    urgent: [
+      'This one is urgent — please. I would not push if I were not certain.',
+      'Quickly! I— sorry. I mean: quickly, please.',
+    ],
+    reminder: [
+      'The recurring one. I like these. Practice is how anything is learned properly.',
+      'It is due again. Repetition is not beneath anyone.',
+    ],
+    done: [
+      'You finished it. I am— I am really glad. I am trying to say that part out loud more.',
+      'Complete, and correctly. I will write down how it was done.',
+    ],
+  },
 }
 
 // Deterministic line pick: same (character, context, seed) → same line, so a

@@ -65,11 +65,25 @@ export function warehouseFeedConfigured(env = process.env) {
 // received — nothing left for the dock — and the spec says exclude it.
 export const WAREHOUSE_PO_STATUS_CODES = ['B', 'D']
 
+// ⚠️ THE CONTAINER IMPORT NEEDS A WIDER SCOPE, AND LEARNING THAT COST A WRONG
+// TRANSFER. Receiving part of a PO moves it to E ("Pending Billing/Partially
+// Received") and fully receiving it to F — so the instant an Item Receipt is
+// imported, that PO DISAPPEARS from the dock's scope above. Regenerating the
+// Inventory Transfer straight afterwards then found no lines for it at all, and the
+// destination fell through to a hardcoded fallback: on 2026-09-09 that sent 150
+// units of container `11 Air ... 2026.9.7` to Warehouse instead of the Virtual
+// Warehouse both POs actually specify.
+//
+// F is included on purpose. A fully-received PO has nothing left for the dock, which
+// is why the dock excludes it — but its units are still in China and still have to
+// transfer. See buildItemReceiptCsv Guard 1 for the same asymmetry.
+export const PACKING_SLIP_PO_STATUS_CODES = ['B', 'D', 'E', 'F']
+
 // Line location COALESCEs line-over-header, the same pattern (and the same
 // fullname-not-leaf trap) as orderConfirmationSql. ORDER BY keeps pagination
 // stable; the mapper re-sorts per PO anyway before numbering positions.
-export function warehousePoLineSql() {
-  const codes = WAREHOUSE_PO_STATUS_CODES.map((c) => `'${c}'`).join(',')
+export function warehousePoLineSql(statusCodes = WAREHOUSE_PO_STATUS_CODES) {
+  const codes = statusCodes.map((c) => `'${c}'`).join(',')
   return `SELECT t.id AS po_id, t.tranid AS po_number,
                  BUILTIN.DF(t.entity) AS vendor, BUILTIN.DF(t.status) AS status,
                  TO_CHAR(t.duedate,'YYYY-MM-DD') AS duedate, t.memo AS header_memo,

@@ -11,7 +11,8 @@ import { resolveNetsuiteLink } from '../src/ingest/netsuiteLink.js'
 import { LINK_ERROR, LINK_MESSAGE } from '../src/model/netsuiteLinks.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync, readdirSync } from 'node:fs'
+import { buildStaleness, WATCHED } from '../src/model/buildStaleness.js'
 
 import {
   setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, recordDeadLabel, undoDeadLabel, listDeadLabels, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
@@ -48,10 +49,13 @@ import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
 import { planScanFiling, fileScannedDoc } from './scanFiling.js'
-import { previewPackingSlip, commitPackingSlip } from './packingSlipImport.js'
+import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
+import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
 import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
+import { renderPoRevisionTo } from './poRevisionPdf.js'
+import { poRevisionTicket } from '../src/ingest/poRevisionLive.js'
 import { authGate, issueSessionCookie, clearSessionCookie, checkPassword } from './auth.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -194,6 +198,13 @@ app.get('/api/health', async (_req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
+
+// ⚠️ MUST BE REGISTERED BEFORE THE SPA CATCH-ALL at the bottom of this file, which
+// answers every unmatched GET with index.html — a route declared after it returns
+// HTML from /api/..., which is how I first shipped this one.
+// `clientBuildState` is a hoisted function declaration further down; the handler
+// only runs after module evaluation, so the `dist` const it closes over is ready.
+app.get('/api/build-state', (_req, res) => res.json(clientBuildState()))
 
 app.get('/api/sync-health', async (_req, res) => {
   try {
@@ -453,9 +464,13 @@ app.delete('/api/transfers/receipt', async (req, res) => {
 // The bulk pick ticket — replaces the NetSuite "Bulk Pick & Ship Manifest" Suitelet.
 // ⚠️ POST, not GET: PO numbers are pasted free text and can be long, and a pick ticket is
 // not something to cache in a URL.
+// ⚠️ `rule` and `pool` are OPTIONAL and travel together. Without them this is the
+// ticket it has always been; with them it also says who goes short. See getBulkPick —
+// passing one without the other is an error rather than a guess.
 app.post('/api/bulk-pick', async (req, res) => {
   try {
-    res.json(await getBulkPick((req.body || {}).pos || ''))
+    const b = req.body || {}
+    res.json(await getBulkPick(b.pos || '', { rule: b.rule || null, pool: b.pool || null }))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
@@ -473,8 +488,11 @@ app.post('/api/bulk-pick', async (req, res) => {
 // A plain link opened in the click itself is never blocked, and the tab can be reloaded.
 app.all('/api/bulk-pick/pdf', async (req, res) => {
   try {
-    const pos = (req.body || {}).pos || req.query.pos || ''
-    await renderPickTicketTo(res, await getBulkPick(pos))
+    const b = req.body || {}
+    const pos = b.pos || req.query.pos || ''
+    const rule = b.rule || req.query.rule || null
+    const pool = b.pool || req.query.pool || null
+    await renderPickTicketTo(res, await getBulkPick(pos, { rule, pool }))
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
@@ -1078,6 +1096,67 @@ app.get('/api/packing-slips/:label', async (req, res) => {
     const slip = await fetchPackingSlip(req.params.label)
     if (!slip) return res.status(404).json({ error: 'no such container' })
     res.json(slip)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// A PO that was re-sent: what changed, as a pick ticket. Reads the EDI, not
+// NetSuite — the new version may have no sales orders at all.
+app.get('/api/po/:po/revision-pick', async (req, res) => {
+  try {
+    const t = await poRevisionTicket(req.params.po)
+    if (req.query.json) return res.json(t)
+    await renderPoRevisionTo(res, t)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// The Harbour — every inbound vessel, where it is, and when to expect it.
+app.get('/api/shipments', async (_req, res) => {
+  try {
+    res.json(await fetchShipmentBoard())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/shipments/:label', async (req, res) => {
+  try {
+    const s = await fetchShipment(req.params.label)
+    if (!s) return res.status(404).json({ error: 'no such shipment' })
+    res.json(s)
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Mark an arrival, set an ETA, choose the mode, record a tracking number.
+// ⚠️ A 409, not a 500, when the write is REFUSED rather than broken: updateShipment
+// will not let an estimate overwrite a date a person entered, and the caller needs to
+// tell those two apart.
+app.post('/api/shipments/:label', async (req, res) => {
+  try {
+    res.json(await updateShipment(req.params.label, req.body || {}))
+  } catch (e) {
+    console.error(e)
+    const refused = /refusing to overwrite/i.test(e.message || '')
+    res.status(refused ? 409 : 400).json({ error: e.message })
+  }
+})
+
+// Did the import do what we expected? Pairs the stored slip against the Item Receipt
+// and Transfer Order NetSuite actually holds, by recomputing their External IDs.
+app.get('/api/packing-slips/:label/verify', async (req, res) => {
+  try {
+    const r = await verifyStoredContainer(req.params.label)
+    if (!r) return res.status(404).json({ error: 'no such container' })
+    res.json(r)
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })
@@ -1936,12 +2015,59 @@ if (existsSync(dist)) {
   app.use((_req, res) => res.sendFile(join(dist, 'index.html')))
 }
 
+// ── Is the bundle :3001 serves older than the code that made it? ────────────
+//
+// Nima lost time to this on 2026-09-11: client/dist was two days old, :3001 served
+// it without comment, and a feature that worked read as missing. The API is never
+// stale — only the built client is — so this reports and never blocks.
+//
+// ⚠️ It walks src/model too, because the client imports the shared model directly;
+// editing only characters.js changes the UI while nothing under client/ moves.
+function newestMtime(root) {
+  let newest = 0
+  let file = null
+  const walk = (p, rel) => {
+    let st
+    try { st = statSync(p) } catch { return }
+    if (st.isDirectory()) {
+      let entries = []
+      try { entries = readdirSync(p) } catch { return }
+      for (const e of entries) {
+        if (e === 'node_modules' || e.startsWith('.')) continue
+        walk(join(p, e), rel ? `${rel}/${e}` : e)
+      }
+      return
+    }
+    if (st.mtimeMs > newest) { newest = st.mtimeMs; file = rel }
+  }
+  walk(join(__dirname, "..", root), root)
+  return { newest, file }
+}
+
+export function clientBuildState() {
+  let builtAt = null
+  try { builtAt = statSync(join(dist, 'index.html')).mtimeMs } catch { builtAt = null }
+  let newestSrc = 0
+  let newestFile = null
+  for (const w of WATCHED) {
+    const { newest, file } = newestMtime(w)
+    if (newest > newestSrc) { newestSrc = newest; newestFile = file }
+  }
+  return buildStaleness({ builtAt, newestSrc: newestSrc || null, newestFile })
+}
+
 // ⚠️ WHICH DATABASE, said out loud, every start. The local mirror is stale by
 // definition, and a stale mirror reporting as live is the worst version of the bug
 // class src/model/fieldAssumptions.js exists to record. If the target is ever
 // ambiguous, no number from this server can be trusted.
 app.listen(PORT, async () => {
   console.log(`▶ Tracker running at http://localhost:${PORT}`)
+  const build = clientBuildState()
+  if (build.stale) {
+    console.log(`⚠  ${build.message}`)
+  } else if (build.state === 'fresh') {
+    console.log(`   CLIENT: built ${build.builtAgeLabel} ago, current with source.`)
+  }
   if (IS_MIRROR) {
     const m = await mirrorAsOf()
     const age = m?.ageHours == null ? 'unknown age' : `${m.ageHours.toFixed(1)}h old`
