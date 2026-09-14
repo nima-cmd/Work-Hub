@@ -48,9 +48,41 @@ for (const r of rows) {
   moves.push({ ...r, newKey, should })
 }
 
-if (!moves.length && !collisions.length) {
-  console.log('✓ Every routing shipment already agrees with partnerForDc(). Nothing to re-file.')
+// ⚠️ bol_registry IS ITS OWN PASS, NOT A SIDE EFFECT OF A MOVE. It carries the partner
+// too, and server/scanFiling.js reads THIS row as the authority when a signed BOL is
+// scanned back in — partner, PO and DC, to file the paperwork and drive the ASN. A
+// stale label files a scanned Exemplar BOL under Nordstrom.
+//
+// It has to run independently because the shipments are usually fixed FIRST: once
+// routing_shipment agrees with partnerForDc there are no moves left, and a registry
+// repair hung off the move loop would never run again. That is exactly the state this
+// database was in after the 2026-09-14 re-file.
+//
+// ⚠️ THE NUMBER IS NEVER TOUCHED — no insert, no delete, only the label on a row that
+// already exists. This is the never-reuse ledger.
+const { rows: regRows } = await pool.query('SELECT bol_number, partner, dc FROM bol_registry')
+//
+// ⚠️ AND IT ONLY CORRECTS A LABEL THAT EXISTS. Two rows must be left alone:
+//
+//   · dc = 'MASTER' — a master BOL consolidates several DCs, so it HAS no single DC
+//     and partnerForDc('MASTER') falls through to "Bloomingdale's", which is a guess.
+//   · partner IS NULL — nobody recorded one. Filling it in from a derivation turns
+//     "unknown" into a confident answer, which is the bug this whole script repairs.
+//
+// The first draft of this pass had neither guard and offered to stamp
+// "Bloomingdale's" onto all three master BOLs in this database.
+const regFixes = regRows
+  .filter((r) => r.partner && r.dc && r.dc !== 'MASTER')
+  .map((r) => ({ ...r, should: partnerForDc(r.dc) }))
+  .filter((r) => r.should !== r.partner)
+
+if (!moves.length && !collisions.length && !regFixes.length) {
+  console.log('✓ Every routing shipment and BOL registry row already agrees with partnerForDc().')
   await pool.end(); process.exit(0)
+}
+
+for (const r of regFixes) {
+  console.log(`bol_registry ${r.bol_number} · DC ${r.dc} · partner ${r.partner} → ${r.should}`)
 }
 
 for (const m of moves) {
@@ -66,8 +98,13 @@ for (const c of collisions) {
 }
 
 if (!write) {
-  console.log(`\n${moves.length} shipment${moves.length === 1 ? '' : 's'} to re-file, ${collisions.length} collision${collisions.length === 1 ? '' : 's'}. DRY RUN — pass --write to apply.`)
+  console.log(`\n${moves.length} shipment${moves.length === 1 ? '' : 's'} to re-file, ${regFixes.length} registry label${regFixes.length === 1 ? '' : 's'} to correct, ${collisions.length} collision${collisions.length === 1 ? '' : 's'}. DRY RUN — pass --write to apply.`)
   await pool.end(); process.exit(collisions.length ? 1 : 0)
+}
+
+for (const r of regFixes) {
+  await pool.query('UPDATE bol_registry SET partner = $1 WHERE bol_number = $2', [r.should, r.bol_number])
+  console.log(`· bol_registry ${r.bol_number}: partner → ${r.should} (the number is untouched)`)
 }
 
 let done = 0
@@ -90,6 +127,7 @@ for (const m of moves) {
     [m.newKey, m.dc_po_key])
   const { rowCount: dropped } = await pool.query(
     'DELETE FROM preship_check WHERE dc_po_key = $1', [m.dc_po_key])
+
   if (ticks) console.log(`  · carried ${ticks} pre-ship tick${ticks === 1 ? '' : 's'}`)
   if (dropped) console.log(`  · ${dropped} older tick${dropped === 1 ? '' : 's'} superseded by one already filed under the new key`)
 }
