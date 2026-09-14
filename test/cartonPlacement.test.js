@@ -197,3 +197,11 @@ test('the search term is recorded, because the banner names find nothing', () =>
   assert.equal(TMS_CONSIGNEE.searchTerm, 'elg')
   assert.match(TMS_CONSIGNEE.searchNote, /finds nothing/)
 })
+
+test('⚠️ DYNAMIC SCHEDULES, THE ASSIGNED CARRIER HAULS — not a BOL mismatch', () => {
+  // Their TMS BOL names "Dynamic Delivery Services" with a blank SCAC while the
+  // assignment gives "Linear Logistics (SCAC: LLGJ)". Two parties, not a contradiction:
+  // the SCAC identifies who is hauling, which is why that is the one they hand you.
+  assert.match(PORTALS.tms.role, /not the carrier itself/)
+  assert.match(PORTALS.tms.carrierComesFrom, /assignment notice/)
+})

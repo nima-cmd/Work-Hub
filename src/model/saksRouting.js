@@ -298,8 +298,23 @@ export const auditTriggerUnits = (poUnits) => Math.ceil((Number(poUnits) || 0) *
  * ⚠️ IMS still has no URL and still prints as a gap.
  */
 export const PORTALS = {
+  // ⚠️ DYNAMIC SCHEDULES; SOMEONE ELSE DRIVES. Two parties, and confusing them makes
+  // the BOL look wrong when it is not. Nima, 2026-09-14: "they gave us the scac to use
+  // dynamic i think schedules it."
+  //
+  // Exemplar's TMS BOL for 8928906 prints CARRIER NAME "Dynamic Delivery Services" with
+  // a BLANK SCAC, while the assignment notice says "Your assigned LTL Carrier is Linear
+  // Logistics (SCAC: LLGJ)". Those are not in conflict: Dynamic is the transportation
+  // management party that books the load, Linear is the motor carrier that collects it.
+  // The SCAC is the one that identifies who is actually hauling, which is why THAT is
+  // the one they hand you and the one that belongs on the BOL beside the carrier name.
+  //
+  // I flagged the mismatch as something to query with sfalogistics@s5a.com. It was not
+  // a mismatch, and the note is here so the next person does not send that email.
   tms: {
     name: "Dynamic TMS",
+    role: 'schedules the load and assigns the motor carrier — it is not the carrier itself',
+    carrierComesFrom: 'the assignment notice, which gives the carrier name AND its SCAC',
     what: 'Book every truck shipment here, at least 3 business days before the cancel date. It returns the carrier, SCAC, ready date and the confirmation number the BOL needs.',
     url: 'https://softweb.dynamiconline.com/softweb/',
     urlSource: 'Nima, 2026-09-14',
