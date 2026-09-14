@@ -7,6 +7,7 @@
 // A field left `null` renders "(confirm …)" in red rather than a guess.
 
 import { dcLabel, DC_ABBREV } from './dc.js'
+import { DCS as EXEMPLAR_DCS, dcAddressLines as exemplarDcAddress } from './exemplarStores.js'
 
 // Where every shipment ships FROM (the master BOL's Ship From block).
 export const SHIP_FROM = {
@@ -220,10 +221,41 @@ function dcCityName(dc) {
 //                   merge-center address (the final DC is named, not addressed).
 //   kind 'master' → name "Macy's <merge label>", at the merge-center address.
 // Nordstrom ships direct to its DC (kind is ignored).
+// Exemplar ships direct to its servicing DC, same as Nordstrom.
 // Returns { block, missing[] }; block.name may be a 2-line string (\n).
+//
+// ⚠️ THE LAST BRANCH IS MACY'S AND IT IS NOT A DEFAULT — IT WAS ACTING AS ONE.
+// Anything that was not Nordstrom fell through to `Macy's <city> DC` at a merge
+// centre. When partnerForDc was corrected on 2026-09-14 and DC 0510 stopped being
+// "Nordstrom", this function began composing **"Macy's PNDC (0510) DC (0510)"** for
+// Exemplar freight — a COMPETITOR'S NAME on the BOL, which is the exact objection
+// Nima raised in August about Macy's references on a Nordstrom BOL. The address came
+// out blank, so it printed red rather than trucking somewhere wrong; the name did not.
+//
+// Every partner that ships direct to a named DC now has its own branch, and the
+// addresses come from that partner's own DC list rather than from this file.
 export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DEFAULT_MERGE, direct = false } = {}) {
   let block
-  if (partner === 'Nordstrom') {
+  if (partner === 'Exemplar') {
+    // ⚠️ ZERO-PADDED IN EDI, BARE IN THE GUIDE — 0510 vs 510. Looked up both ways, or
+    // the miss falls through and we are back to printing Macy's.
+    const key = EXEMPLAR_DCS[String(dc)] ? String(dc) : String(dc).replace(/^0+/, '')
+    const d = EXEMPLAR_DCS[key]
+    if (d) {
+      const [street, cityLine] = exemplarDcAddress(key)
+      const m = /^(.*),\s*([A-Z]{2})\s+(\d{5})/.exec(cityLine || '')
+      block = {
+        name: `${d.name} (${dc})`,
+        street: street || null,
+        city: m ? m[1] : null, state: m ? m[2] : null, zip: m ? m[3] : null,
+      }
+    } else {
+      // ⚠️ NAMED, NOT ADDRESSED. An unknown Exemplar DC prints "(confirm …)" in red —
+      // this file's standing rule, and the reason the Macy's fall-through was a bug
+      // rather than a harmless default.
+      block = { name: `Exemplar DC ${dc}`, street: null, city: null, state: null, zip: null }
+    }
+  } else if (partner === 'Nordstrom') {
     block = { ...(NORDSTROM_DCS[String(dc)] || { name: `Nordstrom DC #${dc}`, street: null, city: null, state: null, zip: null }) }
   } else if (direct && kind !== 'master') {
     // ⚠️ Consigned STRAIGHT to the DC — the case this function used to be unable to
