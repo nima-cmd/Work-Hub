@@ -3462,3 +3462,28 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
    for unearned ones would size the two groups differently in the same row. */
 .tcard.tcUnearned { opacity: 0.42; filter: saturate(0.3); transition: opacity 0.18s ease, filter 0.18s ease; }
 .tcard.tcUnearned:hover { opacity: 1; filter: saturate(1); }
+
+/* Exemplar pre-ship checklist (Routing card). Collapsed by default — it is 21 steps
+   and the card is a queue item, not a document. */
+.rt-preship { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; background: var(--panel2); }
+.rt-preshipHead { width: 100%; text-align: left; background: none; border: none; color: var(--text);
+  padding: 8px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.rt-preshipHead:hover { background: var(--panel); }
+.rt-preshipBody { padding: 4px 10px 10px; border-top: 1px solid var(--line); }
+.rt-preshipWho { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; }
+.rt-preshipPhase { margin-top: 12px; }
+.rt-preshipPhaseName { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 3px; margin-bottom: 6px; }
+.rt-preshipStep { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: 12px; cursor: pointer; }
+.rt-preshipStep input { margin-top: 2px; flex: none; }
+.rt-preshipStep.done .rt-preshipWhat { color: var(--muted); text-decoration: line-through; }
+.rt-preshipWhat { font-weight: 600; }
+.rt-preshipDetail { font-size: 11px; line-height: 1.4; }
+.rt-preshipBy { font-size: 11px; color: var(--ok, #6ec47a); }
+/* The price is the point — a checklist without consequences gets skipped under time
+   pressure; "$250" does not. */
+.rt-preshipFee { margin-left: 6px; font-size: 11px; color: #e0a34a; border: 1px solid #e0a34a55;
+  border-radius: 4px; padding: 0 4px; font-weight: 600; }
+.rt-preshipApp { margin-left: 6px; font-size: 10px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 4px; }
+.rt-preshipNever { font-size: 11px; line-height: 1.5; padding: 2px 0; }

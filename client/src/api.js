@@ -1234,3 +1234,35 @@ export async function fetchSkuCartons(sku) {
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
+
+// ── The Exemplar pre-ship checklist ─────────────────────────────────────────
+// ⚠️ ONLY THE TICKS CROSS THE WIRE. The steps come from shipmentChecklist(), which the
+// view imports directly — one source for what is on the checklist, so the screen and
+// the server can never disagree about what was meant to be verified.
+export async function fetchPreshipChecks(dcPoKey) {
+  const res = await fetch(`/api/preship-checks?dcPoKey=${encodeURIComponent(dcPoKey)}`)
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
+export async function setPreshipCheck({ dcPoKey, stepKey, by, note }) {
+  const res = await fetch('/api/preship-checks', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dcPoKey, stepKey, by, note }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}
+
+// ⚠️ A DELETE, NOT A FALSE. No row means "nobody has verified this", which is a
+// different thing from "someone looked and it was wrong" — see db/schema.sql.
+export async function clearPreshipCheck({ dcPoKey, stepKey }) {
+  const res = await fetch(
+    `/api/preship-checks?dcPoKey=${encodeURIComponent(dcPoKey)}&stepKey=${encodeURIComponent(stepKey)}`,
+    { method: 'DELETE' })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `API ${res.status}`)
+  return body
+}

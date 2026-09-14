@@ -213,95 +213,99 @@ export function shipmentChecklist({ asnWillBeSent = false, cartons = 1, pos = 1,
     const f = feeFor(key, { cartons, pos })
     return f?.estimate != null ? `$${f.estimate.toLocaleString()}` : f?.note ?? ''
   }
-  const step = (phase, what, detail, feeKey, opts = {}) => ({
-    phase, what, detail,
+  // ⚠️ EVERY STEP CARRIES A STABLE KEY, AND IT IS NOT THE DISPLAY TEXT. These get
+  // ticked off before a shipment leaves and the tick is stored against the step; key
+  // them on the sentence and the next wording change silently un-ticks a checklist a
+  // real shipment was cleared against. Rewording `what` is free; renaming a key is not.
+  const step = (key, phase, what, detail, feeKey, opts = {}) => ({
+    key, phase, what, detail,
     fee: feeKey ? { ...FEES[feeKey], cost: money(feeKey) } : null,
     ...opts,
   })
 
   const steps = [
     // ── 1. Before anything is picked ──────────────────────────────────────
-    step('before', 'Confirm the PO has not been revised',
+    step('po-not-revised', 'before', 'Confirm the PO has not been revised',
       'A second 850 under the same PO number is the confirmation of a change (§9.2) — check for a retransmission before picking.',
       'poLate', { appChecks: 'poRevisionTicket() compares the last two transmissions' }),
-    step('before', 'Confirm freight terms — Collect or Prepaid',
+    step('freight-terms', 'before', 'Confirm freight terms — Collect or Prepaid',
       'Set at onboarding by the buying office. Logistics will not advise. Wrong terms invoke the prepay fee.',
       'prepayAgreement'),
 
     // ── 2. Routing, which decides the mode ────────────────────────────────
-    step('route', 'Book the shipment in the Dynamic TMS',
+    step('tms-booked', 'route', 'Book the shipment in the Dynamic TMS',
       'At least 3 business days before the cancel date. The TMS returns the carrier, SCAC, ready date and a confirmation number.',
       'notBookedInTms', { appChecks: 'checkSaksShipment() reports the deadline' }),
-    step('route', 'Let the TMS decide parcel / LTL / TL',
+    step('tms-decides-mode', 'route', 'Let the TMS decide parcel / LTL / TL',
       'Do not assume. The routing guide leaves a gap between its own definitions, and guessing costs the freight plus $75 a package.',
       'unauthorizedCarrier'),
-    dts ? step('route', 'Obtain a Direct-to-Door authorization number',
+    dts ? step('dts-auth', 'route', 'Obtain a Direct-to-Door authorization number',
       'Per PO, ONE TIME, never reused. Must appear on the invoice, packing lists, carton labels AND the BOL (§8.3).',
       'unauthorizedDts') : null,
 
     // ── 3. Packing ────────────────────────────────────────────────────────
-    step('pack', 'Pack by store and PO — one PO per carton',
+    step('pack-by-store-po', 'pack', 'Pack by store and PO — one PO per carton',
       'Pre-distributed unless Vendor Relations approved bulk. Never mix stores in one carton.',
       'notPredist'),
-    step('pack', 'New cartons, within spec',
+    step('carton-spec', 'pack', 'New cartons, within spec',
       `L ${CARTON.lengthIn.join('-')}", W ${CARTON.widthIn.join('-')}", H ${CARTON.heightIn.join('-')}", ${CARTON.weightLb.join('-')} lb. Recycled cartons are not allowed.`,
       'cartonSize'),
-    step('pack', 'Insert top and bottom of every carton',
+    step('carton-insert', 'pack', 'Insert top and bottom of every carton',
       'Prevents pilferage. Its own fee line.',
       'noCartonInsert'),
-    step('pack', 'Seal with SECURITY tape, H format, top and bottom',
+    step('security-tape', 'pack', 'Seal with SECURITY tape, H format, top and bottom',
       'Clear or solid plastic tape is explicitly not acceptable. Re-shipper cartons are exempt.',
       'noSecurityTape'),
-    step('pack', 'No hay, straw, snow, newspaper or printed material',
+    step('packing-material', 'pack', 'No hay, straw, snow, newspaper or printed material',
       'Forbidden as packing material.',
       'unauthorizedPacking'),
 
     // ── 4. Labelling ──────────────────────────────────────────────────────
-    step('label', 'Mark every carton permanently',
+    step('carton-markings', 'label', 'Mark every carton permanently',
       `${CARTON_MARKINGS.join(' · ')}. Written on the carton or on a non-removable label — a packing list is NOT sufficient labelling.`,
       'storeMissing'),
-    step('label', 'GS1-128 placement',
+    step('gs1-placement', 'label', 'GS1-128 placement',
       `${LABEL_PLACEMENT.orientation}; ${LABEL_PLACEMENT.minHeightIn}"-${LABEL_PLACEMENT.maxHeightIn}" from the bottom, on ${LABEL_PLACEMENT.side}. ${LABEL_PLACEMENT.fedexRule}.`,
       'gs1Placement'),
 
     // ── 5. The documents, which differ by EDI status ──────────────────────
     asnWillBeSent
-      ? step('documents', 'Transmit the 856 ASN', '24-48 hours before arrival. The ASN serves as the packing list.', 'asnMissingLate')
-      : step('documents', 'Packing slip per PO per store, emailed IN ADVANCE',
+      ? step('asn-856', 'documents', 'Transmit the 856 ASN', '24-48 hours before arrival. The ASN serves as the packing list.', 'asnMissingLate')
+      : step('packing-slip', 'documents', 'Packing slip per PO per store, emailed IN ADVANCE',
           'Removable pouch on the carton; "PACKING SLIP ATTACHED" on all six sides. Non-trailer: packing list AND a copy of the UNSIGNED BOL in the pouch, one per PO. FedEx/UPS: a slip on every carton.',
           'psNotOnCarton'),
-    step('documents', 'BOL carries the PO number and the TMS confirmation number',
+    step('bol-po-and-tms', 'documents', 'BOL carries the PO number and the TMS confirmation number',
       'Confirmation number goes in CID# and Special Instructions. A valid PO must be listed on the BOL.',
       'poNotOnBol'),
-    step('documents', 'Hand the BOL to the driver',
+    step('bol-to-driver', 'documents', 'Hand the BOL to the driver',
       'Its own $250 fee if you do not.',
       'noBolToCarrier'),
-    step('documents', 'One BOL per destination per day',
+    step('one-bol-per-destination', 'documents', 'One BOL per destination per day',
       'Multiple BOLs to the same destination on the same or consecutive business days is a freight chargeback. We mint the numbers, so this is the one only we can prevent.',
       'multipleBols', { appCanCatch: true }),
 
     // ── 6. Palletising, last because it seals everything ──────────────────
-    step('pallet', `Palletise on ${PALLET.sizeIn.join('x')}" ${PALLET.type}, max ${PALLET.maxHeightIn}"`,
+    step('pallet-spec', 'pallet', `Palletise on ${PALLET.sizeIn.join('x')}" ${PALLET.type}, max ${PALLET.maxHeightIn}"`,
       'All truck deliveries must be palletised — floor-loaded trailers are refused.',
       'wrongPalletSize'),
-    step('pallet', 'Segregate by DC, never by banner or PO',
+    step('pallet-by-dc', 'pallet', 'Segregate by DC, never by banner or PO',
       'Cartons for the same physical ship-to DC go on the same pallet. One PO at a time within the pallet; multiple POs must be placarded PO-carton count.',
       'notSegregatedByDc'),
-    step('pallet', `Shrink wrap ${PALLET.shrinkWrapTurns}x bottom to top, secured to the pallet`,
+    step('shrink-wrap', 'pallet', `Shrink wrap ${PALLET.shrinkWrapTurns}x bottom to top, secured to the pallet`,
       'Do NOT wrap or strap cartons individually. No overhang. Base cartons must be solid.',
       'improperShrinkwrap'),
-    step('pallet', 'Label every pallet',
+    step('pallet-label', 'pallet', 'Label every pallet',
       PALLET.label.join(' · '),
       'palletLabel'),
-    mode === 'TL' ? step('pallet', 'Apply a bolt seal and write the number on the BOL',
+    mode === 'TL' ? step('bolt-seal', 'pallet', 'Apply a bolt seal and write the number on the BOL',
       'Full truckload direct to a DC only. No seal, or no number on the BOL, is rejection at pickup.',
       'missingBoltSeal') : null,
 
     // ── 7. After it ships ─────────────────────────────────────────────────
-    step('after', 'Send the 810 invoice',
+    step('invoice-810', 'after', 'Send the 810 invoice',
       'Missing invoice is its own fee, per PO.',
       'missing810'),
-    step('after', 'Ship exactly what the PO says',
+    step('ship-exact', 'after', 'Ship exactly what the PO says',
       `Short or over shipping is $500 an incident — and the manual says "EDI/NON-EDI", so being non-EDI is no shelter. ${AUDIT.itemErrorRateTrigger * 100}% item error over a receipt month puts you on the Vendor Audit Program at $${AUDIT.feePerMonth}/month for ${AUDIT.minimumMonths} months minimum.`,
       'shortShipped'),
   ].filter(Boolean)

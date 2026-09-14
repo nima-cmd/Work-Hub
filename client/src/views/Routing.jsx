@@ -4,8 +4,11 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck,
 } from '../api.js'
-import { consolidateRouting } from '../../../src/model/routing.js'
+import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
+import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
+import { consolidateRouting, attachShipments } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
 import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
 import { NsLink } from '../lib.jsx'
@@ -128,7 +131,6 @@ export default function Routing({ asnFocus, onAsnFocusTaken }) {
     if (!data) return []
     const held = new Set(data.heldKeys || [])
     const rows = (data.packages || []).filter((p) => isSelected(p.poNumber) && !held.has(`${p.poNumber}|${p.dc}`))
-    const byKey = new Map((data.shipments || []).map((s) => [s.dcPoKey, s]))
     // Pack check, recomputed here for the same reason consolidation is: the PO
     // selection above changes which fulfilments belong to a group.
     const packByPoDc = new Map()
@@ -136,10 +138,13 @@ export default function Routing({ asnFocus, onAsnFocusTaken }) {
       if (!packByPoDc.has(f.poDc)) packByPoDc.set(f.poDc, [])
       packByPoDc.get(f.poDc).push(f)
     }
-    return consolidateRouting(rows).map((g) => {
-      const dcPoKey = `${g.partner}|${g.dc}|${g.memberPos.join(',')}`
+    // ⚠️ THE SHARED MATCHER, NOT A SECOND COPY OF IT. This block used to build the key
+    // and look it up itself — the same three lines as server/queries.js — so when the
+    // server learned to survive a partner rename the card did not, and still offered
+    // "Assign BOL" on freight holding BOL NB1731288. See attachShipments().
+    return attachShipments(consolidateRouting(rows), data.shipments || []).groups.map((g) => {
       const members = (g.memberPos || []).flatMap((po) => packByPoDc.get(`${po}-${g.dc}`) || [])
-      return { ...g, dcPoKey, shipment: byKey.get(dcPoKey) || null, pack: checkGroupPack(members) }
+      return { ...g, pack: checkGroupPack(members) }
     })
   }, [data, selected])
 
@@ -805,6 +810,25 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
         </div>
       )}
 
+      {/* ⚠️ EXEMPLAR ONLY, BECAUSE THESE ARE EXEMPLAR'S RULES. Showing this list on a
+          Nordstrom or Bloomingdale's card would assert their standards are Exemplar's;
+          every partner's guide is different and so are the fees. The partner now
+          resolves correctly for numeric Exemplar DCs — see src/model/dc.js, where every
+          numeric DC used to answer "Nordstrom". */}
+      {g.partner === 'Exemplar' && <PreshipChecklist g={g} s={s} />}
+
+      {/* ⚠️ THIS SHIPMENT WAS FOUND BY ITS FREIGHT, NOT BY ITS KEY. Its stored row still
+          carries a partner name this DC no longer maps to. Nothing is broken — the BOL
+          is the right one and that is the point of the fallback — but the row is stale
+          and saying so is how it gets re-filed instead of quietly persisting. */}
+      {g.refiledFrom && (
+        <div className="rt-warn">
+          ⚠ Filed under <b>{g.refiledFrom.partner}</b>, matched to this card by its DC and PO.
+          Its stored key is still <code>{g.refiledFrom.key}</code> — run{' '}
+          <code>node --env-file=.env.local scripts/rekey-shipment-partners.js --write</code> to re-file it.
+        </div>
+      )}
+
       {!s && noBol ? (
         // A parcel-lane partner gets no BOL at all. Say so on the card with the
         // alternative, rather than leaving a button that the server refuses:
@@ -1364,4 +1388,184 @@ function Cell({ label, v, big }) {
       <div className="rt-cellL muted">{label}</div>
     </div>
   )
+}
+
+// ── The Exemplar pre-ship checklist ─────────────────────────────────────────
+//
+// Nima, 2026-09-14: "we need to make sure we are ahereing to every single requirments
+// they have pheraps if theres a check box of things we need to verify before we ship."
+//
+// Exemplar's rules have been extracted into src/model/exemplarStandards.js and
+// src/model/saksRouting.js since 09-09 — 705 lines with a page citation and a price on
+// every line — and NOTHING RENDERED THEM. A rule the app holds and never shows is a
+// rule nobody follows, so this puts them on the card that ships the freight.
+//
+// ⚠️ THE STEPS COME FROM THE MODEL, NOT FROM THE SERVER. The server stores only ticks.
+// Two sources for "what is on the checklist" could disagree, and the disagreement
+// would surface as a shipment cleared against a list missing a step.
+//
+// ⚠️ AND THIS DOES NOT BLOCK SHIPPING. It is a checklist, not a gate — the person on
+// the floor can see something the app cannot, and an app that refuses to let a real
+// truck leave gets worked around, which costs more than the fee it was preventing.
+function PreshipChecklist({ g, s }) {
+  const dcPoKey = g.dcPoKey
+  const [open, setOpen] = useState(false)
+  const [checks, setChecks] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busyStep, setBusyStep] = useState(null)
+  // ⚠️ WHO IS TICKING, AND THE APP HAS NO USER TO ASK. This is the first entered fact
+  // in the repo that names a person, and inventing one ("system", "Nima") would turn
+  // an accountable statement into an anonymous one — the server refuses an empty name
+  // for exactly that reason. Asked once, remembered per device.
+  const [who, setWho] = useState(() => {
+    try { return localStorage.getItem('preshipWho') || '' } catch { return '' }
+  })
+  const rememberWho = (v) => {
+    setWho(v)
+    try { localStorage.setItem('preshipWho', v) } catch { /* private window — the tick still works, it just asks again */ }
+  }
+
+  useEffect(() => {
+    if (!open || checks) return
+    fetchPreshipChecks(dcPoKey).then((r) => setChecks(r.checks)).catch((e) => setErr(e.message))
+  }, [open, checks, dcPoKey])
+
+  // ⚠️ EVERY ARGUMENT IS WHAT THIS SHIPMENT ACTUALLY IS, never a placeholder. `pos`
+  // drives the per-PO fees, and `asnWillBeSent` decides whether the document step is
+  // the 856 or the packing slip — EDI_STATUS records that our last delivered 856 to
+  // this partner was 2024-11-01, so the non-ASN branch is the live one.
+  const list = shipmentChecklist({
+    asnWillBeSent: EDI_STATUS.asnTransmitted,
+    cartons: g.cartons || 1,
+    pos: (g.memberPos || []).length || 1,
+    mode: s?.mode || null,
+    dts: false,
+  })
+  const done = new Set((checks || []).map((c) => c.stepKey))
+  const byKey = Object.fromEntries((checks || []).map((c) => [c.stepKey, c]))
+  const shipped = !!s?.shippedAt
+
+  const toggle = async (key) => {
+    setErr(null); setBusyStep(key)
+    try {
+      if (done.has(key)) {
+        await clearPreshipCheck({ dcPoKey, stepKey: key })
+        setChecks((c) => c.filter((x) => x.stepKey !== key))
+      } else {
+        const row = await setPreshipCheck({ dcPoKey, stepKey: key, by: who })
+        setChecks((c) => [...c.filter((x) => x.stepKey !== key), row])
+      }
+    } catch (e) { setErr(e.message) } finally { setBusyStep(null) }
+  }
+
+  const remaining = list.steps.filter((x) => !done.has(x.key))
+  // ⚠️ EXPOSURE IS THE UNVERIFIED STEPS ONLY, and the word is "unverified", not
+  // "owed". Nothing has been charged; this is what Exemplar's fee schedule prices
+  // these steps at if they were missed on a shipment this size.
+  const atRisk = remaining
+    .filter((x) => x.fee?.cost?.startsWith('$'))
+    .reduce((a, x) => a + Number(String(x.fee.cost).replace(/[$,]/g, '')), 0)
+
+  return (
+    <div className="rt-preship">
+      <button className="rt-preshipHead" onClick={() => setOpen((o) => !o)}>
+        {open ? '▾' : '▸'} Exemplar pre-ship checks
+        <span className="muted">
+          {checks === null ? ' · not loaded' : ` · ${done.size} of ${list.steps.length} verified`}
+          {checks !== null && atRisk > 0 && ` · $${atRisk.toLocaleString()} unverified`}
+        </span>
+      </button>
+
+      {open && (
+        <div className="rt-preshipBody">
+          {err && <div className="banner error">⚠ {err}</div>}
+
+          <div className="muted rt-sub">
+            {/* ⚠️ THE MANUAL IS EDITIONED AND THE GUIDE IS REVISIONED — they are two
+                different documents with two different versioning schemes, and reading
+                `revision` off the manual printed "rev" followed by nothing. */}
+            {list.source.manual}, {list.source.edition} edition · {SAKS_SOURCE.guide} rev{' '}
+            {SAKS_SOURCE.revision}, {SAKS_SOURCE.updated}. Every step cites its page.
+            {' '}<b>Non-ASN lane</b> — {EDI_STATUS.consequence}.
+          </div>
+
+          {/* ⚠️ NO TICK WITHOUT A NAME. The server refuses an unnamed check; saying so
+              here means the refusal is a prompt rather than an error after the click. */}
+          <label className="composerField rt-preshipWho">
+            Verified by
+            <input className="qtyInput" style={{ width: 140 }} value={who} placeholder="your name"
+                   onChange={(e) => rememberWho(e.target.value)} />
+            {!who && <span className="muted"> — needed before anything can be ticked</span>}
+          </label>
+
+          {shipped && (
+            <div className="banner">
+              This shipment has already left. The ticks are kept as the record of what was
+              verified before it did — they are history now, not a checklist.
+            </div>
+          )}
+
+          {list.phases.map((phase) => {
+            const steps = list.steps.filter((x) => x.phase === phase)
+            if (!steps.length) return null
+            return (
+              <div key={phase} className="rt-preshipPhase">
+                <div className="rt-preshipPhaseName">{PHASE_LABEL[phase] || phase}</div>
+                {steps.map((x) => {
+                  const hit = byKey[x.key]
+                  return (
+                    <label key={x.key} className={'rt-preshipStep' + (hit ? ' done' : '')}>
+                      <input type="checkbox" checked={!!hit} disabled={!who || busyStep === x.key}
+                             onChange={() => toggle(x.key)} />
+                      <div>
+                        <div className="rt-preshipWhat">
+                          {x.what}
+                          {x.fee?.cost?.startsWith('$') && (
+                            <span className="rt-preshipFee" title={x.fee.rule || ''}>{x.fee.cost}</span>
+                          )}
+                          {/* The handful of steps the app can check for itself, named as
+                              such — it still needs a person to confirm, but it is worth
+                              knowing which ones have a second pair of eyes. */}
+                          {x.appCanCatch && <span className="rt-preshipApp" title="The app can also detect this one">app-checked</span>}
+                        </div>
+                        <div className="muted rt-preshipDetail">{x.detail}</div>
+                        {hit && (
+                          <div className="muted rt-preshipBy">
+                            ✓ {hit.checkedBy}, {new Date(hit.checkedAt).toLocaleString()}
+                            {hit.note ? ` — ${hit.note}` : ''}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            )
+          })}
+
+          {/* ⚠️ THE PROHIBITIONS ARE NOT STEPS AND ARE NOT TICKABLE. They are things
+              never to do, not things to confirm you did — a checkbox beside "do not
+              floor-load the trailer" invites reading it as an instruction. */}
+          <div className="rt-preshipPhase">
+            <div className="rt-preshipPhaseName">Never — each one is a chargeback</div>
+            {PROHIBITED.map((p, i) => (
+              <div key={i} className="rt-preshipNever">
+                🚫 {p.rule} <span className="muted">— {p.consequence} (p{p.page})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const PHASE_LABEL = {
+  before: '1 · Before anything is picked',
+  route: '2 · Routing, which decides the mode',
+  pack: '3 · Packing',
+  label: '4 · Labelling',
+  documents: '5 · Documents',
+  pallet: '6 · Palletising',
+  after: '7 · After it ships',
 }
