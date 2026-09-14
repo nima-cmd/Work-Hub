@@ -1271,3 +1271,10 @@ export async function clearPreshipCheck({ dcPoKey, stepKey }) {
 // ⚠️ A URL, not a fetch: same popup-blocker rule as the pick ticket and the BOL. A
 // refusal arrives as plain text in the tab, which is what makes the refusal useful.
 export const manifestPdfUrl = (shipmentId) => `/api/exemplar/manifest.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
+
+// The Exemplar packing slip (one per PO per store) and carton labels (one per carton).
+// ⚠️ URLs, not fetches — same popup rule; and a refusal arrives as readable text in
+// the tab, which is the useful half when a carton has no recorded contents.
+export const packingSlipPdfUrl = (shipmentId) => `/api/exemplar/packing-slip.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
+export const cartonLabelsPdfUrl = (shipmentId, size = 'half-sheet') =>
+  `/api/exemplar/carton-labels.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`

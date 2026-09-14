@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1046,10 +1046,26 @@ function BolActions({ s }) {
           is what browsers block as a popup. A refusal comes back as plain text in the
           tab, which is the whole point of refusing. */}
       {s.partner === 'Exemplar' && (
-        <a className="btnGhost" href={manifestPdfUrl(s.id)} target="_blank" rel="noreferrer"
-           title="Master Manifest & Packing List — hand this to the carrier at pick-up (Routing Guide p13)">
-          Manifest ↗
-        </a>
+        <>
+          <a className="btnGhost" href={manifestPdfUrl(s.id)} target="_blank" rel="noreferrer"
+             title="Master Manifest & Packing List — hand this to the carrier at pick-up (Routing Guide p13)">
+            Manifest ↗
+          </a>
+          <a className="btnGhost" href={packingSlipPdfUrl(s.id)} target="_blank" rel="noreferrer"
+             title="One per PO per store. Email it to Exemplar IN ADVANCE, and pouch a copy to one carton.">
+            Packing slip ↗
+          </a>
+          {/* Both label stocks, because the 3x6 is only conveyor-legal at a quarter-inch
+              margin and that is encoded in the layout, not left to the printer dialog. */}
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. Half-sheet stock.">
+            Labels ½ ↗
+          </a>
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '3x6')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. 3x6 stock — quarter-inch margins keep the SSCC conveyor-scannable.">
+            Labels 3×6 ↗
+          </a>
+        </>
       )}
       <button className="btnGhost" disabled={state?.busy} onClick={file}>
         {state?.busy ? 'Filing…' : '⤒ File to Drive'}

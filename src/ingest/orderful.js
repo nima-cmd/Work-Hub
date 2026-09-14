@@ -6,7 +6,14 @@
 
 import { pool } from '../db.js'
 import { extractStoreQuantities, extractShipTo } from '../model/ediPoDiff.js'
-import { extractPoDates, extractPoLines, summarizePoLines, extractPoPurpose } from './orderfulDates.js'
+// ⚠️ IMPORTED, NOT JUST RE-EXPORTED. `extractPoReferences` appeared on the export
+// line below and nowhere else, and a re-export creates NO local binding — so the name
+// was visible to every other module while being undefined inside this one. That is
+// part of how a parser written on 09-11, with a PO_PARSE_VERSION bump and a comment
+// explaining the backfill, went three days without ever being called.
+import {
+  extractPoDates, extractPoLines, summarizePoLines, extractPoPurpose, extractPoReferences,
+} from './orderfulDates.js'
 
 export { extractPoDates, extractPoLines, extractPoPurpose, extractPoReferences } from './orderfulDates.js'
 
@@ -127,7 +134,15 @@ export async function fetchOrderfulMessage(apiKey, id) {
 //       uncaptured — it was in the 850 body all along. The bump re-reads every
 //       stored 850 once so historical POs get theirs too, instead of only new ones
 //       having it and the rest reading as partners who do not send it.
-export const PO_PARSE_VERSION = 4
+//   5 — ⚠️ BECAUSE 4 NEVER HAPPENED (2026-09-14). The note above is accurate about
+//       intent and wrong about the world: the version was bumped, the comment was
+//       written, `extractPoReferences` was written and exported — and nothing ever
+//       CALLED it, with no column to put the answer in. Every 850 was re-read under
+//       version 4 and learned nothing, so they are all stamped 4 and will not be
+//       re-read again. This is CLAUDE.md's fourth counter shape exactly: a comment
+//       describing a mechanism no code implements. The call and the columns exist
+//       now, and 5 is what forces the re-read that 4 was supposed to be.
+export const PO_PARSE_VERSION = 5
 
 export async function backfillPo850Details(apiKey, db = pool) {
   const { rows } = await db.query(
@@ -147,6 +162,10 @@ export async function backfillPo850Details(apiKey, db = pool) {
     const shipTo = extractShipTo(message)
     const { totalUnits, lineCount } = summarizePoLines(lineItems)
     const purposeCode = extractPoPurpose(message)
+    // ⚠️ PARSED SINCE 09-11 AND NEVER CALLED. The department number Exemplar §8
+    // requires on every carton marking was being read out of the 850 and dropped on
+    // every ingest — which is why the carton label had nowhere to get it from.
+    const refs = extractPoReferences(message)
     // Stamp checked regardless, so a genuinely date-less/line-less 850 isn't re-fetched
     // forever — the VERSION is what allows a deliberate second look later.
     await db.query(
@@ -154,15 +173,17 @@ export async function backfillPo850Details(apiKey, db = pool) {
        SET ship_not_before = $2, cancel_after = $3, po_dates_checked = true,
            line_items = $4::jsonb, total_units = $5, line_count = $6, po_lines_checked = true,
            store_codes = $7, ship_to_codes = $8, store_quantities = $9::jsonb,
-           po_purpose_code = $10, po_parse_version = $11
+           po_purpose_code = $10, po_parse_version = $11,
+           department = $12, vendor_number = $13
        WHERE id = $1`,
       [id, shipNotBefore, cancelAfter, JSON.stringify(lineItems), totalUnits, lineCount,
-       storeCodes, shipTo, JSON.stringify(storeQuantities), purposeCode, PO_PARSE_VERSION],
+       storeCodes, shipTo, JSON.stringify(storeQuantities), purposeCode, PO_PARSE_VERSION,
+       refs.department, refs.vendorNumber],
     )
     // ⚠️ A PURPOSE CODE ALONE COUNTS AS HAVING LEARNED SOMETHING. A cancellation
     // carries no dates and no line detail by design, so the old condition scored
     // the single most important document type as "nothing updated".
-    if (shipNotBefore || cancelAfter || lineItems.length || purposeCode) n++
+    if (shipNotBefore || cancelAfter || lineItems.length || purposeCode || refs.department) n++
   }
   return { checked: rows.length, updated: n }
 }

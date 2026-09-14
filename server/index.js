@@ -5,6 +5,7 @@
 import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { manifestPdf } from './exemplarManifestPdf.js'
+import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -45,6 +46,7 @@ import {
   markTransferReceived, unmarkTransferReceipt, getBulkPick, getHangTags, hangTagsFor,
   getPreshipChecks, setPreshipCheck, clearPreshipCheck,
   getManifestCartons,
+  getExemplarDocData,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -499,6 +501,43 @@ app.all('/api/bulk-pick/pdf', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// ── The Exemplar carton labels and packing slip ─────────────────────────────
+// ⚠️ BOTH REFUSE RATHER THAN PRINT A PARTIAL SET. See cartonContents.js: a carton with
+// no recorded contents, or "Mixed SKUs", cannot carry the style §8.5 requires, and 20
+// labels of 22 leaves two boxes going out unlabelled — same fee, easier to miss.
+// The refusal comes back as readable text, because the refusal is the useful part.
+app.get('/api/exemplar/carton-labels.pdf', async (req, res) => {
+  try {
+    const { cartons } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    const doc = await cartonLabelsPdf(cartons, req.query.size || 'half-sheet')
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="carton-labels-${cartons[0].po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Carton labels not printable.\n\n${e.message}`)
+  }
+})
+
+app.get('/api/exemplar/packing-slip.pdf', async (req, res) => {
+  try {
+    const { cartons, totalUnits, on } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    const head = cartons[0]
+    const doc = await packingSlipPdf(
+      { ...head, totalCartons: cartons.length, totalUnits, cartons },
+      // ⚠️ THE SAME DATE THE LABELS USED. The storefront renames on 2026-09-21, and
+      // a slip and a label naming different companies is what a receiver raises a
+      // discrepancy on — exemplarDocsPdf throws rather than let that print.
+      { on })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="packing-slip-${head.po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Packing slip not printable.\n\n${e.message}`)
   }
 })
 

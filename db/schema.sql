@@ -2166,3 +2166,14 @@ CREATE INDEX IF NOT EXISTS preship_check_shipment ON preship_check (dc_po_key);
 -- ⚠️ NULL UNTIL SOMEONE BOOKS. A shipment with no confirmation yet is the normal
 -- state, not a fault, so there is no default — the BOL prints a blank line to fill in.
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tms_confirmation_number TEXT;
+
+-- The 850's header REF segments (Nima, 2026-09-14). `extractPoReferences` has parsed
+-- these since 09-11 and NOTHING CALLED IT, so the department number — which Exemplar
+-- §8 requires on every carton marking, at $10/carton with a $250 minimum — was being
+-- read out of the 850 and thrown away on every ingest.
+--
+-- ⚠️ THE DEPARTMENT IS PER PO, NOT PER PARTNER. PO 0008928906 is dept 0118; the next
+-- one need not be. Storing it on the transaction is what lets a carton label print the
+-- right one rather than a remembered constant.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS department TEXT;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS vendor_number TEXT;
