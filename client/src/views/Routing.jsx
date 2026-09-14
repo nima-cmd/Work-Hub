@@ -1303,6 +1303,7 @@ function RefEditor({ s, auths, busy, onSave }) {
     trackingNumbers: (s.trackingNumbers || []).join(', '),
     routingRequestNumber: s.routingRequestNumber || '',
     tmsConfirmation: s.tmsConfirmation || '',
+    freightTerms: s.freightTerms || '',
     routingRequestLine: s.routingRequestLine || '',
     proNumber: s.proNumber || '',
   })
@@ -1403,6 +1404,18 @@ function RefEditor({ s, auths, busy, onSave }) {
             placeholder="from Dynamic TMS when you book" />
         </label>
       )}
+      {/* ⚠️ THE BOL TICKS THIS BOX, so leaving it unrecorded is not neutral — the BOL
+          derives Collect, which is right for Bloomingdale's and Nordstrom and wrong for
+          an Exemplar PO whose header says Prepaid (§12.9 code 905, freight + $75).
+          Blank means "nobody has said", and the BOL falls back to the derivation. */}
+      <label>Freight terms
+        <select className="qtyInput" style={{ width: 150 }} value={d.freightTerms} onChange={set('freightTerms')}>
+          <option value="">— not recorded —</option>
+          <option value="Collect">Collect</option>
+          <option value="Prepaid">Prepaid</option>
+          <option value="3rd Party">3rd Party</option>
+        </select>
+      </label>
       <div className="rt-editRow">
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>
         <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>

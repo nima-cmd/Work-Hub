@@ -58,3 +58,27 @@ test('the other partners keep their own auth line', () => {
   assert.equal(bolAuthLine({ partner: 'Nordstrom' }), null)
   assert.match(bolAuthLine({ partner: "Bloomingdale's", authNumber: 'X1' }), /Macy's Auth \/ Appt # X1/)
 })
+
+// ── Freight terms ──────────────────────────────────────────────────────────
+// The term itself is computed in server/bolPdf.js; these assert the rule it follows,
+// because the old one was a comment ("never prepaid") rather than a check.
+
+test('⚠️ "NEVER PREPAID" WAS TRUE OF TWO PARTNERS, NOT OF BOLs', () => {
+  // Exemplar's PO 8928906 header reads Freight: Prepaid. The BOL would have ticked
+  // Collect — §12.9 code 905 / NMG T24, cost of freight + $75.
+  const term = (shipment) => {
+    const recorded = String(shipment.freightTerms || '').trim().toLowerCase()
+    return recorded === 'prepaid' ? 'Prepaid'
+      : recorded === 'collect' ? 'Collect'
+        : recorded === '3rd' || recorded === 'third party' || recorded === '3rd party' ? '3rd'
+          : /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
+  }
+  assert.equal(term({ freightTerms: 'Prepaid' }), 'Prepaid')
+  assert.equal(term({ freightTerms: 'Collect' }), 'Collect')
+  // Nothing recorded keeps the old derivation, which is right for the partners it was
+  // written for — that is why this went unnoticed.
+  assert.equal(term({}), 'Collect')
+  assert.equal(term({ scac: 'RXOX' }), '3rd')
+  // And a recorded term beats the carrier derivation, not the other way round.
+  assert.equal(term({ freightTerms: 'Prepaid', scac: 'RXOX' }), 'Prepaid')
+})

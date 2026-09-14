@@ -9,8 +9,17 @@
 //                   say "MASTER BOL – SEE UNDERLYING BOL'S FOR EACH FINAL DC".
 // Nordstrom ships direct to its DC (kind 'final', no merge center).
 //
-// Freight terms are COLLECT (or 3rd Party for RXO/XLTL) per the guide — never
-// prepaid. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
+// ⚠️ FREIGHT TERMS ARE NOT ALWAYS COLLECT, AND THIS FILE USED TO SAY THEY NEVER
+// WEREN'T. "Collect (or 3rd Party for RXO/XLTL) per the guide — never prepaid" was
+// true of Bloomingdale's and Nordstrom, and it was written as though it were a property
+// of BOLs. Exemplar's PO 8928906 header reads **Freight: Prepaid**, so the box would
+// have been ticked Collect on a Prepaid order — §12.9 code 905 / NMG T24, "Freight
+// agreement — prepay", cost of freight + $75.
+//
+// The term is now the shipment's own `freightTerms` when one has been recorded, and the
+// old derivation only where nothing has. Same shape as shipToFor and bolAuthLine: a
+// default that was right for the partners we had, acting as a rule for a partner we
+// did not. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
 
 import PDFDocument from 'pdfkit'
 import qrcode from 'qrcode-generator'
@@ -112,8 +121,16 @@ function render(doc, shipment, kind) {
     // regardless of what the partner had actually instructed.
     direct: !!shipment.shipDirect,
   })
-  // Freight terms: Collect, unless the carrier is RXO (XLTL) → 3rd Party.
-  const term = /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
+  // ⚠️ THE RECORDED TERM WINS. `routing_shipment.freight_terms` has existed all along
+  // and NOTHING READ IT — the BOL derived Collect regardless of what the partner's PO
+  // said. An entered value that no surface consumes is the same as no value at all.
+  const recorded = String(shipment.freightTerms || '').trim().toLowerCase()
+  const term = recorded === 'prepaid' ? 'Prepaid'
+    : recorded === 'collect' ? 'Collect'
+      : recorded === '3rd' || recorded === 'third party' || recorded === '3rd party' ? '3rd'
+        // Nothing recorded: the old derivation, which is right for Bloomingdale's and
+        // Nordstrom and is the reason this was never noticed.
+        : /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
   let y = M
 
   // ── Header ──────────────────────────────────────────────────────────────
