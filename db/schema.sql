@@ -2153,3 +2153,16 @@ CREATE TABLE IF NOT EXISTS preship_check (
   PRIMARY KEY (dc_po_key, step_key)
 );
 CREATE INDEX IF NOT EXISTS preship_check_shipment ON preship_check (dc_po_key);
+
+-- The Dynamic TMS confirmation number (Nima, 2026-09-14: "we also need that TMS
+-- number for our BOL"). Exemplar routes every truck shipment through Dynamic's TMS,
+-- which returns a confirmation number; the Routing Guide (p23) requires it in CID#
+-- AND Special Instructions on the BOL.
+--
+-- ⚠️ ITS OWN COLUMN, NOT auth_number. A Macy's auth/appointment number and a Dynamic
+-- TMS confirmation are different mechanisms from different partners; sharing a column
+-- is how "Macy's Auth / Appt #" ended up being the label printed for both.
+--
+-- ⚠️ NULL UNTIL SOMEONE BOOKS. A shipment with no confirmation yet is the normal
+-- state, not a fault, so there is no default — the BOL prints a blank line to fill in.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tms_confirmation_number TEXT;

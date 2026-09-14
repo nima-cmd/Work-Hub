@@ -6265,3 +6265,48 @@ export async function clearPreshipCheck({ dcPoKey, stepKey } = {}) {
 const ALL_PRESHIP_STEP_KEYS = new Set(
   [{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
     .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)))
+
+// ── The Exemplar Master Manifest ────────────────────────────────────────────
+//
+// ⚠️ THE CARTON ROWS DO NOT CARRY A STORE, so it is joined on from the orders behind
+// each PO. `edi_carton` holds carton_no / units / weight / SSCC / box for a PO-DC and
+// nothing about who the carton is for.
+//
+// ⚠️ AND A PO SPANNING SEVERAL STORES IS REFUSED, NOT SPREAD. Exemplar POs are
+// pre-distributed — one PO per store is the normal shape — but if one ever covers two,
+// attributing every carton to the first store would print a manifest that says the
+// wrong store received them. The manifest is the sheet the driver signs for.
+export async function getManifestCartons(dcPoKey) {
+  const key = String(dcPoKey || '').trim()
+  if (!key) throw new Error('a shipment key is required')
+  const s = await fetchRoutingShipmentById(Number(key)) || null
+  if (!s) throw new Error(`no routing shipment ${key}`)
+
+  const { rows: cartons } = await pool.query(
+    `SELECT carton_no AS "carton", units, po_number AS "po", dc
+       FROM edi_carton WHERE po_number = ANY($1) AND dc = $2
+      ORDER BY po_number, carton_no::int`,
+    [s.memberPos, s.dc])
+  if (!cartons.length) throw new Error(`no cartons recorded for PO ${s.memberPos.join(', ')} at DC ${s.dc}`)
+
+  const { rows: orders } = await pool.query(
+    `SELECT po_number, store_number FROM orders
+      WHERE po_number = ANY($1) AND store_number IS NOT NULL`, [s.memberPos])
+  const byPo = new Map()
+  for (const o of orders) {
+    if (!byPo.has(o.po_number)) byPo.set(o.po_number, new Set())
+    byPo.get(o.po_number).add(o.store_number)
+  }
+  const multi = [...byPo.entries()].filter(([, set]) => set.size > 1)
+  if (multi.length) {
+    throw new Error(`PO ${multi.map(([po]) => po).join(', ')} covers several stores (${
+      multi.map(([, s2]) => [...s2].join('/')).join('; ')}) — the carton records do not say which carton is for which store, so the manifest cannot be built without that`)
+  }
+  const missing = s.memberPos.filter((po) => !byPo.has(po))
+  if (missing.length) throw new Error(`no store number on file for PO ${missing.join(', ')}`)
+
+  return {
+    shipment: s,
+    cartons: cartons.map((c) => ({ ...c, store: [...byPo.get(c.po)][0] })),
+  }
+}

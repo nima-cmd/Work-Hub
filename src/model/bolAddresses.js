@@ -303,7 +303,17 @@ export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DE
 // because that blank is the prompt. Suppressing on an empty value would hide a
 // required field exactly when it's outstanding — the field-provenance shape in
 // CLAUDE.md's counter-bug list.
-export function bolAuthLine({ partner, authNumber } = {}) {
+export function bolAuthLine({ partner, authNumber, tmsConfirmation } = {}) {
   if (partner === 'Nordstrom') return null
+  // ⚠️ THE SECOND MACY'S DEFAULT ON AN EXEMPLAR BOL. Same shape as shipToFor: a
+  // Nordstrom branch and an else that was Macy's. Exemplar routes through Dynamic's
+  // TMS, which returns a CONFIRMATION NUMBER — a different mechanism from a Macy's
+  // auth/appointment — and the Routing Guide (p23) requires that number in CID# AND
+  // Special Instructions. Printing "Macy's Auth / Appt #" there named a competitor
+  // AND asked for the wrong number.
+  //
+  // ⚠️ The blank stays blank when we do not have it. A BOL with an empty confirmation
+  // line is a prompt; one with a plausible number in it is a wrong document.
+  if (partner === 'Exemplar') return `TMS Confirmation # ${tmsConfirmation || '________'}`
   return `Macy's Auth / Appt # ${authNumber || '________'}`
 }
