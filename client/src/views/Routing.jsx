@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, printCartonLabels,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1063,7 +1063,6 @@ function BolActions({ s }) {
              title="One per carton, §8.5. 4x6 — the warehouse Zebra's stock.">
             Labels 4×6 ↗
           </a>
-          <PrintLabelsButton shipmentId={s.id} />
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">
             ½ ↗
@@ -1617,25 +1616,3 @@ const PHASE_LABEL = {
 }
 
 
-// Straight to the warehouse Zebra, no browser dialog — the same path the cargo tags
-// take. ⚠️ The queue lives on the warehouse iMac, so this fails by NAME on any other
-// machine rather than looking like a broken button.
-function PrintLabelsButton({ shipmentId }) {
-  const [state, setState] = useState(null)
-  async function go() {
-    setState({ busy: true })
-    try {
-      const r = await printCartonLabels(shipmentId)
-      setState({ msg: `Sent to ${r.printer}.`, ok: true })
-    } catch (e) { setState({ msg: e.message, ok: false }) }
-  }
-  return (
-    <>
-      <button className="btnGhost" disabled={state?.busy} onClick={go}
-              title="Print all carton labels to the warehouse Zebra on 4x6 thermal stock">
-        {state?.busy ? 'Printing…' : '🖨 Print 4×6'}
-      </button>
-      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
-    </>
-  )
-}

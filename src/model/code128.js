@@ -80,6 +80,21 @@ export async function code128Png(text, { scale = 3, height = 10 } = {}) {
  */
 export const SSCC_MODULES = 231
 export const X_MIN_IN = 0.0075
+
+/**
+ * ⚠️ BAR HEIGHT IS A SEPARATE SPEC FROM X-DIMENSION, AND WE WERE UNDER IT.
+ *
+ * X-dimension decides whether the bars are wide enough to resolve; BAR HEIGHT decides
+ * whether a scanner sweeping across at an angle stays inside the symbol. GS1 puts the
+ * SSCC bar height on a logistics label at 31.75 mm (1.25 in) — and `gs1BarcodePng`
+ * was being called with `height: 16` (mm), roughly half of it, on every stock.
+ *
+ * Measured on the rendered labels before this was fixed: the symbol drew 78.6pt tall
+ * on the half sheet (1.09in), 57.7pt on the 4x6 (0.80in) and 22.8pt on the 3x6
+ * (0.32in) — the last being a quarter of the specification.
+ */
+export const BAR_HEIGHT_MIN_IN = 1.25
+export const BAR_HEIGHT_MIN_MM = 31.75
 export const X_CONVEYOR_IN = 0.0098
 
 export function xDimensionFor(availableWidthIn, modules = SSCC_MODULES) {

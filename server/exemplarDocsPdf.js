@@ -26,9 +26,9 @@
 // shrink the barcode.
 
 import PDFDocument from 'pdfkit'
-import { gs1BarcodePng, code128Png, xDimensionFor, X_MIN_IN } from '../src/model/code128.js'
+import { gs1BarcodePng, code128Png, xDimensionFor, X_MIN_IN, BAR_HEIGHT_MIN_IN } from '../src/model/code128.js'
 import { labelProblems, SHIP_FROM } from '../src/model/exemplarCartonLabel.js'
-import { DCS, dcAddressLines, storefrontFor } from '../src/model/exemplarStores.js'
+import { DCS, dcAddressLines, consigneeCompany } from '../src/model/exemplarStores.js'
 
 /**
  * ⚠️ THE SHIP-TO COMPANY MUST MATCH THE STORE'S STOREFRONT.
@@ -44,10 +44,17 @@ import { DCS, dcAddressLines, storefrontFor } from '../src/model/exemplarStores.
  * consignee is exactly the kind of thing a receiver raises a discrepancy on.
  */
 function checkStorefront(shipment, on) {
-  const want = storefrontFor(shipment.store, on)
+  // ⚠️ THE AUTHORITY IS THE COMPANY, NOT THE EDI STOREFRONT. This compared against
+  // storefrontFor(), which is the REF(19)/MTX segment value and flips on 2026-09-21 —
+  // so it enforced "SAKS GLOBAL" onto printed paper for a customer NetSuite had
+  // already renamed Exemplar Luxury Group on 2026-09-04. The GUARD is still the point
+  // (two documents in one pouch must not name different companies); only what it
+  // checks against has changed.
+  void on
+  const want = consigneeCompany()
   if (!want || !shipment.operatingCompany) return
   if (String(shipment.operatingCompany).toUpperCase() !== String(want).toUpperCase()) {
-    throw new Error(`ship-to says "${shipment.operatingCompany}" but store ${shipment.store}'s storefront on ${on || 'today'} is "${want}"`)
+    throw new Error(`ship-to says "${shipment.operatingCompany}" but the consignee company is "${want}"`)
   }
 }
 
@@ -58,9 +65,14 @@ const PT = 72
  * a half-inch margin drops the barcode below the conveyor spec.
  */
 export const LAYOUTS = {
+  // Half sheet keeps its half inch: it is LASER stock and a laser cannot print to the edge.
   'half-sheet': { w: 5.5 * PT, h: 8.5 * PT, margin: 0.5 * PT, label: 'Half sheet 5.5 x 8.5' },
   '3x6': { w: 3 * PT, h: 6 * PT, margin: 0.25 * PT, label: '3 x 6' },
-  '4x6': { w: 4 * PT, h: 6 * PT, margin: 0.3125 * PT, label: '4 x 6' },
+  // ⚠️ 0.15in, NOT 0.3125in. Nima on the first 4x6 cut: "we have space both up top at
+  // the bottom and to the rright and left". Five-sixteenths of an inch on each side of
+  // a 4in label throws away 16% of the width — and width is what sets the barcode's
+  // X-dimension. A thermal printer will go closer to the edge than a laser.
+  '4x6': { w: 4 * PT, h: 6 * PT, margin: 0.15 * PT, label: '4 x 6' },
 }
 
 const line = (doc, x, y, w) => doc.moveTo(x, y).lineTo(x + w, y).stroke()
@@ -82,6 +94,32 @@ function fitText(doc, text, x, y, width, { size = 12, min = 5.5, font = 'Helveti
 }
 
 /** One carton label. Returns the doc so the caller can add pages or pipe it. */
+/**
+ * ⚠️ THE GEOMETRY IS PROPORTIONAL, AND IT USED TO BE ABSOLUTE. Every block was a fixed
+ * point height — 92, 74, 78, 30 — written for the 5.5x8.5 half sheet and reused
+ * unchanged on every stock. Nima, 2026-09-14, on the 4x6: "you made them 4x6 but were
+ * no utiziling all the label size."
+ *
+ * He is right, and rendering them showed two separate faults:
+ *
+ *   · 274pt of fixed blocks is 51% of the half sheet's usable height and 71% of the
+ *     4x6's, so the same design is half-empty on one stock and cramped on another.
+ *   · `bcH = 58` was a HARDCODED GUESS at the barcode's drawn height while the real
+ *     one follows the PNG's aspect: 78.6pt on the half sheet, 57.7 on the 4x6, 22.8
+ *     on the 3x6. On the half sheet the human-readable line was therefore printed
+ *     ON TOP OF THE BARS — and that line is precisely what a receiver keys when the
+ *     symbol will not scan.
+ *
+ * Blocks are now fractions of the available height and the barcode's height is
+ * measured from the image, never assumed.
+ */
+const BLOCKS = { fromTo: 0.21, ids: 0.17, contents: 0.19, carton: 0.08, sscc: 0.35 }
+
+/** PNG width/height straight out of the IHDR, so placement uses the real aspect. */
+function pngSize(buf) {
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
+}
+
 export async function renderCartonLabel(doc, carton, layout = LAYOUTS['half-sheet']) {
   const p = labelProblems(carton)
   if (!p.printable) {
@@ -90,6 +128,7 @@ export async function renderCartonLabel(doc, carton, layout = LAYOUTS['half-shee
   }
   const { w, h, margin: M } = layout
   const inner = w - M * 2
+  const avail = h - M * 2
 
   // ⚠️ Geometry is checked BEFORE anything is drawn, so a layout change cannot
   // silently shrink the symbol under the readable floor.
@@ -100,75 +139,139 @@ export async function renderCartonLabel(doc, carton, layout = LAYOUTS['half-shee
 
   const dc = DCS[String(carton.dc).replace(/^0+/, '')]
   const addr = dcAddressLines(carton.dc)
+
+  const hFromTo = avail * BLOCKS.fromTo
+  const hIds = avail * BLOCKS.ids
+  const hContents = avail * BLOCKS.contents
+  const hCarton = avail * BLOCKS.carton
+  const hSscc = avail * BLOCKS.sscc
+  // ⚠️ TYPE IS SIZED FROM ITS OWN BOX, NOT FROM A REFERENCE STOCK. The first version
+  // scaled every font by `avail / half-sheet height`, which on the 4x6 comes to 0.72 —
+  // so it SHRANK all the text by 28% against a page it is not printed on. Nima:
+  // "the text was shrunk for no reason in the boxes makign it harder to read."
+  //
+  // A label is not a scaled-down page. Each field is a fraction of the height of the
+  // block it lives in, so every stock fills its boxes and the type is as large as the
+  // box allows. fitText then shrinks ONLY the fields that would not fit across.
+  const fs = (px) => Math.max(5.5, px)
+
   let y = M
 
   // ── FROM / TO ──
-  doc.lineWidth(1).rect(M, y, inner, 92).stroke()
+  doc.lineWidth(1).rect(M, y, inner, hFromTo).stroke()
   // ⚠️ EVERY text() IS WIDTH-BOUNDED. Without a width pdfkit runs to the page edge,
   // so on the 3x6 "Entrelaced Holdings, LLC" printed straight through the centre
-  // rule and over "Saks Fifth Avenue". It looked fine on the wider half sheet, which
-  // is how a layout bug hides until the narrow stock is used.
+  // rule and over the consignee. It looked fine on the wider half sheet, which is how
+  // a layout bug hides until the narrow stock is used.
   const colW = inner / 2 - 10
-  doc.fontSize(6).font('Helvetica').text('SHIP FROM', M + 5, y + 5, { width: colW })
-  doc.fontSize(8).font('Helvetica-Bold').text(SHIP_FROM.name, M + 5, y + 15, { width: colW })
-  doc.font('Helvetica').fontSize(7.5)
-    .text([...SHIP_FROM.lines, `${SHIP_FROM.city}, ${SHIP_FROM.state} ${SHIP_FROM.zip}`].join('\n'), M + 5, y + 33, { width: colW })
+  const pad = 4
+  const capH = fs(hFromTo * 0.085)          // the little "SHIP FROM" caps
+  const nameH = fs(hFromTo * 0.135)         // the company line
+  const addrH = fs(hFromTo * 0.105)         // address lines
+  // ⚠️ fitText, NOT text(), FOR THE COMPANY LINES. Bounded text() WRAPS, and every
+  // offset below it assumes one line — so "Entrelaced Holdings, LLC" became two lines
+  // and the address printed straight through the second. A field with a fixed box
+  // wants to get smaller, not taller; that is what fitText is for, and it was already
+  // being used two blocks down for exactly this reason.
+  doc.fontSize(capH).font('Helvetica').text('SHIP FROM', M + 5, y + pad, { width: colW })
+  const nameY = y + pad + capH + 2
+  fitText(doc, SHIP_FROM.name, M + 5, nameY, colW, { size: nameH, min: 6 })
+  doc.font('Helvetica').fontSize(addrH)
+    .text([...SHIP_FROM.lines, `${SHIP_FROM.city}, ${SHIP_FROM.state} ${SHIP_FROM.zip}`].join('\n'),
+      M + 5, nameY + nameH + 3, { width: colW })
   const half = M + inner / 2
-  doc.moveTo(half, y).lineTo(half, y + 92).stroke()
-  doc.fontSize(6).font('Helvetica').text('SHIP TO', half + 5, y + 5, { width: colW })
-  doc.fontSize(9).font('Helvetica-Bold').text(carton.operatingCompany, half + 5, y + 15, { width: colW })
-  doc.fontSize(8).text(dc.name, half + 5, y + 36, { width: colW })
-  doc.font('Helvetica').fontSize(7.5).text(addr.join('\n'), half + 5, y + 47, { width: colW })
-  y += 92
+  doc.moveTo(half, y).lineTo(half, y + hFromTo).stroke()
+  doc.fontSize(capH).font('Helvetica').text('SHIP TO', half + 5, y + pad, { width: colW })
+  fitText(doc, carton.operatingCompany, half + 5, nameY, colW, { size: nameH, min: 6 })
+  fitText(doc, dc.name, half + 5, nameY + nameH + 2, colW, { size: nameH * 0.9, min: 6 })
+  doc.font('Helvetica').fontSize(addrH)
+    .text(addr.join('\n'), half + 5, nameY + nameH * 2 + 5, { width: colW })
+  y += hFromTo
 
   // ── PO / DEPT / STORE — the three §8 markings ShopBop's template omits ──
-  doc.rect(M, y, inner, 74).stroke()
-  doc.fontSize(6).font('Helvetica').text('PURCHASE ORDER', M + 5, y + 5)
-  fitText(doc, carton.po, M + 5, y + 14, inner - 10, { size: 15 })
+  doc.rect(M, y, inner, hIds).stroke()
+  doc.fontSize(capH).font('Helvetica').text('PURCHASE ORDER', M + 5, y + pad)
+  // The PO is the field a picker reads across a pallet — it gets 40% of its block.
+  const poSize = fs(hIds * 0.40)
+  fitText(doc, carton.po, M + 5, y + pad + capH + 1, inner - 10, { size: poSize, min: 9 })
   // ⚠️ THREE FIELDS ACROSS, SIZED FROM THE LABEL not from fixed offsets. At M+70 the
   // store ran into the vendor number on the 3x6 — the same class of bug as above.
   const fieldW = inner / 3
+  // ⚠️ MEASURED, NOT A FRACTION. At hIds*0.48 the DEPT/STORE row sat ON TOP of the PO
+  // number, because the PO's own height is 40% of the block and starts below a caption.
+  const rowY = y + pad + capH + 1 + poSize + 3
   const field = (i, label, value, size) => {
     const fx = M + 5 + i * fieldW
-    doc.fontSize(6).font('Helvetica').text(label, fx, y + 36, { width: fieldW - 6 })
-    fitText(doc, value, fx, y + 45, fieldW - 6, { size })
+    doc.fontSize(capH).font('Helvetica').text(label, fx, rowY, { width: fieldW - 6 })
+    fitText(doc, value, fx, rowY + capH + 2, fieldW - 6, { size, min: 7 })
   }
-  field(0, 'DEPT', carton.department, 12)
-  field(1, 'STORE', `${carton.store} ${carton.storeAbbrev}`, 12)
-  if (carton.vendorNumber) field(2, 'VENDOR', carton.vendorNumber, 10)
-  y += 74
+  const idH = fs(hIds * 0.26)
+  field(0, 'DEPT', carton.department, idH)
+  field(1, 'STORE', `${carton.store} ${carton.storeAbbrev}`, idH)
+  if (carton.vendorNumber) field(2, 'VENDOR', carton.vendorNumber, idH * 0.86)
+  y += hIds
 
   // ── CONTENTS ──
-  doc.rect(M, y, inner, 78).stroke()
-  doc.fontSize(6).font('Helvetica').text('STYLE / COLOUR / SIZE', M + 5, y + 5)
-  doc.fontSize(9).font('Helvetica-Bold').text(String(carton.style), M + 5, y + 14, { width: inner - 10, height: 26, ellipsis: true })
-  doc.fontSize(6).font('Helvetica').text('UPC', M + 5, y + 40)
-  doc.fontSize(10).font('Helvetica-Bold').text(String(carton.upc), M + 5, y + 49)
-  doc.fontSize(6).font('Helvetica').text('QTY', M + inner / 2, y + 40)
-  doc.fontSize(14).font('Helvetica-Bold').text(String(carton.units), M + inner / 2, y + 48)
-  doc.fontSize(7).font('Helvetica')
-    .text(`STORE TOTAL  ${carton.totalUnits} units / ${carton.totalCartons} cartons`, M + 5, y + 66)
-  y += 78
+  doc.rect(M, y, inner, hContents).stroke()
+  doc.fontSize(capH).font('Helvetica').text('STYLE / COLOUR / SIZE', M + 5, y + pad)
+  // ⚠️ IT MAY WRAP TO TWO LINES, AND THAT IS DELIBERATE. §8.5 requires "style, colour,
+  // size details" on every carton, and a single ellipsised line drops the COLOUR —
+  // "SN03011LD-MOCHA | St. Barths Petit Tote…" loses "Mocha", which is the half a
+  // receiver checks the units against. Unlike the PO and the store, this field is read
+  // close up, so height is the right thing to spend on it. The ellipsis stays as a
+  // last resort for a style longer than two lines.
+  // ⚠️ SIZED SO TWO LINES ACTUALLY FIT. At 0.145 the box came out about a point short
+  // of a second line, so pdfkit ellipsised anyway and the fix changed nothing visible —
+  // the kind of near-miss that looks like the code was never edited.
+  const styleSize = fs(hContents * 0.125)
+  doc.fontSize(styleSize).font('Helvetica-Bold')
+    .text(String(carton.style), M + 5, y + pad + capH + 1,
+      { width: inner - 10, height: styleSize * 2.5, ellipsis: true, lineGap: 0 })
+  const cRow = y + hContents * 0.50
+  doc.fontSize(capH).font('Helvetica').text('UPC', M + 5, cRow)
+  doc.fontSize(fs(hContents * 0.17)).font('Helvetica-Bold').text(String(carton.upc), M + 5, cRow + capH + 2)
+  doc.fontSize(capH).font('Helvetica').text('QTY', M + inner / 2, cRow)
+  doc.fontSize(fs(hContents * 0.26)).font('Helvetica-Bold').text(String(carton.units), M + inner / 2, cRow + capH + 1)
+  const totH = fs(hContents * 0.10)
+  doc.fontSize(totH).font('Helvetica')
+    .text(`STORE TOTAL  ${carton.totalUnits} units / ${carton.totalCartons} cartons`, M + 5, y + hContents - totH - 4)
+  y += hContents
 
-  doc.fontSize(16).font('Helvetica-Bold')
-    .text(`CARTON ${carton.carton} OF ${carton.totalCartons}`, M, y + 6, { width: inner, align: 'center' })
-  y += 30
+  fitText(doc, `CARTON ${carton.carton} OF ${carton.totalCartons}`, M, y + hCarton * 0.16,
+    inner, { size: fs(hCarton * 0.62), min: 10 })
+  y += hCarton
 
   // ── SSCC-18 ──
   // ⚠️ The human-readable (00) line is part of the GS1-128, not decoration: it is
-  // what a receiver keys when the symbol will not scan.
-  doc.rect(M, y, inner, h - y - M).stroke()
-  doc.fontSize(6).font('Helvetica').text('SSCC-18', M + 5, y + 5)
-  const png = await gs1BarcodePng('00', carton.sscc, { scale: 4, height: 16 })
+  // what a receiver keys when the symbol will not scan — which is why printing it over
+  // the bars, as the fixed bcH did on the half sheet, destroyed the fallback as well
+  // as the symbol.
+  doc.rect(M, y, inner, hSscc).stroke()
+  doc.fontSize(capH).font('Helvetica').text('SSCC-18', M + 5, y + pad)
+  const labelTop = y + pad + capH + 3
+  const hrH = fs(hSscc * 0.13)
+  const hrSpace = hrH + 8
+  const barBox = hSscc - (labelTop - y) - hrSpace - pad
+  // ⚠️ THE BAR HEIGHT IS REQUESTED, NOT INHERITED. GS1 puts the SSCC bar height on a
+  // logistics label at 31.75mm / 1.25in, and this was calling gs1BarcodePng with
+  // height: 16 (mm) on every stock — about half of it, and a quarter of it once the
+  // 3x6 scaled the image down. Ask for the box we actually have, floored at the spec.
+  const wantBarIn = Math.max(BAR_HEIGHT_MIN_IN, barBox / PT)
+  const png = await gs1BarcodePng('00', carton.sscc, { scale: 4, height: wantBarIn * 25.4 })
+  // ⚠️ 10pt of quiet zone each side, not 20 — the module width IS the X-dimension, and
+  // width thrown away here is scanning margin thrown away.
   const bcW = inner - 20
-  doc.image(png, M + 10, y + 16, { width: bcW })
-  const bcH = 58
-  // Centre the human-readable line, shrinking it rather than letting it wrap.
-  const hrSize = (() => { let s2 = 11; doc.font('Helvetica-Bold')
+  const size = pngSize(png)
+  // ⚠️ MEASURED FROM THE IMAGE, NEVER ASSUMED — this is the constant that caused the
+  // overlap. Height is clamped to the box so a tall symbol cannot push the
+  // human-readable line off the label.
+  const drawnH = Math.min(bcW * (size.h / size.w), barBox)
+  doc.image(png, M + 10, labelTop, { width: bcW, height: drawnH })
+  const hrSize = (() => { let s2 = hrH; doc.font('Helvetica-Bold')
     while (s2 > 6 && doc.fontSize(s2).widthOfString(`(00) ${carton.sscc}`) > inner - 10) s2 -= 0.5
     return s2 })()
   doc.fontSize(hrSize).font('Helvetica-Bold')
-    .text(`(00) ${carton.sscc}`, M, y + 16 + bcH + 6, { width: inner, align: 'center', lineBreak: false })
+    .text(`(00) ${carton.sscc}`, M, labelTop + drawnH + 4, { width: inner, align: 'center', lineBreak: false })
   return doc
 }
 

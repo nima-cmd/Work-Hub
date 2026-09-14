@@ -17,7 +17,7 @@ import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
 import { shipmentChecklist } from '../src/model/exemplarStandards.js'
-import { servicingDc, storefrontFor } from '../src/model/exemplarStores.js'
+import { servicingDc, consigneeCompany } from '../src/model/exemplarStores.js'
 import { fetchCartonContents } from '../src/ingest/exemplarCartonFetch.js'
 import {
   shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
@@ -6361,7 +6361,8 @@ export async function getExemplarDocData(shipmentId, { on = null } = {}) {
   // agree with each other and with the day the freight leaves. exemplarDocsPdf throws
   // on a mismatch rather than printing two names in one pouch.
   const shipOn = on || (s.shipDate ? String(s.shipDate).slice(0, 10) : null)
-  const operatingCompany = storefrontFor(store, shipOn)
+  // ⚠️ THE COMPANY, not the EDI storefront — see consigneeCompany().
+  const operatingCompany = consigneeCompany()
 
   const ifNumber = (await pool.query(
     `SELECT DISTINCT if_number FROM edi_carton WHERE po_number = $1 AND dc = $2`, [po, s.dc])).rows[0]?.if_number
