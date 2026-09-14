@@ -271,18 +271,33 @@ export default function PackingSlipImport() {
           />
 
           {/* ── the files ────────────────────────────────────────────────── */}
+          {/* ⚠️ GATED ON preview.blocked, NOT ON EACH BUILDER'S OWN FLAG. An
+              unanswered exception produces two perfectly clean files — a strap left
+              off both CSVs is not a defect in either of them — so `ir.blocked` and
+              `tr.blocked` are both false while the question is still open. Gating on
+              them would have handed over the files with the decision unmade, which is
+              the exact thing this screen now exists to prevent. Caught before the
+              first real use of the panel; nothing in the model tests could see it,
+              because the gate lives here. */}
           <div className="slip-files">
             <div>
               <h4>1 · {ir.filename}</h4>
               <p className="slip-note">{n(ir.rows)} rows across {ir.poCount} POs — Receive = T for what shipped, F for every other still-open line.</p>
-              <button onClick={() => download(ir.csv, ir.filename)} disabled={ir.blocked}>Download</button>
+              <button onClick={() => download(ir.csv, ir.filename)} disabled={preview.blocked}>Download</button>
             </div>
             <div>
               <h4>2 · {tr.filename}</h4>
               <p className="slip-note">{n(tr.rows)} rows across {tr.poCount} POs — China → each PO’s destination.</p>
-              <button onClick={() => download(tr.csv, tr.filename)} disabled={tr.blocked}>Download</button>
+              <button onClick={() => download(tr.csv, tr.filename)} disabled={preview.blocked}>Download</button>
             </div>
           </div>
+          {(preview.unresolved || []).length > 0 && (
+            <p className="slip-error">
+              Both files are withheld until the {preview.unresolved.length === 1 ? 'question' : `${preview.unresolved.length} questions`}{' '}
+              above {preview.unresolved.length === 1 ? 'is' : 'are'} answered. The files
+              themselves are fine — what is missing is the decision they were built on.
+            </p>
+          )}
           {/* ⚠️ ORDER IS NOT A PREFERENCE. You cannot transfer units NetSuite does not
               yet believe it has, so a transfer imported first fails or moves nothing. */}
           <p className="slip-note">
