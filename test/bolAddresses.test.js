@@ -2,7 +2,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shipToFor, bolAuthLine } from '../src/model/bolAddresses.js'
+import { shipToFor, bolAuthLine, scacFor } from '../src/model/bolAddresses.js'
 
 // ── Exemplar ships direct to its own DC, and is not Macy's ─────────────────
 
@@ -81,4 +81,12 @@ test('⚠️ "NEVER PREPAID" WAS TRUE OF TWO PARTNERS, NOT OF BOLs', () => {
   assert.equal(term({ scac: 'RXOX' }), '3rd')
   // And a recorded term beats the carrier derivation, not the other way round.
   assert.equal(term({ freightTerms: 'Prepaid', scac: 'RXOX' }), 'Prepaid')
+})
+
+test('Linear Logistics resolves to its SCAC, from their own assignment notice', () => {
+  assert.equal(scacFor('Linear Logistics'), 'LLGJ')
+  // ⚠️ And it does NOT match the XLTL/RXO test, so the BOL derives Collect for it —
+  // which is why an Exemplar shipment MUST have its Prepaid term recorded rather than
+  // relying on the derivation.
+  assert.ok(!/XLTL|RXO/i.test('LLGJ Linear Logistics'))
 })

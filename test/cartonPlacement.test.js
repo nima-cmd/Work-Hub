@@ -173,6 +173,16 @@ test('padded and bare DC codes both resolve', () => {
   assert.deepEqual(tmsConsigneeFor('0510'), tmsConsigneeFor('510'))
 })
 
+test('⚠️ "% LINEAR" IS THE CARRIER, SO THE DC IS NOT THE WHOLE KEY', () => {
+  // The routing came back "Your assigned LTL Carrier is Linear Logistics (SCAC: LLGJ)".
+  // The consignee entries are per-CARRIER lanes into one DC, and the TMS assigns the
+  // carrier per shipment — so a different carrier next time may need the other entry.
+  const c = tmsConsigneeFor('510')
+  assert.equal(c.carrier, 'Linear Logistics')
+  assert.equal(c.scac, 'LLGJ')
+  assert.match(c.caveat, /different assigned carrier/)
+})
+
 test('⚠️ THE OTHER DCs ARE NOT GUESSED, THOUGH THE PATTERN IS OBVIOUS', () => {
   // Every DC in the lookup has a plain and a "% Linear" entry, so extending the rule is
   // tempting and unverified. Nima confirmed 510 and only 510. An unconfirmed consignee

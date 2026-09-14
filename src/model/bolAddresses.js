@@ -192,6 +192,10 @@ export const CARRIERS = {
   // it. Same company as the entry above; Nima confirmed CAIE 2026-08-24.
   'CTE Carrier': 'CAIE',
   'CTE': 'CAIE',
+  // Assigned by the Dynamic TMS for PO 8928906 to DC 510, 2026-09-14 — confirmation
+  // 15779316. Their notice gives the SCAC outright: "Your assigned LTL Carrier is
+  // Linear Logistics (SCAC: LLGJ)".
+  'Linear Logistics': 'LLGJ',
 }
 
 /** SCAC for a carrier name, case- and spacing-insensitive.

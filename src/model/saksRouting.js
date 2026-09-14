@@ -327,10 +327,17 @@ export const PORTALS = {
  * consignee; the screen just refused to move on. The same pairing exists for the other
  * DCs — a plain entry and a "% Linear" one.
  *
- * ⚠️ ONLY DC 510 IS CONFIRMED. Nima verified 510 on 2026-09-14. The "% Linear" pattern
- * OBVIOUSLY generalises and that is exactly why it is not written down as if it did —
- * the same call as leaving 0073's banner alone when he named only 0077. An unconfirmed
- * consignee that looks authoritative is how the wrong one gets picked with confidence.
+ * ⚠️ "% LINEAR" IS THE CARRIER, AND THAT CHANGES WHAT THIS FACT IS. The routing came
+ * back "Your assigned LTL Carrier is Linear Logistics (SCAC: LLGJ)" — so the consignee
+ * entries are not two spellings of one destination, they are per-CARRIER lanes into the
+ * same DC. Which means the right entry may track the carrier the TMS assigns, and the
+ * TMS assigns that per shipment.
+ *
+ * So this is recorded as "510 + Linear Logistics", not as "510". If a different carrier
+ * is assigned next time, the plain entry may well be the correct one and the one here
+ * the decoy. I had cautioned against generalising the pattern to other DCs for a
+ * weaker reason — that it was merely unverified — and the real reason turns out to be
+ * better: the DC is not the whole key.
  *
  * ⚠️ And the vendor note on that screen matters on its own: "For vendors entering Saks
  * or Neiman Marcus or Bergdorf Goodman shipments please type ELG for consignee search."
@@ -343,7 +350,11 @@ export const TMS_CONSIGNEE = {
     510: {
       select: 'ELG-Neiman/Saks DC 510 % Linear',
       decoy: 'ELG- Neiman/Saks DC 510',
-      confirmed: 'Nima, 2026-09-14 — picking the decoy would not let the routing finish',
+      carrier: 'Linear Logistics',
+      scac: 'LLGJ',
+      confirmed: 'Nima, 2026-09-14 — picking the decoy would not let the routing finish; conf 15779316',
+      // ⚠️ Read this as "DC 510 WHEN LINEAR IS ASSIGNED". See the note above.
+      caveat: 'the "% Linear" entry is the Linear Logistics lane — a different assigned carrier may need the other entry',
     },
   },
   // Seen in the lookup, NOT confirmed against a completed routing. Listed so the pairing
@@ -362,6 +373,10 @@ export function tmsConsigneeFor(dc) {
 
 export const CONTACTS = {
   shippingAndRouting: 'sg-transportation@saks.com',
+  // From the Linear Logistics assignment notice, 2026-09-14: "If there are any issues
+  // please contact sfalogistics@s5a.com." A carrier-assignment contact, distinct from
+  // sg-transportation (routing policy) and csrsupport@dynamiconline.com (web entry).
+  ltlCarrierAssignment: 'sfalogistics@s5a.com',
   compliance: 'compliance@saks.com',
   chargebacks: 'compliance@saks.com',
   edi: 'edi@saks.com',
