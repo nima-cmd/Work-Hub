@@ -31,6 +31,41 @@
 // overages by store)" is ONE offset covering all three — so the SN41262/SN41263
 // substitution found on the Exemplar order would be priced the same way here.
 
+// ⚠️ THE PAGE, NOT JUST THE APPENDIX. Nima asked where the short-shipping rule actually
+// is. It is Appendix H, **page 58**, the second row of the "Distribution Center/MIO
+// Expense Offsets" table, category Shipping — verified against the PDF 2026-09-14:
+//
+//   "Noncompliance to purchase order U.P.C./GTIN/EAN and store distribution (i.e.,
+//    substitutions, shortages, and overages by store). This may include concealed
+//    inaccuracies in the EDI856 Advance Ship Notice."
+//   — $50.00 per receipt and 50% cost of merchandise; $1.00 per unit for collateral
+//
+// The appendix runs 57-60 and its tables are split by area: p57 Technology, p58
+// Distribution Center/MIO and Store Floor Ready, p59 .COM Merchandise Preparation.
+export const PAGES = {
+  appendix: '57-60',
+  technology: 57,
+  distributionCentre: 58,
+  storeFloorReady: 58,
+  comMerchandisePrep: 59,
+  shortShip: 58,
+}
+
+/**
+ * Which page of Appendix H each offset is on, verified against the PDF 2026-09-14.
+ *
+ * ⚠️ ONE MAP RATHER THAN A `page` ON EACH ENTRY, because the entries were transcribed
+ * and the pages were checked separately — keeping them apart makes it obvious that the
+ * page is a later, independent verification rather than something that came with the
+ * transcription and was never confirmed.
+ */
+export const OFFSET_PAGES = {
+  gs1Unusable: 57, gs1Placement: 57, gs1FobDept: 57,
+  asnMissing: 57, asnLate: 57, invoiceEdi: 57,
+  wrongLocation: 58, poNoncompliance: 58, masterPack: 58, integrityAudit: 58,
+  ticketing: 58, hanger: 58,
+}
+
 export const SOURCE = {
   document: "Macy's 2023 Vendor Standards",
   appendix: 'H — Expense Offsets',
@@ -151,8 +186,10 @@ export const RATE_CHANGES = [
  * worth — which on the live case is most of the number.
  */
 export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices = 0, merchandiseUsd = null } = {}) {
-  const o = OFFSETS[key]
-  if (!o) return null
+  const base = OFFSETS[key]
+  if (!base) return null
+  // The page is attached here so every quoted figure can cite one.
+  const o = { ...base, page: OFFSET_PAGES[key] ?? null }
   let total = 0
   const parts = []
   if (o.perReceipt) { total += o.perReceipt * receipts; parts.push(`$${o.perReceipt}/receipt x ${receipts}`) }
@@ -160,6 +197,16 @@ export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices 
   if (o.perInnerCarton) { total += o.perInnerCarton * cartons; parts.push(`$${o.perInnerCarton}/inner carton x ${cartons}`) }
   if (o.perUnit) { total += o.perUnit * units; parts.push(`$${o.perUnit}/unit x ${units}`) }
   if (o.perInvoice) { total += o.perInvoice * invoices; parts.push(`$${o.perInvoice}/invoice x ${invoices}`) }
+  // ⚠️ COLLATERAL WAS STORED AND NEVER ADDED. `poNoncompliance` carries
+  // `perUnitCollateral: 1` straight from p58 — "$1.00 per unit for collateral" — and
+  // this function simply did not look at it, so every shortage estimate came out short
+  // by exactly $1 a unit. On the live Bloomingdale's cut that is $70 missing from a
+  // figure quoted to decide whether to ship. A field the calculator ignores is worse
+  // than one that was never extracted: it reads as covered.
+  if (o.perUnitCollateral) {
+    total += o.perUnitCollateral * units
+    parts.push(`$${o.perUnitCollateral}/unit collateral x ${units}`)
+  }
   if (o.minPerReceipt) total = Math.max(total, o.minPerReceipt * receipts)
 
   if (o.pctOfMerchandise) {
@@ -173,6 +220,18 @@ export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices 
     const pct = o.pctOfMerchandise * merchandiseUsd
     total += pct
     parts.push(`${o.pctOfMerchandise * 100}% of $${merchandiseUsd.toFixed(2)} = $${pct.toFixed(2)}`)
+  }
+  // ⚠️ "AND FREIGHT" IS UNBOUNDED AND MUST NOT ROUND TO ZERO. p58 charges wrong-location
+  // merchandise $250/receipt AND $10/carton AND the freight — and the freight is whatever
+  // it cost, which we cannot know here. Reported as an unknown add-on the way the
+  // merchandise percentage is, rather than silently omitted from a total that then looks
+  // complete.
+  if (o.plusFreight) {
+    return {
+      ...o, key, estimate: Math.round(total * 100) / 100, parts, known: total,
+      unknown: 'plus the freight cost itself, which is not known here',
+      note: 'The estimate is the fixed part only. The freight on a refused/misrouted shipment is usually the larger half.',
+    }
   }
   return { ...o, key, estimate: Math.round(total * 100) / 100, parts, unknown: null }
 }

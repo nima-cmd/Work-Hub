@@ -6,7 +6,7 @@ import {
   FEES, feeFor, shipmentChecklist, AUDIT, CARTON, PALLET,
   RECEIVED_NOT_ORDERED, SOURCE,
 } from '../src/model/exemplarStandards.js'
-import { macysShipmentChecklist, offsetFor, PORTAL as MACYS_PORTAL } from '../src/model/macysStandards.js'
+import { macysShipmentChecklist, offsetFor, PORTAL as MACYS_PORTAL, PAGES as MACYS_PAGES } from '../src/model/macysStandards.js'
 
 test('⚠️ THE MINIMUM CHARGE IS THE REAL NUMBER, not the per-carton amount', () => {
   // Almost every carton violation reads "$10.00 per carton, $250.00 minimum".
@@ -187,4 +187,29 @@ test('⚠️ AND WITHOUT A MERCHANDISE VALUE IT REFUSES TO ESTIMATE', () => {
   const c = macysShipmentChecklist({ receipts: 3 })
   const short = c.steps.find((s) => s.key === 'macys:ship-what-the-po-says')
   assert.match(short.offset.cost, /not supplied|%/)
+})
+
+test('⚠️ COLLATERAL WAS STORED AND NEVER ADDED — every shortage came out $1/unit short', () => {
+  // p58: "$50.00 per receipt and 50% cost of merchandise; $1.00 per unit for collateral".
+  // `perUnitCollateral` was in OFFSETS from the transcription and offsetFor never looked
+  // at it, so the live Bloomingdale's cut quoted $4,140 instead of $4,210 — a number
+  // used to decide whether to ship. A field the calculator ignores is worse than one
+  // never extracted: it reads as covered.
+  const r = offsetFor('poNoncompliance', { receipts: 3, units: 70, merchandiseUsd: 7980 })
+  assert.equal(r.estimate, 4210)
+  assert.ok(r.parts.some((p) => /collateral/.test(p)))
+})
+
+test('⚠️ "AND FREIGHT" IS UNBOUNDED AND DOES NOT ROUND TO ZERO', () => {
+  // Wrong-location merchandise is $250/receipt AND $10/carton AND the freight. The
+  // freight is usually the larger half and cannot be known here, so it is reported as
+  // an unknown add-on rather than omitted from a total that then looks complete.
+  const r = offsetFor('wrongLocation', { receipts: 1, cartons: 22 })
+  assert.equal(r.estimate, 470)
+  assert.match(r.unknown, /freight cost itself/)
+})
+
+test('the short-ship rule cites its page, not just its appendix', () => {
+  assert.equal(offsetFor('poNoncompliance', {}).page, 58)
+  assert.equal(MACYS_PAGES.shortShip, 58)
 })
