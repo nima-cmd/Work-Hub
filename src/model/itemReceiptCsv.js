@@ -97,15 +97,24 @@ export function indexPoLines(poLines = []) {
  *
  * @param container the parsed slip (needs containerNum, containerDate, skuTotals)
  * @param poLines   live PO lines from NetSuite (see indexPoLines)
- * @param opts.acceptExcess  deliberately receive MORE than the PO line has left,
- *   when the factory genuinely shipped extra. It never lifts the duplicate block —
- *   see `kind` below. Off by default: an over-receive must be a decision.
+ * @param opts.acceptExcess  deliberately receive MORE than the PO line has left, when
+ *   the factory genuinely shipped extra. It never lifts the duplicate block — see
+ *   `kind` below. Off by default: an over-receive must be a decision.
+ *
+ *   ⚠️ IT TAKES A LIST OF `PO|SKU` KEYS; `true` (every over-receive on the container)
+ *   survives only for the callers that predate the decision layer. Nima, 2026-09-14:
+ *   "we would like the ability to choose what to do". One boolean said yes to every
+ *   line at once, so a container with a deliberate +1 on one PO and a genuine mistake
+ *   on another was accepted wholesale by a single click. A resolution is per line, and
+ *   this is the half of it that reaches the file.
  *
  * @returns { csv, filename, rows, poCount, overReceives, blockingOverReceives,
  *            excessShipped, acceptedExcess, unknownPOs, unmatchedLines,
  *            duplicateSkus, excluded, excludedPOs, blocked }
  */
 export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT_NOTRACK_KEYWORDS, acceptExcess = false } = {}) {
+  const acceptedKeys = Array.isArray(acceptExcess) ? new Set(acceptExcess) : null
+  const isAccepted = (o) => (acceptedKeys ? acceptedKeys.has(`${o.poNumber}|${o.sku}`) : acceptExcess === true)
   const label = containerLabel(container)
   const date = slipDateToUs(container.containerDate)
   const { byPo, duplicateSkus } = indexPoLines(poLines)
@@ -256,11 +265,9 @@ export function buildItemReceiptCsv(container, poLines = [], { notrack = DEFAULT
     // The PO stays as it was and reads "received 101 of 100", which is true.
     blockingOverReceives: overReceives.filter((o) => o.kind === 'nothing-remaining'),
     excessShipped: overReceives.filter((o) => o.kind === 'excess-shipped'),
-    acceptedExcess: acceptExcess
-      ? overReceives.filter((o) => o.kind === 'excess-shipped')
-      : [],
+    acceptedExcess: overReceives.filter((o) => o.kind === 'excess-shipped' && isAccepted(o)),
     blocked: overReceives.some((o) => o.kind === 'nothing-remaining')
-      || (!acceptExcess && overReceives.some((o) => o.kind === 'excess-shipped'))
+      || overReceives.some((o) => o.kind === 'excess-shipped' && !isAccepted(o))
       || duplicateSkus.length > 0,
   }
 }

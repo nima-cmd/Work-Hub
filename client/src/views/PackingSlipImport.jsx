@@ -67,6 +67,10 @@ export default function PackingSlipImport() {
   const [saved, setSaved] = useState(null)
   const [stored, setStored] = useState([])
   const [showCartons, setShowCartons] = useState(false)
+  // ⚠️ RESET WHENEVER A NEW FILE IS CHOSEN. A decision belongs to the shipment in
+  // front of you; carrying one across documents is the invisible-acceptance shape the
+  // boolean this replaces had.
+  const [decisions, setDecisions] = useState({})
 
   const loadStored = () => fetchPackingSlips().then(setStored).catch(() => {})
   useEffect(() => { loadStored() }, [])
@@ -82,7 +86,7 @@ export default function PackingSlipImport() {
   async function onFile(e) {
     const f = e.target.files?.[0]
     if (!f) return
-    setError(null); setPreview(null); setSaved(null); setPhase('reading')
+    setError(null); setPreview(null); setSaved(null); setDecisions({}); setPhase('reading')
     try {
       const isCsv = /\.csv$/i.test(f.name)
       const payload = isCsv
@@ -101,23 +105,30 @@ export default function PackingSlipImport() {
     }
   }
 
-  async function reparse(opts = {}) {
+  // ⚠️ THE DECISIONS TRAVEL WITH THE REQUEST, because the files are built from them.
+  // They are kept in state rather than re-answered each time — the hazard the old
+  // boolean had was an acceptance nobody could SEE, and every answer here is printed
+  // on its own row with the effect it has. What must not survive is a change of
+  // document, and onFile clears them.
+  async function reparse(next = decisions) {
     if (!file) return
     setError(null); setSaved(null); setPhase('previewing')
     try {
       const p = await previewPackingSlip({
         filename: file.name, base64: file.base64, text: file.text,
         containerNum: num, containerDate: date || null,
-        // ⚠️ ALWAYS SENT FROM THE ARGUMENT, NEVER FROM STATE. Reading a checkbox here
-        // would let a re-check after an unrelated edit silently carry the acceptance
-        // forward — an over-receive has to be decided for the shipment in front of
-        // you, every time.
-        acceptExcess: opts.acceptExcess === true,
+        decisions: next,
       })
       setPreview(p); setPhase('ready')
     } catch (err) {
       setError(err.message); setPhase('ready')
     }
+  }
+
+  function decide(key, id) {
+    const next = { ...decisions, [key]: id }
+    setDecisions(next)
+    reparse(next)
   }
 
   async function commit() {
@@ -126,6 +137,7 @@ export default function PackingSlipImport() {
       const r = await commitPackingSlip({
         filename: file.name, base64: file.base64, text: file.text,
         containerNum: num, containerDate: date || null,
+        decisions,
       })
       setSaved(r)
       await loadStored()
@@ -168,7 +180,8 @@ export default function PackingSlipImport() {
               Date as printed
               <input value={date} onChange={(e) => setDate(e.target.value)} placeholder="2026.9.7" />
             </label>
-            <button onClick={reparse} disabled={phase === 'previewing' || !num}>Re-check</button>
+            {/* ⚠️ Wrapped, or React hands the click EVENT in as the decisions object. */}
+            <button onClick={() => reparse()} disabled={phase === 'previewing' || !num}>Re-check</button>
           </div>
           {/* ⚠️ THE LABEL IS SHOWN BECAUSE IT IS LOAD-BEARING. It is the identity of
               the stored container and it is embedded in every External ID, so a wrong
@@ -282,34 +295,76 @@ export default function PackingSlipImport() {
               combined flag then withholds the TRANSFER too, which is valid and is
               the very file still needed. Caught on 2026-09-09 re-running a
               container whose receipt was already in NetSuite. */}
-          {/* ⚠️ TWO SHAPES OF OVER-RECEIVE, AND ONLY ONE CAN BE ACCEPTED.
-              A line with room left that receives a few extra units is the factory
-              making more than ordered — receiving them records what physically
-              arrived and leaves the PO reading "received 101 of 100", which is true.
-              A line with NOTHING remaining is what every line looks like once this
-              container's receipt has already been imported, and taking it again
-              doubles the stock silently. The first can be accepted; the second never
-              can, and acceptExcess does not open that door. */}
-          {ir.blocked && (preview.excessShipped || []).length > 0
-            && (preview.blockingOverReceives || []).length === 0 && (
-            <div className="slip-error">
-              <p>
-                The factory shipped <b>more than the PO has left</b> on{' '}
-                {preview.excessShipped.length === 1 ? 'one line' : `${preview.excessShipped.length} lines`}
-                {' '}— {preview.excessShipped.map((o) => `${o.sku} ${o.shipped} against ${o.remaining} remaining (+${o.excess})`).join('; ')}.
-              </p>
-              <p>
-                Receiving it records what actually arrived: the PO stays as it is and
-                reads received-over-ordered, and the extra units go onto the transfer
-                so nothing is received in China and left there.
-              </p>
-              <button onClick={() => reparse({ acceptExcess: true })} disabled={phase === 'previewing'}>
-                Receive the extra {preview.excessShipped.reduce((n, o) => n + o.excess, 0)} and build both files
-              </button>
+          {/* ── ⚠️ WHAT NEEDS A PERSON ────────────────────────────────────
+              Nima, 2026-09-14: "we dont want to automate the reponses but we want to
+              account for them so we can fix them in the app."
+
+              Both of these had an automatic answer before, and both automatic answers
+              happened to be right — which is precisely what made them invisible. A
+              suggestion is marked and is NEVER pre-selected: until someone chooses,
+              the files stay withheld. Every option says what it does to BOTH files,
+              because the transfer is the half you cannot see from here. */}
+          {(preview.exceptions || []).length > 0 && (
+            <div className={`slip-findings ${(preview.unresolved || []).length ? 'warn' : ''}`}>
+              <h4>
+                Needs a decision
+                {(preview.unresolved || []).length > 0
+                  ? ` — ${preview.unresolved.length} unanswered, both files withheld`
+                  : ' — all answered'}
+              </h4>
+              {preview.exceptions.map((e) => {
+                const chosen = (preview.decisions || {})[e.key] || null
+                return (
+                  <div key={e.key} className="slip-exception">
+                    <p className="slip-exception-what">
+                      <b>{e.poNumber}</b> · {e.what}
+                    </p>
+                    <p className="slip-note">{e.why}</p>
+                    {e.resolutions.length === 0 ? (
+                      <p className="slip-error">
+                        There is no option here on purpose. This is also exactly what
+                        every line looks like once this container has already been
+                        received, and nothing in the quantities can tell the two apart.
+                      </p>
+                    ) : (
+                      <ul className="slip-resolutions">
+                        {e.resolutions.map((r) => (
+                          <li key={r.id} className={chosen === r.id ? 'chosen' : ''}>
+                            <button
+                              onClick={() => decide(e.key, r.id)}
+                              disabled={phase === 'previewing' || chosen === r.id}
+                            >
+                              {chosen === r.id ? '\u2713 ' : ''}{r.label}
+                            </button>
+                            {r.suggested && chosen !== r.id && <span className="slip-suggested">suggested</span>}
+                            <span className="slip-note">{r.effect}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
-          {ir.blocked && !((preview.excessShipped || []).length > 0
-            && (preview.blockingOverReceives || []).length === 0) && (
+
+          {/* What the answers actually did — stated in units, on both files. */}
+          {(preview.adjustments || []).length > 0 && (
+            <div className="slip-findings">
+              <h4>Applied to both files</h4>
+              <ul>
+                {preview.adjustments.map((a) => <li key={a.key}>{a.effect}</li>)}
+              </ul>
+              {preview.adjustedUnitCount != null && preview.adjustedUnitCount !== preview.unitCount && (
+                <p className="slip-note">
+                  The slip says <b>{n(preview.unitCount)}</b> units; the files carry{' '}
+                  <b>{n(preview.adjustedUnitCount)}</b>. The difference is the decisions above.
+                </p>
+              )}
+            </div>
+          )}
+
+          {ir.blocked && (preview.blockingOverReceives || []).length > 0 && (
             <p className="slip-error">
               The <b>Item Receipt</b> is withheld: units would land on a PO line that
               cannot hold them, and NetSuite accepts that without complaint. If this
@@ -317,11 +372,10 @@ export default function PackingSlipImport() {
               over-receive of the full quantity means — you do not need it again.
             </p>
           )}
-          {preview.acceptExcess && (preview.acceptedExcess || []).length > 0 && (
-            <p className="slip-note">
-              Receiving <b>{preview.acceptedExcess.reduce((n, o) => n + o.excess, 0)} unit(s) over</b>{' '}
-              deliberately — {preview.acceptedExcess.map((o) => `${o.sku} +${o.excess}`).join(', ')}.
-              The PO is unchanged; the overage shows on the receipt.
+          {ir.blocked && (preview.blockingOverReceives || []).length === 0
+            && (preview.unresolved || []).length === 0 && (
+            <p className="slip-error">
+              The <b>Item Receipt</b> is withheld — see the findings above.
             </p>
           )}
           {tr.blocked && (

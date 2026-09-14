@@ -3420,6 +3420,20 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .slip-findings li { margin: 2px 0; }
 .slip-count { color: var(--muted); font-weight: 400; }
 
+/* ── one exception, and what each answer does to both files ─────────────── */
+.slip-exception { padding: 8px 0; border-top: 1px solid var(--line); }
+.slip-exception:first-of-type { border-top: 0; }
+.slip-exception-what { margin: 0 0 2px; font-size: 13px; }
+.slip-resolutions { list-style: none; margin: 6px 0 0; padding: 0; }
+.slip-resolutions li { display: grid; grid-template-columns: auto auto 1fr; gap: 8px;
+                       align-items: baseline; margin: 4px 0; }
+.slip-resolutions li .slip-note { margin: 0; grid-column: 3; }
+.slip-resolutions li.chosen > button { border-color: var(--ok, var(--mid)); font-weight: 600; }
+.slip-resolutions button { white-space: nowrap; }
+/* ⚠️ A SUGGESTION IS A LABEL, NOT A SELECTION — it must never look chosen. */
+.slip-suggested { font-family: var(--display); font-size: 10px; letter-spacing: 0.06em;
+                  text-transform: uppercase; color: var(--muted); }
+
 .slip-files { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0 4px; }
 .slip-files > div { flex: 1 1 280px; padding: 12px 14px; background: var(--panel);
                     border: 1px solid var(--line); border-radius: 6px; }

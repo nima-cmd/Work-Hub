@@ -64,14 +64,18 @@ const contentHashOf = (base64, text) =>
  * @param containerDate  as printed, "2026.9.7"
  */
 /**
- * @param opts.acceptExcess  receive MORE than a PO line has left, when the factory
- *   genuinely shipped extra. Nima, 2026-09-11: "can we also receive the extra unit on
- *   the ir and use it on the transfer and keep the PO the same showing the overrage in
- *   receipt." It never lifts the DUPLICATE block — see itemReceiptCsv.js — because a
- *   line with nothing remaining is what a re-imported container looks like, and the
- *   two are indistinguishable from the quantities alone.
+ * @param opts.decisions  `{ [exceptionKey]: resolutionId }` — one answer per thing the
+ *   slip says that we cannot simply act on. Nima, 2026-09-14: "we dont want to
+ *   automate the reponses but we want to account for them so we can fix them in the
+ *   app." See src/model/slipExceptions.js for the exceptions and what each resolution
+ *   does to each file.
+ *
+ *   ⚠️ IT IS ALWAYS AN OBJECT, EVEN WHEN EMPTY, and that is what opts this screen into
+ *   the decision layer: `{}` means "a person is being asked and has answered nothing
+ *   yet", which blocks. `null` would mean the old behaviour, where a strap was dropped
+ *   and an over-receive refused with nobody deciding either.
  */
-export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null, acceptExcess = false } = {}) {
+export async function previewPackingSlip({ filename = null, base64 = null, text = null, containerNum = null, containerDate = null, decisions = {} } = {}) {
   if (!base64 && !text) throw new Error('base64 or text is required')
   const suggested = suggestContainerFields(filename || '')
   const num = String(containerNum ?? suggested.containerNum ?? '').trim()
@@ -89,7 +93,8 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
   const wanted = new Set((container.poNumbers || []).map((p) => `PO${String(p).replace(/^PO/i, '')}`.toUpperCase()))
   const mine = poLines.filter((l) => wanted.has(`PO${String(l.po_number).replace(/^PO/i, '')}`.toUpperCase()))
 
-  const { itemReceipt, transfer, importOrder } = await buildNetsuiteExport(container, mine, { acceptExcess })
+  const built = await buildNetsuiteExport(container, mine, { decisions: decisions || {} })
+  const { itemReceipt, transfer, importOrder, exceptions, unresolved, adjustments, adjustedUnitCount } = built
 
   // ── the checks Nima asked for, 2026-09-09 ──────────────────────────────────
   // "we want check balacnces we want to make sure we dont doulbe import anything
@@ -130,7 +135,11 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     suggested,
     sourceFilename: filename,
     format: container.format,
+    // ⚠️ The parse's own figure, and BESIDE it what the files actually carry once the
+    // decisions are applied. Showing only one of them is how a screen reads 1,482 next
+    // to two files that move 1,477.
     unitCount: container.unitCount,
+    adjustedUnitCount,
     cartonCount: container.cartonCount,
     poNumbers: container.poNumbers,
     skuTotals: container.skuTotals,
@@ -158,12 +167,20 @@ export async function previewPackingSlip({ filename = null, base64 = null, text 
     // ⚠️ AND THE TRANSFER GETS A VOTE. It blocks when a PO has no destination at
     // all — previously that produced a file routing stock to a hardcoded
     // "Warehouse", which is how 150 units went to the wrong location on 2026-09-09.
-    blocked: itemReceipt.blocked || transfer.blocked,
+    //
+    // ⚠️ AND AN UNANSWERED EXCEPTION BLOCKS TOO. `built.blocked` carries that; the two
+    // builders' own flags cannot, because a strap left off both files produces two
+    // perfectly clean files and one undecided question.
+    blocked: built.blocked,
     // Surfaced so the screen can OFFER the decision rather than only refusing.
+    exceptions,
+    unresolved,
+    adjustments,
+    decisions: decisions || {},
     excessShipped: itemReceipt.excessShipped ?? [],
     blockingOverReceives: itemReceipt.blockingOverReceives ?? [],
     acceptedExcess: itemReceipt.acceptedExcess ?? [],
-    acceptExcess,
+    nonMerchandise: container.nonMerchandise ?? [],
   }
 }
 

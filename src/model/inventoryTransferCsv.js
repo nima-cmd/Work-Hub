@@ -16,6 +16,7 @@
 // never received, so there is nothing to move. See buildItemReceiptCsv Guard 1.
 
 import { DEFAULT_NOTRACK_KEYWORDS, isNotTracked, toPoFull, slipDateToUs, containerLabel } from './itemReceiptCsv.js'
+import { applyDecisions } from './slipExceptions.js'
 
 const csvCell = (v) => {
   const s = v == null ? '' : String(v)
@@ -147,14 +148,47 @@ export function buildInventoryTransferCsv(container, poLinesByPo = new Map(), un
  *
  * ⚠️ The receipt is built first because the transfer NEEDS its `unmatchedLines`.
  * That is a real dependency, not sequencing for tidiness.
+ *
+ * ── ⚠️ THE DECISIONS ARE APPLIED ONCE, UPSTREAM OF BOTH ────────────────────
+ *
+ * Nima, 2026-09-14: "we would like the ability to choose what to do so our IR and our
+ * transfer order reflects it." Both, and that is the constraint that shapes this.
+ *
+ * `applyDecisions` rewrites the SHIPPED QUANTITIES and hands the same adjusted
+ * container to both builders, so a resolution cannot reach one file and miss the
+ * other. Applying it inside buildItemReceiptCsv would have been the smaller change and
+ * would have produced a receipt that takes 53 with a transfer that moves 54 — a unit
+ * moved out of China that was never received into it.
+ *
+ * ⚠️ AN UNRESOLVED EXCEPTION BLOCKS. Not a warning: the whole point of detecting these
+ * is that nobody has decided yet, and a file built meanwhile has silently decided.
  */
 export function buildNetsuiteExport(container, poLines = [], opts = {}) {
   // Imported here rather than at the top so the two builders stay independently
   // testable and neither pulls the other into a caller that only wants one.
   return import('./itemReceiptCsv.js').then(({ buildItemReceiptCsv, indexPoLines }) => {
-    const itemReceipt = buildItemReceiptCsv(container, poLines, opts)
+    const { decisions = null, ...rest } = opts
+    // ⚠️ NO DECISIONS AT ALL MEANS THE OLD BEHAVIOUR, and that is on purpose: callers
+    // that predate this layer (and their tests) must not start blocking on a strap.
+    // Passing `{}` is what OPTS IN — it means "a person is being asked", which is why
+    // the route always sends an object.
+    const plan = decisions
+      ? applyDecisions(container, poLines, decisions)
+      : { container, exceptions: [], unresolved: [], adjustments: [], acceptedExcessKeys: null }
+
+    const buildOpts = plan.acceptedExcessKeys
+      ? { ...rest, acceptExcess: plan.acceptedExcessKeys }
+      : rest
+    const itemReceipt = buildItemReceiptCsv(plan.container, poLines, buildOpts)
     const { byPo } = indexPoLines(poLines)
-    const transfer = buildInventoryTransferCsv(container, byPo, itemReceipt.unmatchedLines, opts)
-    return { itemReceipt, transfer, importOrder: ['itemReceipt', 'transfer'] }
+    const transfer = buildInventoryTransferCsv(plan.container, byPo, itemReceipt.unmatchedLines, buildOpts)
+    return {
+      itemReceipt, transfer, importOrder: ['itemReceipt', 'transfer'],
+      exceptions: plan.exceptions,
+      unresolved: plan.unresolved,
+      adjustments: plan.adjustments,
+      adjustedUnitCount: plan.container.unitCount,
+      blocked: itemReceipt.blocked || transfer.blocked || plan.unresolved.length > 0,
+    }
   })
 }
