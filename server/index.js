@@ -6,6 +6,7 @@ import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { manifestPdf } from './exemplarManifestPdf.js'
 import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
+import { cartonGuidePdf } from './cartonGuidePdf.js'
 import { consigneeCompany } from '../src/model/exemplarStores.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
@@ -552,6 +553,27 @@ app.get('/api/exemplar/packing-slip.pdf', async (req, res) => {
 // review it before we print." A carton label is 22 pieces of adhesive stock and a
 // physical act; the PDF opens in a tab and he prints it when he has looked at it.
 // The cargo tags keep their direct path because a tag is one label and reprintable.
+
+// The application guide — where every label physically goes on the box.
+// ⚠️ INTERNAL. It never leaves the building, which is why it keeps the section numbers
+// and the fees the customer-facing documents deliberately drop.
+app.get('/api/exemplar/carton-guide.pdf', async (req, res) => {
+  try {
+    const { cartons, shipment } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    const size = req.query.size || '4x6'
+    const dims = { '4x6': { w: 4, h: 6 }, '3x6': { w: 3, h: 6 }, 'half-sheet': { w: 5.5, h: 8.5 } }[size]
+    if (!dims) throw new Error(`unknown label size "${size}"`)
+    const doc = await cartonGuidePdf(
+      cartons.map((c) => ({ carton: c.carton, box: c.box })),
+      { label: dims, po: cartons[0].po, store: cartons[0].store, dc: shipment.dc, slipCarton: 1 })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="carton-guide-${cartons[0].po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Carton guide not available.\n\n${e.message}`)
+  }
+})
 
 // ── The Exemplar Master Manifest ────────────────────────────────────────────
 // Guide p13 — required for ALL shipments, handed to the carrier at pick-up. The one

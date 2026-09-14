@@ -4,7 +4,7 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
 import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
@@ -1062,6 +1062,10 @@ function BolActions({ s }) {
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. 4x6 — the warehouse Zebra's stock.">
             Labels 4×6 ↗
+          </a>
+          <a className="btnGhost" href={cartonGuidePdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
+             title="Where every label goes on the box, drawn to scale per box size. Internal sheet.">
+            Where to stick it ↗
           </a>
           <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
              title="One per carton, §8.5. Half-sheet stock.">

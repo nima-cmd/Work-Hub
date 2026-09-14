@@ -156,7 +156,9 @@ export const LABEL_PLACEMENT = {
 /** §8.5 / §9 — what must be printed on every carton, regardless of EDI status. */
 export const CARTON_MARKINGS = [
   'Company name / address',
-  'Operating company name/address (i.e. Saks Fifth Avenue)',
+  // ⚠️ The Manual's own example says "Saks Fifth Avenue"; OUR operating company is
+  // Exemplar Luxury Group (see consigneeCompany), so the example is given as ours.
+  'Operating company name/address (for us: Exemplar Luxury Group)',
   'PO number',
   'Department number',
   'Store number and abbreviation',

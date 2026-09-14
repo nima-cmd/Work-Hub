@@ -1279,3 +1279,7 @@ export const packingSlipPdfUrl = (shipmentId) => `/api/exemplar/packing-slip.pdf
 export const cartonLabelsPdfUrl = (shipmentId, size = 'half-sheet') =>
   `/api/exemplar/carton-labels.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`
 
+
+// The application guide — where each label goes on the physical box. Internal sheet.
+export const cartonGuidePdfUrl = (shipmentId, size = '4x6') =>
+  `/api/exemplar/carton-guide.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`

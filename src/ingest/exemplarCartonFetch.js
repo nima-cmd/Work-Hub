@@ -24,7 +24,9 @@ export async function fetchCartonRows(ifId) {
            COALESCE(TO_NUMBER(custrecord_hb_edi_package_weight),0) AS weight,
            custrecord_hb_edi_package_ucc AS ucc,
            custrecord_pkg_upc_or_mixed AS contents,
-           custrecord_pkg_total_num_cartons AS total_cartons
+           custrecord_pkg_total_num_cartons AS total_cartons,
+           -- The box's dimensions, needed to say WHERE the label goes on it.
+           BUILTIN.DF(custrecord_hb_edi_package_definition) AS box
       FROM customrecord_hb_edi_packages
      WHERE isinactive = 'F' AND custrecord_hb_edi_pack_related_iff = ${Number(ifId)}`)
   if (!q.ok) return { ok: false, error: q.error }
@@ -32,6 +34,7 @@ export async function fetchCartonRows(ifId) {
     .map((r) => ({
       carton: Number(r.carton_no), units: Number(r.units) || 0,
       weightLb: Number(r.weight) || 0, sscc: r.ucc, contents: r.contents ?? null,
+      box: r.box ?? null,
       totalCartons: Number(r.total_cartons) || q.rows.length,
     }))
     .sort((a, b) => a.carton - b.carton)
