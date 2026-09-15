@@ -55,19 +55,18 @@ test('the rules modules resolve back to the document they were built from', () =
   assert.equal(documentForModule('src/model/nothing.js'), null)
 })
 
-test('⚠️ THE GAP REPORT NAMES THE THREE GUIDES NOBODY HAD READ', () => {
-  // The point of the registry: these sat in Drive while I told Nima I needed them.
+test('⚠️ THE GAP REPORT SHRANK BY ONE — the Macy\'s Routing Guide is read', () => {
+  // This test used to assert `macys-routing` was a gap, and it was right to: the guide
+  // sat in Drive while the app enforced merge-centre addresses harvested from routing
+  // emails. It was extracted 2026-09-15 into src/model/macysRouting.js (rev 4/14/26),
+  // so the guard now pins the OTHER two rather than being loosened.
   const keys = unreadDocuments().map((d) => d.key)
-  assert.ok(keys.includes('macys-routing'))
+  assert.ok(!keys.includes('macys-routing'), 'the Macy\'s Routing Guide is no longer a gap')
   assert.ok(keys.includes('shopbop-vendor-ops'))
   assert.ok(keys.includes('nordstrom-edi'))
   // A superseded edition is not a gap — nobody should be reading it.
   assert.ok(!keys.includes('saks-standards-2024-06'))
   assert.ok(!keys.includes('nmg-routing'))
-  // And a rule enforced from a document nobody read says so, with the citation.
-  const macys = unreadDocuments().find((d) => d.key === 'macys-routing')
-  assert.match(macys.why, /bolAddresses\.js/)
-  assert.match(macys.why, /cannot be checked against the source/)
 })
 
 test('a partner lookup puts the governing edition first', () => {
@@ -182,7 +181,7 @@ test('the guides folder is described but NOT created', () => {
   assert.match(GUIDES_ROOT.mirrors, /googleDrive\.js/)
 })
 
-test('⚠️ ONE OF THE THREE IS NOW READ, AND THE OTHER TWO STILL SAY SO', () => {
+test('⚠️ TWO OF THE FOUR ARE NOW READ, AND THE OTHER TWO STILL SAY SO', () => {
   // All three arrived unread the day four Bloomingdale's orders shipped short. The
   // Vendor Standards has since been read — it is a Macy's 2023 document whose
   // Appendix H prices a shortage at 50% of the merchandise — and rulesIn now points
@@ -193,7 +192,13 @@ test('⚠️ ONE OF THE THREE IS NOW READ, AND THE OTHER TWO STILL SAY SO', () =
   assert.equal(vs.editionDate, '2023-01-01')
   assert.match(vs.governs, /Expense Offsets/)
 
-  for (const key of ['bloomingdales-routing', 'macys-store-dc-listing', 'macys-routing']) {
+  // ⚠️ AND THE MACY'S ROUTING GUIDE HAS JOINED IT — extracted 2026-09-15, rev 4/14/26.
+  // It is asserted POSITIVELY rather than dropped from the loop, so that reading a
+  // document has to be recorded here too and cannot quietly stop being tracked.
+  const rg = DOCUMENTS.find((d) => d.key === 'macys-routing')
+  assert.equal(rg.rulesIn, 'src/model/macysRouting.js')
+
+  for (const key of ['bloomingdales-routing', 'macys-store-dc-listing']) {
     assert.equal(DOCUMENTS.find((x) => x.key === key).rulesIn, null, `${key} must still read as unread`)
   }
   assert.ok(unreadDocuments().some((d) => d.key === 'bloomingdales-routing'))

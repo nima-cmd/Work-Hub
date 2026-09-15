@@ -197,6 +197,10 @@ export const CARRIERS = {
   // 15779316. Their notice gives the SCAC outright: "Your assigned LTL Carrier is
   // Linear Logistics (SCAC: LLGJ)".
   'Linear Logistics': 'LLGJ',
+  // ⚠️ FXFE WAS MISSING. The Macy's Routing Guide names "FedEx Freight – LTL (FXFE or
+  // FXNL)" (p13) and we held only FXNL, so a shipment MTO assigned to FXFE resolved to
+  // no carrier at all — and the BOL's freight-term derivation keys off carrier/SCAC.
+  'FedEx Freight FXFE': 'FXFE',
 }
 
 /** SCAC for a carrier name, case- and spacing-insensitive.

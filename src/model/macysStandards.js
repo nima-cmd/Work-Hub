@@ -355,8 +355,9 @@ export function macysShipmentChecklist({ cartons = 1, receipts = 1, units = 0, m
     // ⚠️ NAMED, NOT IMPLIED. See the docblock: three of the four Macy's-side documents
     // in partnerDocuments are unread, and a checklist that does not say so reads as
     // complete.
+    // ⚠️ THE ROUTING GUIDE IS READ NOW — src/model/macysRouting.js, rev 4/14/26. What
+    // remains unread is the Bloomingdale's-specific guide and the Store-to-DC listing.
     notCovered: [
-      'The Macy\'s Routing Guide (macys-routing) — unread. Carrier selection, routing request timing, BOL rules and appointment scheduling all live there.',
       'The Bloomingdale\'s Routing Guide (bloomingdales-routing) — unread.',
       'The Store-to-DC listing — unread; src/model/bolAddresses.js carries DC addresses harvested from routing notifications instead.',
     ],

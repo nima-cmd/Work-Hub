@@ -1,311 +1,131 @@
-import test from 'node:test'
+// test/macysRouting.test.js — the Macy's Routing Guide, rev 4/14/26.
+
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  parseRoutingNotification, parseCarrier, parseConsignee, parseMacysDate,
-  projectsReconcile, planRoutingApply, summarizeRoutingMisses, PAIRING, MISS,
+  SOURCE, REMOVED_DCS, isRemovedDc, FREIGHT_POLICY, FREIGHT_TERMS, freightTermsFor,
+  DEADLINES, VARIANCE, withinVariance, cubeFor, PALLET, BOL_RULES, MERGE_CENTERS,
+  ltlPickupActionFor, SHIP_COMPLETE, cubePerCarton,
 } from '../src/model/macysRouting.js'
+import { MERGE_CENTERS as BOL_MERGE } from '../src/model/bolAddresses.js'
 
-// Shaped from the real 2026-08-13 notification (project 9022514 / shipment 52172263),
-// trimmed to the parts that carry data plus enough boilerplate to prove the parser
-// stops at the right boundary. The tail deliberately repeats the words "Carrier" and
-// "Project" — that page of standing instructions is why the body is bounded.
-const BODY = `<style>.carrier { color: red }</style>
-<div>The following project has been authorized for shipping.</div>
-<div><b>Appointment #:</b> N/A</div>
-<div><b>Trip ID / Authorization #:</b> 00052850382S</div>
-<div><b>Carrier:</b> UPS GRND - BILL TO ACCT#5R12Y0 (UPSN)</div>
-<div><b>Carrier Mode:</b> SMALL PACKAGE</div>
-<div><b>Phone:</b> (111)111-1111X3176</div>
-<div><b>Pickup Date:</b> 08/18/2026</div>
-<div><b>Delivery Date :</b> 08/19/2026</div>
-<div><b>Appointment Type :</b> Drop</div>
-<div>Reminder: All Truckload and Intermodal trailers are required to use bolt seals.</div>
-<div>BILLS OF LADING</div>
-<div>Project Number(s) 9022514 containing Shipment(s) 52172263 - Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094</div>
-<div>If you have received a notification email with the carrier field showing as
-follows: ERROR Carrier: Project Number(s) 999 containing Shipment(s) 888</div>`
-
-const SUBJECT = "Macy's, Inc. Routing Notification (Project(s) 9022514)"
-
-const parse = (over = {}) => parseRoutingNotification({
-  subject: SUBJECT, body: BODY, receivedAt: '2026-08-13T14:00:20Z', messageId: 'm1', ...over,
+test('the edition is the one Nima supplied, and it is the current one', () => {
+  assert.equal(SOURCE.revision, '4/14/26')
+  assert.match(SOURCE.revisionSource, /Summary of Changes/)
 })
 
-test('parses every field off a real notification', () => {
-  const n = parse()
-  assert.equal(n.authNumber, '00052850382S')
-  assert.equal(n.appointmentNumber, null) // 'N/A' is not a number
-  assert.equal(n.carrier, 'UPS GRND')
-  assert.equal(n.scac, 'UPSN')
-  assert.equal(n.billToAccount, '5R12Y0')
-  assert.equal(n.carrierMode, 'SMALL PACKAGE')
-  assert.equal(n.pickupDate, '2026-08-18')
-  assert.equal(n.deliveryDate, '2026-08-19')
-  assert.equal(n.appointmentType, 'Drop')
-  assert.equal(n.pairing, PAIRING.ONE_TO_ONE)
-  assert.deepEqual(n.subjectProjects, ['9022514'])
+test('⚠️ THREE DCs WERE REMOVED ON 4/14/26 AND WE HAD SHIPPED TO ONE', () => {
+  // SO11521 went to "Bloomingdale's - 0135 Cheshire Pool Stock/Customer Fulfillment
+  // Center" — shipped 2026-04-07, a week before the removal, so historical rather than
+  // live. Recorded so a future routing to one is caught rather than found at a closed dock.
+  assert.deepEqual(REMOVED_DCS.names, ['Cheshire', 'West Johnson', 'Sacramento'])
+  assert.ok(isRemovedDc("Bloomingdale's - 0135 Cheshire Pool Stock/Customer Fulfillment Center"))
+  assert.ok(isRemovedDc('West Johnson'))
+  assert.ok(!isRemovedDc('Secaucus'))
 })
 
-// The boilerplate below the data repeats "Project Number(s) 999 containing
-// Shipment(s) 888" as an example. Reading it would authorize a shipment that does
-// not exist.
-test('stops at the end of the BILLS OF LADING section', () => {
-  const n = parse()
-  assert.equal(n.stops.length, 1)
-  assert.equal(n.stops[0].projectNumber, '9022514')
-  assert.equal(n.stops[0].shipmentNumber, '52172263')
-  assert.equal(n.stops[0].shipDirect, true)
-  assert.equal(n.stops[0].dcName, 'SECAUCUS')
+test('⚠️ MACY\'S FORBIDS PREPAY-AND-ADD — the exact opposite of the Exemplar PO', () => {
+  // Exemplar's PO 8928906 header reads Freight: Prepaid. Macy's §3.0 is capitals: "DO
+  // NOT PREPAY AND ADD FREIGHT CHARGES TO THE MERCHANDISE INVOICE." Same field on the
+  // same form, opposite answers, both correct for their partner — which is why the
+  // BOL's freight term must never be one default shared across partners.
+  assert.equal(FREIGHT_POLICY.neverPrepayAndAdd, true)
+  assert.equal(FREIGHT_POLICY.page, 6)
 })
 
-test('a body with no authorization number is not a notification', () => {
-  assert.equal(parseRoutingNotification({ subject: SUBJECT, body: '<div>hello</div>' }), null)
-})
-
-test('the subject is the body\'s checksum', () => {
-  assert.equal(projectsReconcile(parse()), true)
-  const wrong = parse({ subject: "Routing Notification (Project(s) 9022514,9099999)" })
-  assert.equal(projectsReconcile(wrong), false)
-})
-
-test('carrier: the stored short name, the SCAC, and the third-party account', () => {
-  assert.deepEqual(parseCarrier('UPS GRND - BILL TO ACCT#5R12Y0 (UPSN)'),
-    { name: 'UPS GRND', scac: 'UPSN', billToAccount: '5R12Y0', raw: 'UPS GRND - BILL TO ACCT#5R12Y0 (UPSN)' })
-  // No space before the hyphen — the shape that would defeat a ' - ' split.
-  assert.equal(parseCarrier('FEDEX GROUND- PARCEL-COLLECT (FDEG)').name, 'FEDEX GROUND')
-  assert.equal(parseCarrier('FEDEX GROUND- PARCEL-COLLECT (FDEG)').scac, 'FDEG')
-  assert.equal(parseCarrier('FEDEX ECONOMY - LTL (FXNL)').name, 'FEDEX ECONOMY')
-  assert.equal(parseCarrier('').name, null)
-})
-
-test('consignee: direct to the DC, or via a Merge Center', () => {
-  const direct = parseConsignee('SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094')
-  assert.equal(direct.shipDirect, true)
-  assert.equal(direct.mergeCenter, null)
-  assert.equal(direct.dcName, 'SECAUCUS')
-
-  const via = parseConsignee('STONE MOUNTAIN (BT) c/o MEGA-MERGE CA 12801 EXCELSIOR DRIVE SANTA FE SPGS , CA 90670')
-  assert.equal(via.shipDirect, false)
-  assert.equal(via.mergeCenter, 'CA')
-  assert.equal(via.dcName, 'STONE MOUNTAIN (BT)')
-})
-
-test('a pickup date is a DATE — the time of day is never turned into an instant', () => {
-  assert.equal(parseMacysDate('08/04/2026 10:00:00 AM'), '2026-08-04')
-  assert.equal(parseMacysDate('08/18/2026'), '2026-08-18')
-  assert.equal(parseMacysDate('not a date'), null)
-})
-
-// ── the comma-list block, from the real 2026-05-04 notification ───────────────
-const listBody = (projects, shipments) => BODY.replace(
-  'Project Number(s) 9022514 containing Shipment(s) 52172263 - Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-  `Project Number(s) ${projects} containing Shipment(s) ${shipments} - Consigned to: SECAUCUS c/o MEGA-MERGE CA 12801 EXCELSIOR DRIVE SANTA FE SPGS , CA 90670`,
-)
-
-test('equal-length comma lists are zipped by position', () => {
-  const n = parse({ body: listBody('8836810,8835718', '51756016,51754370') })
-  assert.equal(n.pairing, PAIRING.BY_POSITION)
-  assert.deepEqual(n.stops.map((s) => [s.projectNumber, s.shipmentNumber]),
-    [['8836810', '51756016'], ['8835718', '51754370']])
-})
-
-// ⚠️ The SRR lesson: a reference on the wrong shipment is worse than no reference,
-// because it is a number someone types into a portal with confidence.
-test('unequal comma lists pair NOTHING and say so', () => {
-  const n = parse({ body: listBody('8836810,8835718', '51756016') })
-  assert.equal(n.pairing, PAIRING.COUNT_MISMATCH)
-  assert.equal(n.stops.length, 1)
-  assert.equal(n.stops[0].unpaired, true)
-  assert.equal(n.stops[0].projectNumber, null)
-  assert.equal(n.stops[0].shipmentNumber, null)
-
-  const { misses, applies } = planRoutingApply(n, [])
-  assert.equal(applies.length, 0)
-  assert.equal(misses[0].kind, MISS.UNPAIRED)
-})
-
-// ── the dual exact key ────────────────────────────────────────────────────────
-const card = (over = {}) => ({
-  id: 30, partner: "Bloomingdale's", dc: 'SC', bolNumber: 'NB1731263', status: 'needs_routing',
-  projectNumber: '9022514', shipmentNumber: '52172263',
-  authNumber: null, carrier: null, scac: null, shipDate: '2026-08-12', ...over,
-})
-
-test('both keys matching is the only path that writes', () => {
-  const plan = planRoutingApply(parse(), [card()])
-  assert.equal(plan.matched, 1)
-  assert.equal(plan.misses.length, 0)
-  assert.deepEqual(plan.applies[0].set, {
-    authNumber: '00052850382S', carrier: 'UPS GRND', scac: 'UPSN', shipDate: '2026-08-18',
-    // Where it is CONSIGNED comes off the same notification. This was parsed and
-    // discarded until 2026-08-13, so the card kept the column default — "via the CA
-    // merge center" — while its own authorization said Secaucus, direct.
-    shipDirect: true,
-    consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-  })
-  // The live case: the card read six days early and the notification corrects it.
-  assert.equal(plan.applies[0].shipDateWas, '2026-08-12')
-})
-
-test('the project matching alone never writes', () => {
-  const plan = planRoutingApply(parse(), [card({ shipmentNumber: '99999999' })])
-  assert.equal(plan.applies.length, 0)
-  assert.equal(plan.misses[0].kind, MISS.PROJECT_ONLY)
-  assert.match(plan.misses[0].detail, /99999999/)
-})
-
-test('the shipment matching alone never writes', () => {
-  const plan = planRoutingApply(parse(), [card({ projectNumber: '99999999' })])
-  assert.equal(plan.applies.length, 0)
-  assert.equal(plan.misses[0].kind, MISS.SHIPMENT_ONLY)
-})
-
-test('two different cards holding one key each is not a match', () => {
-  const plan = planRoutingApply(parse(), [
-    card({ id: 1, shipmentNumber: null }),
-    card({ id: 2, projectNumber: null }),
-  ])
-  assert.equal(plan.applies.length, 0)
-  assert.equal(plan.misses[0].kind, MISS.PROJECT_ONLY)
-})
-
-test('a notification matching nothing is historical, not nine failures', () => {
-  const plan = planRoutingApply(parse(), [card({ projectNumber: 'x', shipmentNumber: 'y' })])
-  assert.equal(plan.outOfScope, true)
-})
-
-// ⚠️ Found on the live board, not in review. Notification 00052827257S matches seven
-// cards that all carry a conflicting authorization. Deriving "historical" from
-// applies.length called it historical and skipped printing all seven conflicts —
-// a count answering a different question from its label.
-test('a notification that matched cards is NOT historical, even if it writes nothing', () => {
-  const plan = planRoutingApply(parse(), [card({ authNumber: '55753138', status: 'authorized' })])
-  assert.equal(plan.applies.length, 0)
-  assert.equal(plan.matchedCards, 1)
-  assert.equal(plan.outOfScope, false)
-})
-
-// ⚠️ Shipments 5–8 on the live board store 55753138 — that notification's APPOINTMENT
-// number, not its Trip ID. A rule that "corrected" them would silently rewrite a
-// number keyed off a document.
-test('an existing authorization is never overwritten', () => {
-  const plan = planRoutingApply(parse(), [card({ authNumber: '55753138', status: 'authorized' })])
-  assert.equal(plan.misses.some((m) => m.kind === MISS.AUTH_CONFLICT), true)
-  // Nothing at all is written: a card already carrying a DIFFERENT authorization is
-  // not this notification's card, so its carrier and dates are not ours to move
-  // either. The conflict is the whole finding — one human look, not a partial write.
-  assert.equal(plan.applies.length, 0)
-  assert.equal(plan.changes, 0)
-})
-
-test('the same notification applied twice is a no-op', () => {
-  const settled = card({
-    authNumber: '00052850382S', carrier: 'UPS GRND', scac: 'UPSN',
-    shipDate: '2026-08-18', status: 'authorized',
-    // A settled card includes where it is consigned. Leaving these off made the
-    // fixture assert a no-op that the real lane could not deliver.
-    shipDirect: true, consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-  })
-  const plan = planRoutingApply(parse(), [settled])
-  assert.equal(plan.matched, 1)
-  assert.equal(plan.changes, 0)
-  assert.equal(plan.misses.length, 0)
-})
-
-// Nima: "the date the bol is created is the date i generate it for routing, it has
-// nothing to do with what date i think it will ship." So the stored date is an
-// artifact, not a prediction — the pickup date wins regardless of status. My first
-// cut held it on an `authorized` card, which treated an artifact as evidence.
-test('the pickup date wins on any card that has not left, whatever its status', () => {
-  for (const status of ['needs_routing', 'submitted', 'authorized', 'routed']) {
-    const plan = planRoutingApply(parse(), [card({ status, shipDate: '2026-08-02' })])
-    assert.equal(plan.applies[0].set.shipDate, '2026-08-18', `status ${status}`)
-    assert.equal(plan.misses.length, 0, `status ${status}`)
+test('RXO is the only third-party lane, and it carries its own bill-to', () => {
+  assert.equal(freightTermsFor('XLTL').terms, '3rd Party')
+  assert.deepEqual(freightTermsFor('XLTL').billTo, ["Macy's c/o RXO", 'PO Box 49069', 'Charlotte, NC 28277'])
+  for (const scac of ['FXFE', 'FXNL', 'DYXI', 'PAAF']) {
+    assert.equal(freightTermsFor(scac).terms, 'Collect', scac)
   }
 })
 
-// The one guard that stays: a departed shipment is history, and `shipped_at` is the
-// real evidence of when it left. The 08-01 batch departed 08-03, BEFORE its own 08-04
-// pickup date — writing 08-04 there would claim a date after the freight was gone.
-test('a departed shipment keeps its date — history is surfaced, not rewritten', () => {
-  const plan = planRoutingApply(parse(), [
-    card({ status: 'authorized', shipDate: '2026-08-02', shippedAt: '2026-08-03T00:00:00Z' }),
-  ])
-  assert.equal(plan.applies[0].set.shipDate, undefined)
-  const m = plan.misses.find((x) => x.kind === MISS.SHIP_DATE_DEPARTED)
-  assert.ok(m)
-  assert.match(m.detail, /left 2026-08-03/)
+test('⚠️ THE BOL DERIVATION IN server/bolPdf.js AGREES WITH THE GUIDE', () => {
+  // bolPdf has derived `/XLTL|RXO/ ? '3rd' : 'Collect'` since before the guide was read.
+  // It turns out to match p13 exactly — correct by accident until now, checkable from here.
+  const derive = (scac) => (/XLTL|RXO/i.test(scac) ? '3rd Party' : 'Collect')
+  for (const scac of Object.keys(FREIGHT_TERMS)) {
+    const e = FREIGHT_TERMS[scac]
+    if (!e || !e.terms) continue
+    assert.equal(derive(scac), e.terms, `${scac} disagrees with the guide`)
+  }
 })
 
-test('a matched card whose DC disagrees is applied AND flagged', () => {
-  const plan = planRoutingApply(parse(), [card({ dc: 'ST', dcLabel: 'Stone Mountain' })])
-  assert.equal(plan.applies.length, 1)
-  assert.equal(plan.misses[0].kind, MISS.DC_DISAGREES)
-  const agree = planRoutingApply(parse(), [card({ dc: 'SC', dcLabel: 'Secaucus' })])
-  assert.equal(agree.misses.length, 0)
+test('an unknown carrier is null, not assumed Collect', () => {
+  assert.equal(freightTermsFor('LLGJ'), null)   // Linear Logistics is Exemplar's, not Macy's
+  assert.equal(freightTermsFor(''), null)
 })
 
-test('summary counts each kind of miss separately, never lumped', () => {
-  const s = summarizeRoutingMisses([
-    planRoutingApply(parse(), [card({ shipmentNumber: '9' })]),
-    planRoutingApply(parse(), [card()]),
-  ])
-  assert.equal(s.notifications, 2)
-  assert.equal(s.projectOnly, 1)
-  assert.equal(s.applied, 1)
+test('⚠️ THE INDC DATE IS AN ARRIVAL DATE', () => {
+  // "The INDC date on your purchase order is when the goods are expected to ARRIVE."
+  // Reading it as a ship date is 7-14 days of error in the wrong direction.
+  assert.equal(DEADLINES.indcIsArrival, true)
+  assert.deepEqual(DEADLINES.rtsBeforeIndcDays, [7, 14])
+  assert.equal(DEADLINES.entryBeforeCancelDays, 3)
 })
 
-// ── Where the freight is consigned ──────────────────────────────────────────────
-//
-// ⚠️ THE BUG THESE PROTECT, and it was live. `routing_shipment.ship_direct` DEFAULTS
-// to false and `merge_center` DEFAULTS to 'CA', so a card nobody hand-edited asserted
-// "consigned via the Santa Fe Springs merge center". On 2026-08-13 all five
-// Bloomingdale's cards authorized for the 08-18 pickup read that way, while their own
-// notifications consigned them DIRECT to Secaucus / Los Angeles / Stone Mountain /
-// China Grove / Joppa. The BOL's ship-to block reads these fields.
-//
-// The parser had produced the right answer the whole time; the planner threw it away.
-
-test('the notification decides where the freight is consigned, beating a stored default', () => {
-  // The card carries `false` — the column default, which nobody typed. A COALESCE
-  // would treat that as an answer and change nothing; that is precisely how the
-  // wrong value survived, so the write is keyed on DISAGREEMENT, not on absence.
-  const plan = planRoutingApply(parse(), [card({ shipDirect: false, mergeCenter: 'CA' })])
-  assert.equal(plan.applies[0].set.shipDirect, true)
-  assert.equal(plan.applies[0].set.consignedTo, 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094')
-  // Named on both sides, because a change to the destination must never move quietly.
-  assert.match(plan.applies[0].consigneeWas, /merge center CA/)
-  assert.match(plan.applies[0].consigneeNow, /direct to SECAUCUS/)
+test('⚠️ LTL TOLERATES NO VARIANCE AT ALL — and every Bloomingdale\'s shipment is LTL', () => {
+  // TL gets ±49 cartons; LTL gets "no shipment alterations tolerated" and MacysNet must
+  // match the BOL. Our carton counts move whenever a fulfilment is re-packed.
+  assert.equal(VARIANCE.LTL.cartons, 0)
+  assert.equal(withinVariance('LTL', { cartons: 1 }).ok, false)
+  assert.equal(withinVariance('TL', { cartons: 40 }).ok, true)
+  assert.equal(withinVariance('TL', { cartons: 50 }).ok, false)
+  assert.equal(withinVariance('PARCEL', { weightLb: 50 }).ok, true)
 })
 
-test('a card that already agrees is left alone, so a re-run reports no change', () => {
-  const plan = planRoutingApply(parse(), [card({
-    shipDirect: true,
-    consignedTo: 'SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-  })])
-  assert.equal(plan.applies[0].set.shipDirect, undefined)
-  assert.equal(plan.applies[0].set.consignedTo, undefined)
-  assert.equal(plan.applies[0].consigneeWas, null)
+test('an unknown mode says so rather than passing', () => {
+  const r = withinVariance('AIR', { cartons: 999 })
+  assert.equal(r.known, false)
+  assert.ok(!r.ok)
 })
 
-test('a merge-center notification writes the merge center, not just the direct case', () => {
-  const via = BODY.replace(
-    'Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-    'Consigned to: SECAUCUS c/o MEGA-MERGE CA 12801 EXCELSIOR DRIVE SANTA FE SPGS , CA 90670',
-  )
-  const plan = planRoutingApply(parse({ body: via }), [card({ shipDirect: true })])
-  assert.equal(plan.applies[0].set.shipDirect, false)
-  assert.equal(plan.applies[0].set.mergeCenter, 'CA')
+test('⚠️ THE GUIDE ROUNDS PER CARTON BEFORE MULTIPLYING, and we must too', () => {
+  // p11's worked example: 150 @ 25x21x25 = "7.60 cube per carton = 1,140 cube". Exactly
+  // it is 7.5955, and full precision gives 1,139.32. §12.1 charges $50 per freight bill
+  // PLUS FULL FREIGHT for an inaccurate cube, so the number we enter has to be the one
+  // their method produces — not a more precise one that disagrees with it.
+  assert.equal(cubePerCarton(25, 21, 25), 7.6)
+  assert.equal(cubeFor([{ length: 25, width: 21, height: 25, count: 150 }]), 1140)
+  assert.equal(cubeFor([{ length: 18, width: 16, height: 15, count: 250 }]), 625)
+  assert.equal(cubeFor([{ length: 15, width: 12, height: 9, count: 125 }]), 117.5)
 })
 
-test('an unparseable consignee writes NOTHING — a non-answer is not evidence', () => {
-  // The rule from routingAuthSource: "we looked and found nothing" must never be
-  // written as if it were a finding. shipDirect null → no field is set.
-  const blank = BODY.replace(
-    'Consigned to: SECAUCUS 500 MEADOWLANDS PARKWAY SECAUCUS , NJ 07094',
-    'Consigned to:  ',
-  )
-  const plan = planRoutingApply(parse({ body: blank }), [card({ shipDirect: false })])
-  assert.equal(plan.applies[0].set.shipDirect, undefined)
-  assert.equal(plan.applies[0].set.consignedTo, undefined)
+test('a carton with no dimensions is skipped, not counted as zero volume silently', () => {
+  assert.equal(cubeFor([{ length: 22, width: 16, height: 7, count: 1 }, { count: 5 }]), 1.43)
+})
+
+test('⚠️ PALLETS ARE LTL-ONLY AND ONLY WHEN AUTHORISED — $500 an occurrence otherwise', () => {
+  assert.match(PALLET.palletsOnlyWhen, /LTL/)
+  assert.equal(PALLET.unauthorisedUse.amount, 500)
+  assert.equal(PALLET.doubleStack, false)
+  assert.equal(PALLET.maxPallets.FXNL, 8)
+  assert.equal(PALLET.maxPallets.other, 10)
+})
+
+test('⚠️ THE MASTER BOL NUMBER IS NOT ON THE 856', () => {
+  // The underlying per-DC BOL numbers are. Getting that backwards breaks the ASN for
+  // every DC in the load.
+  const master = BOL_RULES.find((r) => /Master BOL is required/.test(r.rule))
+  assert.match(master.rule, /NOT transmitted on the EDI 856/)
+})
+
+test('⚠️ THE MERGE CENTRE ADDRESSES WE ALREADY PRINT MATCH THE GUIDE', () => {
+  // bolAddresses.MERGE_CENTERS was built from routing notifications, before the guide
+  // was read. p18 confirms all three, which is worth pinning rather than assuming.
+  assert.equal(BOL_MERGE.CA.street, MERGE_CENTERS.CA.street)
+  assert.equal(BOL_MERGE.NJ.street, MERGE_CENTERS.NJ.street)
+  assert.equal(BOL_MERGE.HP.street, MERGE_CENTERS.NC.street)
+})
+
+test('who schedules the LTL pickup depends on the carrier', () => {
+  assert.match(ltlPickupActionFor('FXNL').action, /vendor contacts FedEx/)
+  assert.match(ltlPickupActionFor('XLTL').action, /vendor initiates/)
+  assert.match(ltlPickupActionFor('DYXI').action, /designated carrier schedules/)
+})
+
+test('ship-complete points at where the shortage is actually priced', () => {
+  assert.match(SHIP_COMPLETE.rule, /expected to ship complete/)
+  assert.match(SHIP_COMPLETE.pricedIn, /poNoncompliance/)
 })

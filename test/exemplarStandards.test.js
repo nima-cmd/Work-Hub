@@ -167,8 +167,12 @@ test('⚠️ IT NAMES WHAT IT HAS NOT READ', () => {
   // checklist that does not say so reads as complete, and this one is deliberately not
   // the equal of Exemplar's.
   const c = macysShipmentChecklist({})
-  assert.equal(c.notCovered.length, 3)
-  assert.ok(c.notCovered.some((n) => /Routing Guide/.test(n)))
+  // ⚠️ WAS THREE, NOW TWO — the Macy's Routing Guide was read 2026-09-15 into
+  // macysRouting.js. The count is asserted rather than the mere presence of a list, so
+  // that closing a gap has to be reflected here and a stale "unread" cannot linger.
+  assert.equal(c.notCovered.length, 2)
+  assert.ok(c.notCovered.some((n) => /Bloomingdale/.test(n)))
+  assert.ok(!c.notCovered.some((n) => /Macy's Routing Guide/.test(n)))
   assert.match(c.caveat, /Confirm the edition/)
 })
 
