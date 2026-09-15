@@ -6428,3 +6428,39 @@ async function netsuiteIdFor(tranid) {
   const q = await runSuiteQL(`SELECT id FROM transaction WHERE tranid = '${String(tranid).replace(/'/g, "''")}'`)
   return q.ok ? (q.rows[0]?.id ?? null) : null
 }
+
+// ── Recording that a container arrived (2026-09-15) ──────────────────────────
+// The drayage from the port of discharge to Glendale is arranged by nobody whose system
+// we can read (Nima, 2026-09-15: "the part where its transported to us is the part that
+// is invisible"), so this fact exists only when a person states it.
+//
+// ⚠️ STORED AS AN ENTERED VALUE, WITH ITS AUTHOR AND ITS MOMENT — the standing rule in
+// src/model/fieldAssumptions.js. A delivery date that cannot say who decided it is
+// indistinguishable from an observation, and the whole point of this column is that it
+// is NOT one. src/model/containerDelivery.js keeps it apart from the receipt dates
+// NetSuite supplies, and db/schema.sql records why neither may be derived from
+// `port_arrived_on`.
+export async function recordContainerDelivered({ label, deliveredOn, by, note } = {}) {
+  const l = String(label || '').trim()
+  if (!l) return { ok: false, status: 400, error: 'which container?' }
+  // ⚠️ THE DATE IS REQUIRED AND TODAY IS NOT A DEFAULT. Somebody recording this on
+  // Thursday for freight that landed Tuesday must be able to say Tuesday; a silent
+  // `now()` would fabricate the single fact this column exists to hold. CLAUDE.md: a
+  // default is not an answer.
+  if (!deliveredOn || Number.isNaN(+new Date(deliveredOn))) {
+    return { ok: false, status: 400, error: 'deliveredOn is required — the date it actually arrived, which is not necessarily today' }
+  }
+  const { rows } = await pool.query(
+    `UPDATE inbound_shipment
+        SET delivered_on = $2, delivered_by = $3, delivered_note = $4, delivered_at = now()
+      WHERE container_label = $1
+      RETURNING container_label AS "containerLabel", delivered_on AS "deliveredOn",
+                delivered_by AS "deliveredBy", delivered_note AS "deliveredNote",
+                delivered_at AS "deliveredAt"`,
+    [l, deliveredOn, by || null, note || null])
+  // ⚠️ NOT FOUND IS NOT SUCCESS. An UPDATE matching no row returns cleanly, and a client
+  // would report a delivery that was never written — the same shape as the non-JSON 200
+  // that had the app announcing markings it never printed.
+  if (!rows.length) return { ok: false, status: 404, error: `no container named "${l}"` }
+  return { ok: true, container: rows[0] }
+}

@@ -42,6 +42,11 @@
 export const TO_STATES = {
   'Transfer Order : Pending Approval': { leg: 'not yet released', arrived: false, order: 0 },
   'Transfer Order : Pending Fulfillment': { leg: 'not yet shipped from China', arrived: false, order: 1 },
+  // ⚠️ FOUND IN THE LIVE DATA, NOT IN THE DOCS — 2 TOs, 42 units, carried this and read
+  // as "unrecognised status" because I wrote this table from the statuses I had seen.
+  // It sits BETWEEN the two it is spelled from: part of the transfer has left China and
+  // part has not, so the container has not shipped complete.
+  'Transfer Order : Pending Receipt/Partially Fulfilled': { leg: 'part shipped from China, part not', arrived: false, order: 1.5 },
   'Transfer Order : Pending Receipt': { leg: 'in transit', arrived: false, order: 2 },
   'Transfer Order : Partially Received': { leg: 'partly landed', arrived: 'partly', order: 3 },
   'Transfer Order : Received': { leg: 'landed in Glendale', arrived: true, order: 4 },
