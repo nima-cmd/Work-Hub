@@ -2177,3 +2177,48 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tms_confirmation_number TE
 -- right one rather than a remembered constant.
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS department TEXT;
 ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS vendor_number TEXT;
+
+-- container_transfer (2026-09-15): the China -> US leg of an inbound container, as the
+-- transfer orders that carry it. Nima's flow: receive in China (the factory-complete
+-- date, which is what the vendor invoice must match), then a transfer order per PO whose
+-- MEMO is the container label, fulfilled so the units belong to neither China nor LA
+-- until they land.
+--
+-- ⚠️ SEPARATE FROM transfer_order ON PURPOSE. That table is the OUTBOUND feature —
+-- Office and Consignment — and its model records Nima's reason in his own words: "its
+-- genuinely work we want to track its not a container being shipped to us in the shape
+-- of a transfer order." Same NetSuite record type, different question, different table.
+--
+-- ⚠️ container_label IS THE MEMO, byte for byte. It is not a foreign key because a TO
+-- can carry a memo naming a container we have no packing slip for, and losing that row
+-- would hide the one case worth seeing.
+CREATE TABLE IF NOT EXISTS container_transfer (
+  to_number        TEXT PRIMARY KEY,
+  container_label  TEXT,
+  memo             TEXT,
+  status           TEXT NOT NULL,
+  trandate         DATE,
+  units            INTEGER,
+  synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS container_transfer_label ON container_transfer (container_label);
+
+-- The forwarder's view of a container. GLC WiseGrid is the authority for every inbound
+-- container (Nima, 2026-09-15) and has no API, so these are entered from their portal.
+--
+-- ⚠️ `departed_on` ON inbound_shipment IS THE PACKING SLIP'S DATE — the factory's pack
+-- date, which is always BEFORE GLC takes possession. Proven on SE0025980: our slip says
+-- 2026-08-17, GLC says the vessel departed 25-Aug. These columns are the forwarder's
+-- dates and are kept apart from it rather than overwriting it.
+--
+-- ⚠️ AND PORT ARRIVAL IS NOT DELIVERY. `port_arrived_on` is the vessel reaching the port
+-- of discharge. The drayage from there to Glendale is tracked by nobody we can read, so
+-- there is deliberately NO `delivered_on` derived from it — that fact only exists when a
+-- person records it or the transfer order is received.
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder_ref TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS etd_on DATE;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS port_arrived_on DATE;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS origin_port TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS destination_port TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder_source TEXT;
