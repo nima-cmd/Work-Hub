@@ -78,8 +78,11 @@ export function containerKey(label) {
  * that is not a container leg is normal, and one that SHOULD be and has a typo'd memo
  * is exactly the thing that must not vanish silently.
  */
-export function groupByContainer(transferOrders = [], containerLabels = []) {
+export function groupByContainer(transferOrders = [], containerLabels = [], recordedAliases = new Map()) {
+  // ⚠️ RECORDED ALIASES SIT ALONGSIDE THE LABELS IN THE EXACT PASS, so a name somebody
+  // wrote down is matched as data rather than re-guessed from its shape every run.
   const exact = new Map(containerLabels.map((l) => [memoKey(l), l]))
+  for (const [alias, label] of recordedAliases) exact.set(memoKey(alias), label)
 
   // ⚠️ A STRUCTURAL KEY SHARED BY TWO CONTAINERS IS DROPPED, NOT GUESSED AT. Same carton
   // count, same date, two different containers — picking one attaches real freight to

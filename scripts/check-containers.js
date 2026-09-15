@@ -14,6 +14,7 @@
 
 import { pool } from '../src/db.js'
 import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
+import { displayNameFor } from '../src/model/containerAlias.js'
 
 const d = (v) => (v ? String(v).slice(0, 10) : null)
 const { rows: slips } = await pool.query(
@@ -21,7 +22,7 @@ const { rows: slips } = await pool.query(
           p.unit_count AS units, p.po_numbers AS pos,
           i.departed_on AS packed_on, i.forwarder, i.forwarder_ref, i.etd_on,
           i.port_arrived_on, i.arrived_on, i.tracking_number, i.origin_port, i.destination_port,
-          i.eta_on, i.forwarder_source
+          i.eta_on, i.forwarder_source, i.display_name
      FROM packing_slip p LEFT JOIN inbound_shipment i USING (container_label)
     ORDER BY p.container_date DESC`)
 
@@ -32,9 +33,17 @@ for (const s of slips) {
   const leg = containerLeg(tos)
   const act = nextAction({ transferOrders: tos, portArrivedOn: d(s.port_arrived_on) })
 
+  const { rows: aliases } = await pool.query(
+    `SELECT alias, source FROM container_alias WHERE container_label = $1 AND source <> 'slip' ORDER BY source`, [s.label])
   console.log(`\n${'─'.repeat(74)}`)
-  console.log(`${s.num}`)
+  console.log(`${displayNameFor(s.label, s.display_name)}`)
   console.log(`${s.cartons} cartons · ${s.units} units · POs ${(s.pos || []).join(', ')}`)
+  // ⚠️ Every name it answers to, so someone searching from an email, a filename or the
+  // GLC portal finds the same container.
+  if (aliases.length) {
+    console.log(`also known as:`)
+    for (const a of aliases) console.log(`   ${a.source.padEnd(10)} ${a.alias}`)
+  }
   console.log(`${'─'.repeat(74)}`)
   console.log(`  packed (slip)   ${d(s.packed_on) || '—'}        ⚠ the factory's date, not departure`)
   console.log(`  forwarder       ${s.forwarder || '—'} ${s.forwarder_ref || ''}`)

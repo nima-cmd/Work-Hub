@@ -2222,3 +2222,36 @@ ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS port_arrived_on DATE;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS origin_port TEXT;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS destination_port TEXT;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder_source TEXT;
+
+-- container_alias (2026-09-15): every name one container is known by.
+--
+-- ⚠️ A CONTAINER ALREADY HAS FOUR NAMES AND WE ONLY STORED ONE. Measured on the three
+-- live ones: the packing slip's label, the source filename, the transfer order's memo,
+-- and the forwarder's reference. They are not the same string —
+--
+--     slip   "55 LCL carton 2026.9.7"
+--     memo   "55 LCL to LA carton 2026.9.7"
+--
+-- and that difference silently unmatched four transfer orders carrying 1,439 units.
+--
+-- ⚠️ THE CANONICAL NAME STAYS packing_slip.container_label. Nima chose this over
+-- re-keying (2026-09-15): four tables cascade off that primary key and a migration buys
+-- nothing an alias table does not. The label is admittedly a filename artifact — the
+-- 59-carton container's identity literally contains "(1)" from a duplicate download —
+-- but it is stable, it is what NetSuite's memos mostly say, and `display_name` is what
+-- a person actually reads.
+--
+-- ⚠️ `source` IS NOT DECORATION. An alias observed in a TO memo is evidence about
+-- NetSuite; one typed by a person is a decision. When two aliases disagree the source is
+-- what says which to trust.
+CREATE TABLE IF NOT EXISTS container_alias (
+  alias           TEXT PRIMARY KEY,
+  container_label TEXT NOT NULL REFERENCES packing_slip(container_label) ON DELETE CASCADE,
+  source          TEXT NOT NULL,
+  first_seen      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS container_alias_label ON container_alias (container_label);
+
+-- What a person should see instead of the filename-derived label. NULL means "derive it"
+-- — see containerIdentity.displayNameFor. Entered values win and are never recomputed.
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS display_name TEXT;

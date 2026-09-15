@@ -27,6 +27,7 @@
     "check:scan-gaps": "node --env-file=.env.local scripts/check-scan-gaps.js",
     "check:label-records": "node --env-file=.env.local scripts/check-label-records.js",
     "sync:container-transfers": "node --env-file=.env.local -e \"import('./src/ingest/containerTransferSync.js').then(async m=>{console.log(await m.syncContainerTransfers());process.exit(0)})\"",
+    "sync:container-aliases": "node --env-file=.env.local -e \"import('./src/ingest/containerTransferSync.js').then(async m=>{console.log(await m.syncContainerAliases());process.exit(0)})\"",
     "check:containers": "node --env-file=.env.local scripts/check-containers.js",
     "check:counters": "node --env-file=.env.local scripts/check-counters.js",
     "check:counters:mirror": "WORKHUB_DB=mirror npm run check:counters",

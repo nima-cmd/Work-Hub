@@ -12,6 +12,7 @@
 import { pool } from '../db.js'
 import { runSuiteQL } from './netsuiteApi.js'
 import { groupByContainer } from '../model/containerTransfer.js'
+import { aliasesFor } from '../model/containerAlias.js'
 
 /**
  * Transfer orders since a date, with their memo and units.
@@ -65,8 +66,14 @@ export async function syncContainerTransfers({ since = '2026-01-01', db = pool }
   if (!t.ok) return { ok: false, error: t.error }
 
   const { rows: labels } = await db.query('SELECT container_label FROM packing_slip')
+  // ⚠️ RECORDED ALIASES ARE CONSULTED FIRST. Without this the sync re-derives
+  // "55 LCL to LA carton 2026.9.7" structurally on every run — a hypothesis repeated
+  // forever instead of a fact written down once and correctable by a person.
+  const { rows: aliasRows } = await db.query('SELECT alias, container_label FROM container_alias')
+  const aliasMap = new Map(aliasRows.map((r) => [r.alias, r.container_label]))
+
   const { byContainer, unmatched, matchedLoosely, collided } = groupByContainer(
-    t.rows, labels.map((r) => r.container_label))
+    t.rows, labels.map((r) => r.container_label), aliasMap)
 
   const toWrite = []
   for (const [label, tos] of byContainer) for (const to of tos) toWrite.push({ ...to, containerLabel: label })
@@ -95,4 +102,45 @@ export async function syncContainerTransfers({ since = '2026-01-01', db = pool }
     matchedLoosely,
     collided,
   }
+}
+
+/**
+ * Record every name a container is known by.
+ *
+ * ⚠️ THIS IS WHAT TURNS A GUESS INTO A FACT. The transfer-order sync finds "55 LCL to LA
+ * carton 2026.9.7" by structural key — carton count plus date — which is a hypothesis
+ * re-derived on every run. Writing it down means the next sync matches on recorded data,
+ * and a wrong one is a row somebody can see and delete rather than behaviour buried in a
+ * regex.
+ */
+export async function syncContainerAliases({ db = pool } = {}) {
+  const { rows: slips } = await db.query(
+    `SELECT p.container_label AS label, p.source_filename AS filename,
+            i.forwarder_ref, i.tracking_number
+       FROM packing_slip p LEFT JOIN inbound_shipment i USING (container_label)`)
+
+  let written = 0
+  for (const s of slips) {
+    const { rows: memos } = await db.query(
+      'SELECT DISTINCT memo FROM container_transfer WHERE container_label = $1 AND memo IS NOT NULL',
+      [s.label])
+    const aliases = aliasesFor({
+      label: s.label,
+      filename: s.filename,
+      memos: memos.map((m) => m.memo),
+      forwarderRef: s.forwarder_ref,
+      trackingNumber: s.tracking_number,
+    })
+    for (const a of aliases) {
+      // ⚠️ DO NOTHING on conflict, never re-point. An alias already attached to another
+      // container is a collision worth seeing, not something to silently move.
+      const r = await db.query(
+        `INSERT INTO container_alias (alias, container_label, source) VALUES ($1,$2,$3)
+         ON CONFLICT (alias) DO NOTHING`,
+        [a.alias, s.label, a.source])
+      written += r.rowCount
+    }
+  }
+  const { rows: [{ n }] } = await db.query('SELECT count(*)::int n FROM container_alias')
+  return { ok: true, written, total: n }
 }
