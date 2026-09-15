@@ -68,19 +68,72 @@ export const daysBetween = (a, b) => {
 }
 
 /**
- * Real transit time for one shipment, or null.
+ * Which date a shipment's clock starts from, and WHAT THAT DATE ACTUALLY IS.
+ *
+ * ── ⚠️ `departed_on` IS NOT A DEPARTURE, AND THE WHOLE ESTIMATE HUNG OFF IT ───────
+ *
+ * Nima, 2026-09-15, on the packing slip's date: *"that is the date on the packing slip
+ * which is the date she is letting us know its completed."* The column is named
+ * `departed_on` and the schema note has always said what it holds — the factory's pack
+ * date — but every figure built on it was called TRANSIT, which it is not. Measured on
+ * the 59-carton container:
+ *
+ *     packing slip     2026-08-17   Chelly: it is finished
+ *     GLC vessel ETD   2026-08-25   the ship left — EIGHT DAYS LATER
+ *
+ * So "median of 4 sea arrivals (16-31 days)" silently included however long the freight
+ * sat between her email and the vessel sailing. The prediction was never wrong — both
+ * ends of the median use the same anchor, so it is self-consistent — but the LABEL
+ * invited somebody to reason about shipping time using a number that is not shipping
+ * time. Same family as `shipdate` being `trandate + 28`
+ * (src/model/fieldAssumptions.js).
+ *
+ * ⚠️ AND WHEN GLC GIVES US THE REAL SAIL DATE, USE IT. `etd_on` is the vessel actually
+ * leaving — a strictly better anchor, and we have it for two of three live containers.
+ * The slip date stays the fallback rather than the default, and either way the basis
+ * string SAYS WHICH, because two shipments measured from different anchors must not be
+ * presented as the same quantity.
+ */
+export const ANCHORS = {
+  etd: { key: 'etd', field: 'etdOn', label: 'vessel departure', measures: 'sailed → landed', rank: 2 },
+  packed: { key: 'packed', field: 'departedOn', label: 'factory complete', measures: 'finished in China → landed', rank: 1 },
+}
+
+export function anchorFor(s) {
+  // ⚠️ Ranked, not first-non-null-wins, so adding a third anchor later cannot silently
+  // outrank the vessel's own date by being listed above it.
+  const found = Object.values(ANCHORS)
+    .sort((a, b) => b.rank - a.rank)
+    .find((a) => asDate(s?.[a.field]))
+  return found || null
+}
+
+/**
+ * Days from the shipment's best anchor to its observed arrival, or null.
  *
  * ⚠️ NULL UNLESS THE ARRIVAL WAS ACTUALLY OBSERVED. A shipment with an estimated ETA
  * and no arrival has no transit time, and substituting the estimate would feed the
  * model its own output — it would converge on whatever it first guessed and look
  * increasingly confident doing it.
+ *
+ * ⚠️ IT RETURNS THE ANCHOR ALONGSIDE THE NUMBER. A caller that averages days measured
+ * from two different starting points produces a figure describing neither, so the anchor
+ * has to travel with the value rather than be recoverable only by re-deriving it.
  */
 export function transitDays(s) {
-  if (!s?.arrivedOn || !s?.departedOn) return null
-  const d = daysBetween(s.departedOn, s.arrivedOn)
+  const anchor = anchorFor(s)
+  if (!s?.arrivedOn || !anchor) return null
+  const d = daysBetween(s[anchor.field], s.arrivedOn)
   // A negative transit means one of the two dates is wrong. Reported by the caller
   // rather than silently clamped to 0, which would look like a same-day arrival.
   return d == null ? null : d
+}
+
+/** The same measurement, with the anchor it was taken from. */
+export function transitFrom(s) {
+  const anchor = anchorFor(s)
+  const days = transitDays(s)
+  return days == null ? null : { days, anchor }
 }
 
 export const MIN_SAMPLES = 3
@@ -97,19 +150,32 @@ export function transitStats(shipments = []) {
   const byMode = new Map()
   const anomalies = []
   for (const s of shipments) {
-    const d = transitDays(s)
-    if (d == null) continue
-    if (d < 0) { anomalies.push({ containerLabel: s.containerLabel, days: d, reason: 'arrived before it departed' }); continue }
+    const t = transitFrom(s)
+    if (t == null) continue
+    const d = t.days
+    if (d < 0) { anomalies.push({ containerLabel: s.containerLabel, days: d, reason: `arrived before its ${t.anchor.label} date` }); continue }
     if (!s.mode) { anomalies.push({ containerLabel: s.containerLabel, days: d, reason: 'no mode — cannot be attributed to air or sea' }); continue }
-    const arr = byMode.get(s.mode) ?? []
+    // ⚠️ KEYED ON MODE **AND** ANCHOR. A median mixing days-since-sailing with
+    // days-since-the-factory-finished describes neither: the 59 shows those two anchors
+    // eight days apart, so one such sample shifts a small median by most of a week. Two
+    // quantities that are not the same quantity do not go in one bucket, however much
+    // it costs in sample size — and it does cost, which is why `enough` is per bucket.
+    const key = `${s.mode}|${t.anchor.key}`
+    const arr = byMode.get(key) ?? []
     arr.push(d)
-    byMode.set(s.mode, arr)
+    byMode.set(key, arr)
   }
   const stats = {}
-  for (const [mode, days] of byMode) {
+  for (const [key, days] of byMode) {
+    const [mode, anchorKey] = key.split('|')
     const sorted = [...days].sort((a, b) => a - b)
     const mid = Math.floor(sorted.length / 2)
-    stats[mode] = {
+    stats[key] = {
+      mode,
+      // ⚠️ The anchor rides ALONG with the statistic. estimateEta reads it to build the
+      // basis string, so a date can never be presented without saying what it counted
+      // from — an estimate whose derivation is invisible gets treated as a promise.
+      anchor: ANCHORS[anchorKey],
       n: sorted.length,
       median: sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2),
       min: sorted[0],
@@ -138,16 +204,29 @@ export function transitStats(shipments = []) {
  */
 export function estimateEta(shipment, stats = {}) {
   const mode = shipment?.mode
-  if (!mode || !shipment?.departedOn) return null
-  const st = stats[mode]
+  if (!mode) return null
+  // ⚠️ THE ANCHOR IS CHOSEN FIRST, AND THE STATISTICS ARE LOOKED UP TO MATCH IT. The
+  // other way round — pick the best-populated bucket, then find a date to add it to —
+  // is how you end up adding days-since-sailing to a factory-complete date and calling
+  // the result an arrival. The 59 shows those anchors eight days apart.
+  const anchor = anchorFor(shipment)
+  if (!anchor) return null
+  const st = stats[`${mode}|${anchor.key}`]
+  // ⚠️ NO FALLBACK TO THE OTHER ANCHOR'S BUCKET. A vessel-departure estimate is better
+  // than a factory-complete one, but borrowing the factory-complete MEDIAN and applying
+  // it to a sail date is not an estimate of anything — it is two quantities added
+  // together. Better no date than that one.
   if (!st?.enough) return null
-  const dep = asDate(shipment.departedOn)
-  if (!dep) return null
-  const eta = new Date(dep.getTime() + st.median * DAY)
+  const from = asDate(shipment[anchor.field])
+  if (!from) return null
+  const eta = new Date(from.getTime() + st.median * DAY)
   return {
     etaOn: eta.toISOString().slice(0, 10),
     source: 'estimate',
-    basis: `median of ${st.n} observed ${mode} arrivals (${st.min}-${st.max} days)`,
+    anchor,
+    // ⚠️ THE BASIS NAMES WHAT WAS COUNTED FROM. "median of 4 sea arrivals (16-31 days)"
+    // reads as time at sea; it was never that, and saying so is the entire fix.
+    basis: `median of ${st.n} ${mode} arrivals measured ${anchor.measures} (${st.min}-${st.max} days from ${anchor.label})`,
     confidence: st.spread <= 3 ? 'tight' : st.spread <= 10 ? 'loose' : 'very wide',
   }
 }
