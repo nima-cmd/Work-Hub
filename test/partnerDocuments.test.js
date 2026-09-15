@@ -58,7 +58,7 @@ test('the rules modules resolve back to the document they were built from', () =
 test('⚠️ THE GAP REPORT SHRANK BY ONE — the Macy\'s Routing Guide is read', () => {
   // This test used to assert `macys-routing` was a gap, and it was right to: the guide
   // sat in Drive while the app enforced merge-centre addresses harvested from routing
-  // emails. It was extracted 2026-09-15 into src/model/macysRouting.js (rev 4/14/26),
+  // emails. It was extracted 2026-09-15 into src/model/macysRoutingGuide.js (rev 4/14/26),
   // so the guard now pins the OTHER two rather than being loosened.
   const keys = unreadDocuments().map((d) => d.key)
   assert.ok(!keys.includes('macys-routing'), 'the Macy\'s Routing Guide is no longer a gap')
@@ -197,7 +197,7 @@ test('⚠️ ALL FOUR ARE ACCOUNTED FOR — three read, one a duplicate', () => 
   // It is asserted POSITIVELY rather than dropped from the loop, so that reading a
   // document has to be recorded here too and cannot quietly stop being tracked.
   const rg = DOCUMENTS.find((d) => d.key === 'macys-routing')
-  assert.equal(rg.rulesIn, 'src/model/macysRouting.js')
+  assert.equal(rg.rulesIn, 'src/model/macysRoutingGuide.js')
   // And the Store-to-DC listing, 2026-09-15 — the file §2.1 says must be used to map a
   // PO's location number to its receiving DC.
   const sd = DOCUMENTS.find((d) => d.key === 'macys-store-dc-listing')

@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { STORES, SOURCE, store, dcForStore, storesForDc, dcCounts, CODES_WITHOUT_ADDRESS } from '../src/model/macysStores.js'
 import { DC_ABBREV } from '../src/model/dc.js'
-import { isRemovedDc } from '../src/model/macysRouting.js'
+import { isRemovedDc } from '../src/model/macysRoutingGuide.js'
 
 test('the listing is the one the Routing Guide points at, and it dates itself', () => {
   assert.equal(SOURCE.updated, '2026-07-28')

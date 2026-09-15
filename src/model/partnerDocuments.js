@@ -154,7 +154,7 @@ export const DOCUMENTS = [
     folder: 'data',
     edition: 'unknown — file dated 2026-07-22; code cites "rev 4/14/26"',
     driveId: '1CXnkOnGCs9vgrOfIpMzegIND9IOmrS1t',
-    rulesIn: 'src/model/macysRouting.js',
+    rulesIn: 'src/model/macysRoutingGuide.js',
     citedLooselyIn: ['src/model/bolAddresses.js §13.1, §9.1'],
   },
   {
