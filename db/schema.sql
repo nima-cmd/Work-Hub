@@ -2283,3 +2283,38 @@ ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_on   DATE;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_by   TEXT;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_note TEXT;
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_at   TIMESTAMPTZ;
+
+-- ── What a transfer order is FOR (2026-09-15) ───────────────────────────────
+-- Nima: "within the container and this data is where we can assign and give these TO
+-- purposes and a role and a future job if ones needed." See src/model/transferPurpose.js.
+--
+-- ⚠️ `custbodycontainer` IS A DEDICATED CONTAINER FIELD AND WE HAD NEVER READ IT. The
+-- sync matched on `memo`, a free-text note. Measured 2026-09-15: 124 of 181 transfer
+-- orders carry the purpose-built field, and it DISAGREES with the memo on 86 of them —
+-- TO95's memo is "PO1660" while its container field says "5 DHL 2026.4.6". Keying on a
+-- hand-typed display field where an objective one exists is shape 3 in CLAUDE.md.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS container_field TEXT;
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS matched_on TEXT; -- 'field' | 'memo' | 'structural'
+
+-- The PO this transfer draws on — Nima's own description of the flow: "we leave a link
+-- to the original PO in the transfer order so we know what PO its for." It is
+-- `custbodyrelated_po`, an internal id, resolved here to the document number.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS po_number TEXT;
+-- The China-side item receipt: the factory-complete date, which is what the vendor
+-- invoice must match. Its NUMBER, so the card can link to the record.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS receipt_number TEXT;
+-- Where the units land. ⚠️ FOR 33 OF 181 THIS IS THE PURPOSE ("Warehouse Bulk :
+-- Nordstrom"); for the other 135 it is a holding state and means nothing of the sort.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS destination TEXT;
+
+-- ⚠️ ENTERED, AND ONLY MEANINGFUL WHERE THE DESTINATION IS NOT. NetSuite has no field
+-- that says why generic-warehouse stock is coming — that is the gap being filled. It
+-- carries its author for the reason every entered value in this schema does.
+--
+-- ⚠️ AND THE DESTINATION OUTRANKS IT, which is the opposite of this app's usual rule
+-- (see inbound_shipment's date sources). The destination is not a guess to be corrected:
+-- it is where the freight actually goes. transferPurpose.js reports a disagreement
+-- rather than resolving one.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose    TEXT;
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose_by TEXT;
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose_at TIMESTAMPTZ;

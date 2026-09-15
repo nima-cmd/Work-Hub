@@ -23,11 +23,45 @@ import { aliasesFor } from '../model/containerAlias.js'
  * separately and joining them here is the shape that actually works.
  */
 export async function fetchTransferOrders({ since = '2026-01-01' } = {}) {
+  // ⚠️ `custbodycontainer` IS A DEDICATED CONTAINER FIELD AND THIS SYNC HAD NEVER READ
+  // IT — it matched on `memo`, a free-text note. Measured 2026-09-15: 124 of 181 transfer
+  // orders carry the purpose-built field and it DISAGREES with the memo on 86 of them.
+  // TO95's memo is "PO1660"; its container field says "5 DHL 2026.4.6". Keying on a
+  // hand-typed display field where an objective one exists is shape 3 in CLAUDE.md, and
+  // the whole structural-key apparatus below exists because of a mismatch that the right
+  // field would have narrowed from the start.
+  //
+  // ⚠️ `l.fullname`, NOT `BUILTIN.DF(t.transferlocation)` — and this cost a live bug in
+  // the hour it was written. DF returns the LEAF name: "Nordstrom", where the location's
+  // fullname is "Warehouse Bulk : Nordstrom". The HIERARCHY is the entire signal —
+  // src/model/transferPurpose.js reads the "Warehouse Bulk : " prefix to tell partner
+  // stock from the general floor, so with leaf names that branch was UNREACHABLE and all
+  // 33 partner transfers would have read as unassigned. [[inbound-containers]] already
+  // records this exact fullname-vs-leaf trap from the PO side.
+  //
+  // `custbodyrelated_po` is the PO link Nima described in his own account of the flow:
+  // "we leave a link to the original PO in the transfer order so we know what PO its
+  // for." It is an internal id, resolved to a document number further down.
   const head = await runSuiteQL(`
-    SELECT t.tranid, t.memo, BUILTIN.DF(t.status) AS status, t.trandate
+    SELECT t.tranid, t.memo, BUILTIN.DF(t.status) AS status, t.trandate,
+           t.custbodycontainer AS container_field, t.custbodyrelated_po AS po_id,
+           l.fullname AS destination
       FROM transaction t
+      LEFT JOIN location l ON l.id = t.transferlocation
      WHERE t.type = 'TrnfrOrd' AND t.trandate >= TO_DATE('${since}','YYYY-MM-DD')`)
   if (!head.ok) return { ok: false, error: head.error }
+
+  // ⚠️ RESOLVED IN ONE QUERY, NOT ONE PER TRANSFER. 119 of 181 carry a related PO and a
+  // round trip each would be 119 calls against a one-vCPU deploy.
+  const poIds = [...new Set(head.rows.map((r) => r.po_id).filter(Boolean))]
+  const poName = new Map()
+  if (poIds.length) {
+    const p = await runSuiteQL(
+      `SELECT id, tranid FROM transaction WHERE id IN (${poIds.map((n) => Number(n)).filter(Number.isFinite).join(',')})`)
+    // ⚠️ A FAILED LOOKUP LEAVES THE PO NULL rather than failing the sync: the container
+    // leg is the point, the PO number enriches it.
+    if (p.ok) for (const row of p.rows) poName.set(String(row.id), row.tranid)
+  }
 
   const qty = await runSuiteQL(`
     SELECT t.tranid, SUM(tl.quantity) AS units
@@ -58,12 +92,14 @@ export async function fetchTransferOrders({ since = '2026-01-01' } = {}) {
   // ⚠️ DISTINCT IS LOAD-BEARING. The link table is per LINE, so a fifteen-line transfer
   // returns the same receipt fifteen times.
   const chain = await runSuiteQL(`
-    SELECT DISTINCT src.tranid AS to_number, d.type AS doc_type, d.trandate AS doc_date
+    SELECT DISTINCT src.tranid AS to_number, d.type AS doc_type, d.trandate AS doc_date, d.tranid AS doc_id
       FROM previoustransactionlinelink l
       JOIN transaction src ON src.id = l.previousdoc
       JOIN transaction d   ON d.id   = l.nextdoc
      WHERE src.type = 'TrnfrOrd' AND src.trandate >= TO_DATE('${since}','YYYY-MM-DD')
        AND d.type IN ('ItemShip','ItemRcpt')`)
+  // The receipt's own NUMBER, so a card can link to the record rather than only date it.
+  const rcptNo = new Map()
   // ⚠️ A FAILED CHAIN QUERY IS NOT A FAILED SYNC. The headers and units are the container
   // leg; the dates enrich it. Losing NetSuite's link table should leave delivery unknown
   // — which is a state this app models honestly — not throw away the whole run.
@@ -75,7 +111,10 @@ export async function fetchTransferOrders({ since = '2026-01-01' } = {}) {
       const m = r.doc_type === 'ItemRcpt' ? rcpt : ship
       const cur = m.get(r.to_number)
       const d = r.doc_date ? String(r.doc_date) : null
-      if (d && (!cur || new Date(d) > new Date(cur))) m.set(r.to_number, d)
+      if (d && (!cur || new Date(d) > new Date(cur))) {
+        m.set(r.to_number, d)
+        if (r.doc_type === 'ItemRcpt') rcptNo.set(r.to_number, r.doc_id || null)
+      }
     }
   }
 
@@ -92,6 +131,10 @@ export async function fetchTransferOrders({ since = '2026-01-01' } = {}) {
       trandate: r.trandate ? String(r.trandate) : null,
       fulfilledOn: ship.get(r.tranid) ?? null,
       receivedOn: rcpt.get(r.tranid) ?? null,
+      receiptNumber: rcptNo.get(r.tranid) ?? null,
+      containerField: r.container_field ?? null,
+      poNumber: r.po_id ? (poName.get(String(r.po_id)) ?? null) : null,
+      destination: r.destination ?? null,
       // ⚠️ A TO with no positive inventory lines gets 0, not null — it exists and is
       // empty, which is a different thing from a quantity we failed to read.
       units: units.get(r.tranid) ?? 0,
@@ -128,8 +171,10 @@ export async function syncContainerTransfers({ since = '2026-01-01', db = pool }
 
   for (const r of toWrite) {
     await db.query(
-      `INSERT INTO container_transfer (to_number, container_label, memo, status, trandate, units, fulfilled_on, received_on, synced_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+      `INSERT INTO container_transfer (to_number, container_label, memo, status, trandate, units,
+                                       fulfilled_on, received_on, container_field, matched_on,
+                                       po_number, receipt_number, destination, synced_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
        ON CONFLICT (to_number) DO UPDATE SET
          container_label = EXCLUDED.container_label, memo = EXCLUDED.memo,
          status = EXCLUDED.status, trandate = EXCLUDED.trandate,
@@ -138,8 +183,20 @@ export async function syncContainerTransfers({ since = '2026-01-01', db = pool }
          -- run. Writing EXCLUDED straight through would blank every receipt date on the
          -- first bad round trip and report landed containers as never received.
          fulfilled_on = COALESCE(EXCLUDED.fulfilled_on, container_transfer.fulfilled_on),
-         received_on  = COALESCE(EXCLUDED.received_on,  container_transfer.received_on)`,
-      [r.toNumber, r.containerLabel, r.memo, r.status, r.trandate, r.units, r.fulfilledOn, r.receivedOn])
+         received_on  = COALESCE(EXCLUDED.received_on,  container_transfer.received_on),
+         container_field = EXCLUDED.container_field,
+         matched_on      = EXCLUDED.matched_on,
+         destination     = EXCLUDED.destination,
+         -- ⚠️ COALESCE for the two that come from a SECOND query. A failed PO or receipt
+         -- lookup must not blank a number we already hold — the same reason the dates
+         -- above are coalesced.
+         po_number      = COALESCE(EXCLUDED.po_number, container_transfer.po_number),
+         receipt_number = COALESCE(EXCLUDED.receipt_number, container_transfer.receipt_number)`,
+      // ⚠️ `purpose` IS ABSENT FROM THE UPDATE LIST ON PURPOSE. It is entered by a person
+      // and NetSuite knows nothing about it, so including it would have every sync wipe
+      // it — the mistake that would make the whole feature look broken intermittently.
+      [r.toNumber, r.containerLabel, r.memo, r.status, r.trandate, r.units, r.fulfilledOn,
+       r.receivedOn, r.containerField, r.matchedOn ?? null, r.poNumber, r.receiptNumber, r.destination])
   }
 
   return {

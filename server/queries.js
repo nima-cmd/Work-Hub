@@ -15,6 +15,7 @@ import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartn
 import { transferCard } from '../src/model/transferCard.js'
 import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
 import { deliveryFor, unusableWindow, awaitingReceipt } from '../src/model/containerDelivery.js'
+import { purposeFor, purposeBreakdown } from '../src/model/transferPurpose.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -6494,7 +6495,9 @@ export async function getContainers() {
 
   const { rows: tos } = await pool.query(
     `SELECT container_label, to_number AS "toNumber", status, units,
-            fulfilled_on AS "fulfilledOn", received_on AS "receivedOn"
+            fulfilled_on AS "fulfilledOn", received_on AS "receivedOn",
+            po_number AS "poNumber", receipt_number AS "receiptNumber", destination,
+            purpose, purpose_by AS "purposeBy", matched_on AS "matchedOn"
        FROM container_transfer WHERE container_label IS NOT NULL ORDER BY to_number`)
   const { rows: aliases } = await pool.query(
     `SELECT container_label, alias, source FROM container_alias ORDER BY source`)
@@ -6543,7 +6546,14 @@ export async function getContainers() {
       mode: s.mode, modeSource: s.mode_source,
       modeSuggested: inferMode(s.label).mode,
       anchor: anchor ? { key: anchor.key, label: anchor.label, measures: anchor.measures } : null,
-      transferOrders: legs,
+      // ⚠️ THE PURPOSE RIDES ON EACH LEG, decided by transferPurpose.js — the destination
+      // when NetSuite already answers (46 of 181), an entered note when it cannot, and
+      // "unassigned" for the 135 where a generic warehouse is a holding state and not a
+      // reason.
+      transferOrders: legs.map((t) => ({ ...t, purposeState: purposeFor(t) })),
+      // ⚠️ A BREAKDOWN, NOT A SINGLE PURPOSE. A container routinely carries stock for
+      // several partners — the 59 spans six POs — so one answer would erase the answer.
+      purposes: purposeBreakdown(legs),
       leg: containerLeg(legs),
       delivery: deliveryFor(shipment),
       unusable: unusableWindow(legs),
@@ -6584,4 +6594,30 @@ export async function getContainers() {
       deliveredOn: c.delivery.enteredOn, deliveredBy: c.delivery.by,
     }))),
   }
+}
+
+// ── Giving a transfer order a purpose (2026-09-15) ───────────────────────────
+// Nima: "this data is where we can assign and give these TO purposes and a role and a
+// future job if ones needed." src/model/transferPurpose.js holds the rules.
+//
+// ⚠️ IT DOES NOT OVERRIDE THE DESTINATION, and the model says why: where the freight
+// actually goes is not a guess to be corrected. Writing a purpose against a transfer
+// NetSuite already routes to a partner floor is allowed and RECORDED — and the card then
+// shows both, with the disagreement named. Refusing the write would lose the note; using
+// it to override would describe freight that went somewhere else.
+export async function setTransferPurpose({ toNumber, purpose, by } = {}) {
+  const to = String(toNumber || '').trim().toUpperCase()
+  if (!to) return { ok: false, status: 400, error: 'which transfer order?' }
+  // ⚠️ AN EMPTY STRING CLEARS IT, and that is a deliberate distinct outcome from never
+  // having set one — both end as NULL, which is right: "no purpose" is one state.
+  const value = String(purpose ?? '').trim() || null
+  const { rows } = await pool.query(
+    `UPDATE container_transfer
+        SET purpose = $2, purpose_by = $3, purpose_at = CASE WHEN $2::text IS NULL THEN NULL ELSE now() END
+      WHERE to_number = $1
+      RETURNING to_number AS "toNumber", purpose, purpose_by AS "purposeBy", destination`,
+    [to, value, value ? (by || null) : null])
+  // ⚠️ 404 rather than a silent no-op — an UPDATE matching nothing returns cleanly.
+  if (!rows.length) return { ok: false, status: 404, error: `no transfer order ${to} on any container` }
+  return { ok: true, transferOrder: rows[0] }
 }

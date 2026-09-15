@@ -15,7 +15,7 @@
 // different. They get different colours and different words, never one greyed-out row.
 
 import { useEffect, useState } from 'react'
-import { fetchContainers, markContainerDelivered } from '../api.js'
+import { fetchContainers, markContainerDelivered, setTransferPurpose } from '../api.js'
 
 const d = (s) => (s ? new Date(`${s}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null)
 const todayIso = () => new Date().toISOString().slice(0, 10)
@@ -75,6 +75,70 @@ function Arrived({ container, onDone }) {
   )
 }
 
+// One transfer order: the PO it draws on, the China receipt that dated the invoice, where
+// it lands, and what it is for.
+//
+// ⚠️ THE PO AND THE RECEIPT ARE NOT DECORATION. Nima's own account of the flow: "we
+// receive the units in china to mark the date that the factory completes them... the
+// receive is for accounting... once we receive the units in china we have a transfer
+// order which we leave a link to the original PO in the transfer order so we know what
+// PO its for." Those three documents are the chain, and until now the card showed one.
+function Leg({ t, onChange }) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(t.purpose || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const p = t.purposeState
+
+  const save = async () => {
+    setBusy(true); setErr(null)
+    try { await setTransferPurpose(t.toNumber, { purpose: text, by: 'Nima' }); setEditing(false); await onChange() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <li className="c-to">
+      <div className="c-to-top">
+        <NsLink doc={t.toNumber} />
+        <span className="c-status">{String(t.status || '').replace('Transfer Order : ', '')}</span>
+        <span className="c-units">{t.units} units</span>
+        {t.poNumber ? <NsLink doc={t.poNumber} /> : <span className="c-status">no PO linked</span>}
+        {/* The China receipt — the factory-complete date the vendor invoice must match. */}
+        {t.receiptNumber ? <NsLink doc={t.receiptNumber} /> : null}
+        {t.receivedOn ? <span className="c-rcv">received {d(t.receivedOn)}</span> : null}
+      </div>
+      <div className="c-to-purpose">
+        <span className="c-dest">→ {t.destination || 'no destination'}</span>
+        {/* ⚠️ AN OBSERVED PURPOSE IS NOT EDITABLE HERE. NetSuite already routes these
+            units to a partner floor; retyping it is how two copies start disagreeing. */}
+        {p.source?.kind === 'observed' ? (
+          <span className="c-purpose is-observed">{p.detail}</span>
+        ) : editing ? (
+          <span className="c-purpose">
+            <input className="c-purpose-in" value={text} autoFocus
+                   placeholder="what are these units for?"
+                   onChange={(e) => setText(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }} />
+            <button className="btn-small" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+            <button className="btn-small btn-quiet" onClick={() => { setEditing(false); setText(t.purpose || ''); setErr(null) }}>Cancel</button>
+          </span>
+        ) : (
+          <button className="c-purpose-btn" onClick={() => setEditing(true)}
+                  title={p.detail}>
+            {/* ⚠️ "no purpose set" IS A REAL STATE, not an empty field to be embarrassed
+                about. 135 of 181 transfer orders are here, and NetSuite has nowhere to
+                record it — which is the whole reason this exists. */}
+            {p.state === 'known' ? p.detail : '+ no purpose set'}
+          </button>
+        )}
+        {/* ⚠️ A DISAGREEMENT IS NAMED, NEVER RESOLVED — custody.js's rule. */}
+        {p.conflict && <span className="c-warn">⚠ {p.conflict}</span>}
+        {err && <span className="c-warn">{err}</span>}
+      </div>
+    </li>
+  )
+}
+
 function Container({ c, onChange }) {
   const del = DELIVERY[c.delivery.state] || DELIVERY.unknown
   return (
@@ -109,16 +173,23 @@ function Container({ c, onChange }) {
       {c.anchor && <p className="c-anchor">Clock runs {c.anchor.measures} (from {c.anchor.label})</p>}
       {c.unusable && <p className="c-anchor">{c.unusable.days}d {c.unusable.label}</p>}
 
+      {/* ⚠️ THE BREAKDOWN DOES NOT PICK A WINNER — a container carries stock for several
+          partners at once, so one "purpose" would erase the answer. */}
+      {(c.purposes.roles.length > 0 || c.purposes.unassigned > 0) && (
+        <p className="c-roles">
+          {c.purposes.roles.map((r) => (
+            <span key={r.role} className="c-role">{r.partner || r.role} <b>{r.units}</b></span>
+          ))}
+          {c.purposes.unassigned > 0 && (
+            <span className="c-role c-role-none">{c.purposes.unassigned} with no purpose set</span>
+          )}
+        </p>
+      )}
+
       <div className="c-leg">
         <strong>China leg — {c.leg.known ? c.leg.leg : c.leg.why}</strong>
-        <ul>
-          {c.transferOrders.map((t) => (
-            <li key={t.toNumber}>
-              <NsLink doc={t.toNumber} />
-              <span className="c-status">{String(t.status || '').replace('Transfer Order : ', '')}</span>
-              {t.receivedOn ? <span className="c-rcv">received {d(t.receivedOn)}</span> : null}
-            </li>
-          ))}
+        <ul className="c-tos">
+          {c.transferOrders.map((t) => <Leg key={t.toNumber} t={t} onChange={onChange} />)}
         </ul>
         {/* ⚠️ An unrecognised NetSuite status is NAMED, not folded into a neighbour. */}
         {c.leg.unrecognised?.length ? <p className="c-warn">⚠ unrecognised: {c.leg.unrecognised.join(', ')}</p> : null}
