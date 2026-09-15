@@ -35,7 +35,12 @@ for (const s of slips) {
        FROM container_transfer
       WHERE container_label = $1 ORDER BY to_number`, [s.label])
   const leg = containerLeg(tos)
-  const act = nextAction({ transferOrders: tos, portArrivedOn: d(s.port_arrived_on) })
+  // ⚠️ THE TRACKING NUMBER AND FORWARDER REF ARE PASSED IN — without them nextAction
+  // has nothing observed to key on and falls back to describing a leg nobody entered.
+  const act = nextAction({
+    transferOrders: tos, portArrivedOn: d(s.port_arrived_on),
+    trackingNumber: s.tracking_number, forwarderRef: s.forwarder_ref, forwarder: s.forwarder,
+  })
   const del = deliveryFor({
     transferOrders: tos, portArrivedOn: s.port_arrived_on,
     deliveredOn: s.delivered_on, deliveredBy: s.delivered_by,

@@ -11,9 +11,14 @@ import {
   deliveryFor, allReceived, receivedOn, unusableWindow, awaitingReceipt,
   DELIVERY_EVIDENCE, NOT_DELIVERY_EVIDENCE, UNUSABLE_WINDOW_LABEL,
 } from '../src/model/containerDelivery.js'
-import { legFor, containerLeg } from '../src/model/containerTransfer.js'
+import { legFor, containerLeg, nextAction, whereToLook, lookupFor } from '../src/model/containerTransfer.js'
+import { inferMode } from '../src/model/inboundShipment.js'
 
 const to = (n, o = {}) => ({ toNumber: n, units: 100, ...o })
+// ⚠️ nextAction only reaches its in-transit branch when the TO carries a STATUS — the
+// delivery tests above never needed one, and leaving it off made the first where-to-look
+// test fall through to "not shipped yet" and read as a bug in lookupFor.
+const inTransit = (n) => to(n, { status: 'Transfer Order : Pending Receipt' })
 
 test('⚠️ a port date is NEVER delivery — the mistake this module exists to prevent', () => {
   // The 59-carton container, as it actually stood on 2026-09-15: at the port two days,
@@ -156,4 +161,75 @@ test('⚠️ the TO status found in live data that the table did not know', () =
   assert.deepEqual(c.unrecognised, [], 'no longer unrecognised')
   assert.match(c.leg, /part shipped/, 'the least-advanced TO still decides the container')
   assert.equal(c.arrived, false)
+})
+
+// ── Where to look, which is not the same question as how it travels ─────────────
+
+test('⚠️ the 11-carton AIR shipment was told it was "still at sea"', () => {
+  // The real bug, with the real data: a UPS tracking number sitting in the same record
+  // as a sentence asserting an ocean voyage nobody entered.
+  const air = {
+    transferOrders: [inTransit('TO218'), inTransit('TO219')],
+    trackingNumber: '1Z HV2 589 04 3832 1771',
+    forwarder: 'GLC WiseGrid',
+  }
+  const why = whereToLook(air)
+  assert.doesNotMatch(why, /at sea/i, 'it is on a plane')
+  assert.match(why, /UPS/)
+  assert.match(why, /1Z HV2 589 04 3832 1771/)
+  assert.equal(nextAction(air).lookup.kind, 'tracking')
+  assert.equal(nextAction(air).lookup.carrier, 'UPS')
+})
+
+test('a forwarder reference sends you to the forwarder, not to a tracking site', () => {
+  const sea = {
+    transferOrders: [inTransit('TO220')],
+    forwarderRef: 'SI0067968', forwarder: 'GLC WiseGrid',
+  }
+  const why = whereToLook(sea)
+  assert.match(why, /No public tracking/)
+  assert.match(why, /GLC WiseGrid is the only source/)
+  assert.match(why, /SI0067968/)
+  assert.doesNotMatch(why, /at sea/i)
+  assert.equal(lookupFor(sea).kind, 'forwarder')
+})
+
+test('⚠️ an unrecognised tracking number gets NO carrier name attached', () => {
+  // ⚠️ Nima, 2026-09-15: air comes from GLC sometimes and DHL other times. Naming the
+  // wrong carrier sends somebody to the wrong website, which is worse than naming none.
+  // Only "1Z" is safe — it is UPS's by specification.
+  const dhl = { transferOrders: [inTransit('TO1')], trackingNumber: '1234567890' }
+  const l = lookupFor(dhl)
+  assert.equal(l.kind, 'tracking')
+  assert.equal(l.carrier, null, 'we do not know whose number this is')
+  assert.match(whereToLook(dhl), /look it up with whoever is carrying it/)
+  assert.doesNotMatch(whereToLook(dhl), /UPS|DHL/)
+})
+
+test('⚠️ knowing nothing says so — it never falls back to a mode', () => {
+  const blank = { transferOrders: [inTransit('TO1')] }
+  const why = whereToLook(blank)
+  assert.match(why, /Nothing we hold says where/)
+  assert.doesNotMatch(why, /at sea|air|plane/i)
+  assert.equal(lookupFor(blank).kind, 'none')
+})
+
+test('the port date still leads when we have one — it is the latest observation', () => {
+  const atPort = {
+    transferOrders: [inTransit('TO224')],
+    portArrivedOn: '2026-09-13', forwarderRef: 'SE0025980', forwarder: 'GLC WiseGrid',
+  }
+  assert.match(whereToLook(atPort), /at the port on 2026-09-13/)
+  assert.match(whereToLook(atPort), /drayage/)
+})
+
+test('⚠️ the mode field is NOT consulted, and inferMode stays a suggestion', () => {
+  // src/model/inboundShipment.js already decided this: mode is NULL until a person
+  // chooses it. Nothing here may read a guess as a fact — so an entered mode and no
+  // mode at all produce the SAME sentence, because the sentence is about evidence.
+  const base = { transferOrders: [inTransit('TO1')], trackingNumber: '1Z999AA10123456784' }
+  assert.equal(whereToLook({ ...base, mode: 'sea' }), whereToLook({ ...base, mode: null }))
+  // and the suggestion is still available to anyone who wants to OFFER it
+  assert.deepEqual(inferMode('11 Air 1820 1777 air list carton 2026.9.7'), { mode: 'air', inferred: true })
+  assert.deepEqual(inferMode('55 LCL carton 2026.9.7'), { mode: null, inferred: true })
 })

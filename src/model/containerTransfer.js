@@ -168,12 +168,67 @@ export function nextAction(container = {}) {
   if (leg.leg === 'in transit') {
     return {
       action: 'wait for delivery, then receive the transfer orders',
-      why: container.portArrivedOn
-        ? `GLC shows it at the port on ${container.portArrivedOn}. The drayage to Glendale is not tracked anywhere we can read, so arrival at the door is only known when someone says so.`
-        : 'still at sea by the forwarder\'s reckoning.',
+      why: whereToLook(container),
       blocking: false,
       transferOrders: leg.transferOrders.map((l) => l.to),
+      lookup: lookupFor(container),
     }
   }
   return { action: `not shipped yet — ${leg.leg}`, why: null, blocking: false }
+}
+
+/**
+ * Where a person should go to find out where this freight is.
+ *
+ * ── ⚠️ THIS USED TO SAY "still at sea by the forwarder's reckoning" ─────────────
+ *
+ * It said that about EVERY container in transit with no port date — including the
+ * 11-carton AIR shipment, which was on a plane and carried a UPS tracking number we
+ * already held. A sentence asserting a mode nobody entered, printed next to the evidence
+ * that contradicted it. The same shape as `merge_center DEFAULT 'CA'`.
+ *
+ * ⚠️ AND THE FIX IS NOT TO GUESS AIR VS SEA INSTEAD. Nima, 2026-09-15: *"sometimes we
+ * will also have an airshipment that comes from GLC on a plane other times it will be
+ * DHL so we're not sure."* src/model/inboundShipment.js already settled that question —
+ * `mode` stays NULL until a person chooses it and `inferMode()` is offered as a
+ * suggestion, "because a stored guess would be indistinguishable from a decision".
+ *
+ * So this keys on something OBSERVED instead, and it is the thing actually being asked:
+ * is there a number somebody can look up, or is the forwarder the only source? That
+ * partition holds however the freight travels — UPS, DHL, or GLC putting it on a plane —
+ * and needs no guess about which.
+ */
+export function lookupFor(container = {}) {
+  const tracking = String(container.trackingNumber || '').trim()
+  const ref = String(container.forwarderRef || '').trim()
+  const forwarder = String(container.forwarder || '').trim() || 'the forwarder'
+  // ⚠️ "1Z" IS THE ONE PREFIX SAFE TO NAME. It is UPS's, unambiguously and by
+  // specification. Every other carrier's format overlaps somebody else's, so an
+  // unrecognised number is reported as a tracking number without a carrier attached
+  // rather than guessed at — a wrong carrier name sends somebody to the wrong website.
+  if (tracking) {
+    const carrier = /^1Z/i.test(tracking.replace(/\s+/g, '')) ? 'UPS' : null
+    return { kind: 'tracking', number: tracking, carrier, where: carrier || 'the carrier' }
+  }
+  if (ref) return { kind: 'forwarder', number: ref, carrier: null, where: forwarder }
+  return { kind: 'none', number: null, carrier: null, where: null }
+}
+
+export function whereToLook(container = {}) {
+  // ⚠️ THE PORT DATE STILL LEADS WHEN WE HAVE ONE — it is the most recent thing anybody
+  // observed, and the drayage after it is the invisible leg. See containerDelivery.js.
+  if (container.portArrivedOn) {
+    return `GLC shows it at the port on ${container.portArrivedOn}. The drayage to Glendale is not tracked anywhere we can read, so arrival at the door is only known when someone says so.`
+  }
+  const l = lookupFor(container)
+  if (l.kind === 'tracking') {
+    return l.carrier
+      ? `${l.carrier} is carrying it — ${l.number} is trackable now.`
+      : `Tracking number ${l.number} — look it up with whoever is carrying it.`
+  }
+  if (l.kind === 'forwarder') {
+    return `No public tracking. ${l.where} is the only source — their reference is ${l.number}.`
+  }
+  // ⚠️ NOT "at sea". We do not know where it is, and saying so is the honest answer.
+  return 'In transit. Nothing we hold says where — no tracking number and no forwarder reference.'
 }
