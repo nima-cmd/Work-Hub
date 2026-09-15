@@ -231,5 +231,9 @@ test('⚠️ the mode field is NOT consulted, and inferMode stays a suggestion',
   assert.equal(whereToLook({ ...base, mode: 'sea' }), whereToLook({ ...base, mode: null }))
   // and the suggestion is still available to anyone who wants to OFFER it
   assert.deepEqual(inferMode('11 Air 1820 1777 air list carton 2026.9.7'), { mode: 'air', inferred: true })
-  assert.deepEqual(inferMode('55 LCL carton 2026.9.7'), { mode: null, inferred: true })
+  // ⚠️ THIS LINE ASSERTED `mode: null` AND I WROTE IT MYSELF, documenting a miss I had
+  // not noticed was a defect: the old anchored pattern failed on "55 LCL carton" and on
+  // the plural "59 cartons", so neither live sea container suggested anything. A test
+  // can pin a bug as firmly as it pins a feature — see test/inboundShipment.test.js.
+  assert.deepEqual(inferMode('55 LCL carton 2026.9.7'), { mode: 'sea', inferred: true })
 })

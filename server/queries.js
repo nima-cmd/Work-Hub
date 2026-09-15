@@ -13,6 +13,13 @@ import { shipmentEvidence, evidenceHeadline } from '../src/model/shipmentEvidenc
 import { isoPlainDay } from '../src/model/shipmentCalendar.js'
 import { resolveDriveFolder, folderKeysFor, TREE } from '../src/model/drivePartnerFolder.js'
 import { transferCard } from '../src/model/transferCard.js'
+import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
+import { deliveryFor, unusableWindow, awaitingReceipt } from '../src/model/containerDelivery.js'
+import { displayNameFor } from '../src/model/containerAlias.js'
+// ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
+// something entirely different (which lane an order anchors to). Two unrelated functions
+// of the same name in one module is how the wrong one gets called.
+import { anchorFor as transitAnchorFor, inferMode } from '../src/model/inboundShipment.js'
 import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
@@ -6463,4 +6470,118 @@ export async function recordContainerDelivered({ label, deliveredOn, by, note } 
   // that had the app announcing markings it never printed.
   if (!rows.length) return { ok: false, status: 404, error: `no container named "${l}"` }
   return { ok: true, container: rows[0] }
+}
+
+// ── The container board (2026-09-15) ─────────────────────────────────────────
+// Step 3 of the container work: the consolidated view that only existed as
+// `scripts/check-containers.js`. Same models, same rules — a container's identity, the
+// names it is also known by, its China leg, where its freight is, and what to do next.
+//
+// ⚠️ EVERY JUDGEMENT COMES FROM src/model/, NOT FROM SQL HERE. The delivery state, the
+// leg, the next action and the where-to-look sentence are all decided by tested pure
+// functions; this assembles their inputs. Logic that lives in a query or a .jsx is
+// logic with no test ([[marked-shipped-is-not-departed]]).
+export async function getContainers() {
+  const { rows: slips } = await pool.query(
+    `SELECT p.container_label AS label, p.container_num AS num, p.carton_count AS cartons,
+            p.unit_count AS units, p.po_numbers AS pos, p.container_date,
+            i.departed_on, i.forwarder, i.forwarder_ref, i.etd_on, i.eta_on, i.eta_source,
+            i.port_arrived_on, i.tracking_number, i.origin_port, i.destination_port,
+            i.display_name, i.mode, i.mode_source,
+            i.delivered_on, i.delivered_by, i.delivered_note
+       FROM packing_slip p LEFT JOIN inbound_shipment i USING (container_label)
+      ORDER BY p.container_date DESC`)
+
+  const { rows: tos } = await pool.query(
+    `SELECT container_label, to_number AS "toNumber", status, units,
+            fulfilled_on AS "fulfilledOn", received_on AS "receivedOn"
+       FROM container_transfer WHERE container_label IS NOT NULL ORDER BY to_number`)
+  const { rows: aliases } = await pool.query(
+    `SELECT container_label, alias, source FROM container_alias ORDER BY source`)
+
+  const byLabel = new Map()
+  for (const t of tos) {
+    if (!byLabel.has(t.container_label)) byLabel.set(t.container_label, [])
+    byLabel.get(t.container_label).push(t)
+  }
+  const aliasBy = new Map()
+  for (const a of aliases) {
+    if (!aliasBy.has(a.container_label)) aliasBy.set(a.container_label, [])
+    aliasBy.get(a.container_label).push({ alias: a.alias, source: a.source })
+  }
+
+  const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null)
+  const containers = slips.map((s) => {
+    const legs = byLabel.get(s.label) || []
+    const shipment = {
+      transferOrders: legs,
+      portArrivedOn: iso(s.port_arrived_on),
+      deliveredOn: iso(s.delivered_on),
+      deliveredBy: s.delivered_by,
+      trackingNumber: s.tracking_number,
+      forwarderRef: s.forwarder_ref,
+      forwarder: s.forwarder,
+    }
+    const anchor = transitAnchorFor({ departedOn: iso(s.departed_on), etdOn: iso(s.etd_on) })
+    return {
+      label: s.label,
+      displayName: displayNameFor(s.label, s.display_name),
+      cartons: s.cartons, units: s.units, pos: s.pos || [],
+      aliases: (aliasBy.get(s.label) || []).filter((a) => a.source !== 'slip'),
+      // ⚠️ `packedOn`, NOT `departedOn`. Nima, 2026-09-15: it is "the date she is letting
+      // us know its completed" — naming it a departure on screen is the defect #211 fixed
+      // in the model, and it would be pointless to reintroduce it in the view's own keys.
+      packedOn: iso(s.departed_on),
+      etdOn: iso(s.etd_on), etaOn: iso(s.eta_on), etaSource: s.eta_source,
+      portArrivedOn: iso(s.port_arrived_on),
+      forwarder: s.forwarder, forwarderRef: s.forwarder_ref,
+      trackingNumber: s.tracking_number,
+      originPort: s.origin_port, destinationPort: s.destination_port,
+      // ⚠️ THE SUGGESTION TRAVELS SEPARATELY FROM THE VALUE. `mode` is what a person
+      // chose and is usually NULL; `modeSuggested` is inferMode's guess. Merging them
+      // is exactly what src/model/inboundShipment.js refuses to do in the database.
+      mode: s.mode, modeSource: s.mode_source,
+      modeSuggested: inferMode(s.label).mode,
+      anchor: anchor ? { key: anchor.key, label: anchor.label, measures: anchor.measures } : null,
+      transferOrders: legs,
+      leg: containerLeg(legs),
+      delivery: deliveryFor(shipment),
+      unusable: unusableWindow(legs),
+      next: nextAction(shipment),
+    }
+  })
+
+  // ⚠️ CONTAINERS NETSUITE KNOWS AND WE HAVE NO SLIP FOR — the transfer orders are a
+  // MORE COMPLETE container register than our packing slips are. Their receipt state is
+  // included because without it the list reads as a backlog; every one is in fact
+  // landed and received, which is missing paperwork rather than missing freight.
+  const { rows: orphanRows } = await pool.query(
+    `SELECT memo, count(*)::int tos, sum(units)::int units, min(trandate) first_seen,
+            count(*) FILTER (WHERE received_on IS NOT NULL)::int received,
+            max(received_on) received_on, min(fulfilled_on) fulfilled_on
+       FROM container_transfer
+      WHERE container_label IS NULL AND memo ~ '[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\s*$'
+      GROUP BY memo ORDER BY min(trandate)`)
+  const orphans = orphanRows.map((o) => ({
+    memo: o.memo, tos: o.tos, units: o.units,
+    firstSeen: iso(o.first_seen),
+    received: o.received,
+    // Number() both sides — count(*) arrives as a string and '6' === 6 is false, which
+    // made this exact comparison report six landed containers as outstanding.
+    allReceived: Number(o.received) === Number(o.tos),
+    receivedOn: iso(o.received_on),
+    unusableDays: o.fulfilled_on && o.received_on && Number(o.received) === Number(o.tos)
+      ? Math.round((new Date(o.received_on) - new Date(o.fulfilled_on)) / 86400000) : null,
+  }))
+
+  return {
+    containers,
+    orphans,
+    // ⚠️ COUNTS WHAT A PERSON SAID IS HERE, never "has no receipt" — see
+    // src/model/containerDelivery.js. Freight in the Pacific is not a receiving backlog.
+    awaitingReceipt: awaitingReceipt(containers.map((c) => ({
+      containerLabel: c.label, transferOrders: c.transferOrders,
+      deliveredOn: c.delivery.enteredOn, deliveredBy: c.delivery.by,
+    }))),
+  }
 }

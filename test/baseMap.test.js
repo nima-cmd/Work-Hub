@@ -227,7 +227,43 @@ test('comms counts unread mail and ops counts open tasks', () => {
 
 test('an empty base is all zeroes, never padded to look busy', () => {
   const s = buildingStates({})
-  for (const b of BUILDINGS) assert.equal(s[b.key].count, 0, `${b.key} invented work`)
+  for (const b of BUILDINGS) {
+    // ⚠️ null IS ALLOWED AND 0 IS NOT THE ONLY HONEST ANSWER. The Landing bay is fed a
+    // container feed that arrives after first paint; with none it reads UNKNOWN, the
+    // same thing `countable: false` says for the Archive and the Catalogue. What the
+    // test actually forbids is INVENTED WORK — a positive number from nothing.
+    assert.ok(s[b.key].count === 0 || s[b.key].count === null, `${b.key} invented work`)
+    assert.ok(!(s[b.key].count > 0), `${b.key} invented work`)
+  }
+  // And unknown must not masquerade as a real zero.
+  assert.equal(s.port.count, null)
+  assert.equal(s.port.countable, false)
+})
+
+test('⚠️ the Landing bay counts VESSELS IN TRANSIT, and only what a person said is here', () => {
+  const vessel = (label, state) => ({ containerLabel: label, label, delivery: { state } })
+  const s = buildingStates({
+    containers: {
+      containers: [
+        vessel('at sea', 'unknown'),
+        vessel('on the dock', 'unknown'),
+        vessel('in the yard', 'delivered'),
+        vessel('done', 'received'),
+      ],
+    },
+  })
+  // ⚠️ Three in transit, not four: a received container is FINISHED, and counting it
+  // would make the number grow forever and never fall.
+  assert.equal(s.port.count, 3)
+  // ⚠️ THE ALERT IS ONLY THE ONE A PERSON SAID IS HERE. Two of the three have no
+  // receipt; counting both would report freight in the Pacific as a receiving backlog.
+  assert.equal(s.port.alerts.length, 1)
+  assert.equal(s.port.alerts[0].count, 1)
+  assert.match(s.port.alerts[0].label, /on our floor, not received/)
+  // A quiet port raises no alert at all rather than an empty one.
+  const quiet = buildingStates({ containers: { containers: [vessel('done', 'received')] } })
+  assert.equal(quiet.port.count, 0)
+  assert.deepEqual(quiet.port.alerts, [])
 })
 
 test('every building gets a state, so none renders undefined', () => {
@@ -389,11 +425,13 @@ test('the Archive declares itself uncountable rather than inventing a number', (
   assert.equal(s.datapad.count, 0)
 })
 
-test('every building still has a state after growing to twelve', () => {
+test('every building still has a state after growing to thirteen', () => {
   const s = buildingStates({ orders: [so()] })
   // ⚠️ A DELIBERATE CANARY: adding a building must trip this and make someone check
   // that it has a state, a road and a real sprite. Bump it knowingly, never reflexively.
-  assert.equal(BUILDINGS.length, 12)
+  // Bumped 2026-09-15 for the Landing bay — checked: it has a state (above), two roads
+  // (port→receiving, port→stock) and a real sprite (bldg-02, mirrored off Receiving).
+  assert.equal(BUILDINGS.length, 13)
   for (const b of BUILDINGS) {
     assert.ok(s[b.key], `${b.key} has no state`)
     assert.ok(Array.isArray(s[b.key].items))

@@ -217,3 +217,34 @@ test('mode inferred from the label is marked as inferred on the card', () => {
   assert.equal(r.mode, 'air')
   assert.equal(r.modeInferred, true)
 })
+
+test('⚠️ inferMode missed BOTH live sea containers — the anchored pattern was wrong', () => {
+  // The docblock claimed the sea labels read "321, 264, 39, 16, 55". They do not: the
+  // real ones carry words between the number and "carton", and one is PLURAL. The old
+  // `^\s*\d+\s+carton\b` matched neither, so the suggestion was silently absent on the
+  // two containers anybody would actually be looking at.
+  assert.equal(inferMode('55 LCL carton 2026.9.7').mode, 'sea')
+  assert.equal(inferMode('59 cartons LCL to LA INVOICE&PL (1) carton 2026.8.17').mode, 'sea')
+  // and the simpler historical ones still work
+  for (const l of ['39 carton 2026.5.22', '264 carton 2026.6.18', '16 carton 2026.7.9', '321 carton 2026.7.10']) {
+    assert.equal(inferMode(l).mode, 'sea', l)
+  }
+})
+
+test('⚠️ air wins over "carton" — the air labels contain BOTH words', () => {
+  // Reversing the two tests in inferMode calls each of these sea.
+  assert.equal(inferMode('1 air carton 2026.8.8').mode, 'air')
+  assert.equal(inferMode('11 Air 1820 1777 air list carton 2026.9.7').mode, 'air')
+  assert.equal(inferMode('2 Air DHL 2026.6.9').mode, 'air')
+  assert.equal(inferMode('35 Air-PO1690').mode, 'air')
+})
+
+test('a memo that is not a container suggests nothing at all', () => {
+  // ⚠️ The suggestion must stay absent for things that are not containers — TO215's
+  // memo is "PO1616Transfer" and it is not a vessel.
+  assert.equal(inferMode('PO1616Transfer').mode, null)
+  assert.equal(inferMode('for SO11913').mode, null)
+  assert.equal(inferMode('').mode, null)
+  // and every one of these is still flagged as a GUESS, never a decision
+  assert.equal(inferMode('55 LCL carton 2026.9.7').inferred, true)
+})
