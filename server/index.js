@@ -26,6 +26,7 @@ import {
   setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, recordDeadLabel, undoDeadLabel, listDeadLabels, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
   recordContainerDelivered,
+  getContainers,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -1279,6 +1280,17 @@ app.get('/api/filing/unfiled', async (_req, res) => {
 app.get('/api/inbound/containers', async (_req, res) => {
   try {
     res.json(await getInboundContainers())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// The container board — one vessel per row, its identity, its China leg, where its
+// freight is and what to do next. src/model/container*.js hold every rule.
+app.get('/api/containers', async (_req, res) => {
+  try {
+    res.json(await getContainers())
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

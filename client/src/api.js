@@ -1345,3 +1345,28 @@ export async function printPalletLabels({ shipmentId, size = '4x6', pallets = 1,
   if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
   return body
 }
+
+// ── Containers (2026-09-15) ─────────────────────────────────────────────────
+// ⚠️ BOTH GO THROUGH asJson. A 200 carrying an HTML body is what had the app reporting
+// "Sent undefined markings to undefined" when nothing had printed — `res.json().catch(
+// () => ({}))` turns a stale server into a silent success.
+export async function fetchContainers() {
+  return asJson(await fetch('/api/containers'), 'loading the containers')
+}
+
+/**
+ * Record that a container physically arrived.
+ *
+ * ⚠️ `deliveredOn` IS REQUIRED AND THE CALLER MUST SUPPLY IT. There is deliberately no
+ * `?? today` here: the drayage from the port is invisible, so somebody recording this on
+ * Thursday for freight that landed Tuesday must be able to say Tuesday. The server
+ * refuses a missing date too — this is not the only guard, on purpose.
+ */
+export async function markContainerDelivered(label, { deliveredOn, by, note } = {}) {
+  const res = await fetch(`/api/inbound/containers/${encodeURIComponent(label)}/delivered`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deliveredOn, by, note }),
+  })
+  return asJson(res, 'recording the delivery')
+}

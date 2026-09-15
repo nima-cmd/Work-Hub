@@ -51,8 +51,20 @@ export function sourceWins(incoming, current) {
  */
 export function inferMode(containerLabel) {
   const s = String(containerLabel || '')
+  // ⚠️ AIR IS TESTED FIRST BECAUSE THE AIR LABELS ALSO SAY "carton". The live ones read
+  // `1 air carton 2026.8.8` and `11 Air 1820 1777 air list carton 2026.9.7` — order is
+  // the whole rule, and reversing these two lines calls both of them sea.
   if (/\bair\b/i.test(s)) return { mode: 'air', inferred: true }
-  if (/^\s*\d+\s+carton\b/i.test(s)) return { mode: 'sea', inferred: true }
+  // ⚠️ THIS USED TO BE `^\s*\d+\s+carton\b` AND MISSED BOTH LIVE SEA CONTAINERS. The
+  // docblock above claimed the labels read "321, 264, 39, 16, 55" — they do not:
+  //
+  //     55 LCL carton 2026.9.7                        words between number and "carton"
+  //     59 cartons LCL to LA INVOICE&PL (1) carton …  PLURAL, and `carton\b` fails on it
+  //
+  // Both suggested nothing, which is safe but useless — the anchored pattern only ever
+  // matched the older, simpler labels. The shape that actually holds is the one
+  // containerTransfer.containerKey already relies on: "<count> …words… carton <date>".
+  if (/\bcartons?\b/i.test(s)) return { mode: 'sea', inferred: true }
   return { mode: null, inferred: true }
 }
 

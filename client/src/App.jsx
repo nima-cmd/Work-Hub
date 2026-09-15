@@ -9,6 +9,7 @@ import Kanban from './views/Kanban.jsx'
 import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
 import Allocations from './views/Allocations.jsx'
+import Containers from './views/Containers.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Routing from './views/Routing.jsx'
 import Catalogue from './views/Catalogue.jsx'
@@ -159,6 +160,10 @@ const VIEWS = [
   { key: 'table', label: 'Table', C: TableView },
   { key: 'calendar', label: 'Calendar', C: Calendar },
   { key: 'allocations', label: 'Inbound', C: Allocations },
+  // ⚠️ SEPARATE FROM 'Inbound', WHICH IS THE OC↔PO QUEUE. This is the vessel — one row
+  // per container, its identity and aliases, its China leg, where its freight is and
+  // what to do next. Same NetSuite records, a different question.
+  { key: 'containers', label: 'Containers', C: Containers },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'routing', label: 'Routing', C: Routing },
   { key: 'catalogue', label: 'Catalogue', C: Catalogue },
