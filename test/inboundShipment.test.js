@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   inferMode, transitDays, transitStats, estimateEta, shipmentState,
-  describeShipment, shipmentBoard, sourceWins, MIN_SAMPLES,
+  describeShipment, shipmentBoard, sourceWins, MIN_SAMPLES, anchorFor, transitFrom, ANCHORS,
 } from '../src/model/inboundShipment.js'
 
 const TODAY = new Date('2026-09-09T12:00:00Z')
@@ -39,18 +39,24 @@ const observed = [
 
 test('⚠️ MEDIAN NOT MEAN, and the spread is reported alongside it', () => {
   const { stats } = transitStats(observed)
-  assert.equal(stats.air.n, 3)
-  assert.equal(stats.air.median, 2)
-  assert.equal(stats.air.spread, 1)
-  assert.equal(stats.air.enough, true)
-  assert.equal(stats.sea.median, 18)
+  // ⚠️ THE KEY IS mode|anchor, NOT mode. These fixtures carry only `departedOn` — the
+  // packing slip's date — so they bucket under `packed`. Asserted POSITIVELY rather
+  // than loosened, because the whole point of the change is that a statistic must say
+  // what it counted FROM: `stats.sea` alone could never tell you.
+  assert.equal(stats['air|packed'].n, 3)
+  assert.equal(stats['air|packed'].median, 2)
+  assert.equal(stats['air|packed'].spread, 1)
+  assert.equal(stats['air|packed'].enough, true)
+  assert.equal(stats['air|packed'].anchor.key, 'packed')
+  assert.equal(stats['sea|packed'].median, 18)
+  assert.equal(stats.sea, undefined, 'an unqualified bucket would not know its own anchor')
   // One vessel stuck at customs must not drag the expectation for every other.
   const withOutlier = transitStats([...observed, { containerLabel: 'held', mode: 'sea', departedOn: '2026-01-01', arrivedOn: '2026-04-01' }])
   // 16/18/21 days, plus one vessel held 90. Median 18 -> 20. The MEAN would be 36 —
   // an expectation that matches nothing that has ever actually happened.
-  assert.equal(withOutlier.stats.sea.median, 20, 'the median moves 2 days; a mean would move 18')
-  assert.equal(withOutlier.stats.sea.max, 90)
-  assert.equal(withOutlier.stats.sea.spread, 74, 'and the spread makes the outlier visible')
+  assert.equal(withOutlier.stats['sea|packed'].median, 20, 'the median moves 2 days; a mean would move 18')
+  assert.equal(withOutlier.stats['sea|packed'].max, 90)
+  assert.equal(withOutlier.stats['sea|packed'].spread, 74, 'and the spread makes the outlier visible')
 })
 
 test('a shipment with no mode is an anomaly, not silently averaged in', () => {
@@ -58,14 +64,16 @@ test('a shipment with no mode is an anomaly, not silently averaged in', () => {
     ...observed,
     { containerLabel: 'mystery', mode: null, departedOn: '2026-07-01', arrivedOn: '2026-07-10' },
   ])
-  assert.equal(stats.air.n, 3)
+  assert.equal(stats['air|packed'].n, 3)
   assert.equal(anomalies.length, 1)
   assert.match(anomalies[0].reason, /cannot be attributed/)
 })
 
 test('arriving before departing is reported, never clamped to a same-day arrival', () => {
   const { anomalies } = transitStats([{ containerLabel: 'x', mode: 'sea', departedOn: '2026-07-10', arrivedOn: '2026-07-01' }])
-  assert.match(anomalies[0].reason, /before it departed/)
+  // ⚠️ The reason NAMES THE ANCHOR now — "before its factory complete date" — because
+  // "before it departed" was the very wording that made a pack date sound like a sailing.
+  assert.match(anomalies[0].reason, /arrived before its factory complete date/)
   assert.equal(anomalies[0].days, -9)
 })
 
@@ -82,7 +90,11 @@ test('an estimate always carries its basis and its confidence', () => {
   const { stats } = transitStats(observed)
   const air = estimateEta({ mode: 'air', departedOn: '2026-09-09' }, stats)
   assert.equal(air.source, 'estimate')
-  assert.match(air.basis, /median of 3 observed air arrivals \(2-3 days\)/)
+  // ⚠️ IT USED TO READ "median of 3 observed air arrivals (2-3 days)" — a sentence about
+  // flying time built from dates that are not departures. It now names the anchor.
+  assert.match(air.basis, /median of 3 air arrivals measured finished in China → landed/)
+  assert.match(air.basis, /\(2-3 days from factory complete\)/)
+  assert.equal(air.anchor.key, 'packed')
   assert.equal(air.confidence, 'tight')
   const sea = estimateEta({ mode: 'sea', departedOn: '2026-09-09' }, stats)
   assert.equal(sea.confidence, 'loose', '16-21 days is a range, and says so')
@@ -144,6 +156,42 @@ test('⚠️ AN ESTIMATE NEVER OVERWRITES AN ENTERED DATE', () => {
   assert.equal(filled.etaOn, '2026-09-11')
   assert.equal(filled.etaSource, 'estimate')
   assert.match(filled.etaBasis, /median of 3/)
+  // ⚠️ AND THE BASIS NAMES WHAT IT COUNTED FROM. "median of 3 air arrivals (2-3 days)"
+  // reads as time in the air; these samples are measured from the factory-complete date,
+  // which on the 59-carton container was EIGHT DAYS before the vessel sailed.
+  assert.match(filled.etaBasis, /finished in China → landed/)
+  assert.match(filled.etaBasis, /from factory complete/)
+})
+
+test('⚠️ GLC\'s real sail date outranks the packing slip, and is never mixed with it', () => {
+  // Two buckets from the same six shipments once half of them carry a vessel ETD.
+  const withEtd = observed.map((o, i) => (i % 2 ? { ...o, etdOn: o.departedOn } : o))
+  const { stats } = transitStats(withEtd)
+  assert.ok(stats['sea|packed'] || stats['air|packed'], 'slip-anchored samples still bucket')
+  assert.ok(stats['sea|etd'] || stats['air|etd'], 'and ETD-anchored ones bucket separately')
+  // ⚠️ NEVER SUMMED. Mixing them would describe neither quantity.
+  const packedN = Object.entries(stats).filter(([k]) => k.endsWith('|packed')).reduce((a, [, v]) => a + v.n, 0)
+  const etdN = Object.entries(stats).filter(([k]) => k.endsWith('|etd')).reduce((a, [, v]) => a + v.n, 0)
+  assert.equal(packedN + etdN, 6)
+  assert.ok(packedN > 0 && etdN > 0)
+
+  // The anchor a shipment USES is the best one it has.
+  assert.equal(anchorFor({ departedOn: '2026-08-17', etdOn: '2026-08-25' }).key, 'etd')
+  assert.equal(anchorFor({ departedOn: '2026-08-17' }).key, 'packed')
+  assert.equal(anchorFor({}), null)
+  // and the eight real days between them on the 59
+  assert.equal(transitFrom({ mode: 'sea', departedOn: '2026-08-17', etdOn: '2026-08-25', arrivedOn: '2026-09-20' }).days, 26)
+  assert.equal(transitFrom({ mode: 'sea', departedOn: '2026-08-17', arrivedOn: '2026-09-20' }).days, 34)
+})
+
+test('⚠️ an ETD-anchored shipment does NOT borrow the packing-slip median', () => {
+  // Only slip-anchored history exists; a shipment with a real sail date must get no
+  // estimate rather than a date built by adding one anchor's median to another's start.
+  const { stats } = transitStats(observed)
+  const sailed = estimateEta({ mode: 'air', departedOn: '2026-09-09', etdOn: '2026-09-11' }, stats)
+  assert.equal(sailed, null, 'two quantities added together is not an estimate')
+  // the same shipment without the sail date still estimates, from the bucket that fits
+  assert.ok(estimateEta({ mode: 'air', departedOn: '2026-09-09' }, stats))
 })
 
 test('the board sorts by what needs attention and counts from the resolved state', () => {
@@ -161,7 +209,7 @@ test('the board sorts by what needs attention and counts from the resolved state
   assert.equal(board.attention, 2)
   // Counting must agree with the list it is a count OF.
   assert.equal(board.counts.overdue, board.rows.filter((r) => r.state === 'overdue').length)
-  assert.equal(stats.air.median, 2)
+  assert.equal(stats['air|packed'].median, 2)
 })
 
 test('mode inferred from the label is marked as inferred on the card', () => {

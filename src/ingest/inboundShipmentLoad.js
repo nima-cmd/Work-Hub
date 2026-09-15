@@ -14,7 +14,14 @@ const rowToShipment = (r) => ({
   containerNum: r.container_num ?? null,
   mode: r.mode ?? null,
   modeSource: r.mode_source ?? null,
+  // ⚠️ NAMED `departedOn` AND IT IS THE PACKING SLIP'S DATE — the day the factory told
+  // us the goods were complete, which on the 59-carton container was EIGHT DAYS before
+  // the vessel sailed. src/model/inboundShipment.js ANCHORS explains what each measures.
   departedOn: r.departed_on ? r.departed_on.toISOString().slice(0, 10) : null,
+  // ⚠️ THIS WAS SELECTED BY `s.*` AND NEVER MAPPED, so the better anchor was invisible
+  // to the model — `anchorFor` could only ever return `packed` and the ETD branch was
+  // unreachable. Counter-bug shape 1 in CLAUDE.md, in a mapper rather than a counter.
+  etdOn: r.etd_on ? r.etd_on.toISOString().slice(0, 10) : null,
   etaOn: r.eta_on ? r.eta_on.toISOString().slice(0, 10) : null,
   etaSource: r.eta_source ?? null,
   etaNote: r.eta_note ?? null,
