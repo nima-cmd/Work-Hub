@@ -181,12 +181,13 @@ test('the guides folder is described but NOT created', () => {
   assert.match(GUIDES_ROOT.mirrors, /googleDrive\.js/)
 })
 
-test('⚠️ TWO OF THE FOUR ARE NOW READ, AND THE OTHER TWO STILL SAY SO', () => {
+test('⚠️ ALL FOUR ARE ACCOUNTED FOR — three read, one a duplicate', () => {
   // All three arrived unread the day four Bloomingdale's orders shipped short. The
   // Vendor Standards has since been read — it is a Macy's 2023 document whose
   // Appendix H prices a shortage at 50% of the merchandise — and rulesIn now points
-  // at the module. The other two are still unread, and the registry must keep saying
-  // that rather than implying the partner is covered.
+  // at the module. The Routing Guide and the Store-to-DC listing followed on
+  // 2026-09-15. Only the Bloomingdale's-specific routing guide is still unread, and the
+  // registry must keep saying so rather than implying the partner is covered.
   const vs = DOCUMENTS.find((d) => d.key === 'bloomingdales-vendor-standards')
   assert.equal(vs.rulesIn, 'src/model/macysStandards.js')
   assert.equal(vs.editionDate, '2023-01-01')
@@ -197,17 +198,32 @@ test('⚠️ TWO OF THE FOUR ARE NOW READ, AND THE OTHER TWO STILL SAY SO', () =
   // document has to be recorded here too and cannot quietly stop being tracked.
   const rg = DOCUMENTS.find((d) => d.key === 'macys-routing')
   assert.equal(rg.rulesIn, 'src/model/macysRouting.js')
+  // And the Store-to-DC listing, 2026-09-15 — the file §2.1 says must be used to map a
+  // PO's location number to its receiving DC.
+  const sd = DOCUMENTS.find((d) => d.key === 'macys-store-dc-listing')
+  assert.equal(sd.rulesIn, 'src/model/macysStores.js')
 
-  for (const key of ['bloomingdales-routing', 'macys-store-dc-listing']) {
-    assert.equal(DOCUMENTS.find((x) => x.key === key).rulesIn, null, `${key} must still read as unread`)
-  }
-  assert.ok(unreadDocuments().some((d) => d.key === 'bloomingdales-routing'))
+  // ⚠️ AND THE FOURTH WAS NEVER A DOCUMENT. "Bloomingdales Routing Guide.pdf" is the
+  // Macy's Routing Guide under another filename — same cover naming all three banners,
+  // same Summary of Changes headed 4/14/26, same byte length (1,429,760) with only a
+  // different PDF id from being re-saved. It stays in the registry as an ALIAS because
+  // the file is in Drive under that name and someone will open it expecting a
+  // Bloomingdale's-specific guide; it is out of the gap report because there is nothing
+  // left to read.
+  const br = DOCUMENTS.find((d) => d.key === 'bloomingdales-routing')
+  assert.equal(br.sameAs, 'macys-routing')
+  assert.ok(!unreadDocuments().map((d) => d.key).includes('bloomingdales-routing'))
+
 })
 
 test('⚠️ TWO FILES SHARE A NAME WITH DOCUMENTS THAT ARE NOT THEM', () => {
-  // "Vendor Standards.pdf" already exists elsewhere in Drive at a different size, and
-  // the Bloomingdale's routing guide is a different file from macys-routing. Matching
-  // either by title alone picks the wrong document.
+  // "Vendor Standards.pdf" already exists elsewhere in Drive at a different size, so
+  // matching by title alone picks the wrong document.
+  //
+  // ⚠️ THE BLOOMINGDALE'S HALF OF THIS WAS WRONG. It said the Bloomingdale's routing
+  // guide is "a different file from macys-routing". Opened 2026-09-15: it is the SAME
+  // document under another filename — same 4/14/26 Summary of Changes, same 1,429,760
+  // bytes. It is an alias now, and the title collision it warns about is still real.
   const vs = DOCUMENTS.find((d) => d.key === 'bloomingdales-vendor-standards')
   assert.match(vs.note, /1,294,548/)
   const br = DOCUMENTS.find((d) => d.key === 'bloomingdales-routing')

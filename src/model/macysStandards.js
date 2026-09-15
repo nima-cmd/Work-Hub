@@ -358,8 +358,13 @@ export function macysShipmentChecklist({ cartons = 1, receipts = 1, units = 0, m
     // ⚠️ THE ROUTING GUIDE IS READ NOW — src/model/macysRouting.js, rev 4/14/26. What
     // remains unread is the Bloomingdale's-specific guide and the Store-to-DC listing.
     notCovered: [
-      'The Bloomingdale\'s Routing Guide (bloomingdales-routing) — unread.',
-      'The Store-to-DC listing — unread; src/model/bolAddresses.js carries DC addresses harvested from routing notifications instead.',
+      // ⚠️ THE LAST "GAP" WAS A DUPLICATE. "Bloomingdales Routing Guide.pdf" is the
+      // Macy's Routing Guide under another filename — same rev 4/14/26, same byte
+      // length. There is no Bloomingdale's-specific routing guide to read.
+      'Bloomingdale\'s-specific ticketing, hanger and RFID rules — Appendix H prices them but the Vendor Standards sections behind them are not extracted.',
+      // ⚠️ Only the Bloomingdale's-specific routing guide is left. Both the Macy's
+      // Routing Guide and the Store-to-DC listing were read on 2026-09-15.
+
     ],
     caveat: SOURCE.verifyBeforeQuoting
       ? `Figures are from the ${SOURCE.edition} ${SOURCE.document}, Appendix ${SOURCE.appendix}. Confirm the edition before quoting — the routing guide beside it in Drive is marked rev 4/14/26.`

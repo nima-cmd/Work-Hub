@@ -12,6 +12,22 @@
 // they abbreviate to the number itself — no map entry needed.
 import { DCS as EXEMPLAR_DC_TABLE } from './exemplarStores.js'
 
+// ⚠️ THIS MAP IS NAME -> CODE, AND IT IS THE WRONG WAY ROUND FOR AN OPEN ORDER.
+// It was built from FULFILMENT ship-to strings, which name the DC — so the DC could only
+// be known once an IF existed. An open Bloomingdale's SO reads "Bloomingdale's - 0006
+// Short Hills": store number, store name, no DC at all.
+//
+// src/model/macysStores.js now carries Macy's own Store-to-DC listing, which maps the
+// STORE NUMBER to the DC code directly and is the file Routing Guide §2.1 (p5) says must
+// be used: "Purchase orders will only contain location numbers and quantities."
+// Prefer `dcForStore(store)` when you have a store number; this map stays for parsing a
+// fulfilment's ship-to, which is a different question.
+//
+// ⚠️ AND IT IS MISSING TU AND HI, which is a known gap rather than a discovered one. The
+// listing shows store 0065 (Bloomies University Village, Seattle) routes to TU and store
+// 0947 (Hawaii Pool Stock, c/o Los Angeles) routes to HI. Their DC NAMES and addresses
+// are still unknown — the listing gives the store's address, not the DC's — so they are
+// deliberately NOT added here with an invented name. See CODES_WITHOUT_ADDRESS.
 export const DC_ABBREV = {
   'Secaucus': 'SC',
   'Stone Mountain': 'ST',

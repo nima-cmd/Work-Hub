@@ -269,6 +269,17 @@ export const DOCUMENTS = [
   // of them is READ the answer is still unknown.
   {
     key: 'bloomingdales-routing',
+    // ⚠️ THIS IS NOT A SEPARATE DOCUMENT. Opened 2026-09-15 to close the last gap and it
+    // is the MACY'S ROUTING GUIDE under another filename: same cover naming all three
+    // banners, same contents page, same Summary of Changes headed 4/14/26, same byte
+    // length as "Routing Guide.pdf" (1,429,760) with only a different PDF id from being
+    // re-saved.
+    //
+    // It is recorded as an alias rather than deleted, because the FILE exists in Drive
+    // under that name and someone will open it expecting a Bloomingdale's-specific
+    // guide. Saying "this is the Macy's guide" is the useful answer; leaving it in the
+    // gap report as unread would have kept us hunting for a document that is not there.
+    sameAs: 'macys-routing',
     partner: "Bloomingdale's",
     also: ["Macy's Inc"],
     kind: 'routing guide',
@@ -321,7 +332,8 @@ export const DOCUMENTS = [
     lastChecked: '2026-09-11',
     driveId: null,
     folder: 'data',
-    rulesIn: null,
+    // Extracted 2026-09-15 from the copy updated 2026-07-28.
+    rulesIn: 'src/model/macysStores.js',
     governs: "store → servicing DC for Macy's, Bloomingdale's and Bloomingdale's Outlet",
     // ⚠️ FOUR TABS, AND THE STORE LISTS ARE PER BANNER: Summary of Changes (684
     // rows), Macy's (516), Bloomingdale's (40 stores), Bloomingdale's Outlet.
@@ -381,7 +393,10 @@ export const documentForModule = (modulePath) =>
  */
 export function unreadDocuments() {
   return DOCUMENTS
-    .filter((d) => !d.rulesIn && !d.supersededBy)
+    // ⚠️ `sameAs` IS A GAP THAT IS NOT ONE. A file in Drive under its own name that
+    // turns out to be another document already read is not missing rules — it is the
+    // same rules with a confusing filename.
+    .filter((d) => !d.rulesIn && !d.supersededBy && !d.sameAs)
     .map((d) => ({
       ...withUrl(d),
       why: d.citedLooselyIn
