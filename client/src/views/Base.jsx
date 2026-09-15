@@ -63,7 +63,7 @@ const AGE = (iso) => {
   return days <= 0 ? 'today' : `${days}d`
 }
 
-export default function Base({ orders = [], tasks = [], emails = [], events = [], onNavigate, viewFor }) {
+export default function Base({ orders = [], tasks = [], emails = [], events = [], containers = null, onNavigate, viewFor }) {
   // ── OPENING A BUILDING, WITHOUT MAKING THE CLICK WAIT FOR IT ──────────────
   //
   // Measured 2026-08-21 in Nima's Performance panel: INP 208ms on a pointer, against
@@ -138,8 +138,11 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
   }, [])
 
   const states = useMemo(
-    () => buildingStates({ orders, tasks, emails, events }),
-    [orders, tasks, emails, events],
+    () => buildingStates({ orders, tasks, emails, events, containers }),
+    // ⚠️ `containers` BELONGS IN THE DEPS. It arrives after the first paint (its own
+    // fetch), and without it here the Landing bay would stay at its loading state — the
+    // count frozen as unknown while the data sat in props.
+    [orders, tasks, emails, events, containers],
   )
   const movers = useMemo(() => moversFrom(events), [events])
 

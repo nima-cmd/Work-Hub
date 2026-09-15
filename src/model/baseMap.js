@@ -73,6 +73,26 @@ export const BUILDINGS = [
     of: 'presold, waiting on stock', view: 'allocations',
   },
   {
+    // ⚠️ THE PORT IS NOT THE RECEIVING BUILDING, and the distinction is the whole reason
+    // it exists. Receiving answers "what is presold and waiting on stock" — an ORDER
+    // question. This answers "where is the freight" — a VESSEL question. Nima,
+    // 2026-09-15: "we want this in the base view."
+    //
+    // It stands between Receiving and the Pack house because that is the real sequence:
+    // a container lands, its transfer orders are received, and only then can anything
+    // draw on the units.
+    // ⚠️ NAMED AGAINST THE LAUNCH PAD, DELIBERATELY. The base already has the outbound
+    // door; this is the inbound one, and the pair is what makes both legible at a glance.
+    // "Landing bay" rather than "Landing pad" so the nav strip cannot be misread at
+    // speed — and "bay" is the word the Scan bay already uses for a working hall.
+    key: 'port', label: 'Landing bay', sprite: 'bldg-02', tone: 'arrive', flip: true,
+    // ⚠️ The Receiving sprite, MIRRORED — the same pair rule as the scan bay and the
+    // catalogue. Two arrival halls facing each other is what the flow actually looks
+    // like, and `flip` is what keeps them apart visually.
+    x: 17, y: 34, w: 12, h: 17,
+    of: 'containers in transit', view: 'containers',
+  },
+  {
     key: 'pack', label: 'Pack house', sprite: 'bldg-04', tone: 'hands',
     // Dock doors right around the perimeter.
     x: 30, y: 32, w: 14, h: 19,
@@ -149,7 +169,10 @@ export const centreOf = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
 // than inventing one. That is the whole guarantee — a mover can only ever travel
 // between buildings that are genuinely connected.
 export const ROADS = [
-  // The flow of goods, west to east.
+  // The flow of goods, west to east. The port is the first door: freight lands there
+  // before anything downstream can draw on it.
+  { key: 'port-receiving', from: 'port', to: 'receiving' },
+  { key: 'port-stock', from: 'port', to: 'stock' },
   { key: 'in-stock', from: 'receiving', to: 'stock' },
   { key: 'in-pack', from: 'receiving', to: 'pack' },
   { key: 'stock-pack', from: 'stock', to: 'pack' },
@@ -192,16 +215,26 @@ const shipped = (s) => /shipped/i.test(String(s || ''))
  * exists to be worked from, and "319 orders" is not work. Where a building's honest
  * number is zero it stays zero; a building is never padded to look busy.
  */
-export function buildingStates({ orders = [], tasks = [], emails = [], events = [] } = {}) {
+export function buildingStates({ orders = [], tasks = [], emails = [], events = [], containers = null } = {}) {
   const lane = (o) => laneFor(o)?.key || null
 
   // Presold with nothing fulfilled yet — the order side of "waiting on the factory".
-  // NOT a container count: containers are inbound stock, and this view gets no
-  // container feed, so claiming one here would be a number with no source.
+  // ⚠️ STILL NOT A CONTAINER COUNT, even now that containers ARE fed in. This asks an
+  // ORDER question — what is presold with nothing fulfilled — and the Landing bay asks a
+  // VESSEL one. They move together and they are not the same number; merging them is how
+  // a building ends up counting something other than its label.
   const waitingOnStock = orders.filter(
     (o) => lane(o) !== 'stock' && lane(o) !== 'edi' && !ifsOf(o).length && !shipped(o.stage),
   )
   const fromStock = orders.filter((o) => lane(o) === 'stock' && !shipped(o.stage))
+
+  // ── Vessels ─────────────────────────────────────────────────────────────
+  // ⚠️ THE STATES COME FROM THE API, WHICH GOT THEM FROM src/model/containerDelivery.js.
+  // Nothing here re-decides whether a container has landed; this only partitions rows
+  // whose state was already settled by a tested function.
+  const vessels = containers?.containers || []
+  const inTransit = vessels.filter((c) => c.delivery?.state !== 'received')
+  const onTheFloorNotReceived = vessels.filter((c) => c.delivery?.state === 'delivered')
 
   // Out of our hands and not back: the custody gap, which is the real question the
   // pack house answers. custodyOut with no custodyIn — observed scans, both of them.
@@ -308,6 +341,27 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
   })
   return {
     receiving: state(waitingOnStock.length, waitingOnStock, 'order', (o) => o.startDate),
+    // ── The Landing bay ────────────────────────────────────────────────────
+    // ⚠️ THE HEADLINE IS "IN TRANSIT", AND THAT IS A DELIBERATE CHOICE OF WHAT IS WORK.
+    // A landed-and-received container is finished; counting it would make the number
+    // grow forever and never fall, which is the opposite of a thing to act on.
+    //
+    // ⚠️ AND `null` IS NOT `0`. When no container feed was passed — App still loading, or
+    // a caller that has none — the building must read as UNKNOWN rather than assert an
+    // empty port. `countable: false` is how the Archive and the Catalogue already say
+    // "no honest number here", and an invented zero among real numbers is worse than
+    // none (the reason the comment above forbade this count in the first place).
+    port: containers
+      ? state(
+        inTransit.length, inTransit, 'container', (c) => c.packedOn,
+        // ⚠️ THE ALERT IS THE ONE PIECE OF REAL WORK: on our floor, not on the books.
+        // It counts what a person SAID arrived — never "has no receipt", which would
+        // report freight in the Pacific as a receiving backlog.
+        onTheFloorNotReceived.length
+          ? [{ key: 'awaitingReceipt', label: 'on our floor, not received in NetSuite', count: onTheFloorNotReceived.length, items: onTheFloorNotReceived }]
+          : [],
+      )
+      : { count: null, countable: false, items: [], alerts: [] },
     stock: state(fromStock.length, fromStock, 'order', (o) => o.startDate),
     pack: state(onTheFloor.length, onTheFloor, 'fulfillment', (f) => f.custodyOut, [
       { key: 'staleTags', label: 'custody tags never closed', count: staleTags.length, items: staleTags },

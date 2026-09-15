@@ -159,9 +159,24 @@ function Container({ c, onChange }) {
   )
 }
 
+// ⚠️ THE TABS ARE THE THREE THINGS A CONTAINER CAN BE, not a filter menu. Nima,
+// 2026-09-15: "there should be a in transit tab, received, and perhaps one for the ones
+// with no packing slip."
+//
+// ⚠️ AND "En route" IS NOT "everything not received". It is the two live delivery states
+// — still coming, and on our floor unreceived — which is exactly the partition
+// containerDelivery.js refuses to collapse. A tab built as the complement of another tab
+// would quietly re-merge them.
+const TABS = [
+  { key: 'transit', label: 'En route', hint: 'still coming, or here and not yet on the books' },
+  { key: 'landed', label: 'Landed', hint: 'every transfer order received — finished' },
+  { key: 'unmanifested', label: 'Unmanifested', hint: 'NetSuite has the transfer orders; we never imported a packing slip' },
+]
+
 export default function Containers() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
+  const [tab, setTab] = useState('transit')
   const load = async () => {
     try { setData(await fetchContainers()); setErr(null) } catch (e) { setErr(e.message) }
   }
@@ -172,12 +187,30 @@ export default function Containers() {
 
   const { containers, orphans, awaitingReceipt } = data
   const openOrphans = orphans.filter((o) => !o.allReceived)
+  const landed = containers.filter((c) => c.delivery.state === 'received')
+  const enRoute = containers.filter((c) => c.delivery.state !== 'received')
+  const counts = { transit: enRoute.length, landed: landed.length, unmanifested: orphans.length }
+  const shown = tab === 'landed' ? landed : enRoute
 
   return (
     <div className="view containers-view">
-      <h2>Containers</h2>
+      <h2>Landing bay</h2>
 
-      {/* ⚠️ THIS BANNER COUNTS WHAT A PERSON SAID IS HERE — never "has no receipt",
+      <nav className="c-tabs">
+        {TABS.map((t) => (
+          <button key={t.key} type="button" title={t.hint}
+                  className={`c-tab${tab === t.key ? ' is-on' : ''}`}
+                  onClick={() => setTab(t.key)}>
+            {t.label} <span className="c-tabN">{counts[t.key]}</span>
+          </button>
+        ))}
+      </nav>
+      <p className="c-why">{TABS.find((t) => t.key === tab).hint}</p>
+
+      {/* ⚠️ THE BANNER IS OUTSIDE THE TABS ON PURPOSE. It is the only actionable thing
+          on this screen, and hiding it behind the tab somebody is not looking at is how
+          it gets missed — which is the failure the whole app exists to prevent.
+          ⚠️ IT COUNTS WHAT A PERSON SAID IS HERE — never "has no receipt",
           which would report freight in the Pacific as a receiving backlog. */}
       {awaitingReceipt.length > 0 && (
         <div className="c-banner sev-hi">
@@ -186,9 +219,19 @@ export default function Containers() {
         </div>
       )}
 
-      {containers.map((c) => <Container key={c.label} c={c} onChange={load} />)}
+      {tab !== 'unmanifested' && shown.map((c) => <Container key={c.label} c={c} onChange={load} />)}
+      {/* ⚠️ AN EMPTY TAB SAYS WHY IT IS EMPTY. "Nothing here" next to a 0 is the state
+          somebody argues with; naming the reason is the same rule the delivery states
+          follow. */}
+      {tab !== 'unmanifested' && shown.length === 0 && (
+        <p className="c-why">
+          {tab === 'landed'
+            ? 'No container has had all its transfer orders received yet.'
+            : 'Nothing is in transit — every container we hold a slip for has landed and been received.'}
+        </p>
+      )}
 
-      {orphans.length > 0 && (
+      {tab === 'unmanifested' && orphans.length > 0 && (
         <section className="container-card c-orphans">
           <header><h3>In NetSuite with no packing slip — {orphans.length}</h3></header>
           <p className="c-sub">

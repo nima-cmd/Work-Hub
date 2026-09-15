@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers , fetchTransfers, recordViewVisit } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers, fetchContainers, fetchTransfers, recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -269,6 +269,9 @@ export default function App() {
   const [asnCartons, setAsnCartons] = useState(null)
   const [unfiled, setUnfiled] = useState(null)
   const [inbound, setInbound] = useState(null)
+  // ⚠️ null UNTIL IT LOADS, and buildingStates reads that as "no honest number" rather
+  // than an empty port — see the Landing bay in src/model/baseMap.js.
+  const [containers, setContainers] = useState(null)
   // Manual NetSuite refresh (Nima, 2026-07-31). `nsBusy` is NOT an error state:
   // it means Celigo is mid-run and holds the concurrency, which has priority.
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
@@ -326,6 +329,7 @@ export default function App() {
     fetchUnfiledPaper().then(setUnfiled).catch(() => setUnfiled(null))
     // Inbound containers past their arrival date (open POs grouped by due date).
     fetchInboundContainers().then(setInbound).catch(() => setInbound(null))
+    fetchContainers().then(setContainers).catch(() => setContainers(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
@@ -440,7 +444,7 @@ export default function App() {
   // copy would quietly lose a feature the tab kept.
   const viewProps = {
     orders, transfers, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
-    labelGaps, custody, bay,
+    labelGaps, custody, bay, containers,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     handoffPo, onHandoffPoTaken: () => setHandoffPo(null), onOpenBulkPick: openBulkPick,
     asnFocus, onAsnFocusTaken: () => setAsnFocus(null),
