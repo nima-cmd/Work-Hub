@@ -25,6 +25,7 @@ import { buildStaleness, WATCHED } from '../src/model/buildStaleness.js'
 import {
   setFulfillmentPrepped, setFulfillmentDeparted, getLabelWorksheetCsv, pushToShipstation, recordDeadLabel, undoDeadLabel, listDeadLabels, getOrders, getFreshness, getNwFreshness, getShipDepartures, getLaunchBay, getUnfiledPaper, getCredits, getAffection,
   getInboundContainers,
+  recordContainerDelivered,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -1278,6 +1279,29 @@ app.get('/api/filing/unfiled', async (_req, res) => {
 app.get('/api/inbound/containers', async (_req, res) => {
   try {
     res.json(await getInboundContainers())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── "It's here" (2026-09-15) ────────────────────────────────────────────────
+// The drayage from the port of discharge to Glendale is arranged by nobody whose
+// system we can read, so a container's arrival at our door is a fact that exists
+// ONLY when a person says so. This is the person saying so.
+//
+// ⚠️ IT IS AN ENTERED VALUE AND IS STORED AS ONE — with its author and its moment,
+// so nothing downstream can mistake it for something observed. src/model/
+// containerDelivery.js holds the rules; db/schema.sql says why there is no
+// derivation from `port_arrived_on` and never may be.
+app.post('/api/inbound/containers/:label/delivered', async (req, res) => {
+  try {
+    const { deliveredOn, by, note } = req.body || {}
+    const r = await recordContainerDelivered({ label: req.params.label, deliveredOn, by, note })
+    // ⚠️ Each refusal keeps its own status — a missing date is the caller's mistake to
+    // fix, a missing container is a different one, and lumping them as 400 hides which.
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

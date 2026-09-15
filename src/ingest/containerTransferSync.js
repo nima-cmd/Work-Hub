@@ -39,13 +39,59 @@ export async function fetchTransferOrders({ since = '2026-01-01' } = {}) {
   if (!qty.ok) return { ok: false, error: qty.error }
   const units = new Map(qty.rows.map((r) => [r.tranid, Number(r.units) || 0]))
 
+  // ⚠️ THE THIRD QUERY IS WHERE DELIVERY COMES FROM, and it is the only place NetSuite
+  // will tell us. A transfer order's own `trandate` and `status` say what it IS, never
+  // when either end happened: a TO reading "Received" carries no receipt date, so before
+  // this the app could not tell a container received yesterday from one received in May.
+  //
+  // `previoustransactionlinelink` holds the document chain. Off a transfer order it
+  // yields two kinds, and they are opposite ends of the leg:
+  //
+  //   ItemShip  the transfer was fulfilled   — units left China's books
+  //   ItemRcpt  the transfer was received    — units arrived on Glendale's
+  //
+  // ⚠️ AND `createdfrom` IS NOT AN ALTERNATIVE. `JOIN transaction src ON src.id =
+  // t.createdfrom` and even a bare `SELECT createdfrom FROM transaction` both answer 500
+  // UNEXPECTED_ERROR from SuiteQL. The link table is not the tidier option; it is the
+  // one that works.
+  //
+  // ⚠️ DISTINCT IS LOAD-BEARING. The link table is per LINE, so a fifteen-line transfer
+  // returns the same receipt fifteen times.
+  const chain = await runSuiteQL(`
+    SELECT DISTINCT src.tranid AS to_number, d.type AS doc_type, d.trandate AS doc_date
+      FROM previoustransactionlinelink l
+      JOIN transaction src ON src.id = l.previousdoc
+      JOIN transaction d   ON d.id   = l.nextdoc
+     WHERE src.type = 'TrnfrOrd' AND src.trandate >= TO_DATE('${since}','YYYY-MM-DD')
+       AND d.type IN ('ItemShip','ItemRcpt')`)
+  // ⚠️ A FAILED CHAIN QUERY IS NOT A FAILED SYNC. The headers and units are the container
+  // leg; the dates enrich it. Losing NetSuite's link table should leave delivery unknown
+  // — which is a state this app models honestly — not throw away the whole run.
+  const ship = new Map(); const rcpt = new Map()
+  if (chain.ok) {
+    for (const r of chain.rows) {
+      // Latest wins: a transfer fulfilled in two shipments is finished by the last one,
+      // the same MAX rule containerDelivery.receivedOn applies across a container.
+      const m = r.doc_type === 'ItemRcpt' ? rcpt : ship
+      const cur = m.get(r.to_number)
+      const d = r.doc_date ? String(r.doc_date) : null
+      if (d && (!cur || new Date(d) > new Date(cur))) m.set(r.to_number, d)
+    }
+  }
+
   return {
     ok: true,
+    // ⚠️ Named so a surface can say "delivery dates are missing because NetSuite's link
+    // table did not answer", rather than showing every container as never received.
+    chainOk: chain.ok,
+    chainError: chain.ok ? null : chain.error,
     rows: head.rows.map((r) => ({
       toNumber: r.tranid,
       memo: r.memo ?? null,
       status: r.status ?? null,
       trandate: r.trandate ? String(r.trandate) : null,
+      fulfilledOn: ship.get(r.tranid) ?? null,
+      receivedOn: rcpt.get(r.tranid) ?? null,
       // ⚠️ A TO with no positive inventory lines gets 0, not null — it exists and is
       // empty, which is a different thing from a quantity we failed to read.
       units: units.get(r.tranid) ?? 0,
@@ -82,18 +128,29 @@ export async function syncContainerTransfers({ since = '2026-01-01', db = pool }
 
   for (const r of toWrite) {
     await db.query(
-      `INSERT INTO container_transfer (to_number, container_label, memo, status, trandate, units, synced_at)
-            VALUES ($1,$2,$3,$4,$5,$6, now())
+      `INSERT INTO container_transfer (to_number, container_label, memo, status, trandate, units, fulfilled_on, received_on, synced_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
        ON CONFLICT (to_number) DO UPDATE SET
          container_label = EXCLUDED.container_label, memo = EXCLUDED.memo,
          status = EXCLUDED.status, trandate = EXCLUDED.trandate,
-         units = EXCLUDED.units, synced_at = now()`,
-      [r.toNumber, r.containerLabel, r.memo, r.status, r.trandate, r.units])
+         units = EXCLUDED.units, synced_at = now(),
+         -- ⚠️ COALESCE KEEPS A DATE WE ALREADY HAVE when the chain query failed this
+         -- run. Writing EXCLUDED straight through would blank every receipt date on the
+         -- first bad round trip and report landed containers as never received.
+         fulfilled_on = COALESCE(EXCLUDED.fulfilled_on, container_transfer.fulfilled_on),
+         received_on  = COALESCE(EXCLUDED.received_on,  container_transfer.received_on)`,
+      [r.toNumber, r.containerLabel, r.memo, r.status, r.trandate, r.units, r.fulfilledOn, r.receivedOn])
   }
 
   return {
     ok: true,
     fetched: t.rows.length,
+    // ⚠️ Surfaced, not swallowed: without the chain every container reads as never
+    // received, and that must be distinguishable from every container actually being at
+    // sea. `dated` is how many legs have both ends.
+    chainOk: t.chainOk,
+    chainError: t.chainError,
+    dated: t.rows.filter((r) => r.receivedOn).length,
     matched: toWrite.filter((r) => r.containerLabel).length,
     unmatched: unmatched.length,
     containers: byContainer.size,

@@ -14,6 +14,7 @@
 
 import { pool } from '../src/db.js'
 import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
+import { deliveryFor, unusableWindow } from '../src/model/containerDelivery.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 
 const d = (v) => (v ? String(v).slice(0, 10) : null)
@@ -22,16 +23,29 @@ const { rows: slips } = await pool.query(
           p.unit_count AS units, p.po_numbers AS pos,
           i.departed_on AS packed_on, i.forwarder, i.forwarder_ref, i.etd_on,
           i.port_arrived_on, i.arrived_on, i.tracking_number, i.origin_port, i.destination_port,
-          i.eta_on, i.forwarder_source, i.display_name
+          i.eta_on, i.forwarder_source, i.display_name,
+          i.delivered_on, i.delivered_by, i.delivered_note
      FROM packing_slip p LEFT JOIN inbound_shipment i USING (container_label)
     ORDER BY p.container_date DESC`)
 
 for (const s of slips) {
   const { rows: tos } = await pool.query(
-    `SELECT to_number AS "toNumber", status, units FROM container_transfer
+    `SELECT to_number AS "toNumber", status, units,
+            fulfilled_on AS "fulfilledOn", received_on AS "receivedOn"
+       FROM container_transfer
       WHERE container_label = $1 ORDER BY to_number`, [s.label])
   const leg = containerLeg(tos)
-  const act = nextAction({ transferOrders: tos, portArrivedOn: d(s.port_arrived_on) })
+  // ⚠️ THE TRACKING NUMBER AND FORWARDER REF ARE PASSED IN — without them nextAction
+  // has nothing observed to key on and falls back to describing a leg nobody entered.
+  const act = nextAction({
+    transferOrders: tos, portArrivedOn: d(s.port_arrived_on),
+    trackingNumber: s.tracking_number, forwarderRef: s.forwarder_ref, forwarder: s.forwarder,
+  })
+  const del = deliveryFor({
+    transferOrders: tos, portArrivedOn: s.port_arrived_on,
+    deliveredOn: s.delivered_on, deliveredBy: s.delivered_by,
+  })
+  const win = unusableWindow(tos)
 
   const { rows: aliases } = await pool.query(
     `SELECT alias, source FROM container_alias WHERE container_label = $1 AND source <> 'slip' ORDER BY source`, [s.label])
@@ -58,7 +72,19 @@ for (const s of slips) {
   // arrived at port, the part where its transported to us is the part that is
   // invisible." GLC stops at the port of discharge; the drayage to Glendale is tracked
   // by nobody we can read.
-  console.log(`  delivered       ${d(s.arrived_on) || '— NOT TRACKED ANYWHERE (drayage from the port)'}`)
+  // ⚠️ THE STATE, NOT A DATE. "unknown" is a real answer here and must not read as
+  // "not delivered" — see src/model/containerDelivery.js.
+  const DELIVERED = {
+    received: (x) => `RECEIVED ${d(x.on)}   (${x.evidence.kind})`,
+    delivered: (x) => `ON OUR FLOOR ${d(x.on)}   (${x.evidence.kind}${x.by ? ' — ' + x.by : ''})`,
+    unknown: () => '— not known',
+  }
+  console.log(`  delivered       ${DELIVERED[del.state](del)}`)
+  console.log(`                  ${del.why}`)
+  if (del.state === 'received' && del.enteredOn && del.enteredOn !== del.on) {
+    console.log(`                  on the floor ${d(del.enteredOn)} — ${Math.round((new Date(del.on) - new Date(del.enteredOn)) / 864e5)}d before NetSuite knew`)
+  }
+  if (win) console.log(`  unusable        ${win.days}d  ${win.fulfilledOn} → ${win.receivedOn}  (${win.label})`)
   console.log()
   console.log(`  China leg       ${leg.known ? leg.leg : leg.why}${leg.mixed ? '  (MIXED — see below)' : ''}`)
   if (leg.known) {
@@ -79,8 +105,16 @@ for (const s of slips) {
 // slips were never imported — the transfer orders are a MORE COMPLETE container
 // register than our packing slips are, which is worth knowing and was invisible until
 // this sync existed.
+//
+// ⚠️ AND NOW WE CAN SAY WHETHER THEY ARE STILL COMING. Until the receipt dates existed
+// this was a list of six unexplained gaps that read like a backlog. Every one of them is
+// RECEIVED — historical containers whose paperwork we never imported, not freight
+// anybody is waiting on. That is a materially different sentence and the reason the
+// state is printed per row rather than left to be assumed.
 const { rows: orphans } = await pool.query(
-  `SELECT memo, count(*) tos, sum(units)::int units, min(trandate) first_seen
+  `SELECT memo, count(*) tos, sum(units)::int units, min(trandate) first_seen,
+          count(*) FILTER (WHERE received_on IS NOT NULL) received,
+          max(received_on) received_on, min(fulfilled_on) fulfilled_on
      FROM container_transfer
     WHERE container_label IS NULL AND memo ~ '[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,2}\\s*$'
     GROUP BY memo ORDER BY min(trandate)`)
@@ -88,8 +122,25 @@ if (orphans.length) {
   console.log(`\n${'─'.repeat(74)}`)
   console.log(`CONTAINERS IN NETSUITE WITH NO PACKING SLIP IMPORTED — ${orphans.length}`)
   for (const o of orphans) {
-    console.log(`   ${String(o.memo).padEnd(34)} ${String(o.tos).padStart(2)} TOs · ${String(o.units).padStart(5)} units · ${String(o.first_seen).slice(0, 10)}`)
+    // ⚠️ THREE OUTCOMES, NOT TWO. "some received" is its own row and must never round to
+    // either neighbour — it is the only one of the three that is unfinished work.
+    // ⚠️ Number() ON BOTH SIDES. pg hands back count(*) as a STRING (bigint has no safe
+    // JS number), so `o.received === Number(o.tos)` compared '6' to 6 and was false for
+    // every row — the "all received" branch was unreachable and this printed "⚠ 6 of
+    // them still have transfer orders to receive" about six containers that landed in
+    // May. Shape 1 in CLAUDE.md, in the first run of the code that reports it.
+    const done = Number(o.received) === Number(o.tos)
+    const state = done ? `received ${String(o.received_on).slice(0, 10)}`
+      : Number(o.received) > 0 ? `⚠ ${o.received}/${o.tos} received`
+        : 'no receipt'
+    const days = done && o.fulfilled_on
+      ? `  ${Math.round((new Date(o.received_on) - new Date(o.fulfilled_on)) / 864e5)}d unusable` : ''
+    console.log(`   ${String(o.memo).padEnd(34)} ${String(o.tos).padStart(2)} TOs · ${String(o.units).padStart(5)} units · ${String(o.first_seen).slice(0, 10)}  ${state}${days}`)
   }
-  console.log('   Their transfer orders are recorded; their cartons, SKUs and POs are not.')
+  const open = orphans.filter((o) => Number(o.received) !== Number(o.tos))
+  console.log(`   Their transfer orders are recorded; their cartons, SKUs and POs are not.`)
+  console.log(open.length
+    ? `   ⚠ ${open.length} of them still have transfer orders to receive.`
+    : `   None is outstanding — all ${orphans.length} landed and were received. Missing paperwork, not missing freight.`)
 }
 await pool.end()

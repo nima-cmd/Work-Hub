@@ -2255,3 +2255,31 @@ CREATE INDEX IF NOT EXISTS container_alias_label ON container_alias (container_l
 -- What a person should see instead of the filename-derived label. NULL means "derive it"
 -- — see containerIdentity.displayNameFor. Entered values win and are never recomputed.
 ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS display_name TEXT;
+
+-- ── The delivery leg (2026-09-15) ───────────────────────────────────────────────
+-- Step 1 gave a container one identity; this is the leg it could not answer. See
+-- src/model/containerDelivery.js for the rules and every trap.
+--
+-- ⚠️ THESE ARE OBSERVED, from NetSuite's own document chain. `previoustransactionlinelink`
+-- carries both ends: the transfer's fulfilment (ItemShip) and its receipt (ItemRcpt).
+-- Before this, container_transfer held only the TO's own `trandate` and the app could
+-- not tell a container in the Pacific from one received a month ago.
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS fulfilled_on DATE;
+ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS received_on  DATE;
+
+-- ⚠️ AND THIS ONE IS ENTERED, WHICH IS WHY IT IS SHAPED DIFFERENTLY. The schema note
+-- above (port_arrived_on) already said a delivery "only exists when a person records it
+-- or the transfer order is received" — this is the first half of that sentence, built.
+--
+-- It carries its author and its moment because an entered value that cannot say who
+-- decided it is indistinguishable from an observation, which is the standing rule in
+-- src/model/fieldAssumptions.js and the reason `forwarder_source` exists two columns up.
+--
+-- ⚠️ IT IS NEVER DERIVED FROM port_arrived_on. The drayage from the port of discharge to
+-- Glendale is arranged by nobody whose system we can read. A container that reached the
+-- port and has no receipt is the NORMAL state, not a missed step (Nima, 2026-09-15:
+-- "59 hasn't arrived it arrived at port... that part is invisible").
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_on   DATE;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_by   TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_note TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS delivered_at   TIMESTAMPTZ;
