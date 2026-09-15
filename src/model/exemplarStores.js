@@ -86,7 +86,27 @@ export const STOREFRONT_RENAME = {
   ],
 }
 
-/** The storefront name to put in REF(19)/MTX for a date. */
+/**
+ * ⚠️ THE COMPANY WE CONSIGN TO ON PAPER — NOT the same question as the storefront below.
+ *
+ * Nima, 2026-09-14: "is Saks the right ship to[?] Exemplar the name of the company".
+ * No, it was not, and I had conflated two things:
+ *
+ *   · `storefrontFor()` is an EDI SEGMENT VALUE — its own docline says REF(19)/MTX —
+ *     and it flips on 2026-09-21 because that is when Exemplar's EDI notice says the
+ *     segment changes. It is about what we transmit.
+ *   · The COMPANY is already Exemplar Luxury Group. LIVE_ENTITY records the NetSuite
+ *     customer created 2026-09-04: parent 539 "Exemplar Luxury Group", ship-to 541
+ *     "EXEMPLAR LUXURY - GLOBAL PNDC - 0077".
+ *
+ * I used the first for the consignee block on the packing slip, the carton labels and
+ * the manifest, so all three named "SAKS GLOBAL" — a storefront string, on a date rule
+ * that has nothing to do with a printed document, for a company that had already been
+ * renamed in NetSuite ten days earlier.
+ */
+export const consigneeCompany = () => LIVE_ENTITY.name
+
+/** The storefront name to put in REF(19)/MTX for a date. ⚠️ EDI ONLY — see above. */
 export function storefrontFor(store, on = new Date().toISOString().slice(0, 10)) {
   const s = STOREFRONT_RENAME.affectsStores.includes(pad4(store))
   if (!s) return null
@@ -268,11 +288,30 @@ export const STORES = [
  * confusing: the NetSuite customer is "EXEMPLAR LUXURY - GLOBAL PNDC - 0077", so
  * store 0077 IS Pinnacle Point, not a shop.
  */
+//
+// ⚠️ 0077's BANNER WAS 'SFA' AND IT IS THE NEIMAN SIDE. Nima, 2026-09-14: "this is
+// actualy for Neiman Marcus side not the saks though i knwo that what teh warehouse is
+// called." The evidence agrees with him and the old value was a hand-entered guess:
+//
+//   · PNDC is Pinnacle Point, which saksRouting.js names NMG-Pinnacle Point — NMG
+//     being the Neiman Marcus Group.
+//   · DC 510 services 13 stores: 10 Neiman Marcus, 1 Bergdorf Goodman, 1 SFA, 1 OFF 5th.
+//   · 0072 GLOBAL NCDC — also an NMG facility — is already 'NM' here. 0077 was the
+//     odd one out.
+//
+// It matters because the manifest is ONE PER BANNER and prints the banner name at the
+// top (guide p13), so an Exemplar shipment to Pinnacle Point was heading itself
+// "Saks Fifth Avenue".
+//
+// ⚠️ 0073 GLOBAL ECDC IS THE SAME QUESTION AND IS DELIBERATELY UNTOUCHED. ECDC is
+// NMG-East Coast Service Center by the same mapping, yet it is marked 'SFA' too. Nima
+// named 0077 and only 0077; changing 0073 on my own inference would be inventing the
+// answer to a question he has not been asked. It is in the open-questions list.
 export const DC_STORES = {
   '0072': { name: 'GLOBAL NCDC', dc: '550', banner: 'NM' },
   '0073': { name: 'GLOBAL ECDC', dc: '560', banner: 'SFA' },
   '0074': { name: 'BG HNF ECDC', dc: '560', banner: 'BG' },
-  '0077': { name: 'GLOBAL PNDC', dc: '510', banner: 'SFA' },
+  '0077': { name: 'GLOBAL PNDC', dc: '510', banner: 'NM', bannerSource: 'Nima, 2026-09-14 — was SFA' },
   '0039': { name: 'PJ CORP WH', dc: null, banner: 'NM' },
 }
 

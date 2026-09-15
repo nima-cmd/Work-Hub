@@ -9,8 +9,17 @@
 //                   say "MASTER BOL – SEE UNDERLYING BOL'S FOR EACH FINAL DC".
 // Nordstrom ships direct to its DC (kind 'final', no merge center).
 //
-// Freight terms are COLLECT (or 3rd Party for RXO/XLTL) per the guide — never
-// prepaid. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
+// ⚠️ FREIGHT TERMS ARE NOT ALWAYS COLLECT, AND THIS FILE USED TO SAY THEY NEVER
+// WEREN'T. "Collect (or 3rd Party for RXO/XLTL) per the guide — never prepaid" was
+// true of Bloomingdale's and Nordstrom, and it was written as though it were a property
+// of BOLs. Exemplar's PO 8928906 header reads **Freight: Prepaid**, so the box would
+// have been ticked Collect on a Prepaid order — §12.9 code 905 / NMG T24, "Freight
+// agreement — prepay", cost of freight + $75.
+//
+// The term is now the shipment's own `freightTerms` when one has been recorded, and the
+// old derivation only where nothing has. Same shape as shipToFor and bolAuthLine: a
+// default that was right for the partners we had, acting as a rule for a partner we
+// did not. buildBolPdf(shipment) → Promise<Buffer>; renderBolTo(res, shipment).
 
 import PDFDocument from 'pdfkit'
 import qrcode from 'qrcode-generator'
@@ -112,8 +121,16 @@ function render(doc, shipment, kind) {
     // regardless of what the partner had actually instructed.
     direct: !!shipment.shipDirect,
   })
-  // Freight terms: Collect, unless the carrier is RXO (XLTL) → 3rd Party.
-  const term = /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
+  // ⚠️ THE RECORDED TERM WINS. `routing_shipment.freight_terms` has existed all along
+  // and NOTHING READ IT — the BOL derived Collect regardless of what the partner's PO
+  // said. An entered value that no surface consumes is the same as no value at all.
+  const recorded = String(shipment.freightTerms || '').trim().toLowerCase()
+  const term = recorded === 'prepaid' ? 'Prepaid'
+    : recorded === 'collect' ? 'Collect'
+      : recorded === '3rd' || recorded === 'third party' || recorded === '3rd party' ? '3rd'
+        // Nothing recorded: the old derivation, which is right for Bloomingdale's and
+        // Nordstrom and is the reason this was never noticed.
+        : /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
   let y = M
 
   // ── Header ──────────────────────────────────────────────────────────────
@@ -162,7 +179,14 @@ function render(doc, shipment, kind) {
   boxOutline(doc, M, y + 11, half, midH - 11)
   addrLines(doc, M, y + 13, half, shipTo, missing, true)
   fob(doc, M + half - 42, y + midH - 12)
-  doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12)
+  // ⚠️ CID# WAS A LABEL WITH NOTHING IN IT, on ours AND on Exemplar's own TMS-generated
+  // BOL. The Routing Guide (p23) requires the TMS confirmation number in CID# **AND**
+  // Special Instructions — two places, deliberately, because they are read by different
+  // people. We printed it in neither until bolAuthLine learned about Exemplar, and in
+  // only one until now.
+  doc.font('Helvetica').fontSize(6).fillColor('#000').text('CID#', M + 3, y + midH - 12, { continued: true })
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(shipment.tmsConfirmation ? RED : '#000')
+    .text('  ' + (shipment.tmsConfirmation || ''))
   boxOutline(doc, rX, y + 11, half, midH - 11)
   const carr = [['CARRIER NAME:', shipment.carrier || '', true], ['Trailer number:', shipment.trailerNumber || ''], ['Seal number(s):', shipment.sealNumber || ''], ['SCAC:', shipment.scac || '', true], ['Pro number:', shipment.proNumber || ''], ['FedEx Pickup #:', shipment.fedexPickupNumber || '', true]]
   let cy = y + 13
@@ -197,7 +221,12 @@ function render(doc, shipment, kind) {
   y += tpH + 3
 
   // ── Special Instructions ─────────────────────────────────────────────────
-  const siH = isMaster ? 34 : 24
+  // ⚠️ THE BOX GROWS WITH WHAT GOES IN IT. It was a fixed 24pt sized for one auth line,
+  // so adding the department line pushed "Dept 0118" straight through the CUSTOMER
+  // ORDER INFORMATION bar below — half a required field, visibly clipped. A box whose
+  // height is a constant is fine right up until the day something else has to go in it.
+  const siLines = [bolAuthLine(shipment), shipment.department, isMaster ? 'master' : null].filter(Boolean).length
+  const siH = Math.max(isMaster ? 34 : 24, 14 + siLines * 11)
   boxOutline(doc, M, y, W, siH)
   doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000').text('SPECIAL INSTRUCTIONS:', M + 4, y + 3)
   // Lines are laid out in sequence rather than at fixed offsets, so a Nordstrom
@@ -209,6 +238,20 @@ function render(doc, shipment, kind) {
   if (authLine) {
     doc.font('Helvetica-Bold').fontSize(9).fillColor(RED).text(authLine, M + 4, siY)
     siY += 11
+  }
+  // ⚠️ THE DEPARTMENT NUMBER, which BOL_FIELDS requires and which was on NEITHER our
+  // BOL nor Exemplar's own. It is per PO and joined rather than picked, so a
+  // consolidated shipment shows both instead of quietly showing one.
+  //
+  // Pallet count alongside it because Exemplar's TMS BOL prints "Pallets: 1" there and
+  // a document that has to be read against theirs should not make someone hunt.
+  const siBits = [
+    shipment.department ? `Dept ${shipment.department}` : null,
+    palletWeight(shipment).hu ? `Pallets: ${palletWeight(shipment).hu}` : null,
+  ].filter(Boolean)
+  if (siBits.length) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor('#000').text(siBits.join('     '), M + 4, siY)
+    siY += 10
   }
   if (isMaster) doc.font('Helvetica-Bold').fontSize(8).fillColor(RED).text(L.masterNote, M + 4, siY)
   y += siH + 3
@@ -224,7 +267,13 @@ function render(doc, shipment, kind) {
   let ry = y + 11 + 15
   for (let i = 0; i < rowsN; i++) {
     const it = items[i]
-    gridRow(doc, M, ry, cCols, [it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '', it ? 'Y        N' : '', ''], false, RED)
+    // ⚠️ "Y        N" IS NOT AN ANSWER, and BOL_FIELDS says so outright: the pallet /
+    // slip indicator "must be INDICATED — a printed 'Y N' is not an answer". When we
+    // know the shipment is palletised we say Y; when we do not, the choice is printed
+    // for someone to circle rather than guessed.
+    const palletised = !!palletWeight(shipment).hu
+    const psCell = it ? (palletised ? 'Y   (pallet)' : 'Y        N') : ''
+    gridRow(doc, M, ry, cCols, [it ? String(it.po) : '', it ? String(it.cartons ?? '') : '', it ? String(it.weight ?? '') : '', psCell, it && shipment.department ? `Dept ${shipment.department}` : ''], false, RED)
     ry += 15
   }
   gridRow(doc, M, ry, cCols, ['GRAND TOTAL', String(shipment.cartons ?? ''), String(shipment.weightLb ?? ''), '', ''], true, RED)

@@ -17,6 +17,9 @@ import { transferFilingFolder } from '../src/model/transferOrder.js'
 import { receiptsByTransfer } from '../src/model/transferReceipt.js'
 import { bulkPick, parsePoInput, demandLines, poolFor, poolNames } from '../src/model/bulkPick.js'
 import { shipmentChecklist } from '../src/model/exemplarStandards.js'
+import { macysShipmentChecklist } from '../src/model/macysStandards.js'
+import { servicingDc, consigneeCompany } from '../src/model/exemplarStores.js'
+import { fetchCartonContents } from '../src/ingest/exemplarCartonFetch.js'
 import {
   shortfall, allocate, invoiceAdjustments, readyToFulfil, wholeCutOptions,
 } from '../src/model/allocationPlan.js'
@@ -4039,7 +4042,32 @@ async function withLineItems(shipment) {
 export async function streamShipmentBol(res, id) {
   const shipment = await withLineItems(await fetchRoutingShipmentById(id))
   if (!shipment) throw new Error('shipment not found')
-  await renderBolTo(res, shipment)
+  await renderBolTo(res, await withBolExtras(shipment))
+}
+
+/**
+ * The fields the VICS form has boxes for and the shipment row does not carry.
+ *
+ * ⚠️ THE DEPARTMENT NUMBER IS REQUIRED ON THE BOL and was on neither our document nor
+ * Exemplar's own TMS-generated one. `BOL_FIELDS` lists it — "the 850's REF*DP*" — and
+ * it has been in edi_transactions since the REF segments were finally ingested this
+ * morning. It just had no way of reaching the page.
+ *
+ * ⚠️ IT IS PER PO, so a consolidated shipment can carry several. They are joined
+ * rather than picking the first: two departments on one BOL is a fact worth printing,
+ * and silently showing one of them is how a receiver books freight against the wrong
+ * department.
+ */
+async function withBolExtras(shipment) {
+  const pos = shipment.memberPos || []
+  if (!pos.length) return shipment
+  const { rows } = await pool.query(
+    `SELECT DISTINCT department FROM edi_transactions
+      WHERE type = '850_PURCHASE_ORDER' AND department IS NOT NULL
+        AND (business_number = ANY($1) OR ltrim(business_number,'0') = ANY($2))`,
+    [pos, pos.map((p) => String(p).replace(/^0+/, ''))])
+  const departments = rows.map((r) => r.department).filter(Boolean).sort()
+  return { ...shipment, department: departments.join(', ') || null }
 }
 
 /**
@@ -6260,11 +6288,20 @@ export async function clearPreshipCheck({ dcPoKey, stepKey } = {}) {
   return { cleared: rowCount }
 }
 
-// Every key the checklist can ever issue, across all its conditional branches, so a
-// stored tick can be validated without knowing this shipment's shape.
-const ALL_PRESHIP_STEP_KEYS = new Set(
-  [{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
-    .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)))
+// Every key EITHER checklist can ever issue, across all conditional branches, so a
+// stored tick can be validated without knowing this shipment's shape or partner.
+//
+// ⚠️ THE MACY'S KEYS HAD TO BE ADDED HERE OR EVERY TICK ON THAT CHECKLIST WOULD BE
+// REFUSED. setPreshipCheck validates against this set on purpose — a tick under an
+// unknown key is invisible on screen and counts as unverified forever — so a second
+// checklist is not just a UI addition. The guard would have rejected it correctly and
+// looked like a broken button.
+const ALL_PRESHIP_STEP_KEYS = new Set([
+  ...[{}, { dts: true }, { mode: 'TL' }, { asnWillBeSent: true }]
+    .flatMap((o) => shipmentChecklist(o).steps.map((s) => s.key)),
+  ...[{ asnWillBeSent: true }, { asnWillBeSent: false }]
+    .flatMap((o) => macysShipmentChecklist(o).steps.map((s) => s.key)),
+])
 
 // ── The Exemplar Master Manifest ────────────────────────────────────────────
 //
@@ -6309,4 +6346,85 @@ export async function getManifestCartons(dcPoKey) {
     shipment: s,
     cartons: cartons.map((c) => ({ ...c, store: [...byPo.get(c.po)][0] })),
   }
+}
+
+// ── Everything the Exemplar carton labels and packing slip need ─────────────
+//
+// ⚠️ ASSEMBLED FROM FOUR SOURCES, AND EACH IS THE AUTHORITY ON ITS OWN FIELD:
+//   · the routing shipment  → which POs, which DC, the BOL
+//   · the 850               → department and vendor number (REF*DP* / REF*VR*)
+//   · orders                → which store
+//   · NetSuite, LIVE        → the cartons and what is in them
+//
+// ⚠️ THE CONTENTS ARE READ LIVE, like the pick ticket and for the same reason: these
+// become a label glued to a box and a slip handed to a receiver, and §9.1 audits them
+// against the physical units monthly.
+export async function getExemplarDocData(shipmentId, { on = null } = {}) {
+  const s = await fetchRoutingShipmentById(Number(shipmentId))
+  if (!s) throw new Error(`no routing shipment ${shipmentId}`)
+  if (s.partner !== 'Exemplar') throw new Error(`shipment ${shipmentId} is ${s.partner}, not Exemplar — these are Exemplar's documents`)
+  if (s.memberPos.length !== 1) {
+    // ⚠️ The slip is one per PO per store and the label carries ONE PO. A consolidated
+    // shipment needs one set per PO, which is a different call than this one.
+    throw new Error(`this shipment covers ${s.memberPos.length} POs (${s.memberPos.join(', ')}) — the packing slip is one per PO per store, so ask for them one PO at a time`)
+  }
+  const po = s.memberPos[0]
+
+  const { rows: [tx] } = await pool.query(
+    `SELECT business_number, department, vendor_number AS "vendorNumber"
+       FROM edi_transactions
+      WHERE type='850_PURCHASE_ORDER' AND (business_number = $1 OR ltrim(business_number,'0') = ltrim($1,'0'))
+      ORDER BY created_at DESC LIMIT 1`, [po])
+  if (!tx) throw new Error(`no 850 on file for PO ${po}`)
+  // ⚠️ NO FALLBACK DEPARTMENT. §8 requires it on every carton and a missing one is
+  // $10/carton with a $250 minimum — a placeholder would be that fee, printed.
+  if (!tx.department) throw new Error(`the 850 for PO ${po} carries no REF*DP* department number, and §8 requires it on every carton marking`)
+
+  const { rows: orders } = await pool.query(
+    `SELECT DISTINCT store_number FROM orders WHERE po_number = $1 AND store_number IS NOT NULL`, [po])
+  if (orders.length !== 1) {
+    throw new Error(orders.length
+      ? `PO ${po} covers ${orders.length} stores (${orders.map((o) => o.store_number).join(', ')}) — the carton records do not say which carton is for which store`
+      : `no store number on file for PO ${po}`)
+  }
+  const store = orders[0].store_number
+  const s2 = servicingDc(store)
+  if (!s2) throw new Error(`store ${store} is not in Exemplar's DC List`)
+
+  // ⚠️ THE STOREFRONT IS DATE-DRIVEN AND THE DATE IS THE SHIP DATE. Store 0077 is
+  // SAKS GLOBAL until 2026-09-21 and EXEMPLAR LUXURY GROUP after; the documents must
+  // agree with each other and with the day the freight leaves. exemplarDocsPdf throws
+  // on a mismatch rather than printing two names in one pouch.
+  const shipOn = on || (s.shipDate ? String(s.shipDate).slice(0, 10) : null)
+  // ⚠️ THE COMPANY, not the EDI storefront — see consigneeCompany().
+  const operatingCompany = consigneeCompany()
+
+  const ifNumber = (await pool.query(
+    `SELECT DISTINCT if_number FROM edi_carton WHERE po_number = $1 AND dc = $2`, [po, s.dc])).rows[0]?.if_number
+  if (!ifNumber) throw new Error(`no fulfilment recorded for PO ${po} at DC ${s.dc}`)
+  const nsId = await netsuiteIdFor(ifNumber)
+  if (!nsId) throw new Error(`could not resolve ${ifNumber} in NetSuite`)
+
+  const c = await fetchCartonContents(nsId)
+  if (!c.ok) throw new Error(c.error)
+  if (!c.printable) {
+    throw new Error(`the cartons cannot be documented yet:\n  ${c.problems.map((p) => p.why).join('\n  ')}`)
+  }
+
+  const totalUnits = c.cartons.reduce((a, x) => a + x.units, 0)
+  const cartons = c.cartons.map((x) => ({
+    ...x,
+    totalCartons: c.cartons.length, totalUnits,
+    shipFromName: 'Entrelaced Holdings, LLC',
+    operatingCompany,
+    po, department: tx.department, vendorNumber: tx.vendorNumber,
+    store, storeAbbrev: s2.abbrev, dc: s.dc,
+  }))
+  return { shipment: s, on: shipOn, operatingCompany, cartons, totalUnits }
+}
+
+/** An IF's NetSuite internal id, which the carton record is keyed on. */
+async function netsuiteIdFor(tranid) {
+  const q = await runSuiteQL(`SELECT id FROM transaction WHERE tranid = '${String(tranid).replace(/'/g, "''")}'`)
+  return q.ok ? (q.rows[0]?.id ?? null) : null
 }

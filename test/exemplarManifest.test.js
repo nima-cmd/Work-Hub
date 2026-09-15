@@ -14,7 +14,11 @@ test('the live shipment produces one manifest, named by banner and DC', () => {
   assert.deepEqual(r.problems, [])
   assert.equal(r.manifests.length, 1)
   const m = r.manifests[0]
-  assert.equal(m.bannerName, 'Saks Fifth Avenue')
+  // ⚠️ NEIMAN, NOT SAKS. Nima, 2026-09-14: store 0077 is the Pinnacle Point DC's own
+  // ship-to and "this is actualy for Neiman Marcus side not the saks". Its banner was
+  // hand-entered as SFA while DC 510 services 10 NM stores, 1 BG, 1 SFA and 1 OFF 5th,
+  // and saksRouting names PNDC "NMG-Pinnacle Point".
+  assert.equal(m.bannerName, 'Neiman Marcus')
   assert.equal(m.dcName, 'PNDC')
   assert.equal(m.totalCartons, 22)
   assert.deepEqual(m.pos, ['0008928906'])

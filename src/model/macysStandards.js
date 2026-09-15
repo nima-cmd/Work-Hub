@@ -31,6 +31,41 @@
 // overages by store)" is ONE offset covering all three — so the SN41262/SN41263
 // substitution found on the Exemplar order would be priced the same way here.
 
+// ⚠️ THE PAGE, NOT JUST THE APPENDIX. Nima asked where the short-shipping rule actually
+// is. It is Appendix H, **page 58**, the second row of the "Distribution Center/MIO
+// Expense Offsets" table, category Shipping — verified against the PDF 2026-09-14:
+//
+//   "Noncompliance to purchase order U.P.C./GTIN/EAN and store distribution (i.e.,
+//    substitutions, shortages, and overages by store). This may include concealed
+//    inaccuracies in the EDI856 Advance Ship Notice."
+//   — $50.00 per receipt and 50% cost of merchandise; $1.00 per unit for collateral
+//
+// The appendix runs 57-60 and its tables are split by area: p57 Technology, p58
+// Distribution Center/MIO and Store Floor Ready, p59 .COM Merchandise Preparation.
+export const PAGES = {
+  appendix: '57-60',
+  technology: 57,
+  distributionCentre: 58,
+  storeFloorReady: 58,
+  comMerchandisePrep: 59,
+  shortShip: 58,
+}
+
+/**
+ * Which page of Appendix H each offset is on, verified against the PDF 2026-09-14.
+ *
+ * ⚠️ ONE MAP RATHER THAN A `page` ON EACH ENTRY, because the entries were transcribed
+ * and the pages were checked separately — keeping them apart makes it obvious that the
+ * page is a later, independent verification rather than something that came with the
+ * transcription and was never confirmed.
+ */
+export const OFFSET_PAGES = {
+  gs1Unusable: 57, gs1Placement: 57, gs1FobDept: 57,
+  asnMissing: 57, asnLate: 57, invoiceEdi: 57,
+  wrongLocation: 58, poNoncompliance: 58, masterPack: 58, integrityAudit: 58,
+  ticketing: 58, hanger: 58,
+}
+
 export const SOURCE = {
   document: "Macy's 2023 Vendor Standards",
   appendix: 'H — Expense Offsets',
@@ -151,8 +186,10 @@ export const RATE_CHANGES = [
  * worth — which on the live case is most of the number.
  */
 export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices = 0, merchandiseUsd = null } = {}) {
-  const o = OFFSETS[key]
-  if (!o) return null
+  const base = OFFSETS[key]
+  if (!base) return null
+  // The page is attached here so every quoted figure can cite one.
+  const o = { ...base, page: OFFSET_PAGES[key] ?? null }
   let total = 0
   const parts = []
   if (o.perReceipt) { total += o.perReceipt * receipts; parts.push(`$${o.perReceipt}/receipt x ${receipts}`) }
@@ -160,6 +197,16 @@ export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices 
   if (o.perInnerCarton) { total += o.perInnerCarton * cartons; parts.push(`$${o.perInnerCarton}/inner carton x ${cartons}`) }
   if (o.perUnit) { total += o.perUnit * units; parts.push(`$${o.perUnit}/unit x ${units}`) }
   if (o.perInvoice) { total += o.perInvoice * invoices; parts.push(`$${o.perInvoice}/invoice x ${invoices}`) }
+  // ⚠️ COLLATERAL WAS STORED AND NEVER ADDED. `poNoncompliance` carries
+  // `perUnitCollateral: 1` straight from p58 — "$1.00 per unit for collateral" — and
+  // this function simply did not look at it, so every shortage estimate came out short
+  // by exactly $1 a unit. On the live Bloomingdale's cut that is $70 missing from a
+  // figure quoted to decide whether to ship. A field the calculator ignores is worse
+  // than one that was never extracted: it reads as covered.
+  if (o.perUnitCollateral) {
+    total += o.perUnitCollateral * units
+    parts.push(`$${o.perUnitCollateral}/unit collateral x ${units}`)
+  }
   if (o.minPerReceipt) total = Math.max(total, o.minPerReceipt * receipts)
 
   if (o.pctOfMerchandise) {
@@ -174,6 +221,18 @@ export function offsetFor(key, { receipts = 1, cartons = 0, units = 0, invoices 
     total += pct
     parts.push(`${o.pctOfMerchandise * 100}% of $${merchandiseUsd.toFixed(2)} = $${pct.toFixed(2)}`)
   }
+  // ⚠️ "AND FREIGHT" IS UNBOUNDED AND MUST NOT ROUND TO ZERO. p58 charges wrong-location
+  // merchandise $250/receipt AND $10/carton AND the freight — and the freight is whatever
+  // it cost, which we cannot know here. Reported as an unknown add-on the way the
+  // merchandise percentage is, rather than silently omitted from a total that then looks
+  // complete.
+  if (o.plusFreight) {
+    return {
+      ...o, key, estimate: Math.round(total * 100) / 100, parts, known: total,
+      unknown: 'plus the freight cost itself, which is not known here',
+      note: 'The estimate is the fixed part only. The freight on a refused/misrouted shipment is usually the larger half.',
+    }
+  }
   return { ...o, key, estimate: Math.round(total * 100) / 100, parts, unknown: null }
 }
 
@@ -187,4 +246,128 @@ export const VS_EXEMPLAR = {
     macys: { perReceipt: 50, pctOfMerchandise: 0.5, section: 'H' },
     why: 'Exemplar is a flat per-incident fee; Macy\'s is a receipt fee PLUS half the value of the merchandise. On a wholesale-priced handbag order the percentage is almost the whole exposure.',
   },
+}
+
+/**
+ * ⚠️ THE PORTAL, AND IT WANTS SAFARI.
+ *
+ * Nima, 2026-09-14: "https://macysnet.com is the link to the portal and that needs to be
+ * opned in safari if possible." Recorded as HIS instruction, not a browser-compat fact
+ * we established — the app surfaces the note so nobody wastes twenty minutes on a
+ * portal that half-works in Chrome.
+ */
+export const PORTAL = {
+  name: 'MacysNet',
+  url: 'https://macysnet.com',
+  urlSource: 'Nima, 2026-09-14',
+  browser: 'Safari',
+  browserNote: 'Nima: open it in Safari if possible.',
+  holds: 'the Expense Offset and Invoice Chargeback Descriptions document, which needs a sign-on — so the fee text below is from the 2023 Vendor Standards PDF, not from the portal.',
+}
+
+/**
+ * The pre-ship checklist for Macy's and Bloomingdale's.
+ *
+ * ⚠️ IT IS BUILT FROM THE VENDOR STANDARDS ONLY, AND IT SAYS SO. `partnerDocuments`
+ * records four Macy's-side documents and exactly ONE is extracted — this one. The
+ * ROUTING GUIDE (`macys-routing`), the Bloomingdale's Routing Guide
+ * (`bloomingdales-routing`) and the Store-to-DC listing are all `rulesIn: null`, unread.
+ *
+ * So this is not the Exemplar checklist's equal and must not look like it. Exemplar's
+ * covers routing, packing, labelling, documents, palletising and after-ship because the
+ * Routing Guide AND the Manual were both read. This one covers what Appendix H PRICES —
+ * which is real and is most of the money — and names the gap rather than implying
+ * completeness. A checklist that looks finished is worse than a short one that admits
+ * what it has not read.
+ *
+ * ⚠️ AND THE EDITION IS UNCONFIRMED. SOURCE.verifyBeforeQuoting is true: this is the
+ * 2023 Vendor Standards, while the routing guide sitting beside it in Drive is marked
+ * rev 4/14/26. Every figure here is quoted with that caveat attached.
+ */
+export function macysShipmentChecklist({ cartons = 1, receipts = 1, units = 0, merchandiseUsd = null, asnWillBeSent = true } = {}) {
+  const money = (key, opts = {}) => {
+    const f = offsetFor(key, { cartons, receipts, units, merchandiseUsd, ...opts })
+    return f?.estimate != null ? `$${f.estimate.toLocaleString()}` : (f?.unknown || '')
+  }
+  // ⚠️ NAMESPACED, BECAUSE `gs1-placement` EXISTS IN BOTH CHECKLISTS. Exemplar's is
+  // §12.1 at $10/carton with a $250 minimum; this one is Appendix H at $5/carton with a
+  // $50 minimum per receipt. Different requirements, different money, same natural name.
+  //
+  // A shipment is one partner or the other, so today the two could not cross-tick — but
+  // that is luck, not design, and `preship_check` rows are keyed on the step alone. A
+  // prefix makes the stored row say which checklist it came from and makes the clash
+  // impossible rather than merely unlikely.
+  const step = (key, phase, what, detail, offsetKey, opts = {}) => ({
+    key: `macys:${key}`, phase, what, detail,
+    offset: offsetKey ? { ...OFFSETS[offsetKey], key: offsetKey, cost: money(offsetKey) } : null,
+    ...opts,
+  })
+
+  const steps = [
+    step('ship-what-the-po-says', 'before', 'Ship exactly what the PO says, by store',
+      'Shortages, substitutions and overages BY STORE are one offset — and it is the expensive one. '
+      + 'It is a receipt fee PLUS half the value of the merchandise, so the percentage is almost the whole exposure on a wholesale handbag order.',
+      'poNoncompliance', { theExpensiveOne: true }),
+    step('master-pack', 'before', 'Respect master pack quantities',
+      'Breaking a master pack is its own offset, separate from the shortage above.',
+      'masterPack'),
+
+    step('gs1-on-every-carton', 'label', 'A readable GS1-128 on every carton',
+      'Label quality, and the pack-level data behind it. A label that will not scan is charged per carton.',
+      'gs1Unusable'),
+    step('gs1-placement', 'label', 'Correct placement, format, and human-readable division / PO / store',
+      'The human-readable block is part of the requirement, not decoration.',
+      'gs1Placement'),
+    step('gs1-fob-dept', 'label', 'FOB and department on the carton',
+      'Its own small per-carton offset on top of the placement one.',
+      'gs1FobDept'),
+    step('ticketing', 'label', 'U.P.C. ticketing correct',
+      'Charged per receipt with a floor, so one bad batch costs the same as many.',
+      'ticketing'),
+    step('hanger', 'label', 'Hanger requirements met',
+      'Per receipt with a floor. Not applicable to every product, but it is priced when it is.',
+      'hanger'),
+
+    step('right-location', 'route', 'Ship to the location the PO says',
+      'Wrong-location freight is charged per carton — and unlike most of these, the app can see the DC it was routed to.',
+      'wrongLocation', { appCanCatch: true }),
+
+    asnWillBeSent
+      ? step('asn-on-time', 'documents', 'Transmit the 856 ASN, on time',
+          'Late is charged per receipt; missing is charged per carton with a floor. Two different offsets for the same document.',
+          'asnLate')
+      : step('asn-missing', 'documents', 'No 856 will be sent — this is the expensive lane',
+          'Missing ASN is per carton with a minimum per receipt.',
+          'asnMissing'),
+    step('invoice-edi', 'after', 'Send the 810 by EDI',
+      'A non-EDI invoice is charged per invoice.',
+      'invoiceEdi'),
+    step('integrity-audit', 'after', 'Expect the integrity audit',
+      'Charged per receipt when the audit finds a discrepancy — it is the check behind the shortage offset above.',
+      'integrityAudit'),
+  ]
+
+  return {
+    source: SOURCE,
+    portal: PORTAL,
+    steps,
+    phases: ['before', 'route', 'label', 'documents', 'after'],
+    // ⚠️ NAMED, NOT IMPLIED. See the docblock: three of the four Macy's-side documents
+    // in partnerDocuments are unread, and a checklist that does not say so reads as
+    // complete.
+    // ⚠️ THE ROUTING GUIDE IS READ NOW — src/model/macysRoutingGuide.js, rev 4/14/26. What
+    // remains unread is the Bloomingdale's-specific guide and the Store-to-DC listing.
+    notCovered: [
+      // ⚠️ THE LAST "GAP" WAS A DUPLICATE. "Bloomingdales Routing Guide.pdf" is the
+      // Macy's Routing Guide under another filename — same rev 4/14/26, same byte
+      // length. There is no Bloomingdale's-specific routing guide to read.
+      'Bloomingdale\'s-specific ticketing, hanger and RFID rules — Appendix H prices them but the Vendor Standards sections behind them are not extracted.',
+      // ⚠️ Only the Bloomingdale's-specific routing guide is left. Both the Macy's
+      // Routing Guide and the Store-to-DC listing were read on 2026-09-15.
+
+    ],
+    caveat: SOURCE.verifyBeforeQuoting
+      ? `Figures are from the ${SOURCE.edition} ${SOURCE.document}, Appendix ${SOURCE.appendix}. Confirm the edition before quoting — the routing guide beside it in Drive is marked rev 4/14/26.`
+      : null,
+  }
 }

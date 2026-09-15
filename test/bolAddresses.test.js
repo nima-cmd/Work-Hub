@@ -2,7 +2,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shipToFor, bolAuthLine } from '../src/model/bolAddresses.js'
+import { shipToFor, bolAuthLine, scacFor } from '../src/model/bolAddresses.js'
 
 // ── Exemplar ships direct to its own DC, and is not Macy's ─────────────────
 
@@ -13,7 +13,25 @@ test('⚠️ AN EXEMPLAR BOL MUST NOT SAY "MACY\'S" — the last branch was acti
   // name on the BOL, the exact objection Nima raised in August about Nordstrom BOLs.
   const { block } = shipToFor('Exemplar', '0510', 'PNDC (0510)', { direct: true })
   assert.doesNotMatch(block.name, /Macy/i)
-  assert.match(block.name, /PNDC/)
+  // ⚠️ It names the TMS LANE now, not our own DC label. Exemplar's own BOL for 8928906
+  // reads "ELG-Neiman/Saks DC 510 % Linear" — the string the carrier's dispatch system
+  // holds — and two documents at one pickup should name the consignee the same way.
+  assert.match(block.name, /DC 510/)
+})
+
+test('⚠️ THE LANE NAME IS THE LABEL; THE ADDRESS IS STILL EXEMPLAR\'S DC LIST', () => {
+  // Their BOL prints the lane name against 4123 Pinnacle Point. The lane is a label, not
+  // a location, and the DC List is the source this repo trusts for the address.
+  const { block, missing } = shipToFor('Exemplar', '0510', 'x', { direct: true })
+  assert.equal(block.name, 'ELG-Neiman/Saks DC 510 % Linear')
+  assert.equal(block.street, '4123 Pinnacle Point')
+  assert.deepEqual(missing, [])
+})
+
+test('a DC with no confirmed TMS lane keeps our own naming', () => {
+  // 517 has a lookup pairing but nothing confirmed against a completed routing, so it
+  // does not borrow 510's. See TMS_CONSIGNEE.
+  assert.match(shipToFor('Exemplar', '0517', 'x', { direct: true }).block.name, /SAKS WCSC/)
 })
 
 test('an Exemplar DC is addressed from their own DC List, padded or bare', () => {
@@ -57,4 +75,36 @@ test('⚠️ AN UNKNOWN TMS NUMBER LEAVES THE BLANK BLANK', () => {
 test('the other partners keep their own auth line', () => {
   assert.equal(bolAuthLine({ partner: 'Nordstrom' }), null)
   assert.match(bolAuthLine({ partner: "Bloomingdale's", authNumber: 'X1' }), /Macy's Auth \/ Appt # X1/)
+})
+
+// ── Freight terms ──────────────────────────────────────────────────────────
+// The term itself is computed in server/bolPdf.js; these assert the rule it follows,
+// because the old one was a comment ("never prepaid") rather than a check.
+
+test('⚠️ "NEVER PREPAID" WAS TRUE OF TWO PARTNERS, NOT OF BOLs', () => {
+  // Exemplar's PO 8928906 header reads Freight: Prepaid. The BOL would have ticked
+  // Collect — §12.9 code 905 / NMG T24, cost of freight + $75.
+  const term = (shipment) => {
+    const recorded = String(shipment.freightTerms || '').trim().toLowerCase()
+    return recorded === 'prepaid' ? 'Prepaid'
+      : recorded === 'collect' ? 'Collect'
+        : recorded === '3rd' || recorded === 'third party' || recorded === '3rd party' ? '3rd'
+          : /XLTL|RXO/i.test(`${shipment.scac || ''} ${shipment.carrier || ''}`) ? '3rd' : 'Collect'
+  }
+  assert.equal(term({ freightTerms: 'Prepaid' }), 'Prepaid')
+  assert.equal(term({ freightTerms: 'Collect' }), 'Collect')
+  // Nothing recorded keeps the old derivation, which is right for the partners it was
+  // written for — that is why this went unnoticed.
+  assert.equal(term({}), 'Collect')
+  assert.equal(term({ scac: 'RXOX' }), '3rd')
+  // And a recorded term beats the carrier derivation, not the other way round.
+  assert.equal(term({ freightTerms: 'Prepaid', scac: 'RXOX' }), 'Prepaid')
+})
+
+test('Linear Logistics resolves to its SCAC, from their own assignment notice', () => {
+  assert.equal(scacFor('Linear Logistics'), 'LLGJ')
+  // ⚠️ And it does NOT match the XLTL/RXO test, so the BOL derives Collect for it —
+  // which is why an Exemplar shipment MUST have its Prepaid term recorded rather than
+  // relying on the derivation.
+  assert.ok(!/XLTL|RXO/i.test('LLGJ Linear Logistics'))
 })

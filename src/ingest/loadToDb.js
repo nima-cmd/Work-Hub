@@ -1041,7 +1041,11 @@ export async function fetchRoutingShipmentById(id, db = pool) {
             -- bolAuthLine() now prints the TMS confirmation for Exemplar (guide p23,
             -- CID# AND Special Instructions); without selecting it here the line would
             -- render its blank forever no matter what was typed on the card.
-            tms_confirmation_number AS "tmsConfirmation"
+            tms_confirmation_number AS "tmsConfirmation",
+            -- ⚠️ AND THE SAME TRAP A THIRD TIME IN THIS QUERY. The BOL renders from the
+            -- BY-ID path; a column the by-id query does not select is a column the BOL
+            -- cannot print, however carefully it was recorded.
+            freight_terms AS "freightTerms"
      FROM routing_shipment WHERE id = $1`,
     [id],
   )
@@ -1127,6 +1131,12 @@ const SHIPMENT_REF_COLS = {
   // became the label printed for both. Guide p23 wants it in CID# AND Special
   // Instructions.
   tmsConfirmationNumber: 'tms_confirmation_number',
+  // ⚠️ THE COLUMN EXISTED, THE WORKSHEET DISPLAYED IT, AND NOTHING COULD WRITE IT.
+  // `freight_terms` was selected by the list query and rendered as "terms not recorded"
+  // forever, because it was never in this map and had no input. A value a surface can
+  // show but no surface can set is the same as no value — and the BOL, which is the
+  // document that actually needs it, derived Collect regardless.
+  freightTerms: 'freight_terms',
   // Nordstrom's portal references (Nima, 2026-08-05) — see db/schema.sql.
   routingRequestNumber: 'routing_request_number',
   routingRequestLine: 'routing_request_line',

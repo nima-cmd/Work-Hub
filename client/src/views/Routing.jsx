@@ -4,10 +4,11 @@ import {
   setShipmentRefs, saveRoutingAuth, deleteRoutingAuth,
   bolPdfUrl, fileBolToDrive, holdRoutingPo, releaseRoutingPo,
   masterBolPdfUrl, fileMasterToDrive, refreshRoutingFeed, pushToShipstation, applyTender,
-  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl,
+  fetchPreshipChecks, setPreshipCheck, clearPreshipCheck, manifestPdfUrl, packingSlipPdfUrl, cartonLabelsPdfUrl, cartonGuidePdfUrl, slipMarkingPdfUrl, printSlipMarkings, palletLabelPdfUrl, printPalletLabels,
 } from '../api.js'
 import { shipmentChecklist } from '../../../src/model/exemplarStandards.js'
-import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE } from '../../../src/model/saksRouting.js'
+import { macysShipmentChecklist, PORTAL as MACYS_PORTAL } from '../../../src/model/macysStandards.js'
+import { EDI_STATUS, PROHIBITED, SOURCE as SAKS_SOURCE, PORTALS, DEADLINES, TMS_CONSIGNEE, tmsConsigneeFor } from '../../../src/model/saksRouting.js'
 import { consolidateRouting, attachShipments } from '../../../src/model/routing.js'
 import { noBolReason } from '../../../src/model/parcelLane.js'
 import { authProvenance, AUTH_STATE } from '../../../src/model/routingAuthSource.js'
@@ -815,7 +816,54 @@ function ShipmentCard({ g, auths, busy, onAssign, onVoid, onSaveRefs, onHold, on
           every partner's guide is different and so are the fees. The partner now
           resolves correctly for numeric Exemplar DCs — see src/model/dc.js, where every
           numeric DC used to answer "Nordstrom". */}
+      {/* ⚠️ THE ROUTING LINK ON THE CARD, because that is where the decision to route
+          is made — Nima, 2026-09-14: "thats the link to route btw to put ont he card".
+          It is his bookmark, not one inferred from the guide: the Routing Guide gives
+          contacts and no addresses, and "softweb" is not a host anyone would have
+          guessed from csrsupport@dynamiconline.com. */}
+      {/* ⚠️ THE MACY'S PORTAL, WITH THE BROWSER NOTE. Nima, 2026-09-14: "macysnet.com is
+          the link to the portal and that needs to be opned in safari if possible." That
+          is his instruction, recorded as his — not a compatibility fact we established —
+          and it is on the card so nobody loses twenty minutes to a portal that
+          half-works in Chrome. */}
+      {/^(Bloomingdale|Macy)/i.test(g.partner || '') && !s?.shippedAt && (
+        <div className="rt-tmsLink">
+          <a className="btnGhost" href={MACYS_PORTAL.url} target="_blank" rel="noreferrer"
+             title={MACYS_PORTAL.holds}>
+            {MACYS_PORTAL.name} ↗
+          </a>
+          <span className="muted"> — open it in <b>{MACYS_PORTAL.browser}</b> if you can.</span>
+        </div>
+      )}
+      {g.partner === 'Exemplar' && PORTALS.tms.url && !s?.shippedAt && (
+        <div className="rt-tmsLink">
+          <a className="btnGhost" href={PORTALS.tms.url} target="_blank" rel="noreferrer"
+             title={`${PORTALS.tms.name} — ${PORTALS.tms.what}`}>
+            Route in {PORTALS.tms.name} ↗
+          </a>
+          {!s?.tmsConfirmation && (
+            <span className="muted"> — book at least {DEADLINES.tmsRouting.businessDaysBeforeCancel} business
+              days before the cancel date, then put the confirmation number on this card.</span>
+          )}
+          {/* ⚠️ THE CONSIGNEE TRAP. The lookup returns two near-identical entries per DC
+              and the wrong one silently refuses to let the routing finish — no message
+              names the consignee. This cost an afternoon on 2026-09-14. */}
+          {tmsConsigneeFor(g.dc) && (
+            <div className="rt-consigneePick">
+              Search <code>{TMS_CONSIGNEE.searchTerm}</code> and pick exactly:{' '}
+              <b>{tmsConsigneeFor(g.dc).select}</b>
+              <div className="muted">
+                NOT <s>{tmsConsigneeFor(g.dc).decoy}</s> — it looks right and will not let the routing finish.
+                {' '}{TMS_CONSIGNEE.searchNote}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {g.partner === 'Exemplar' && <PreshipChecklist g={g} s={s} />}
+      {/* Macy's divisions share one Vendor Standards and one Appendix H. */}
+      {/^(Bloomingdale|Macy)/i.test(g.partner || '') && <PreshipChecklist g={g} s={s} partner={g.partner} />}
 
       {/* ⚠️ THIS SHIPMENT WAS FOUND BY ITS FREIGHT, NOT BY ITS KEY. Its stored row still
           carries a partner name this DC no longer maps to. Nothing is broken — the BOL
@@ -1046,10 +1094,55 @@ function BolActions({ s }) {
           is what browsers block as a popup. A refusal comes back as plain text in the
           tab, which is the whole point of refusing. */}
       {s.partner === 'Exemplar' && (
-        <a className="btnGhost" href={manifestPdfUrl(s.id)} target="_blank" rel="noreferrer"
-           title="Master Manifest & Packing List — hand this to the carrier at pick-up (Routing Guide p13)">
-          Manifest ↗
-        </a>
+        <>
+          <a className="btnGhost" href={manifestPdfUrl(s.id)} target="_blank" rel="noreferrer"
+             title="Master Manifest & Packing List — hand this to the carrier at pick-up (Routing Guide p13)">
+            Manifest ↗
+          </a>
+          <a className="btnGhost" href={packingSlipPdfUrl(s.id)} target="_blank" rel="noreferrer"
+             title="One per PO per store. Email it to Exemplar IN ADVANCE, and pouch a copy to one carton.">
+            Packing slip ↗
+          </a>
+          {/* ⚠️ 4x6 FIRST — it is the stock on the warehouse Zebra (Nima, 2026-09-14).
+              The other two stay because they exist; 3x6 is only conveyor-legal at a
+              quarter-inch margin, which is why the margin is part of the layout rather
+              than something chosen in a print dialog. */}
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. 4x6 — the warehouse Zebra's stock.">
+            Labels 4×6 ↗
+          </a>
+          <a className="btnGhost" href={cartonGuidePdfUrl(s.id, '4x6')} target="_blank" rel="noreferrer"
+             title="Where every label goes on the box, drawn to scale per box size. Internal sheet.">
+            Where to stick it ↗
+          </a>
+          {/* ⚠️ MUNBYN FIRST for the markings, 4x6 second — the reverse of the carton
+              label, which the MUNBYN cannot carry at all. The 2.25x1.25 is text with no
+              barcode and clears all six faces of every box on the shipment; a 4x6
+              marking has ZERO spare on four faces of the 24x14x4 cartons. */}
+          <a className="btnGhost" href={slipMarkingPdfUrl(s.id, '2.25x1.25', 1)} target="_blank" rel="noreferrer"
+             title={'Six "PACKING SLIP ATTACHED" markings on the MUNBYN 2.25x1.25 stock — one per face of the carton carrying the slip.'}>
+            &quot;Slip attached&quot; ×6 ↗
+          </a>
+          <PrintMarkingsButton shipmentId={s.id} />
+          <a className="btnGhost" href={slipMarkingPdfUrl(s.id, '4x6', 1)} target="_blank" rel="noreferrer"
+             title={'The same six markings on 4x6 — tight on the 24x14x4 cartons.'}>
+            ×6 on 4×6 ↗
+          </a>
+          {/* ⚠️ `s`, NOT `g` — BolActions is passed the SHIPMENT and has no group in
+              scope. `g.cartons` threw ReferenceError on render, and because it threw
+              inside the component tree it took the WHOLE ROUTING YARD to a blank screen
+              rather than breaking one button. The shipment row carries the carton count
+              itself, which is what this needed all along. */}
+          <PalletLabels shipmentId={s.id} cartons={s.cartons} />
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, 'half-sheet')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. Half-sheet stock.">
+            ½ ↗
+          </a>
+          <a className="btnGhost" href={cartonLabelsPdfUrl(s.id, '3x6')} target="_blank" rel="noreferrer"
+             title="One per carton, §8.5. 3x6 stock — quarter-inch margins keep the SSCC conveyor-scannable.">
+            3×6 ↗
+          </a>
+        </>
       )}
       <button className="btnGhost" disabled={state?.busy} onClick={file}>
         {state?.busy ? 'Filing…' : '⤒ File to Drive'}
@@ -1246,6 +1339,7 @@ function RefEditor({ s, auths, busy, onSave }) {
     trackingNumbers: (s.trackingNumbers || []).join(', '),
     routingRequestNumber: s.routingRequestNumber || '',
     tmsConfirmation: s.tmsConfirmation || '',
+    freightTerms: s.freightTerms || '',
     routingRequestLine: s.routingRequestLine || '',
     proNumber: s.proNumber || '',
   })
@@ -1346,6 +1440,18 @@ function RefEditor({ s, auths, busy, onSave }) {
             placeholder="from Dynamic TMS when you book" />
         </label>
       )}
+      {/* ⚠️ THE BOL TICKS THIS BOX, so leaving it unrecorded is not neutral — the BOL
+          derives Collect, which is right for Bloomingdale's and Nordstrom and wrong for
+          an Exemplar PO whose header says Prepaid (§12.9 code 905, freight + $75).
+          Blank means "nobody has said", and the BOL falls back to the derivation. */}
+      <label>Freight terms
+        <select className="qtyInput" style={{ width: 150 }} value={d.freightTerms} onChange={set('freightTerms')}>
+          <option value="">— not recorded —</option>
+          <option value="Collect">Collect</option>
+          <option value="Prepaid">Prepaid</option>
+          <option value="3rd Party">3rd Party</option>
+        </select>
+      </label>
       <div className="rt-editRow">
         <label>Trailer #<input value={d.trailerNumber} onChange={set('trailerNumber')} /></label>
         <label>Seal #<input value={d.sealNumber} onChange={set('sealNumber')} /></label>
@@ -1430,7 +1536,7 @@ function Cell({ label, v, big }) {
 // ⚠️ AND THIS DOES NOT BLOCK SHIPPING. It is a checklist, not a gate — the person on
 // the floor can see something the app cannot, and an app that refuses to let a real
 // truck leave gets worked around, which costs more than the fee it was preventing.
-function PreshipChecklist({ g, s }) {
+function PreshipChecklist({ g, s, partner = 'Exemplar' }) {
   const dcPoKey = g.dcPoKey
   const [open, setOpen] = useState(false)
   const [checks, setChecks] = useState(null)
@@ -1457,13 +1563,31 @@ function PreshipChecklist({ g, s }) {
   // drives the per-PO fees, and `asnWillBeSent` decides whether the document step is
   // the 856 or the packing slip — EDI_STATUS records that our last delivered 856 to
   // this partner was 2024-11-01, so the non-ASN branch is the live one.
-  const list = shipmentChecklist({
-    asnWillBeSent: EDI_STATUS.asnTransmitted,
-    cartons: g.cartons || 1,
-    pos: (g.memberPos || []).length || 1,
-    mode: s?.mode || null,
-    dts: false,
-  })
+  // ⚠️ THE TWO PARTNERS' CHECKLISTS ARE NOT THE SAME DOCUMENT AND MUST NOT LOOK IT.
+  // Exemplar's covers routing, packing, labelling, documents, palletising and after-ship
+  // because BOTH its Routing Guide and its Manual were read. Macy's covers what Appendix
+  // H prices, because three of the four Macy's-side documents are still unread — and it
+  // carries `notCovered` saying exactly which. Same widget, honestly different contents.
+  const isMacys = partner !== 'Exemplar'
+  const list = isMacys
+    ? macysShipmentChecklist({
+      cartons: g.cartons || 1,
+      receipts: (g.memberPos || []).length || 1,
+      units: g.units || 0,
+      // ⚠️ Merchandise value is NOT guessed. The dominant line — shortages — is a
+      // receipt fee PLUS half the merchandise, and offsetFor returns `unknown` with the
+      // flat part rather than an estimate when the value is missing. A number invented
+      // here would be the one someone quotes.
+      merchandiseUsd: null,
+      asnWillBeSent: true,
+    })
+    : shipmentChecklist({
+      asnWillBeSent: EDI_STATUS.asnTransmitted,
+      cartons: g.cartons || 1,
+      pos: (g.memberPos || []).length || 1,
+      mode: s?.mode || null,
+      dts: false,
+    })
   const done = new Set((checks || []).map((c) => c.stepKey))
   const byKey = Object.fromEntries((checks || []).map((c) => [c.stepKey, c]))
   const shipped = !!s?.shippedAt
@@ -1492,7 +1616,7 @@ function PreshipChecklist({ g, s }) {
   return (
     <div className="rt-preship">
       <button className="rt-preshipHead" onClick={() => setOpen((o) => !o)}>
-        {open ? '▾' : '▸'} Exemplar pre-ship checks
+        {open ? '▾' : '▸'} {isMacys ? "Macy's / Bloomingdale's" : 'Exemplar'} pre-ship checks
         <span className="muted">
           {checks === null ? ' · not loaded' : ` · ${done.size} of ${list.steps.length} verified`}
           {checks !== null && atRisk > 0 && ` · $${atRisk.toLocaleString()} unverified`}
@@ -1504,13 +1628,30 @@ function PreshipChecklist({ g, s }) {
           {err && <div className="banner error">⚠ {err}</div>}
 
           <div className="muted rt-sub">
-            {/* ⚠️ THE MANUAL IS EDITIONED AND THE GUIDE IS REVISIONED — they are two
-                different documents with two different versioning schemes, and reading
-                `revision` off the manual printed "rev" followed by nothing. */}
-            {list.source.manual}, {list.source.edition} edition · {SAKS_SOURCE.guide} rev{' '}
-            {SAKS_SOURCE.revision}, {SAKS_SOURCE.updated}. Every step cites its page.
-            {' '}<b>Non-ASN lane</b> — {EDI_STATUS.consequence}.
+            {isMacys ? (
+              <>
+                {list.source.document}, Appendix {list.source.appendix} (pp {list.source.pages}).
+                {' '}<b>{list.caveat}</b>
+              </>
+            ) : (
+              <>
+                {/* ⚠️ THE MANUAL IS EDITIONED AND THE GUIDE IS REVISIONED — two documents,
+                    two versioning schemes; reading `revision` off the manual printed
+                    "rev" followed by nothing. */}
+                {list.source.manual}, {list.source.edition} edition · {SAKS_SOURCE.guide} rev{' '}
+                {SAKS_SOURCE.revision}, {SAKS_SOURCE.updated}. Every step cites its page.
+                {' '}<b>Non-ASN lane</b> — {EDI_STATUS.consequence}.
+              </>
+            )}
           </div>
+          {/* ⚠️ WHAT THIS CHECKLIST HAS NOT READ, on the checklist. A list that looks
+              complete is worse than a short one that admits its gaps. */}
+          {list.notCovered && (
+            <div className="rt-preshipPhase">
+              <div className="rt-preshipPhaseName">Not covered — these documents are unread</div>
+              {list.notCovered.map((n, i) => <div key={i} className="rt-preshipNever">· {n}</div>)}
+            </div>
+          )}
 
           {/* ⚠️ NO TICK WITHOUT A NAME. The server refuses an unnamed check; saying so
               here means the refusal is a prompt rather than an error after the click. */}
@@ -1543,9 +1684,15 @@ function PreshipChecklist({ g, s }) {
                       <div>
                         <div className="rt-preshipWhat">
                           {x.what}
-                          {x.fee?.cost?.startsWith('$') && (
-                            <span className="rt-preshipFee" title={x.fee.rule || ''}>{x.fee.cost}</span>
+                          {(x.fee?.cost || x.offset?.cost) && (
+                            <span className="rt-preshipFee" title={x.fee?.rule || x.offset?.what || ''}>
+                              {x.fee?.cost || x.offset?.cost}
+                            </span>
                           )}
+                          {/* The shortage line is the one that dominates the exposure —
+                              a receipt fee PLUS half the merchandise — so it is marked
+                              rather than left to look like the others. */}
+                          {x.theExpensiveOne && <span className="rt-preshipApp" title="Receipt fee plus 50% of the merchandise value">the expensive one</span>}
                           {/* The handful of steps the app can check for itself, named as
                               such — it still needs a person to confirm, but it is worth
                               knowing which ones have a second pair of eyes. */}
@@ -1569,7 +1716,7 @@ function PreshipChecklist({ g, s }) {
           {/* ⚠️ THE PROHIBITIONS ARE NOT STEPS AND ARE NOT TICKABLE. They are things
               never to do, not things to confirm you did — a checkbox beside "do not
               floor-load the trailer" invites reading it as an instruction. */}
-          <div className="rt-preshipPhase">
+          <div className="rt-preshipPhase" hidden={isMacys}>
             <div className="rt-preshipPhaseName">Never — each one is a chargeback</div>
             {PROHIBITED.map((p, i) => (
               <div key={i} className="rt-preshipNever">
@@ -1591,4 +1738,98 @@ const PHASE_LABEL = {
   documents: '5 · Documents',
   pallet: '6 · Palletising',
   after: '7 · After it ships',
+}
+
+
+
+
+// ⚠️ THE MUNBYN IS THE ONLY WAY TO MAKE THESE. It cannot be driven from a browser print
+// dialog — the queue, the paper size and the background wash its gap sensor needs all
+// live in the app (server/printLabel.js). So unlike the carton labels, which have no
+// print route at all because 22 adhesive labels get reviewed first, this one prints.
+//
+// ⚠️ It still only fires from a CLICK, and the preview link sits right beside it.
+function PrintMarkingsButton({ shipmentId }) {
+  const [state, setState] = useState(null)
+  async function go() {
+    setState({ busy: true })
+    try {
+      const r = await printSlipMarkings({ shipmentId })
+      setState({
+        msg: `Sent ${r.faces ?? 6} markings to ${r.printer}.`
+          + (r.tight ? ` ${r.tight} face${r.tight === 1 ? '' : 's'} are a tight fit — land them square.` : ''),
+        ok: true,
+      })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+  return (
+    <>
+      <button className="btnGhost" disabled={state?.busy} onClick={go}
+              title="Print the six markings to the MUNBYN (2.25x1.25). It cannot be printed from a browser dialog.">
+        {state?.busy ? 'Printing…' : '🖨 Markings → MUNBYN'}
+      </button>
+      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
+    </>
+  )
+}
+
+
+// The pallet placard (§12.6, $250 minimum).
+//
+// ⚠️ THE PALLET COUNT IS ASKED FOR, NOT ASSUMED. Nothing in our data says how many
+// pallets a shipment was built onto — that is a fact from the floor — and with more
+// than one, nothing says which carton went on which either. The model refuses a split
+// it was not given rather than dividing 22 by 3 and printing a confident wrong count,
+// which is exactly what §12.6 charges for.
+function PalletLabels({ shipmentId, cartons }) {
+  const [pallets, setPallets] = useState(1)
+  const [perPallet, setPerPallet] = useState('')
+  const [state, setState] = useState(null)
+  const n = Math.max(1, Number(pallets) || 1)
+  const opts = { pallets: n, perPallet: n > 1 ? perPallet : null }
+
+  async function go() {
+    setState({ busy: true })
+    try {
+      const r = await printPalletLabels({ shipmentId, ...opts })
+      setState({ msg: `Sent ${r.pallets} placard${r.pallets === 1 ? '' : 's'} to ${r.printer}.`, ok: true })
+    } catch (e) { setState({ msg: e.message, ok: false }) }
+  }
+
+  return (
+    <span className="rt-pallet">
+      <label className="muted">Pallets
+        <input className="qtyInput" style={{ width: 44, marginLeft: 4 }} value={pallets}
+               onChange={(e) => setPallets(e.target.value)} />
+      </label>
+      {n > 1 && (
+        <label className="muted"> cartons each
+          <input className="qtyInput" style={{ width: 90, marginLeft: 4 }} value={perPallet}
+                 placeholder={`e.g. ${splitHint(cartons, n)}`}
+                 onChange={(e) => setPerPallet(e.target.value)} />
+        </label>
+      )}
+      <a className="btnGhost" href={palletLabelPdfUrl(shipmentId, opts)} target="_blank" rel="noreferrer"
+         title="The pallet placard — §12.6, p37. Preview before printing.">
+        Pallet label ↗
+      </a>
+      <button className="btnGhost" disabled={state?.busy} onClick={go}
+              title="Print the placards to the warehouse Zebra on 4x6 thermal stock.">
+        {state?.busy ? 'Printing…' : '🖨 → 4×6'}
+      </button>
+      {state?.msg && <div className={'rt-driveMsg ' + (state.ok ? 'ok' : 'err')}>{state.msg}</div>}
+    </span>
+  )
+}
+
+// ⚠️ A HINT IN A PLACEHOLDER, NOT A DEFAULT IN THE FIELD. An even division is a
+// plausible guess and almost never how a pallet is actually built; offering it as
+// greyed-out example text keeps it a suggestion rather than something that gets
+// submitted unread.
+function splitHint(cartons, n) {
+  const total = Number(cartons) || 0
+  if (!total || n < 2) return ''
+  const base = Math.floor(total / n)
+  const out = Array.from({ length: n }, (_, i) => base + (i < total % n ? 1 : 0))
+  return out.join(',')
 }

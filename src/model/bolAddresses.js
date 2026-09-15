@@ -8,6 +8,7 @@
 
 import { dcLabel, DC_ABBREV } from './dc.js'
 import { DCS as EXEMPLAR_DCS, dcAddressLines as exemplarDcAddress } from './exemplarStores.js'
+import { tmsConsigneeFor } from './saksRouting.js'
 
 // Where every shipment ships FROM (the master BOL's Ship From block).
 export const SHIP_FROM = {
@@ -192,6 +193,14 @@ export const CARRIERS = {
   // it. Same company as the entry above; Nima confirmed CAIE 2026-08-24.
   'CTE Carrier': 'CAIE',
   'CTE': 'CAIE',
+  // Assigned by the Dynamic TMS for PO 8928906 to DC 510, 2026-09-14 — confirmation
+  // 15779316. Their notice gives the SCAC outright: "Your assigned LTL Carrier is
+  // Linear Logistics (SCAC: LLGJ)".
+  'Linear Logistics': 'LLGJ',
+  // ⚠️ FXFE WAS MISSING. The Macy's Routing Guide names "FedEx Freight – LTL (FXFE or
+  // FXNL)" (p13) and we held only FXNL, so a shipment MTO assigned to FXFE resolved to
+  // no carrier at all — and the BOL's freight-term derivation keys off carrier/SCAC.
+  'FedEx Freight FXFE': 'FXFE',
 }
 
 /** SCAC for a carrier name, case- and spacing-insensitive.
@@ -207,7 +216,19 @@ export function scacFor(carrier) {
   return null
 }
 
-export const COMMODITY = { description: 'Polyester Handbags', nmfc: '', class: '100', packaging: 'PLT' }
+// ⚠️ "NEOPRENE HANDBAG" IS WHAT NIMA TYPED ON THE BOL THE CARRIER ACCEPTED, so it is
+// what ours says. It read "Polyester Handbags" — a description nobody had checked
+// against a shipment — and on 2026-09-14 the TMS BOL for PO 8928906 went out as
+// "Neoprene Handbag", class 100. Two documents describing one pallet two different
+// ways is what a carrier audit or a receiver discrepancy latches onto, and the
+// commodity description is what drives the NMFC item and therefore the class.
+//
+// ⚠️ `nmfc` IS STILL EMPTY, and that is a real gap rather than a formatting one. Class
+// 100 is a stored number, not one derived from a classification we hold: at 435 lb over
+// 41.7 cubic feet the density is 10.4 lb/ft3, which on the standard scale is the 92.5
+// band. 100 is the conservative side — over-declaring costs a little freight, while
+// under-declaring gets reclassed with a fee — but the NMFC item is what would settle it.
+export const COMMODITY = { description: 'Neoprene Handbag', nmfc: '', class: '100', packaging: 'PLT' }
 
 // City name for a DC code, with any trailing "DC" stripped (dcLabel('CG') is
 // "China Grove DC" → "China Grove"), so the ship-to reads "Macy's China Grove
@@ -237,6 +258,29 @@ function dcCityName(dc) {
 export function shipToFor(partner, dc, label, { kind = 'final', mergeCenter = DEFAULT_MERGE, direct = false } = {}) {
   let block
   if (partner === 'Exemplar') {
+    // ⚠️ THE CONSIGNEE NAME MATCHES THE TMS's, WHEN WE HAVE A CONFIRMED ONE. Exemplar's
+    // own BOL for 8928906 reads "ELG-Neiman/Saks DC 510 % Linear" — the TMS lane, which
+    // is the string the carrier's dispatch system holds. Ours said "PNDC (0510)": the
+    // same place, named differently, on a document that sits beside theirs at pickup.
+    //
+    // ⚠️ THE ADDRESS STILL COMES FROM EXEMPLAR'S DC LIST, not from the TMS. Their BOL
+    // prints the lane name against 4123 Pinnacle Point, and the DC List is the source
+    // this repo trusts for that address — the lane name is a label, not a location.
+    const lane = tmsConsigneeFor(dc)
+    if (lane) {
+      const key0 = EXEMPLAR_DCS[String(dc)] ? String(dc) : String(dc).replace(/^0+/, '')
+      const d0 = EXEMPLAR_DCS[key0]
+      if (d0) {
+        const [street0, cityLine0] = exemplarDcAddress(key0)
+        const m0 = /^(.*),\s*([A-Z]{2})\s+(\d{5})/.exec(cityLine0 || '')
+        const block = {
+          name: lane.select,
+          street: street0 || null,
+          city: m0 ? m0[1] : null, state: m0 ? m0[2] : null, zip: m0 ? m0[3] : null,
+        }
+        return { block, missing: ['street', 'city', 'state', 'zip'].filter((k) => !block[k]) }
+      }
+    }
     // ⚠️ ZERO-PADDED IN EDI, BARE IN THE GUIDE — 0510 vs 510. Looked up both ways, or
     // the miss falls through and we are back to printing Macy's.
     const key = EXEMPLAR_DCS[String(dc)] ? String(dc) : String(dc).replace(/^0+/, '')

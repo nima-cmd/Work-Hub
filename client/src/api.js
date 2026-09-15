@@ -1271,3 +1271,77 @@ export async function clearPreshipCheck({ dcPoKey, stepKey }) {
 // ⚠️ A URL, not a fetch: same popup-blocker rule as the pick ticket and the BOL. A
 // refusal arrives as plain text in the tab, which is what makes the refusal useful.
 export const manifestPdfUrl = (shipmentId) => `/api/exemplar/manifest.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
+
+// ⚠️ A 200 IS NOT A SUCCESS IF THE BODY IS NOT JSON, and every helper here used to
+// treat it as one: `await res.json().catch(() => ({}))` swallows an HTML body, `res.ok`
+// is true, and the caller reads undefined fields off `{}`.
+//
+// Live on 2026-09-14: the API on :3001 was running code from before the print route
+// existed, so Express fell through to the SPA catch-all and answered index.html with a
+// 200. The card said "Sent undefined markings to undefined" — reporting that six labels
+// had been printed when the printer had received nothing. A silent stale-server failure
+// that reads as a physical act completing is about the worst shape this can take.
+//
+// So the parse failure is named, and it names its own most likely cause.
+async function asJson(res, what) {
+  const text = await res.text()
+  let body
+  try { body = JSON.parse(text) } catch {
+    if (/^\s*<!doctype html/i.test(text) || /^\s*<html/i.test(text)) {
+      throw new Error(`${what}: the API returned a web page instead of an answer — the server is almost certainly running older code than this page. Restart it (npm run dev) and try again.`)
+    }
+    throw new Error(`${what}: the API returned something that is not JSON (${text.slice(0, 80)})`)
+  }
+  if (!res.ok) throw new Error(body.error || `${what}: API ${res.status}`)
+  return body
+}
+
+// The Exemplar packing slip (one per PO per store) and carton labels (one per carton).
+// ⚠️ URLs, not fetches — same popup rule; and a refusal arrives as readable text in
+// the tab, which is the useful half when a carton has no recorded contents.
+export const packingSlipPdfUrl = (shipmentId) => `/api/exemplar/packing-slip.pdf?shipmentId=${encodeURIComponent(shipmentId)}`
+export const cartonLabelsPdfUrl = (shipmentId, size = 'half-sheet') =>
+  `/api/exemplar/carton-labels.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`
+
+
+// The application guide — where each label goes on the physical box. Internal sheet.
+export const cartonGuidePdfUrl = (shipmentId, size = '4x6') =>
+  `/api/exemplar/carton-guide.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}`
+
+// The six "PACKING SLIP ATTACHED" markings for the carton carrying the slip.
+export const slipMarkingPdfUrl = (shipmentId, size = '4x6', carton = 1) =>
+  `/api/exemplar/slip-marking.pdf?shipmentId=${encodeURIComponent(shipmentId)}&size=${encodeURIComponent(size)}&carton=${carton}`
+
+// Print the six markings to the MUNBYN. ⚠️ The MUNBYN cannot be driven from a browser
+// print dialog — the app owns the queue, the media string and the background wash its
+// gap sensor needs. Fires only from a click; the PDF preview sits beside it.
+export async function printSlipMarkings({ shipmentId, size = '2.25x1.25', carton = 1 }) {
+  const res = await fetch('/api/exemplar/slip-marking/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipmentId, size, carton }),
+  })
+  const body = await asJson(res, 'printing the markings')
+  // ⚠️ AND THE ANSWER HAS TO LOOK LIKE ONE. Even valid JSON from the wrong handler
+  // would let the caller render "Sent undefined markings to undefined"; the button is
+  // claiming a physical act happened, so it checks that the server said which printer.
+  if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
+  return body
+}
+
+// The pallet placard (§12.6). ⚠️ `pallets` and the per-pallet split are facts from the
+// floor — nothing in our data knows them, so they are passed in and refused if absent.
+export const palletLabelPdfUrl = (shipmentId, { size = '4x6', pallets = 1, perPallet = null, copies = 1 } = {}) => {
+  const q = new URLSearchParams({ shipmentId, size, pallets: String(pallets), copies: String(copies) })
+  if (perPallet) q.set('perPallet', perPallet)
+  return `/api/exemplar/pallet-label.pdf?${q}`
+}
+
+export async function printPalletLabels({ shipmentId, size = '4x6', pallets = 1, perPallet = null, copies = 1 }) {
+  const res = await fetch('/api/exemplar/pallet-label/print', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shipmentId, size, pallets, perPallet, copies }),
+  })
+  const body = await asJson(res, 'printing the pallet placards')
+  if (!body.printer) throw new Error('the server did not say which printer it used — treat this as NOT printed and check the queue')
+  return body
+}

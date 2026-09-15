@@ -6,6 +6,7 @@ import PDFDocument from 'pdfkit'
 import {
   LAYOUTS, renderCartonLabel, cartonLabelsPdf, packingSlipPdf, PACKING_SLIP_HANDLING,
 } from '../server/exemplarDocsPdf.js'
+import { consigneeCompany } from '../src/model/exemplarStores.js'
 
 const carton = {
   carton: 20, totalCartons: 22, units: 10, totalUnits: 270,
@@ -13,7 +14,7 @@ const carton = {
   style: 'SN41262LD-CHOCOLATE | Porto Small Half-Moon Bag | Chocolate',
   // ⚠️ The STOREFRONT, not Orderful's trading-partner name — same correction as the
   // label fixture. Store 0077 is SAKS GLOBAL, renamed EXEMPLAR LUXURY GROUP on 9/21.
-  shipFromName: 'Entrelaced Holdings, LLC', operatingCompany: 'EXEMPLAR LUXURY GROUP',
+  shipFromName: 'Entrelaced Holdings, LLC', operatingCompany: 'Exemplar Luxury Group',
   po: '0008928906', department: '0118', vendorNumber: '7126456',
   store: '0077', storeAbbrev: 'PNDC', dc: '0510',
 }
@@ -23,6 +24,9 @@ test('⚠️ THE MARGIN IS PART OF THE SIZE', () => {
   // margin is not a style choice and is not left to the caller.
   assert.equal(LAYOUTS['3x6'].margin, 0.25 * 72)
   assert.equal(LAYOUTS['half-sheet'].margin, 0.5 * 72)
+  // ⚠️ And the 4x6 is THERMAL, which goes closer to the edge than a laser. At 0.3125in
+  // a 4in label threw away 16% of its width — and width is the barcode's X-dimension.
+  assert.equal(LAYOUTS['4x6'].margin, 0.15 * 72)
 })
 
 test('⚠️ GEOMETRY IS CHECKED BEFORE ANYTHING IS DRAWN', async () => {
@@ -65,20 +69,23 @@ test('⚠️ THE HANDLING RULES ARE EXPORTED, NOT PRINTED ON THE CUSTOMER SHEET'
 })
 
 test('⚠️ THE TWO DOCUMENTS CANNOT NAME DIFFERENT COMPANIES', () => {
-  // The labels derived the ship-to from storefrontFor(); the packing-slip script had
-  // "Saks Fifth Avenue" typed in, so the slip and the labels for one shipment named
-  // different consignees. Two documents in one pouch disagreeing is what a receiver
+  // Two documents in one pouch disagreeing about the consignee is what a receiver
   // raises a discrepancy on, so this throws rather than printing the mismatch.
   return assert.rejects(
     () => packingSlipPdf({ ...carton, operatingCompany: 'Saks Fifth Avenue', cartons: [carton] }, { on: '2026-09-21' }),
-    /storefront on 2026-09-21 is "EXEMPLAR LUXURY GROUP"/)
+    /the consignee company is "Exemplar Luxury Group"/)
 })
 
-test('⚠️ AND THE STOREFRONT IS DATE-DRIVEN, SO THE DATE MATTERS', () => {
-  // Before 2026-09-21 store 0077's storefront is still SAKS GLOBAL. Shipping on the
-  // 11th with EXEMPLAR LUXURY GROUP on the paperwork is a real question, not a
-  // formatting one — the guard makes it impossible to pass silently either way.
-  return assert.rejects(
-    () => packingSlipPdf({ ...carton, cartons: [carton] }, { on: '2026-09-11' }),
-    /storefront on 2026-09-11 is "SAKS GLOBAL"/)
+test('⚠️ THE CONSIGNEE IS THE COMPANY, NOT THE EDI STOREFRONT — and it is NOT date-driven', async () => {
+  // `storefrontFor()` is the REF(19)/MTX segment value and flips on 2026-09-21. It was
+  // driving the PRINTED consignee, so the slip and labels said "SAKS GLOBAL" for a
+  // customer NetSuite had renamed Exemplar Luxury Group on 2026-09-04. Nima,
+  // 2026-09-14: "Exemplar the name of the company". The same name prints either side
+  // of the EDI date, because that date is about what we TRANSMIT.
+  assert.equal(consigneeCompany(), 'Exemplar Luxury Group')
+  for (const on of ['2026-09-11', '2026-09-21']) {
+    const doc = await packingSlipPdf({ ...carton, cartons: [carton] }, { on })
+    doc.end()
+    assert.ok(doc, on)
+  }
 })

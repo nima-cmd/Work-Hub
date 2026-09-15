@@ -284,8 +284,114 @@ export const AUDIT = {
 /** 2% of what? The trigger in units, for one PO. */
 export const auditTriggerUnits = (poUnits) => Math.ceil((Number(poUnits) || 0) * AUDIT.itemErrorRateTrigger)
 
+/**
+ * Where the routing actually gets done, for the instruction sheet.
+ *
+ * ⚠️ THE TMS URL CAME FROM NIMA, NOT FROM THE GUIDE, AND THAT IS WHY IT IS RIGHT.
+ * The Routing Guide gives contacts, not addresses; the only hint we had was the domain
+ * of the TMS support mailbox (csrsupport@dynamiconline.com). The actual address is
+ * https://softweb.dynamiconline.com/softweb/ — the "softweb" host is not something that
+ * could have been inferred from that domain, which is the whole argument for having
+ * printed "NOT ON FILE" for a day instead of a plausible guess. A wrong link on a
+ * routing instruction sends someone to the wrong system to book real freight.
+ *
+ * ⚠️ IMS still has no URL and still prints as a gap.
+ */
+export const PORTALS = {
+  // ⚠️ DYNAMIC SCHEDULES; SOMEONE ELSE DRIVES. Two parties, and confusing them makes
+  // the BOL look wrong when it is not. Nima, 2026-09-14: "they gave us the scac to use
+  // dynamic i think schedules it."
+  //
+  // Exemplar's TMS BOL for 8928906 prints CARRIER NAME "Dynamic Delivery Services" with
+  // a BLANK SCAC, while the assignment notice says "Your assigned LTL Carrier is Linear
+  // Logistics (SCAC: LLGJ)". Those are not in conflict: Dynamic is the transportation
+  // management party that books the load, Linear is the motor carrier that collects it.
+  // The SCAC is the one that identifies who is actually hauling, which is why THAT is
+  // the one they hand you and the one that belongs on the BOL beside the carrier name.
+  //
+  // I flagged the mismatch as something to query with sfalogistics@s5a.com. It was not
+  // a mismatch, and the note is here so the next person does not send that email.
+  tms: {
+    name: "Dynamic TMS",
+    role: 'schedules the load and assigns the motor carrier — it is not the carrier itself',
+    carrierComesFrom: 'the assignment notice, which gives the carrier name AND its SCAC',
+    what: 'Book every truck shipment here, at least 3 business days before the cancel date. It returns the carrier, SCAC, ready date and the confirmation number the BOL needs.',
+    url: 'https://softweb.dynamiconline.com/softweb/',
+    urlSource: 'Nima, 2026-09-14',
+    support: 'csrsupport@dynamiconline.com',
+  },
+  ims: {
+    name: 'QLogitek IMS (Inbound Management System)',
+    what: 'Compliance and chargeback disputes — 60-day window.',
+    url: null,
+    urlSource: null,
+    support: 'compliance@saks.com',
+  },
+}
+
+/**
+ * WHICH CONSIGNEE TO PICK IN THE DYNAMIC TMS.
+ *
+ * ⚠️ THIS COST NIMA AN AFTERNOON AND THE ERROR NEVER SAID SO. The TMS consignee lookup
+ * returns SIX entries for "elg", and two of them are DC 510:
+ *
+ *     ELG- Neiman/Saks DC 510              ← looks right, and the routing will not finish
+ *     ELG-Neiman/Saks DC 510 % Linear      ← the one to pick
+ *
+ * Choosing the first simply would not let him complete the pickup. No message named the
+ * consignee; the screen just refused to move on. The same pairing exists for the other
+ * DCs — a plain entry and a "% Linear" one.
+ *
+ * ⚠️ "% LINEAR" IS THE CARRIER, AND THAT CHANGES WHAT THIS FACT IS. The routing came
+ * back "Your assigned LTL Carrier is Linear Logistics (SCAC: LLGJ)" — so the consignee
+ * entries are not two spellings of one destination, they are per-CARRIER lanes into the
+ * same DC. Which means the right entry may track the carrier the TMS assigns, and the
+ * TMS assigns that per shipment.
+ *
+ * So this is recorded as "510 + Linear Logistics", not as "510". If a different carrier
+ * is assigned next time, the plain entry may well be the correct one and the one here
+ * the decoy. I had cautioned against generalising the pattern to other DCs for a
+ * weaker reason — that it was merely unverified — and the real reason turns out to be
+ * better: the DC is not the whole key.
+ *
+ * ⚠️ And the vendor note on that screen matters on its own: "For vendors entering Saks
+ * or Neiman Marcus or Bergdorf Goodman shipments please type ELG for consignee search."
+ * Searching the banner name finds nothing.
+ */
+export const TMS_CONSIGNEE = {
+  searchTerm: 'elg',
+  searchNote: 'Search "elg" — searching Saks, Neiman Marcus or Bergdorf Goodman finds nothing.',
+  byDc: {
+    510: {
+      select: 'ELG-Neiman/Saks DC 510 % Linear',
+      decoy: 'ELG- Neiman/Saks DC 510',
+      carrier: 'Linear Logistics',
+      scac: 'LLGJ',
+      confirmed: 'Nima, 2026-09-14 — picking the decoy would not let the routing finish; conf 15779316',
+      // ⚠️ Read this as "DC 510 WHEN LINEAR IS ASSIGNED". See the note above.
+      caveat: 'the "% Linear" entry is the Linear Logistics lane — a different assigned carrier may need the other entry',
+    },
+  },
+  // Seen in the lookup, NOT confirmed against a completed routing. Listed so the pairing
+  // is visible without asserting which half is right for these DCs.
+  unconfirmed: {
+    '517/577': ['ELG- Neiman/Saks DC 517/577', 'ELG- Neiman/Saks DC 517/577% Linear'],
+    560: ['ELG- Neiman/Saks/BG DC 560', 'ELG- Neiman/Saks/BG DC 560 % Linear'],
+  },
+}
+
+/** The exact consignee string for a DC, or null when we have not confirmed one. */
+export function tmsConsigneeFor(dc) {
+  const key = String(dc ?? '').replace(/^0+/, '')
+  return TMS_CONSIGNEE.byDc[key] || null
+}
+
 export const CONTACTS = {
   shippingAndRouting: 'sg-transportation@saks.com',
+  // From the Linear Logistics assignment notice, 2026-09-14: "If there are any issues
+  // please contact sfalogistics@s5a.com." A carrier-assignment contact, distinct from
+  // sg-transportation (routing policy) and csrsupport@dynamiconline.com (web entry).
+  ltlCarrierAssignment: 'sfalogistics@s5a.com',
   compliance: 'compliance@saks.com',
   chargebacks: 'compliance@saks.com',
   edi: 'edi@saks.com',

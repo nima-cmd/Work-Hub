@@ -2166,3 +2166,92 @@ CREATE INDEX IF NOT EXISTS preship_check_shipment ON preship_check (dc_po_key);
 -- ⚠️ NULL UNTIL SOMEONE BOOKS. A shipment with no confirmation yet is the normal
 -- state, not a fault, so there is no default — the BOL prints a blank line to fill in.
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS tms_confirmation_number TEXT;
+
+-- The 850's header REF segments (Nima, 2026-09-14). `extractPoReferences` has parsed
+-- these since 09-11 and NOTHING CALLED IT, so the department number — which Exemplar
+-- §8 requires on every carton marking, at $10/carton with a $250 minimum — was being
+-- read out of the 850 and thrown away on every ingest.
+--
+-- ⚠️ THE DEPARTMENT IS PER PO, NOT PER PARTNER. PO 0008928906 is dept 0118; the next
+-- one need not be. Storing it on the transaction is what lets a carton label print the
+-- right one rather than a remembered constant.
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS department TEXT;
+ALTER TABLE edi_transactions ADD COLUMN IF NOT EXISTS vendor_number TEXT;
+
+-- container_transfer (2026-09-15): the China -> US leg of an inbound container, as the
+-- transfer orders that carry it. Nima's flow: receive in China (the factory-complete
+-- date, which is what the vendor invoice must match), then a transfer order per PO whose
+-- MEMO is the container label, fulfilled so the units belong to neither China nor LA
+-- until they land.
+--
+-- ⚠️ SEPARATE FROM transfer_order ON PURPOSE. That table is the OUTBOUND feature —
+-- Office and Consignment — and its model records Nima's reason in his own words: "its
+-- genuinely work we want to track its not a container being shipped to us in the shape
+-- of a transfer order." Same NetSuite record type, different question, different table.
+--
+-- ⚠️ container_label IS THE MEMO, byte for byte. It is not a foreign key because a TO
+-- can carry a memo naming a container we have no packing slip for, and losing that row
+-- would hide the one case worth seeing.
+CREATE TABLE IF NOT EXISTS container_transfer (
+  to_number        TEXT PRIMARY KEY,
+  container_label  TEXT,
+  memo             TEXT,
+  status           TEXT NOT NULL,
+  trandate         DATE,
+  units            INTEGER,
+  synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS container_transfer_label ON container_transfer (container_label);
+
+-- The forwarder's view of a container. GLC WiseGrid is the authority for every inbound
+-- container (Nima, 2026-09-15) and has no API, so these are entered from their portal.
+--
+-- ⚠️ `departed_on` ON inbound_shipment IS THE PACKING SLIP'S DATE — the factory's pack
+-- date, which is always BEFORE GLC takes possession. Proven on SE0025980: our slip says
+-- 2026-08-17, GLC says the vessel departed 25-Aug. These columns are the forwarder's
+-- dates and are kept apart from it rather than overwriting it.
+--
+-- ⚠️ AND PORT ARRIVAL IS NOT DELIVERY. `port_arrived_on` is the vessel reaching the port
+-- of discharge. The drayage from there to Glendale is tracked by nobody we can read, so
+-- there is deliberately NO `delivered_on` derived from it — that fact only exists when a
+-- person records it or the transfer order is received.
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder_ref TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS etd_on DATE;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS port_arrived_on DATE;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS origin_port TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS destination_port TEXT;
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS forwarder_source TEXT;
+
+-- container_alias (2026-09-15): every name one container is known by.
+--
+-- ⚠️ A CONTAINER ALREADY HAS FOUR NAMES AND WE ONLY STORED ONE. Measured on the three
+-- live ones: the packing slip's label, the source filename, the transfer order's memo,
+-- and the forwarder's reference. They are not the same string —
+--
+--     slip   "55 LCL carton 2026.9.7"
+--     memo   "55 LCL to LA carton 2026.9.7"
+--
+-- and that difference silently unmatched four transfer orders carrying 1,439 units.
+--
+-- ⚠️ THE CANONICAL NAME STAYS packing_slip.container_label. Nima chose this over
+-- re-keying (2026-09-15): four tables cascade off that primary key and a migration buys
+-- nothing an alias table does not. The label is admittedly a filename artifact — the
+-- 59-carton container's identity literally contains "(1)" from a duplicate download —
+-- but it is stable, it is what NetSuite's memos mostly say, and `display_name` is what
+-- a person actually reads.
+--
+-- ⚠️ `source` IS NOT DECORATION. An alias observed in a TO memo is evidence about
+-- NetSuite; one typed by a person is a decision. When two aliases disagree the source is
+-- what says which to trust.
+CREATE TABLE IF NOT EXISTS container_alias (
+  alias           TEXT PRIMARY KEY,
+  container_label TEXT NOT NULL REFERENCES packing_slip(container_label) ON DELETE CASCADE,
+  source          TEXT NOT NULL,
+  first_seen      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS container_alias_label ON container_alias (container_label);
+
+-- What a person should see instead of the filename-derived label. NULL means "derive it"
+-- — see containerIdentity.displayNameFor. Entered values win and are never recomputed.
+ALTER TABLE inbound_shipment ADD COLUMN IF NOT EXISTS display_name TEXT;

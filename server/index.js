@@ -5,6 +5,13 @@
 import { IS_MIRROR, IS_OFFLINE, DB_TARGET, mirrorAsOf } from '../src/db.js'
 import express from 'express'
 import { manifestPdf } from './exemplarManifestPdf.js'
+import { cartonLabelsPdf, packingSlipPdf } from './exemplarDocsPdf.js'
+import { cartonGuidePdf } from './cartonGuidePdf.js'
+import { slipMarkingPdf } from './slipMarkingPdf.js'
+import { palletLabelPdf } from './palletLabelPdf.js'
+import { palletPlan } from '../src/model/palletLabel.js'
+import { DCS } from '../src/model/exemplarStores.js'
+import { consigneeCompany } from '../src/model/exemplarStores.js'
 import { syncTenders } from '../src/ingest/manhattanTender.js'
 import { startCalendarIncremental } from '../src/ingest/shipmentCalendarCron.js'
 import { syncMacysRouting } from '../src/ingest/macysRouting.js'
@@ -45,6 +52,7 @@ import {
   markTransferReceived, unmarkTransferReceipt, getBulkPick, getHangTags, hangTagsFor,
   getPreshipChecks, setPreshipCheck, clearPreshipCheck,
   getManifestCartons,
+  getExemplarDocData,
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
@@ -55,7 +63,7 @@ import { planScanFiling, fileScannedDoc } from './scanFiling.js'
 import { previewPackingSlip, commitPackingSlip, verifyStoredContainer } from './packingSlipImport.js'
 import { listPackingSlips, fetchPackingSlip, findSkuInCartons } from '../src/ingest/packingSlipLoad.js'
 import { fetchShipmentBoard, fetchShipment, updateShipment } from '../src/ingest/inboundShipmentLoad.js'
-import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags } from './printLabel.js'
+import { printCargoTag, availableSizes, makeTagSheet, printTagSheet, makeHangTagSheet, printHangTags, printPdfDoc } from './printLabel.js'
 import { renderPickTicketTo } from './pickTicketPdf.js'
 import { renderPoRevisionTo } from './poRevisionPdf.js'
 import { poRevisionTicket } from '../src/ingest/poRevisionLive.js'
@@ -502,15 +510,203 @@ app.all('/api/bulk-pick/pdf', async (req, res) => {
   }
 })
 
+// ── The Exemplar carton labels and packing slip ─────────────────────────────
+// ⚠️ BOTH REFUSE RATHER THAN PRINT A PARTIAL SET. See cartonContents.js: a carton with
+// no recorded contents, or "Mixed SKUs", cannot carry the style §8.5 requires, and 20
+// labels of 22 leaves two boxes going out unlabelled — same fee, easier to miss.
+// The refusal comes back as readable text, because the refusal is the useful part.
+app.get('/api/exemplar/carton-labels.pdf', async (req, res) => {
+  try {
+    const { cartons } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    // ⚠️ 4x6 IS THE DEFAULT BECAUSE IT IS THE STOCK ON THE WAREHOUSE ZEBRA. Nima,
+    // 2026-09-14: "for the labels we can have 4x6 as our paper size." The half-sheet
+    // and 3x6 layouts stay available; 3x6 is only conveyor-legal at a quarter-inch
+    // margin, which is why the margin is part of the layout and not a print setting.
+    const doc = await cartonLabelsPdf(cartons, req.query.size || '4x6')
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="carton-labels-${cartons[0].po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Carton labels not printable.\n\n${e.message}`)
+  }
+})
+
+app.get('/api/exemplar/packing-slip.pdf', async (req, res) => {
+  try {
+    const { cartons, totalUnits, on } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    const head = cartons[0]
+    const doc = await packingSlipPdf(
+      { ...head, totalCartons: cartons.length, totalUnits, cartons },
+      // ⚠️ THE SAME DATE THE LABELS USED. The storefront renames on 2026-09-21, and
+      // a slip and a label naming different companies is what a receiver raises a
+      // discrepancy on — exemplarDocsPdf throws rather than let that print.
+      { on })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="packing-slip-${head.po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Packing slip not printable.\n\n${e.message}`)
+  }
+})
+
+// ⚠️ THERE IS DELIBERATELY NO PRINT-STRAIGHT-TO-THE-ZEBRA ROUTE FOR CARTON LABELS.
+// One existed for about an hour on 2026-09-14 and I proved it by calling it, which put
+// 22 real labels on the warehouse printer nobody had asked for. Nima: "we want to
+// review it before we print." A carton label is 22 pieces of adhesive stock and a
+// physical act; the PDF opens in a tab and he prints it when he has looked at it.
+// The cargo tags keep their direct path because a tag is one label and reprintable.
+
+// The application guide — where every label physically goes on the box.
+// ⚠️ INTERNAL. It never leaves the building, which is why it keeps the section numbers
+// and the fees the customer-facing documents deliberately drop.
+app.get('/api/exemplar/carton-guide.pdf', async (req, res) => {
+  try {
+    const { cartons, shipment } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+    const size = req.query.size || '4x6'
+    const dims = { '4x6': { w: 4, h: 6 }, '3x6': { w: 3, h: 6 }, 'half-sheet': { w: 5.5, h: 8.5 } }[size]
+    if (!dims) throw new Error(`unknown label size "${size}"`)
+    const doc = await cartonGuidePdf(
+      cartons.map((c) => ({ carton: c.carton, box: c.box })),
+      { label: dims, po: cartons[0].po, store: cartons[0].store, dc: shipment.dc, slipCarton: 1 })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="carton-guide-${cartons[0].po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Carton guide not available.\n\n${e.message}`)
+  }
+})
+
+// The six "PACKING SLIP ATTACHED" markings for the one carton that carries the slip.
+// ⚠️ Sized to the label stock, one per face, each naming its face — six identical
+// labels in a stack is how five end up on the same carton.
+app.get('/api/exemplar/slip-marking.pdf', async (req, res) => {
+  try {
+    const size = req.query.size || '4x6'
+    let box = req.query.box || null
+    let po = req.query.po || null
+    const carton = Number(req.query.carton) || 1
+    // When a shipment is named, take the box of the carton that will carry the slip,
+    // so the sheet can say which face shares a side with the barcode.
+    if (req.query.shipmentId) {
+      const { cartons } = await getExemplarDocData(req.query.shipmentId, { on: req.query.on || null })
+      const c = cartons.find((x) => x.carton === carton) || cartons[0]
+      box = box || c.box
+      po = po || c.po
+    }
+    const { doc } = await slipMarkingPdf({ box, size, po, carton })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="packing-slip-attached-${po || 'carton'}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Markings not available.\n\n${e.message}`)
+  }
+})
+
+// Print the six markings to the MUNBYN, from the app.
+//
+// ⚠️ THE MUNBYN CANNOT BE DRIVEN FROM A BROWSER. Nima, 2026-09-14: "to print to the
+// munbyn printer we can just print normal at least not to my knowledge we need it sent
+// through the app." He is right, and printLabel.js has always said so — picking the
+// printer and the paper size in a print dialog is the thing that kept breaking, and the
+// stock needs a background wash or its gap sensor truncates the job. So the app owns
+// the queue, the media string and the wash.
+//
+// ⚠️ A BUTTON, NOT A SIDE EFFECT. The carton labels deliberately have NO print route
+// because he reviews 22 adhesive labels before they exist. These are six markings for
+// one carton and the MUNBYN is the only way to make them, so this route exists — but it
+// only ever fires from a click, and the PDF preview sits beside it.
+app.post('/api/exemplar/slip-marking/print', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const size = b.size || '2.25x1.25'
+    const carton = Number(b.carton) || 1
+    let box = b.box || null
+    let po = b.po || null
+    if (b.shipmentId) {
+      const { cartons } = await getExemplarDocData(b.shipmentId, { on: b.on || null })
+      const c = cartons.find((x) => x.carton === carton) || cartons[0]
+      box = box || c.box
+      po = po || c.po
+    }
+    const { doc, plan } = await slipMarkingPdf({ box, size, po, carton })
+    const out = await printPdfDoc(doc, size, `slip-marking-${po || 'carton'}`)
+    res.json({ ...out, faces: plan ? plan.faces.length : 6, tight: plan ? plan.tight.length : 0 })
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// The pallet placard (§12.6, p37) — preview, and print to the warehouse Zebra.
+//
+// ⚠️ THE PALLET COUNT AND THE SPLIT COME FROM THE CALLER, because they are facts from
+// the floor. Nothing in our data says how many pallets a shipment was built onto or
+// which carton went on which — and a placard with the wrong carton count is precisely
+// what §12.6 charges $250 for.
+async function palletLabelsFor(query) {
+  const { cartons, shipment } = await getExemplarDocData(query.shipmentId, { on: query.on || null })
+  const head = cartons[0]
+  const pallets = Math.max(1, Number(query.pallets) || 1)
+  const perPallet = query.perPallet
+    ? String(query.perPallet).split(',').map((n) => Number(n.trim())).filter((n) => !Number.isNaN(n))
+    : null
+  const plan = palletPlan({
+    cartons: cartons.length, pallets, perPallet,
+    operatingCompany: head.operatingCompany, po: head.po, department: head.department,
+    store: head.store, storeAbbrev: head.storeAbbrev, dc: shipment.dc,
+    dcName: (DCS[String(shipment.dc).replace(/^0+/, '')] || {}).name || null,
+  })
+  if (!plan.ok) throw new Error(plan.why)
+  return { plan, head }
+}
+
+app.get('/api/exemplar/pallet-label.pdf', async (req, res) => {
+  try {
+    const { plan, head } = await palletLabelsFor(req.query)
+    const doc = await palletLabelPdf(plan.labels, { size: req.query.size || '4x6', copies: Number(req.query.copies) || 1 })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="pallet-labels-${head.po}.pdf"`)
+    doc.pipe(res); doc.end()
+  } catch (e) {
+    console.error(e)
+    res.status(400).type('text/plain').send(`Pallet label not available.\n\n${e.message}`)
+  }
+})
+
+// ⚠️ A CLICK, NEVER A SIDE EFFECT — the rule the carton labels taught. Nima asked for
+// this one to reach the 4x6 printer, and the preview link sits beside it.
+app.post('/api/exemplar/pallet-label/print', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const { plan } = await palletLabelsFor(b)
+    const size = b.size || '4x6'
+    const doc = await palletLabelPdf(plan.labels, { size, copies: Number(b.copies) || 1 })
+    const out = await printPdfDoc(doc, size, `pallet-labels-${plan.labels[0].po}`)
+    res.json({ ...out, pallets: plan.labels.length, copies: Number(b.copies) || 1 })
+  } catch (e) {
+    console.error(e)
+    res.status(400).json({ error: e.message })
+  }
+})
+
 // ── The Exemplar Master Manifest ────────────────────────────────────────────
 // Guide p13 — required for ALL shipments, handed to the carrier at pick-up. The one
 // required document this app has never produced.
 app.get('/api/exemplar/manifest.pdf', async (req, res) => {
   try {
     const { shipment, cartons } = await getManifestCartons(req.query.shipmentId)
+    // ⚠️ THE SAME CONSIGNEE NAME THE OTHER TWO DOCUMENTS USE. Date-driven, because the
+    // storefront renames on 2026-09-21 — so all three agree with each other AND with
+    // the day the freight leaves.
+    const on = req.query.on || (shipment.shipDate ? String(shipment.shipDate).slice(0, 10) : null)
     const doc = await manifestPdf(cartons, {
       dc: shipment.dc,
       bolNumber: shipment.bolNumber,
+      operatingCompany: consigneeCompany(),
       shipment: { cartons: shipment.cartons, units: shipment.units },
     })
     res.setHeader('Content-Type', 'application/pdf')
