@@ -242,9 +242,29 @@ test('Core is a restock by definition, and no drop means no guess', () => {
   assert.equal(core.confident, true)
   assert.match(core.why, /belongs to no drop/)
 
-  // ⚠️ A reason nobody can defend is worse than an empty dropdown.
-  const none = suggestReason({ seasonLabel: 'Spring 2027', drop: 1, drops })
-  assert.equal(none.reason, null)
-  assert.match(none.why, /no Spring 2027 drop on the calendar/)
-  assert.equal(suggestReason({ drops }).reason, null)
+  // ⚠️ A reason nobody can defend is worse than an empty dropdown — but the YEAR is
+  // often defensible on its own, which this used to miss. See the test below.
+  assert.equal(suggestReason({ drops }).reason, null, 'no season at all is still no answer')
+})
+
+test('⚠️ "no drop on the calendar" is NOT "no answer" — the year still tells you', () => {
+  // Nima, 2026-09-16, on PO1777: "its not core color but its a restock of previous
+  // seasons." Fall 2025 stock arriving in 2026 is obviously replenishment, and the old
+  // version returned null because the calendar only carries the current year — so the
+  // most clear-cut restock on the board fell through a gap.
+  const drops = dropsFrom(CALENDAR)
+  const today = new Date('2026-09-16T12:00:00Z')
+
+  const past = suggestReason({ seasonLabel: 'Fall 2025', drops, today })
+  assert.equal(past.reason, 'restock')
+  assert.equal(past.confident, true)
+  assert.match(past.why, /past season/)
+  assert.equal(suggestReason({ seasonLabel: 'Resort 2024', drops, today }).reason, 'restock')
+
+  // ⚠️ A FUTURE season is a launch — but NOT confident, because nobody has set its
+  // drop date yet, so there is no deadline to hold it to and the plan can still move.
+  const future = suggestReason({ seasonLabel: 'Spring 2027', drops, today })
+  assert.equal(future.reason, 'launch')
+  assert.equal(future.confident, false)
+  assert.match(future.why, /no drop date set on the calendar yet/)
 })

@@ -199,10 +199,18 @@ export function seasonFor(po = {}, { drops = [], today = new Date(), hasOrderLin
       hasOrderLink, drops, today,
     })
     : null
-  if (po.season) {
+  if (po.season || (po.seasons || []).length) {
+    // ⚠️ EVERY CONFIRMED SEASON IS CARRIED, and `label` is only the one that leads.
+    // 46% of POs span more than one season; reporting a single label loses the rest.
+    const all = (po.seasons || []).length ? po.seasons : (po.season ? [po.season] : [])
+    const lead = po.season || all[0] || null
     return {
       state: 'confirmed',
-      label: po.season,
+      label: lead,
+      seasons: all,
+      // ⚠️ The units behind each confirmed season, so the card can show "Fall 2025
+      // 175 · Fall 2026 140" rather than asking anyone to trust a bare list.
+      units: Object.fromEntries(all.map((x) => [x, (suggested.mix || []).find((m) => m.label === x)?.units ?? null])),
       drop: po.drop ?? null,
       reason: po.reason ?? null,
       by: po.seasonBy || null,
@@ -210,7 +218,11 @@ export function seasonFor(po = {}, { drops = [], today = new Date(), hasOrderLin
       reasonHint,
       // ⚠️ Named when a person chose something the items do not support — not blocked.
       // They may know a thing the catalogue does not; the disagreement is the signal.
-      differs: suggested.suggestion && suggested.suggestion.label !== po.season
+      // ⚠️ A DISAGREEMENT IS ONLY A DISAGREEMENT IF THE SUGGESTION IS NOWHERE IN THE
+      // CONFIRMED SET. Confirming "Fall 2025 AND Fall 2026" on a PO the items call
+      // Fall 2025 is agreement plus detail, not a conflict — flagging it would train
+      // somebody to ignore the warning.
+      differs: suggested.suggestion && !all.includes(suggested.suggestion.label)
         ? `the items on this PO are mostly ${suggested.suggestion.label}`
         : null,
       why: suggested.why,
@@ -219,6 +231,10 @@ export function seasonFor(po = {}, { drops = [], today = new Date(), hasOrderLin
   return {
     state: suggested.suggestion ? 'suggested' : 'unknown',
     label: suggested.suggestion?.label || null,
+    // ⚠️ THE WHOLE MIX IS OFFERED, not just the winner — so "confirm all of these" is
+    // one click on the 46% of POs that span several.
+    seasons: (suggested.mix || []).map((m) => m.label),
+    units: Object.fromEntries((suggested.mix || []).map((m) => [m.label, m.units])),
     drop: null,
     // ⚠️ THE SUGGESTED REASON COMES FROM THE CALENDAR AND CARRIES ITS OWN CONFIDENCE.
     // Stock arriving AFTER its drop reads as a restock but is not confident — it can

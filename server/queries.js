@@ -6540,7 +6540,7 @@ export async function getContainers() {
   const { rows: mixRows } = await pool.query(
     'SELECT po_number, season, units FROM po_item_season')
   const { rows: confirmedRows } = await pool.query(
-    `SELECT doc_number, season, drop_number, reason, confirmed_by, suggested_was
+    `SELECT doc_number, season, seasons, drop_number, reason, confirmed_by, suggested_was
        FROM doc_seasons WHERE doc_type = 'PO'`)
   const { rows: dropRows } = await pool.query(
     'SELECT season, drop_number, year, on_date, title, single FROM season_drop')
@@ -6624,6 +6624,7 @@ export async function getContainers() {
         const season = seasonFor({
           lines: t.poNumber ? (mixByPo.get(t.poNumber) || []) : [],
           season: confirmed?.season || null,
+          seasons: confirmed?.seasons || [],
           drop: confirmed?.drop_number ?? null,
           reason: confirmed?.reason || null,
           seasonBy: confirmed?.confirmed_by || null,
@@ -6735,13 +6736,20 @@ export async function setTransferPurpose({ toNumber, purpose, by } = {}) {
 // ⚠️ THE SUGGESTION IS NEVER WRITTEN INTO `season`. A row in doc_seasons always means a
 // person decided — `suggested_was` records what the app had offered so an override stays
 // visible, and it is never read back as the season.
-export async function confirmPoSeason({ poNumber, season, drop, reason, by } = {}) {
+export async function confirmPoSeason({ poNumber, season, seasons, drop, reason, by } = {}) {
   const po = String(poNumber || '').trim().toUpperCase()
   if (!/^PO\d+$/.test(po)) return { ok: false, status: 400, error: `not a purchase order number: ${poNumber}` }
 
+  // ⚠️ A PO IS A MIX — 41 of 89 carry more than one season. `seasons` is the full set;
+  // `season` is the one a launch deadline hangs off. Passing either alone works: a
+  // single season fills the set, and a set with no lead takes its first entry.
+  const set = Array.isArray(seasons) ? seasons.map((x) => String(x).trim()).filter(Boolean) : []
+  const lead = String(season || '').trim() || set[0] || null
+  const all = set.length ? [...new Set(lead && !set.includes(lead) ? [lead, ...set] : set)] : (lead ? [lead] : [])
+
   // ⚠️ CLEARING IS AN OUTCOME, not an error — passing no season removes the confirmation
   // and the card falls back to showing the suggestion again.
-  if (!season) {
+  if (!all.length) {
     await pool.query(`DELETE FROM doc_seasons WHERE doc_type = 'PO' AND doc_number = $1`, [po])
     return { ok: true, poNumber: po, cleared: true }
   }
@@ -6760,16 +6768,17 @@ export async function confirmPoSeason({ poNumber, season, drop, reason, by } = {
   const suggested = seasonFor({ lines: mix.map((m) => ({ season: m.season, units: m.units })) })
 
   const { rows } = await pool.query(
-    `INSERT INTO doc_seasons (doc_type, doc_number, season, drop_number, reason,
+    `INSERT INTO doc_seasons (doc_type, doc_number, season, seasons, drop_number, reason,
                               confirmed_by, confirmed_at, suggested_was, updated_at)
-          VALUES ('PO', $1, $2, $3, $4, $5, now(), $6, now())
+          VALUES ('PO', $1, $2, $3, $4, $5, $6, now(), $7, now())
      ON CONFLICT (doc_type, doc_number) DO UPDATE SET
-       season = EXCLUDED.season, drop_number = EXCLUDED.drop_number,
+       season = EXCLUDED.season, seasons = EXCLUDED.seasons,
+       drop_number = EXCLUDED.drop_number,
        reason = EXCLUDED.reason, confirmed_by = EXCLUDED.confirmed_by,
        confirmed_at = now(), suggested_was = EXCLUDED.suggested_was, updated_at = now()
-     RETURNING doc_number AS "poNumber", season, drop_number AS "drop", reason,
+     RETURNING doc_number AS "poNumber", season, seasons, drop_number AS "drop", reason,
                confirmed_by AS "by", suggested_was AS "suggestedWas"`,
-    [po, season, dropNo, reason || null, by || null, suggested.label || null])
+    [po, lead, all, dropNo, reason || null, by || null, suggested.label || null])
   return { ok: true, ...rows[0] }
 }
 
