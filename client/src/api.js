@@ -1388,10 +1388,10 @@ export async function setTransferPurpose(toNumber, { purpose, by } = {}) {
 }
 
 /** Confirm the season a PO is for. Pass season:null to clear it back to the suggestion. */
-export async function confirmPoSeason(poNumber, { season, drop, reason, by } = {}) {
+export async function confirmPoSeason(poNumber, { season, seasons, drop, reason, by } = {}) {
   return asJson(await fetch(`/api/containers/po/${encodeURIComponent(poNumber)}/season`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ season, drop, reason, by }),
+    body: JSON.stringify({ season, seasons, drop, reason, by }),
   }), 'confirming the season')
 }
 

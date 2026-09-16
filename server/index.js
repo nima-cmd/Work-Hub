@@ -1317,8 +1317,8 @@ app.get('/api/containers', async (_req, res) => {
 // that a person decided. src/model/poSeason.js holds every rule.
 app.post('/api/containers/po/:po/season', async (req, res) => {
   try {
-    const { season, drop, reason, by } = req.body || {}
-    const r = await confirmPoSeason({ poNumber: req.params.po, season, drop, reason, by })
+    const { season, seasons, drop, reason, by } = req.body || {}
+    const r = await confirmPoSeason({ poNumber: req.params.po, season, seasons, drop, reason, by })
     if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
     res.json(r)
   } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }

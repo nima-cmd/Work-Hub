@@ -2406,3 +2406,20 @@ CREATE TABLE IF NOT EXISTS product_launch (
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_at     TIMESTAMPTZ;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_by     TEXT;
 ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_reason TEXT;
+
+-- ── A PO is a MIX of seasons, not one season (2026-09-16) ───────────────────
+-- Nima, on PO1777: "it marked it by default as fall 2025 cause most of the items are
+-- there but it also has fall 2026... i think it be good to have all season on the PO
+-- referenced."
+--
+-- ⚠️ MEASURED BEFORE BUILDING: 41 of 89 POs carry more than one season — 46%. Storing
+-- one makes the rest invisible. PO1777 is Fall 2025 = 175 units AND Fall 2026 = 140,
+-- and a single "Fall 2025" label silently loses 140 units of different merchandise.
+-- Its 56% majority was enough for the `confident` flag while 44% of the PO was
+-- something else.
+--
+-- ⚠️ `season` (singular) IS KEPT AND STILL LEADS. It is the season a deadline hangs
+-- off when the reason is a launch, and a launch PO is normally one season. `seasons`
+-- is the full truth; `season` is the one that binds. Two columns because they answer
+-- two questions — never-lump, the same rule the court strip runs on.
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS seasons TEXT[];

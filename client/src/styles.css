@@ -3611,3 +3611,5 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 
 .c-order { color: var(--accent); font-size: 12px; }
 .c-season-form optgroup { color: var(--muted); }
+
+.c-season-chip small { color: var(--accent); }

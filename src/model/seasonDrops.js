@@ -225,6 +225,23 @@ export function suggestReason({ seasonLabel, drop, evergreen = false, hasOrderLi
   }
   const target = dropFor(seasonLabel, drop, drops)
   if (!target) {
+    // ⚠️ "NO DROP ON THE CALENDAR" IS NOT "NO ANSWER" — the YEAR still tells you.
+    // Nima, 2026-09-16, on PO1777: "its not core color but its a restock of previous
+    // seasons." It is Fall 2025 stock arriving in 2026; that launch is long gone, and
+    // returning null there made the app silent about the most obvious restock on the
+    // board. The calendar only carries the current year, so a season outside it was
+    // falling through a gap rather than being reasoned about.
+    const m = String(seasonLabel || '').match(/(\d{4})$/)
+    const year = m ? Number(m[1]) : null
+    const thisYear = new Date(today).getFullYear()
+    if (year && year < thisYear) {
+      return { reason: 'restock', confident: true, why: `${seasonLabel} is a past season — its launch was in ${year}, so this is replenishment` }
+    }
+    if (year && year > thisYear) {
+      // ⚠️ NOT confident: a future season IS a launch, but nobody has set its drop
+      // date yet, so there is no deadline to hold it to and the plan could change.
+      return { reason: 'launch', confident: false, why: `${seasonLabel} is a future season — no drop date set on the calendar yet` }
+    }
     return { reason: null, confident: false, why: seasonLabel ? `no ${seasonLabel} drop on the calendar to compare against` : 'no season to compare against' }
   }
   const days = Math.round((new Date(target.on) - new Date(today)) / 86400000)

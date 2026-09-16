@@ -116,8 +116,15 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
     <div className="c-season">
       {st.state === 'confirmed' ? (
         <>
+          {/* ⚠️ EVERY CONFIRMED SEASON, WITH ITS UNITS. 46% of POs span more than one,
+              and PO1777's single "Fall 2025" label was hiding 140 units of Fall 2026. */}
           <span className="c-season-on">
-            {st.label}{st.drop ? ` · drop ${st.drop}` : ''}{st.reason ? ` · ${st.reason}` : ''}
+            {(st.seasons?.length ? st.seasons : [st.label]).map((x, i) => (
+              <span key={x} className="c-season-chip">
+                {i > 0 ? ' · ' : ''}{x}{st.units?.[x] != null ? <small> {st.units[x]}u</small> : null}
+              </span>
+            ))}
+            {st.drop ? ` · drop ${st.drop}` : ''}{st.reason ? ` · ${st.reason}` : ''}
             {st.by ? <small> · {st.by}</small> : null}
           </span>
           {/* ⚠️ A DISAGREEMENT WITH THE ITEMS IS NAMED, not blocked — they may know
@@ -136,10 +143,20 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
           </span>
           {/* ⚠️ ONE CLICK ONLY WHEN THE APP IS CONFIDENT. A tie or a bare plurality gets
               the full form instead, because those are the cases that need a person. */}
-          {st.label && st.confident && (
+          {st.label && st.confident && (st.seasons || []).length <= 1 && (
             <button className="btn-small" disabled={busy}
                     onClick={() => save({ season: st.label, reason: st.reason || null, by: 'Nima' })}>
               Accept {st.label}
+            </button>
+          )}
+          {/* ⚠️ A MULTI-SEASON PO GETS "ACCEPT ALL", NOT A WINNER. Offering only the
+              dominant season is what hid 140 units of Fall 2026 on PO1777. The lead is
+              still the biggest — it is what a launch deadline hangs off — but the
+              others come with it. */}
+          {(st.seasons || []).length > 1 && (
+            <button className="btn-small" disabled={busy}
+                    onClick={() => save({ season: st.label, seasons: st.seasons, reason: st.reason || null, by: 'Nima' })}>
+              Accept all {st.seasons.length} ({st.seasons.join(' + ')})
             </button>
           )}
           <button className="btn-small btn-quiet" onClick={() => setOpen(true)}>set…</button>
