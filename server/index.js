@@ -27,6 +27,7 @@ import {
   getInboundContainers,
   recordContainerDelivered,
   getContainers,
+  setTransferPurpose,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -1291,6 +1292,19 @@ app.get('/api/inbound/containers', async (_req, res) => {
 app.get('/api/containers', async (_req, res) => {
   try {
     res.json(await getContainers())
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// What a transfer order is FOR — the field NetSuite has no home for. The destination
+// still outranks it; see src/model/transferPurpose.js.
+app.post('/api/containers/transfer/:to/purpose', async (req, res) => {
+  try {
+    const r = await setTransferPurpose({ toNumber: req.params.to, purpose: req.body?.purpose, by: req.body?.by })
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

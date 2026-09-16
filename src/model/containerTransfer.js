@@ -106,13 +106,39 @@ export function groupByContainer(transferOrders = [], containerLabels = [], reco
   const unmatched = []
   const matchedLoosely = []
   for (const to of transferOrders) {
-    const memo = memoKey(to.memo)
-    let label = exact.get(memo) || null
+    // ⚠️ THE DEDICATED FIELD IS TRIED FIRST, AND THE MEMO IS THE FALLBACK — it used to be
+    // the only input. `custbodycontainer` exists for exactly this and disagrees with the
+    // memo on 86 of the 124 transfer orders that carry it (TO95: memo "PO1660", field
+    // "5 DHL 2026.4.6"). Preferring a free-text note over the purpose-built field is
+    // shape 3 in CLAUDE.md.
+    //
+    // ⚠️ THE MEMO IS KEPT RATHER THAN DROPPED because 57 transfer orders have no
+    // container field at all, and one of those with a container-shaped memo is still a
+    // container leg. Two inputs, tried in order of authority, each recorded as the one
+    // that matched.
+    const candidates = [
+      { value: memoKey(to.containerField), how: 'field' },
+      { value: memoKey(to.memo), how: 'memo' },
+    ].filter((c) => c.value)
+
+    let label = null
+    let matchedOn = null
+    for (const c of candidates) {
+      const hit = exact.get(c.value)
+      if (hit) { label = hit; matchedOn = c.how; break }
+    }
     if (!label) {
-      const k = containerKey(memo)
-      if (k && byKey.has(k)) { label = byKey.get(k); matchedLoosely.push({ to: to.toNumber, memo, label }) }
+      for (const c of candidates) {
+        const k = containerKey(c.value)
+        if (k && byKey.has(k)) {
+          label = byKey.get(k); matchedOn = `${c.how}:structural`
+          matchedLoosely.push({ to: to.toNumber, memo: c.value, label, via: c.how })
+          break
+        }
+      }
     }
     if (!label) { unmatched.push(to); continue }
+    to.matchedOn = matchedOn
     if (!byContainer.has(label)) byContainer.set(label, [])
     byContainer.get(label).push(to)
   }

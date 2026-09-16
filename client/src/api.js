@@ -1370,3 +1370,19 @@ export async function markContainerDelivered(label, { deliveredOn, by, note } = 
   })
   return asJson(res, 'recording the delivery')
 }
+
+/**
+ * Give a transfer order a purpose — or clear it by passing an empty string.
+ *
+ * ⚠️ IT DOES NOT OVERRIDE THE DESTINATION. Where NetSuite already transfers the units to
+ * a partner floor, that is what they are for; this note is recorded alongside and the
+ * card names the disagreement rather than resolving it.
+ */
+export async function setTransferPurpose(toNumber, { purpose, by } = {}) {
+  const res = await fetch(`/api/containers/transfer/${encodeURIComponent(toNumber)}/purpose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ purpose, by }),
+  })
+  return asJson(res, 'setting the purpose')
+}
