@@ -250,6 +250,14 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
         </span>
       )}
 
+      {/* ⚠️ WHAT IS ON THE PO AND NOT ON THIS BOAT. TO218 is Fall 2026 only while
+          PO1777 still holds 175 units of Fall 2025 — bought, not shipped. Shown beside
+          the leg's own season and never folded into it. */}
+      {(t.poRemainder || []).length > 0 && (
+        <span className="c-remainder">
+          {t.poNumber} also holds {t.poRemainder.map((r) => `${r.season || 'no season'} ${r.units}u`).join(', ')} — not on this container
+        </span>
+      )}
       {risk.word && <span className={`pill ${risk.tone}`} title={t.dropRisk.why}>{risk.word}</span>}
       {t.dropRisk?.why && t.dropRisk.state !== 'unknown' && <span className="c-risk-why">{t.dropRisk.why}</span>}
       {err && <span className="c-warn">{err}</span>}

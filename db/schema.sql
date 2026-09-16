@@ -2423,3 +2423,30 @@ ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_reason TEXT;
 -- is the full truth; `season` is the one that binds. Two columns because they answer
 -- two questions — never-lump, the same rule the court strip runs on.
 ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS seasons TEXT[];
+
+-- ── The season is on the TRANSFER ORDER, not the PO (2026-09-16) ────────────
+-- Nima: "that transfer order didn't have the whole PO on it just some units and they
+-- were from fall 2026 only."
+--
+-- ⚠️ HE IS RIGHT AND THE APP WAS MEASURING THE WRONG OBJECT. A transfer order carries a
+-- SUBSET of its PO's lines — TO218 is 100 units of Fall 2026 while PO1777 holds Fall
+-- 2025 = 175 AND Fall 2026 = 140. Inferring the container leg's season from the PO
+-- described merchandise that is not on the boat.
+--
+-- ⚠️ AND MEASURING THE RIGHT OBJECT REMOVES MOST OF THE AMBIGUITY. At PO level, PO1747
+-- was an unbreakable 350/350 tie. Its two legs are Resort 106 / Holiday 53 and Holiday
+-- 187 / Resort 172 — each has an answer. 6 of 12 live legs are SINGLE-season and need
+-- no confirmation at all. The tie was an artifact of summing two shipments.
+--
+-- Same shape as po_item_season, and nullable `season` for the same reason: TO221 and
+-- TO228 carry 430 and 290 units whose items have no season, which is a real answer.
+CREATE TABLE IF NOT EXISTS to_item_season (
+  to_number  TEXT NOT NULL,
+  season     TEXT,
+  units      INTEGER NOT NULL,
+  synced_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS to_item_season_named
+  ON to_item_season (to_number, season) WHERE season IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS to_item_season_unseasoned
+  ON to_item_season (to_number) WHERE season IS NULL;

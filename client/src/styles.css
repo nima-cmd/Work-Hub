@@ -3622,3 +3622,5 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .c-season-extra { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 9px; font-size: 12px; }
 .c-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 4px; }
 .c-x:hover { color: #ffb3ad; }
+
+.c-remainder { color: var(--muted); font-size: 12px; font-style: italic; }

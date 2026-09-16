@@ -125,6 +125,56 @@ export async function fetchPoItemSeasons({ poNumbers = [] } = {}) {
 }
 
 /**
+ * The item-season mix per TRANSFER ORDER — the grain that is actually on the boat.
+ *
+ * ⚠️ A TRANSFER ORDER IS A SUBSET OF ITS PO. TO218 carries 100 units of Fall 2026;
+ * PO1777 holds Fall 2025 = 175 AND Fall 2026 = 140. Asking the PO what season a
+ * container leg is describes merchandise that did not ship.
+ */
+export async function fetchToItemSeasons({ toNumbers = [] } = {}) {
+  const tos = toNumbers.map((t) => String(t).trim().toUpperCase()).filter((t) => /^TO\d+$/.test(t))
+  if (!tos.length) return { ok: true, rows: [] }
+  const r = await runSuiteQL(`
+    SELECT t.tranid AS too, i.custitem_season_year AS season, SUM(tl.quantity) AS units
+      FROM transaction t
+      JOIN transactionline tl ON tl.transaction = t.id
+      JOIN item i ON i.id = tl.item
+     WHERE t.type = 'TrnfrOrd' AND t.tranid IN (${tos.map((t) => `'${t}'`).join(',')})
+       AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+     GROUP BY t.tranid, i.custitem_season_year`)
+  if (!r.ok) return { ok: false, error: r.error }
+  return { ok: true, rows: r.rows.map((x) => ({ toNumber: x.too, season: x.season ?? null, units: Number(x.units) || 0 })) }
+}
+
+/** Cache it, replace-per-TO inside a transaction — same rules as the PO version. */
+export async function syncToItemSeasons({ db = pool } = {}) {
+  const { rows } = await db.query(
+    'SELECT to_number FROM container_transfer WHERE container_label IS NOT NULL ORDER BY to_number')
+  const toNumbers = rows.map((r) => r.to_number)
+  if (!toNumbers.length) return { ok: true, tos: 0, rows: 0 }
+
+  const r = await fetchToItemSeasons({ toNumbers })
+  if (!r.ok) return { ok: false, error: r.error }
+
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
+    const touched = new Set(r.rows.map((x) => x.toNumber))
+    for (const t of touched) await client.query('DELETE FROM to_item_season WHERE to_number = $1', [t])
+    for (const x of r.rows) {
+      await client.query(
+        'INSERT INTO to_item_season (to_number, season, units, synced_at) VALUES ($1,$2,$3, now())',
+        [x.toNumber, x.season, x.units])
+    }
+    await client.query('COMMIT')
+    return { ok: true, tos: touched.size, rows: r.rows.length, asked: toNumbers.length }
+  } catch (e) {
+    await client.query('ROLLBACK')
+    return { ok: false, error: e.message }
+  } finally { client.release() }
+}
+
+/**
  * Cache the mix for every PO our containers carry.
  *
  * ⚠️ SCOPED TO THE POs ON CONTAINERS, not every PO in NetSuite. This exists to answer a

@@ -64,6 +64,7 @@ import {
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
 import { syncContainerTransfers, syncContainerAliases } from '../src/ingest/containerTransferSync.js'
+import { syncToItemSeasons, syncPoItemSeasons, syncSeasonDrops } from '../src/ingest/seasonSync.js'
 import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
@@ -2276,6 +2277,10 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         // Aliases second: it reads the names the leg sync just recorded, so running it
         // first would miss anything new this cycle.
         await syncContainerAliases({})
+        // ⚠️ AND THE LEG-LEVEL SEASON MIX, which must run AFTER the legs exist — it is
+        // scoped to the transfer orders the sync above just matched to containers.
+        await syncToItemSeasons({})
+        await syncPoItemSeasons({})
       } catch (e) {
         console.error('container transfer sync failed (rest of the check continues):', e.message)
       }

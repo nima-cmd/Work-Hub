@@ -6101,11 +6101,17 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
     try {
       onStep?.('containers')
       const { syncContainerTransfers, syncContainerAliases } = await import('../src/ingest/containerTransferSync.js')
+      const { syncToItemSeasons, syncPoItemSeasons } = await import('../src/ingest/seasonSync.js')
       const r = await syncContainerTransfers({})
       if (r.ok) {
         containerLegs = { matched: r.matched, containers: r.containers, dated: r.dated }
         // Aliases second — it reads the names the leg sync just recorded.
         await syncContainerAliases({})
+        // ⚠️ AND THE SEASON MIXES AFTER THAT — both are scoped to the transfer orders
+        // and POs the sync just matched, so running them earlier would miss this
+        // cycle's new legs entirely.
+        await syncToItemSeasons({})
+        await syncPoItemSeasons({})
       } else if (busyFrom(r.error)) {
         return { busy: true, reason: 'netsuite', partial: 'orders are in; the container legs hit the limit' }
       } else {
@@ -6537,6 +6543,12 @@ export async function getContainers() {
   // ⚠️ THREE QUERIES, NOT THREE PER PO. The Landing bay carries ~30 distinct POs; a
   // per-PO round trip would be 90 queries on a one-vCPU deploy for a screen meant to
   // stay open. The mix is a cache (po_item_season) precisely so this stays cheap.
+  // ⚠️ THE LEG'S OWN MIX IS THE ANSWER; the PO's is CONTEXT. A transfer order carries a
+  // subset of its PO — TO218 is 100 units of Fall 2026 while PO1777 also holds 175 of
+  // Fall 2025 that did not ship. Asking the PO describes merchandise that is not on the
+  // boat (Nima, 2026-09-16).
+  const { rows: legMixRows } = await pool.query(
+    'SELECT to_number, season, units FROM to_item_season')
   const { rows: mixRows } = await pool.query(
     'SELECT po_number, season, units FROM po_item_season')
   const { rows: confirmedRows } = await pool.query(
@@ -6549,6 +6561,11 @@ export async function getContainers() {
   for (const m of mixRows) {
     if (!mixByPo.has(m.po_number)) mixByPo.set(m.po_number, [])
     mixByPo.get(m.po_number).push({ season: m.season, units: m.units })
+  }
+  const legMixByTo = new Map()
+  for (const m of legMixRows) {
+    if (!legMixByTo.has(m.to_number)) legMixByTo.set(m.to_number, [])
+    legMixByTo.get(m.to_number).push({ season: m.season, units: m.units })
   }
   const confirmedByPo = new Map(confirmedRows.map((c) => [c.doc_number, c]))
   // The PO→order links, so a linked PO can suggest "re-order" — a fact, which outranks
@@ -6633,8 +6650,12 @@ export async function getContainers() {
       transferOrders: legs.map((t) => {
         const confirmed = t.poNumber ? confirmedByPo.get(t.poNumber) : null
         const orderLinks = t.poNumber ? (linksByPo.get(t.poNumber) || []) : []
+        const legLines = legMixByTo.get(t.toNumber) || []
+        const poLines = t.poNumber ? (mixByPo.get(t.poNumber) || []) : []
+        // ⚠️ THE LEG'S LINES, falling back to the PO's only when the leg has not been
+        // synced — never preferring the PO, which is what made TO218 read "Fall 2025".
         const season = seasonFor({
-          lines: t.poNumber ? (mixByPo.get(t.poNumber) || []) : [],
+          lines: legLines.length ? legLines : poLines,
           season: confirmed?.season || null,
           seasons: confirmed?.seasons || [],
           drop: confirmed?.drop_number ?? null,
@@ -6648,6 +6669,14 @@ export async function getContainers() {
           orderLinks,
           // Other legs drawing on the same PO — empty when this one is alone.
           sharesPoWith: (legsByPo.get(t.poNumber) || []).filter((l) => l.toNumber !== t.toNumber),
+          // ⚠️ WHAT IS ON THE PO BUT NOT ON THIS LEG. TO218 is Fall 2026 only while
+          // PO1777 still holds 175 units of Fall 2025 — stock that exists, is bought,
+          // and is not on this boat. Worth seeing; never folded into the leg's season.
+          poRemainder: (() => {
+            if (!legLines.length || !poLines.length) return []
+            const onLeg = new Set(legLines.map((l) => l.season))
+            return poLines.filter((l) => !onLeg.has(l.season))
+          })(),
           // ⚠️ THE RISK USES THE CONTAINER'S ETA, and only an honest one. Never the port
           // date — the drayage is invisible (containerDelivery.js).
           dropRisk: dropRisk({
