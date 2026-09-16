@@ -27,6 +27,7 @@ import {
   getInboundContainers,
   recordContainerDelivered,
   getContainers,
+  waiveShipmentAsn,
   setTransferPurpose,
   confirmPoSeason,
   setContainerMode,
@@ -1066,6 +1067,16 @@ app.get('/api/routing', async (_req, res) => {
 // routing_shipment_edi (populated on 30 of 53 shipped rows) and NOT NetSuite's
 // custbody_hb_edi_856_synced (read T on ten fulfilments with zero ASNs sent). See
 // src/model/asnDue.js for what each of those cost.
+// Excuse ONE shipment from its ASN deadline. Per shipment, reason required — see
+// src/model/asnDue.js for why there is no partner-level switch.
+app.post('/api/asn-due/:bol/waive', async (req, res) => {
+  try {
+    const r = await waiveShipmentAsn({ bolNumber: req.params.bol, reason: req.body?.reason, by: req.body?.by })
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
 app.get('/api/asn-due', async (_req, res) => {
   try {
     res.json(await getAsnDue())

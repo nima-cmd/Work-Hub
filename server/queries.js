@@ -3873,6 +3873,7 @@ export async function getAsnDue() {
   const { rows } = await pool.query(`
     SELECT rs.bol_number, rs.partner, rs.member_pos, rs.cartons, rs.units,
            rs.ship_date, rs.shipped_at, rs.tracking_numbers,
+           rs.asn_waived_at, rs.asn_waived_by, rs.asn_waived_reason,
            (SELECT MIN(t.created_at) FROM edi_transactions t
              WHERE t.type = '856_SHIP_NOTICE_MANIFEST' AND t.direction = 'OUT'
                AND (t.business_number = rs.bol_number
@@ -6823,5 +6824,41 @@ export async function linkPoToOrder({ poNumber, docType, docNumber, label } = {}
   // success, not a failure. Reporting it as an error would have somebody "fix" a link
   // that is already correct.
   if (!rows.length) return { ok: true, poNumber: po, docType: type, docNumber: num, alreadyLinked: true }
+  return { ok: true, ...rows[0] }
+}
+
+// ── Excusing one shipment from its ASN deadline (2026-09-16) ─────────────────
+// Nima: "this will be the one and only time where not gonna send an ASN for them so
+// we may want to figure a work around rather then a permanent solution."
+//
+// ⚠️ ONE SHIPMENT, AND A REASON IS REQUIRED. There is deliberately no partner-level
+// switch: "Exemplar does not get ASNs" inferred from a single shipment would silence
+// the next 22 cartons that do need one, and their guide charges $500 an ASN (§12.3).
+// The waived row stays visible in the list — only the banner stops shouting.
+export async function waiveShipmentAsn({ bolNumber, reason, by } = {}) {
+  const bol = String(bolNumber || '').trim().toUpperCase()
+  if (!bol) return { ok: false, status: 400, error: 'which shipment?' }
+
+  // Clearing is an outcome: the deadline comes back, which is the safe direction.
+  if (reason === null) {
+    const { rows } = await pool.query(
+      `UPDATE routing_shipment SET asn_waived_at = NULL, asn_waived_by = NULL, asn_waived_reason = NULL
+        WHERE bol_number = $1 RETURNING bol_number AS "bolNumber"`, [bol])
+    if (!rows.length) return { ok: false, status: 404, error: `no shipment on BOL ${bol}` }
+    return { ok: true, bolNumber: bol, cleared: true }
+  }
+
+  // ⚠️ A WAIVER WITH NO REASON IS INDISTINGUISHABLE FROM A MISTAKE six weeks later.
+  const why = String(reason || '').trim()
+  if (!why) return { ok: false, status: 400, error: 'a waiver needs a reason — why is this shipment not getting an ASN?' }
+
+  const { rows } = await pool.query(
+    `UPDATE routing_shipment
+        SET asn_waived_at = now(), asn_waived_by = $2, asn_waived_reason = $3
+      WHERE bol_number = $1
+      RETURNING bol_number AS "bolNumber", partner, asn_waived_at AS "at",
+                asn_waived_by AS "by", asn_waived_reason AS "reason"`,
+    [bol, by || null, why])
+  if (!rows.length) return { ok: false, status: 404, error: `no shipment on BOL ${bol}` }
   return { ok: true, ...rows[0] }
 }

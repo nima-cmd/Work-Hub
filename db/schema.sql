@@ -2388,3 +2388,21 @@ CREATE TABLE IF NOT EXISTS product_launch (
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (on_date, title)
 );
+
+-- ── An ASN nobody is going to send (2026-09-16) ──────────────────────────────
+-- Nima, on the Exemplar shipment that left without one: "this will be the one and
+-- only time where not gonna send an ASN for them so we may want to figure a work
+-- around rather then a permanent solution."
+--
+-- ⚠️ SO THIS IS PER SHIPMENT, NOT PER PARTNER, AND THAT IS THE WHOLE DESIGN. Deriving
+-- "Exemplar does not get ASNs" from one shipment would silence the next 22 cartons
+-- that do need one — their guide charges $500 an ASN (§12.3, SFA 78/76 · NMG 501) and
+-- we have already sent 37 to Neiman Marcus Group and 4 to Saks through Orderful. That
+-- lane is dormant, not absent.
+--
+-- ⚠️ AND THE REASON IS REQUIRED, not decorative. A waiver with no reason is
+-- indistinguishable from a mistake six weeks later — which is exactly how the Courier
+-- outage ran silently for 49 days.
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_at     TIMESTAMPTZ;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_by     TEXT;
+ALTER TABLE routing_shipment ADD COLUMN IF NOT EXISTS asn_waived_reason TEXT;
