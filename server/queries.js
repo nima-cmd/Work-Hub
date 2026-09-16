@@ -6085,6 +6085,33 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
     if (feed.ok) cartons = { loaded: feed.loaded ?? 0, skipped: feed.skipped || null }
     else if (busyFrom(feed.error)) return { busy: true, reason: 'celigo', partial: 'orders are in; the carton feed hit the limit' }
 
+    // ── The container legs ─────────────────────────────────────────────────────
+    // ⚠️ THE HOURLY CRON IS NOT ENOUGH FOR THE ONE MOMENT THIS MATTERS. A container is
+    // received in NetSuite and the person who did it wants to see the Landing bay agree
+    // — waiting up to an hour for the cron, on the step that closes out a container, is
+    // exactly when somebody decides the screen is wrong and stops trusting it.
+    //
+    // ⚠️ NON-FATAL, like the DC backfill above. The orders the human pressed the button
+    // for are already in; a failed container leg must not turn a successful refresh into
+    // an error.
+    let containerLegs = null
+    try {
+      onStep?.('containers')
+      const { syncContainerTransfers, syncContainerAliases } = await import('../src/ingest/containerTransferSync.js')
+      const r = await syncContainerTransfers({})
+      if (r.ok) {
+        containerLegs = { matched: r.matched, containers: r.containers, dated: r.dated }
+        // Aliases second — it reads the names the leg sync just recorded.
+        await syncContainerAliases({})
+      } else if (busyFrom(r.error)) {
+        return { busy: true, reason: 'netsuite', partial: 'orders are in; the container legs hit the limit' }
+      } else {
+        containerLegs = { error: r.error }
+      }
+    } catch (e) {
+      containerLegs = { error: e.message }
+    }
+
     return {
       ok: true,
       counts: {
@@ -6094,6 +6121,7 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
         archived: (main.archived || []).length,
       },
       cartons,
+      containerLegs,
       dcWarning,
       syncedAt: new Date().toISOString(),
     }
