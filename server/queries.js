@@ -16,6 +16,8 @@ import { transferCard } from '../src/model/transferCard.js'
 import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
 import { deliveryFor, unusableWindow, awaitingReceipt } from '../src/model/containerDelivery.js'
 import { purposeFor, purposeBreakdown } from '../src/model/transferPurpose.js'
+import { seasonFor, REASONS, SEASONS } from '../src/model/poSeason.js'
+import { dropsFrom, dropRisk } from '../src/model/seasonDrops.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -6530,6 +6532,33 @@ export async function getContainers() {
   const { rows: aliases } = await pool.query(
     `SELECT container_label, alias, source FROM container_alias ORDER BY source`)
 
+  // ── The season inputs, loaded ONCE for every PO on every container ──────────
+  // ⚠️ THREE QUERIES, NOT THREE PER PO. The Landing bay carries ~30 distinct POs; a
+  // per-PO round trip would be 90 queries on a one-vCPU deploy for a screen meant to
+  // stay open. The mix is a cache (po_item_season) precisely so this stays cheap.
+  const { rows: mixRows } = await pool.query(
+    'SELECT po_number, season, units FROM po_item_season')
+  const { rows: confirmedRows } = await pool.query(
+    `SELECT doc_number, season, drop_number, reason, confirmed_by, suggested_was
+       FROM doc_seasons WHERE doc_type = 'PO'`)
+  const { rows: dropRows } = await pool.query(
+    'SELECT season, drop_number, year, on_date, title, single FROM season_drop')
+
+  const mixByPo = new Map()
+  for (const m of mixRows) {
+    if (!mixByPo.has(m.po_number)) mixByPo.set(m.po_number, [])
+    mixByPo.get(m.po_number).push({ season: m.season, units: m.units })
+  }
+  const confirmedByPo = new Map(confirmedRows.map((c) => [c.doc_number, c]))
+  // ⚠️ `on_date` ARRIVES AS A Date AND MUST BE ISO'd PROPERLY. `String(pgDate).slice(0,10)`
+  // yields "Wed Feb 04" — not a date — and every year comparison in dropFor then fails
+  // silently, reporting every container's risk as "unknown". That is exactly how I first
+  // mis-verified this model.
+  const drops = dropRows.map((d) => ({
+    season: d.season, drop: d.drop_number, on: new Date(d.on_date).toISOString().slice(0, 10),
+    title: d.title, single: d.single,
+  }))
+
   const byLabel = new Map()
   for (const t of tos) {
     if (!byLabel.has(t.container_label)) byLabel.set(t.container_label, [])
@@ -6578,7 +6607,27 @@ export async function getContainers() {
       // when NetSuite already answers (46 of 181), an entered note when it cannot, and
       // "unassigned" for the 135 where a generic warehouse is a holding state and not a
       // reason.
-      transferOrders: legs.map((t) => ({ ...t, purposeState: purposeFor(t) })),
+      transferOrders: legs.map((t) => {
+        const confirmed = t.poNumber ? confirmedByPo.get(t.poNumber) : null
+        const season = seasonFor({
+          lines: t.poNumber ? (mixByPo.get(t.poNumber) || []) : [],
+          season: confirmed?.season || null,
+          drop: confirmed?.drop_number ?? null,
+          reason: confirmed?.reason || null,
+          seasonBy: confirmed?.confirmed_by || null,
+        })
+        return {
+          ...t,
+          purposeState: purposeFor(t),
+          seasonState: season,
+          // ⚠️ THE RISK USES THE CONTAINER'S ETA, and only an honest one. Never the port
+          // date — the drayage is invisible (containerDelivery.js).
+          dropRisk: dropRisk({
+            seasonLabel: season.label, drop: season.drop, reason: season.reason,
+            expectedOn: iso(s.eta_on), deliveredOn: iso(s.delivered_on), drops,
+          }),
+        }
+      }),
       // ⚠️ A BREAKDOWN, NOT A SINGLE PURPOSE. A container routinely carries stock for
       // several partners — the 59 spans six POs — so one answer would erase the answer.
       purposes: purposeBreakdown(legs),
@@ -6614,6 +6663,11 @@ export async function getContainers() {
 
   return {
     containers,
+    // The vocabulary the dropdowns are built from — served with the data so the client
+    // never carries its own copy of a list the model owns.
+    seasons: SEASONS,
+    reasons: Object.values(REASONS),
+    drops,
     orphans,
     // ⚠️ COUNTS WHAT A PERSON SAID IS HERE, never "has no receipt" — see
     // src/model/containerDelivery.js. Freight in the Pacific is not a receiving backlog.
@@ -6648,4 +6702,104 @@ export async function setTransferPurpose({ toNumber, purpose, by } = {}) {
   // ⚠️ 404 rather than a silent no-op — an UPDATE matching nothing returns cleanly.
   if (!rows.length) return { ok: false, status: 404, error: `no transfer order ${to} on any container` }
   return { ok: true, transferOrder: rows[0] }
+}
+
+// ── Confirming a PO's season (2026-09-16) ────────────────────────────────────
+// Nima: "we should be able to infer them based off the items and then we can confirm it
+// on the PO level." src/model/poSeason.js computes the suggestion; this records the
+// decision.
+//
+// ⚠️ THE SUGGESTION IS NEVER WRITTEN INTO `season`. A row in doc_seasons always means a
+// person decided — `suggested_was` records what the app had offered so an override stays
+// visible, and it is never read back as the season.
+export async function confirmPoSeason({ poNumber, season, drop, reason, by } = {}) {
+  const po = String(poNumber || '').trim().toUpperCase()
+  if (!/^PO\d+$/.test(po)) return { ok: false, status: 400, error: `not a purchase order number: ${poNumber}` }
+
+  // ⚠️ CLEARING IS AN OUTCOME, not an error — passing no season removes the confirmation
+  // and the card falls back to showing the suggestion again.
+  if (!season) {
+    await pool.query(`DELETE FROM doc_seasons WHERE doc_type = 'PO' AND doc_number = $1`, [po])
+    return { ok: true, poNumber: po, cleared: true }
+  }
+
+  const dropNo = drop == null || drop === '' ? null : Number(drop)
+  if (dropNo != null && !Number.isInteger(dropNo)) {
+    return { ok: false, status: 400, error: `drop must be a whole number, got ${drop}` }
+  }
+  if (reason && !['restock', 'launch', 'reorder'].includes(reason)) {
+    return { ok: false, status: 400, error: `unknown reason: ${reason}` }
+  }
+
+  // What the app would have said, captured at the moment of confirming.
+  const { rows: mix } = await pool.query(
+    'SELECT season, units FROM po_item_season WHERE po_number = $1', [po])
+  const suggested = seasonFor({ lines: mix.map((m) => ({ season: m.season, units: m.units })) })
+
+  const { rows } = await pool.query(
+    `INSERT INTO doc_seasons (doc_type, doc_number, season, drop_number, reason,
+                              confirmed_by, confirmed_at, suggested_was, updated_at)
+          VALUES ('PO', $1, $2, $3, $4, $5, now(), $6, now())
+     ON CONFLICT (doc_type, doc_number) DO UPDATE SET
+       season = EXCLUDED.season, drop_number = EXCLUDED.drop_number,
+       reason = EXCLUDED.reason, confirmed_by = EXCLUDED.confirmed_by,
+       confirmed_at = now(), suggested_was = EXCLUDED.suggested_was, updated_at = now()
+     RETURNING doc_number AS "poNumber", season, drop_number AS "drop", reason,
+               confirmed_by AS "by", suggested_was AS "suggestedWas"`,
+    [po, season, dropNo, reason || null, by || null, suggested.label || null])
+  return { ok: true, ...rows[0] }
+}
+
+// ── The container's mode (2026-09-16) ────────────────────────────────────────
+// ⚠️ THIS IS WHY NO ETA HAS EVER FIRED. `mode` is NULL on every container, so
+// estimateEta refuses — and 8 of 21 completed round trips sit in transitStats' anomaly
+// list as "no mode — cannot be attributed to air or sea". The history is there; the
+// mode is the blocker. inferMode SUGGESTS it and this is a person accepting.
+export async function setContainerMode({ label, mode } = {}) {
+  const l = String(label || '').trim()
+  if (!l) return { ok: false, status: 400, error: 'which container?' }
+  const m = mode ? String(mode).trim().toLowerCase() : null
+  if (m && !['air', 'sea'].includes(m)) return { ok: false, status: 400, error: `mode must be air or sea, got ${mode}` }
+  const { rows } = await pool.query(
+    `UPDATE inbound_shipment
+        SET mode = $2, mode_source = CASE WHEN $2::text IS NULL THEN NULL ELSE 'entered' END
+      WHERE container_label = $1
+      RETURNING container_label AS "label", mode, mode_source AS "modeSource"`,
+    [l, m])
+  if (!rows.length) return { ok: false, status: 404, error: `no container named "${l}"` }
+  // ⚠️ `mode_source` IS SET TO 'entered' IN THE SAME STATEMENT, never left to default.
+  // A mode with no source is indistinguishable from a stored guess, which is the whole
+  // reason inferMode's answer was kept out of the database.
+  return { ok: true, container: rows[0] }
+}
+
+// ── Linking a PO to the order it is for (2026-09-16) ─────────────────────────
+// Nima: "one of the PO on 59 is connected to an actual order we need to be able to link
+// to OC SO in the container."
+//
+// ⚠️ IT USES `doc_links`, WHICH ALREADY EXISTS FOR EXACTLY THIS and has held 0 rows
+// since 2026-07. Its own schema note calls it "the thing NetSuite can't do", and its
+// declared types already include SO, OC and PO — so no new table, and the link is
+// bidirectional by construction.
+export async function linkPoToOrder({ poNumber, docType, docNumber, label } = {}) {
+  const po = String(poNumber || '').trim().toUpperCase()
+  const type = String(docType || '').trim().toUpperCase()
+  const num = String(docNumber || '').trim().toUpperCase()
+  if (!/^PO\d+$/.test(po)) return { ok: false, status: 400, error: `not a purchase order number: ${poNumber}` }
+  // ⚠️ SO AND OC ONLY. doc_links accepts more types, but a PO pointing at an email or a
+  // task is a different relationship and would show up in this list as an order.
+  if (!['SO', 'OC'].includes(type)) return { ok: false, status: 400, error: 'link a PO to an SO or an OC' }
+  if (!num) return { ok: false, status: 400, error: 'which order?' }
+
+  const { rows } = await pool.query(
+    `INSERT INTO doc_links (a_type, a_number, b_type, b_number, label)
+          VALUES ('PO', $1, $2, $3, $4)
+     ON CONFLICT DO NOTHING
+     RETURNING id, a_number AS "poNumber", b_type AS "docType", b_number AS "docNumber", label`,
+    [po, type, num, label || null])
+  // ⚠️ ON CONFLICT DO NOTHING returns no row when the link already exists — which is a
+  // success, not a failure. Reporting it as an error would have somebody "fix" a link
+  // that is already correct.
+  if (!rows.length) return { ok: true, poNumber: po, docType: type, docNumber: num, alreadyLinked: true }
+  return { ok: true, ...rows[0] }
 }

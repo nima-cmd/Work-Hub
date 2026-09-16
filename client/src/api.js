@@ -1386,3 +1386,33 @@ export async function setTransferPurpose(toNumber, { purpose, by } = {}) {
   })
   return asJson(res, 'setting the purpose')
 }
+
+/** Confirm the season a PO is for. Pass season:null to clear it back to the suggestion. */
+export async function confirmPoSeason(poNumber, { season, drop, reason, by } = {}) {
+  return asJson(await fetch(`/api/containers/po/${encodeURIComponent(poNumber)}/season`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ season, drop, reason, by }),
+  }), 'confirming the season')
+}
+
+/**
+ * Air or sea for a container.
+ *
+ * ⚠️ THIS IS WHAT UNLOCKS THE ETA. `mode` is NULL on every container, so estimateEta
+ * refuses — the 21 completed round trips we hold cannot be attributed to a mode until
+ * somebody accepts one.
+ */
+export async function setContainerMode(label, mode) {
+  return asJson(await fetch(`/api/inbound/containers/${encodeURIComponent(label)}/mode`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  }), 'setting the mode')
+}
+
+/** Link a PO to the SO or OC it exists for. */
+export async function linkPoToOrder(poNumber, { docType, docNumber, label } = {}) {
+  return asJson(await fetch(`/api/containers/po/${encodeURIComponent(poNumber)}/order`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docType, docNumber, label }),
+  }), 'linking the order')
+}

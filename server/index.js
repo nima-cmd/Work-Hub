@@ -28,6 +28,9 @@ import {
   recordContainerDelivered,
   getContainers,
   setTransferPurpose,
+  confirmPoSeason,
+  setContainerMode,
+  linkPoToOrder,
   getLedger, getOrderLedger, getPoLedger, getLedgerDailyCounts,
   getOcPoReview, commitOcPoLink, undoOcPoLink, dismissOcPoLine,
   getEdiReview, syncEdi, linkEdiTransaction, unlinkEdiTransaction, addEdiManualOrder, removeEdiManualOrder,
@@ -1297,6 +1300,37 @@ app.get('/api/containers', async (_req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Confirm the season a PO is for. The app SUGGESTS it from the item mix; this records
+// that a person decided. src/model/poSeason.js holds every rule.
+app.post('/api/containers/po/:po/season', async (req, res) => {
+  try {
+    const { season, drop, reason, by } = req.body || {}
+    const r = await confirmPoSeason({ poNumber: req.params.po, season, drop, reason, by })
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// Air or sea. ⚠️ THE REASON NO ETA HAS EVER FIRED — see setContainerMode.
+app.post('/api/inbound/containers/:label/mode', async (req, res) => {
+  try {
+    const r = await setContainerMode({ label: req.params.label, mode: req.body?.mode })
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// Link a container's PO to the order it exists for — through doc_links, which has been
+// waiting for this since 2026-07.
+app.post('/api/containers/po/:po/order', async (req, res) => {
+  try {
+    const { docType, docNumber, label } = req.body || {}
+    const r = await linkPoToOrder({ poNumber: req.params.po, docType, docNumber, label })
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // What a transfer order is FOR — the field NetSuite has no home for. The destination
