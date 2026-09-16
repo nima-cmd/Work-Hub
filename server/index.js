@@ -59,6 +59,7 @@ import {
 } from './queries.js'
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
+import { syncContainerTransfers, syncContainerAliases } from '../src/ingest/containerTransferSync.js'
 import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
@@ -2179,6 +2180,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     // Best-effort + gated on the creds, same contract as the two syncs above.
     let netsuite = null
     let cartons = null
+    let containerLegs = null
     if (netsuiteConfigured()) {
       try {
         const r = await syncFromNetsuite({})
@@ -2207,6 +2209,30 @@ app.post('/api/internal/recurring-check', async (req, res) => {
           : { error: r.error }
       } catch (e) {
         console.error('EDI carton feed failed (recurring tasks still checked):', e.message)
+      }
+      // ── The container legs ─────────────────────────────────────────────────
+      // ⚠️ THIS MODULE HAD NO CALLER, which is the third time in this file. The two
+      // comments above document the same defect twice (PR #16's NetSuite sync drifted
+      // for a week; the tender module shipped with nothing calling it), and the
+      // container sync shipped 2026-09-15 reachable only from `npm run
+      // sync:container-transfers`.
+      //
+      // ⚠️ AND IT WOULD HAVE FAILED ON ITS FIRST REAL USE, TODAY. Nima's 11-carton air
+      // shipment lands and gets received this afternoon. A receipt against TO218/TO219
+      // reaches this app only through this sync — so without a caller the Landing bay
+      // would have read "on our floor, not received in NetSuite" indefinitely while the
+      // units sat on the shelf, and the one new piece of work the container model
+      // surfaces would have been permanently wrong.
+      try {
+        const r = await syncContainerTransfers({})
+        containerLegs = r.ok
+          ? { fetched: r.fetched, matched: r.matched, containers: r.containers, dated: r.dated, chainOk: r.chainOk }
+          : { error: r.error }
+        // Aliases second: it reads the names the leg sync just recorded, so running it
+        // first would miss anything new this cycle.
+        await syncContainerAliases({})
+      } catch (e) {
+        console.error('container transfer sync failed (rest of the check continues):', e.message)
       }
     }
     // The partner TMS tender emails — the ACCEPTED pickup datetime, carrier and per-DC
@@ -2306,7 +2332,7 @@ app.post('/api/internal/recurring-check', async (req, res) => {
     }
 
     const recurringCreated = await ensureRecurringTasks()
-    res.json({ ok: true, email, edi, netsuite, cartons, tenders, tendersApplied, macysRouting, asnCartons, calendar, recurringCreated })
+    res.json({ ok: true, email, edi, netsuite, cartons, containerLegs, tenders, tendersApplied, macysRouting, asnCartons, calendar, recurringCreated })
   } catch (e) {
     console.error(e)
     res.status(500).json({ error: e.message })

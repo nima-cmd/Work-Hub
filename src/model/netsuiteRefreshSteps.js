@@ -57,6 +57,10 @@ export const REFRESH_STEPS = [
   // Two follow-on syncs outside the transaction.
   { key: 'fulfillmentDc', phase: 'Finishing', label: 'fulfilment DCs' },
   { key: 'cartons', phase: 'Finishing', label: 'EDI cartons' },
+  // ⚠️ A STEP MUST BE DECLARED HERE OR THE PROGRESS BAR LIES. `onStep('containers')`
+  // with no entry resolves to index -1, so the refresh would run the container legs
+  // while the bar sat still on "EDI cartons" — a real step doing real work, invisible.
+  { key: 'containers', phase: 'Finishing', label: 'Container legs' },
 ]
 
 export const REFRESH_STEP_TOTAL = REFRESH_STEPS.length
