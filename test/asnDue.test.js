@@ -208,3 +208,60 @@ test('⚠️ NO CHARACTER OUTSIDE WinAnsi IN THE BANNER', () => {
     assert.doesNotMatch(b.text, /[←-⯿]/, b.text)
   }
 })
+
+// ── The one-off waiver (2026-09-16) ────────────────────────────────────────────
+
+test('⚠️ a waived shipment is STILL RETURNED — it reports waived, it does not vanish', () => {
+  // Nima: "this will be the one and only time where not gonna send an ASN for them."
+  // The whole reason this module exists is that the app knew everything and said
+  // nothing; a waiver that makes a row disappear rebuilds exactly that silence.
+  const rows = [{
+    bolNumber: 'NB1731288', partner: 'Exemplar', memberPos: ['8928906'], cartons: 22,
+    shipDate: '2026-09-15T07:00:00.000Z',
+    asnWaivedAt: '2026-09-16T18:00:00.000Z', asnWaivedBy: 'Nima',
+    asnWaivedReason: 'routed on paper through Dynamic — one-off, not on the EDI lane',
+  }]
+  const list = asnDueList(rows, Date.parse('2026-09-16T21:00:00Z'))
+  assert.equal(list.length, 1, 'still listed')
+  assert.equal(list[0].state, 'waived')
+  assert.equal(list[0].waived.by, 'Nima')
+  assert.match(list[0].waived.reason, /one-off/)
+})
+
+test('⚠️ the BANNER is the one place a waiver suppresses', () => {
+  // A row somebody explicitly excused must not keep stopping them at the door —
+  // that is what turns a banner into wallpaper.
+  const waived = {
+    bolNumber: 'NB1731288', partner: 'Exemplar', cartons: 22,
+    shipDate: '2026-09-15T07:00:00.000Z', asnWaivedAt: '2026-09-16T18:00:00.000Z',
+    asnWaivedReason: 'paper',
+  }
+  const now = Date.parse('2026-09-16T21:00:00Z')
+  assert.equal(asnBanner([waived], now), null, 'nothing left to shout about')
+  assert.equal(asnDueSummary([waived], now), null)
+
+  // ⚠️ AND IT SUPPRESSES ONLY ITSELF. A real overdue shipment beside it still fires.
+  const real = { bolNumber: 'NB1731290', partner: "Bloomingdale's", cartons: 7, shipDate: '2026-09-15T07:00:00.000Z' }
+  const b = asnBanner([waived, real], now)
+  assert.ok(b, 'the genuine one still stops you')
+  assert.equal(b.total, 1, 'and counts ONE, not two')
+  assert.deepEqual(b.bols, ['NB1731290'])
+  const sum = asnDueSummary([waived, real], now)
+  assert.equal(sum.total, 1)
+  assert.equal(sum.waived, 1, 'the waiver is reported, not hidden')
+})
+
+test('waived sorts last, so it never displaces real work', () => {
+  const now = Date.parse('2026-09-16T21:00:00Z')
+  const list = asnDueList([
+    { bolNumber: 'W', shipDate: '2026-09-15T07:00:00.000Z', asnWaivedAt: '2026-09-16T18:00:00.000Z' },
+    { bolNumber: 'DUE', shipDate: '2026-09-15T07:00:00.000Z' },
+  ], now)
+  assert.deepEqual(list.map((r) => r.bolNumber), ['DUE', 'W'])
+})
+
+test('a shipment with no waiver carries waived:null, not a missing key', () => {
+  const r = asnDueList([{ bolNumber: 'X', shipDate: '2026-09-15T07:00:00.000Z' }], Date.parse('2026-09-16T21:00:00Z'))[0]
+  assert.equal(r.waived, null)
+  assert.equal(r.state, 'due')
+})

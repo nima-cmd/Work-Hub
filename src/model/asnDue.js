@@ -99,9 +99,35 @@ export function asnDue(shipment = {}, now = Date.now()) {
 
   const dueAt = at + ASN_WINDOW_HOURS * HOURS
   const hoursLeft = (dueAt - now) / HOURS
-  const state = hoursLeft <= 0 ? 'due' : hoursLeft <= ASN_WARN_HOURS ? 'warn' : 'watch'
+
+  // ── ⚠️ A WAIVER IS PER SHIPMENT AND NEVER PER PARTNER ────────────────────────
+  //
+  // Nima, 2026-09-16, on the Exemplar shipment that left without one: *"this will be
+  // the one and only time where not gonna send an ASN for them so we may want to
+  // figure a work around rather then a permanent solution."*
+  //
+  // So this is one exception carrying its reason, NOT a policy. Deriving "Exemplar
+  // does not get ASNs" from a single shipment would silence the next 22 cartons that
+  // do need one — and their guide charges $500 an ASN (§12.3, SFA 78/76 · NMG 501),
+  // with 37 already sent to NMG and 4 to Saks through Orderful. The lane is dormant,
+  // not absent.
+  //
+  // ⚠️ AND A WAIVED SHIPMENT IS STILL RETURNED, never filtered out. The whole reason
+  // asnDue.js exists is that the app knew everything and said nothing; a waiver that
+  // makes a row vanish rebuilds exactly that silence. It reports `waived` with who
+  // said so and why, so the exception is visible rather than absent.
+  const waivedAt = time(shipment.asnWaivedAt ?? shipment.asn_waived_at)
+  const state = waivedAt ? 'waived'
+    : hoursLeft <= 0 ? 'due' : hoursLeft <= ASN_WARN_HOURS ? 'warn' : 'watch'
 
   return {
+    waived: waivedAt
+      ? {
+        at: new Date(waivedAt).toISOString(),
+        by: shipment.asnWaivedBy ?? shipment.asn_waived_by ?? null,
+        reason: shipment.asnWaivedReason ?? shipment.asn_waived_reason ?? null,
+      }
+      : null,
     bolNumber: shipment.bolNumber ?? shipment.bol_number ?? null,
     partner: shipment.partner ?? null,
     po: (shipment.memberPos ?? shipment.member_pos ?? [])[0] ?? null,
@@ -123,7 +149,8 @@ export function asnDue(shipment = {}, now = Date.now()) {
  * would rebuild the silence this replaces.
  */
 export function asnDueList(shipments = [], now = Date.now()) {
-  const rank = { due: 0, warn: 1, watch: 2 }
+  // ⚠️ `waived` SORTS LAST but is not dropped — see the note in asnDue().
+  const rank = { due: 0, warn: 1, watch: 2, waived: 3 }
   return shipments
     .map((s) => asnDue(s, now))
     .filter(Boolean)
@@ -138,7 +165,12 @@ export function asnDueList(shipments = [], now = Date.now()) {
  * the reason the second wording exists.
  */
 export function asnDueSummary(shipments = [], now = Date.now()) {
-  const list = asnDueList(shipments, now)
+  // ⚠️ THE BANNER IS THE ONE PLACE A WAIVER DOES SUPPRESS. A row somebody has
+  // explicitly excused must not keep stopping them at the door — that is what makes
+  // a banner ignorable, and an ignored banner is the failure this module exists to
+  // prevent. The row itself stays visible in the list; only the shout is dropped.
+  const all = asnDueList(shipments, now)
+  const list = all.filter((r) => r.state !== 'waived')
   if (!list.length) return null
   const due = list.filter((r) => r.state === 'due')
   const warn = list.filter((r) => r.state === 'warn')
@@ -147,6 +179,7 @@ export function asnDueSummary(shipments = [], now = Date.now()) {
   if (warn.length) parts.push(`${warn.length} due within ${ASN_WARN_HOURS}h`)
   if (!parts.length) parts.push(`${list.length} shipment${list.length === 1 ? '' : 's'} awaiting an ASN`)
   return {
+    waived: all.length - list.length,
     total: list.length,
     due: due.length,
     warn: warn.length,
@@ -226,7 +259,10 @@ export function cutoffPhase(now = Date.now(), tz = ASN_CUTOFF_TZ) {
  * this one appears when it can still be acted on.
  */
 export function asnBanner(shipments = [], now = Date.now(), tz = ASN_CUTOFF_TZ) {
-  const list = asnDueList(shipments, now)
+  // ⚠️ Same rule as asnDueSummary: an explicitly excused shipment must not keep
+  // stopping somebody at the door, or the banner becomes wallpaper. It stays in the
+  // list; only the shout is dropped.
+  const list = asnDueList(shipments, now).filter((r) => r.state !== 'waived')
   if (!list.length) return null
   const { phase, minutesToCutoff } = cutoffPhase(now, tz)
   const overdue = list.filter((r) => r.state === 'due')
