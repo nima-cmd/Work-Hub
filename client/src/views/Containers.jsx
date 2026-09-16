@@ -15,7 +15,7 @@
 // different. They get different colours and different words, never one greyed-out row.
 
 import { useEffect, useState } from 'react'
-import { fetchContainers, markContainerDelivered, setTransferPurpose } from '../api.js'
+import { fetchContainers, markContainerDelivered, setTransferPurpose, confirmPoSeason, setContainerMode, linkPoToOrder } from '../api.js'
 
 const d = (s) => (s ? new Date(`${s}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null)
 const todayIso = () => new Date().toISOString().slice(0, 10)
@@ -75,6 +75,134 @@ function Arrived({ container, onDone }) {
   )
 }
 
+// ⚠️ EACH RISK STATE IS ITS OWN WORD AND TONE. "no-deadline" is not a pale "ok": a
+// restock genuinely has no drop to miss, and drawing it like a passing grade implies a
+// deadline was checked and met.
+const RISK = {
+  late: { tone: 'sev-hi', word: 'LATE' },
+  tight: { tone: 'sev-mid', word: 'Tight' },
+  ok: { tone: 'sev-lo', word: 'In time' },
+  'no-deadline': { tone: '', word: 'No drop deadline' },
+  unknown: { tone: '', word: '' },
+}
+
+// The season a PO is for: suggested from its items, confirmed by a person.
+//
+// ⚠️ A SUGGESTION IS DRAWN AS A SUGGESTION. The select is not pre-filled with the guess —
+// it opens empty with the guess offered beside it as a button, because a pre-filled
+// dropdown somebody tabs past becomes a stored decision nobody made
+// ([[default-is-not-an-answer]]).
+function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
+  const st = t.seasonState || {}
+  const [open, setOpen] = useState(false)
+  const [season, setSeason] = useState(st.state === 'confirmed' ? st.label : '')
+  const [drop, setDrop] = useState(st.drop ?? '')
+  const [reason, setReason] = useState(st.reason ?? '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const risk = RISK[t.dropRisk?.state] || RISK.unknown
+
+  if (!t.poNumber) return null
+
+  const save = async (override) => {
+    setBusy(true); setErr(null)
+    try {
+      await confirmPoSeason(t.poNumber, override || { season, drop: drop || null, reason: reason || null, by: 'Nima' })
+      setOpen(false); await onChange()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="c-season">
+      {st.state === 'confirmed' ? (
+        <>
+          <span className="c-season-on">
+            {st.label}{st.drop ? ` · drop ${st.drop}` : ''}{st.reason ? ` · ${st.reason}` : ''}
+            {st.by ? <small> · {st.by}</small> : null}
+          </span>
+          {/* ⚠️ A DISAGREEMENT WITH THE ITEMS IS NAMED, not blocked — they may know
+              something the catalogue does not. */}
+          {st.differs && <span className="c-warn">⚠ {st.differs}</span>}
+          <button className="btn-small btn-quiet" onClick={() => setOpen(true)}>change</button>
+        </>
+      ) : open ? null : (
+        <>
+          <span className="c-season-none">
+            {st.label
+              ? <>Season <b>not confirmed</b> — items say <b>{st.label}</b>{st.confident ? '' : ' (not a majority)'}</>
+              : <>Season <b>unknown</b></>}
+            {/* The calendar's read on WHY, shown even before anything is confirmed. */}
+            {st.reason ? <> · looks like a <b>{st.reason}</b>{st.reasonConfident ? '' : ' (not sure)'}</> : null}
+          </span>
+          {/* ⚠️ ONE CLICK ONLY WHEN THE APP IS CONFIDENT. A tie or a bare plurality gets
+              the full form instead, because those are the cases that need a person. */}
+          {st.label && st.confident && (
+            <button className="btn-small" disabled={busy}
+                    onClick={() => save({ season: st.label, reason: st.reason || null, by: 'Nima' })}>
+              Accept {st.label}
+            </button>
+          )}
+          <button className="btn-small btn-quiet" onClick={() => setOpen(true)}>set…</button>
+        </>
+      )}
+
+      {open && (
+        <span className="c-season-form">
+          {/* ⚠️ THE YEAR IS PART OF THE SEASON AND COMES FROM THE DATA. This used to
+              build options as `${season} ${thisYear}`, which cannot express PO1754's
+              Spring 2027 — stock for next year's drop, already on a container. Nima,
+              2026-09-16: "we need to keep the year in the list of information for the
+              purchase orders as well." The years are the ones actually on these POs,
+              served by the API, plus next year for a forward booking. */}
+          <select value={season} onChange={(e) => setSeason(e.target.value)}>
+            <option value="">— season —</option>
+            {st.mix?.length ? (
+              <optgroup label="on this PO">
+                {st.mix.map((m) => <option key={m.label} value={m.label}>{m.label} — {m.units} units</option>)}
+              </optgroup>
+            ) : null}
+            <optgroup label="any season">
+              {seasonYears.flatMap((y) => seasons.map((x) => (
+                <option key={`${x} ${y}`} value={`${x} ${y}`}>{x} {y}</option>
+              )))}
+            </optgroup>
+          </select>
+          <select value={drop} onChange={(e) => setDrop(e.target.value)}>
+            <option value="">— drop —</option>
+            <option value="1">Drop 1</option>
+            <option value="2">Drop 2</option>
+          </select>
+          <select value={reason} onChange={(e) => setReason(e.target.value)}>
+            <option value="">— why —</option>
+            {reasons.map((r) => <option key={r.key} value={r.key} title={r.detail}>{r.label}</option>)}
+          </select>
+          {/* ⚠️ OFFERED, NOT PRE-SELECTED, and it says how sure it is. The calendar
+              decides this — Fall stock arriving AFTER Fall Drop 2 is a restock of goods
+              that sold through, not the launch — and "after its drop" is only usually a
+              restock: it can equally be a launch that slipped. */}
+          {st.reason && st.reason !== reason && (
+            <button className="btn-small btn-quiet" title={st.reasonWhy}
+                    onClick={() => setReason(st.reason)}>
+              {st.reasonConfident ? '' : 'maybe '}{st.reason}?
+            </button>
+          )}
+          <button className="btn-small" disabled={busy || !season} onClick={() => save()}>{busy ? 'Saving…' : 'Confirm'}</button>
+          <button className="btn-small btn-quiet" onClick={() => { setOpen(false); setErr(null) }}>Cancel</button>
+          {/* Clearing returns the card to showing the suggestion. */}
+          {st.state === 'confirmed' && (
+            <button className="btn-small btn-quiet" disabled={busy}
+                    onClick={() => save({ season: null, by: 'Nima' })}>Clear</button>
+          )}
+        </span>
+      )}
+
+      {risk.word && <span className={`pill ${risk.tone}`} title={t.dropRisk.why}>{risk.word}</span>}
+      {t.dropRisk?.why && t.dropRisk.state !== 'unknown' && <span className="c-risk-why">{t.dropRisk.why}</span>}
+      {err && <span className="c-warn">{err}</span>}
+    </div>
+  )
+}
+
 // One transfer order: the PO it draws on, the China receipt that dated the invoice, where
 // it lands, and what it is for.
 //
@@ -83,7 +211,7 @@ function Arrived({ container, onDone }) {
 // receive is for accounting... once we receive the units in china we have a transfer
 // order which we leave a link to the original PO in the transfer order so we know what
 // PO its for." Those three documents are the chain, and until now the card showed one.
-function Leg({ t, onChange }) {
+function Leg({ t, seasons, seasonYears, reasons, onChange }) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(t.purpose || '')
   const [busy, setBusy] = useState(false)
@@ -105,8 +233,13 @@ function Leg({ t, onChange }) {
         {t.poNumber ? <NsLink doc={t.poNumber} /> : <span className="c-status">no PO linked</span>}
         {/* The China receipt — the factory-complete date the vendor invoice must match. */}
         {t.receiptNumber ? <NsLink doc={t.receiptNumber} /> : null}
-        {t.receivedOn ? <span className="c-rcv">received {d(t.receivedOn)}</span> : null}
+          {t.receivedOn ? <span className="c-rcv">received {d(t.receivedOn)}</span> : null}
+        {/* The order this PO exists for, when somebody has linked one. */}
+        {(t.orderLinks || []).map((o) => (
+          <span key={o.docNumber} className="c-order">for <NsLink doc={o.docNumber} /></span>
+        ))}
       </div>
+      <Season t={t} seasons={seasons} seasonYears={seasonYears} reasons={reasons} onChange={onChange} />
       <div className="c-to-purpose">
         <span className="c-dest">→ {t.destination || 'no destination'}</span>
         {/* ⚠️ AN OBSERVED PURPOSE IS NOT EDITABLE HERE. NetSuite already routes these
@@ -139,7 +272,44 @@ function Leg({ t, onChange }) {
   )
 }
 
-function Container({ c, onChange }) {
+// ⚠️ THE MODE IS WHAT UNLOCKS EVERY ETA. It is NULL on every container, so estimateEta
+// refuses and 8 of 21 completed round trips sit in transitStats' anomaly list as "no mode
+// — cannot be attributed to air or sea". The history is there; this button is the gap.
+function Mode({ c, onChange }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const set = async (mode) => {
+    setBusy(true); setErr(null)
+    try { await setContainerMode(c.label, mode); await onChange() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  if (c.mode) {
+    return (
+      <span className="c-mode">
+        Mode <b>{c.mode}</b>{c.modeSource ? <small> · {c.modeSource}</small> : null}
+        <button className="btn-small btn-quiet" disabled={busy} onClick={() => set(null)}>unset</button>
+      </span>
+    )
+  }
+  return (
+    <span className="c-mode">
+      Mode <b>not set</b>
+      {/* ⚠️ The suggestion is OFFERED, never stored — a guess in the column would be
+          indistinguishable from a decision, and mode picks which transit median applies. */}
+      {c.modeSuggested ? <> — looks like <b>{c.modeSuggested}</b> from the name</> : null}
+      {c.modeSuggested && (
+        <button className="btn-small" disabled={busy} onClick={() => set(c.modeSuggested)}>
+          Accept {c.modeSuggested}
+        </button>
+      )}
+      <button className="btn-small btn-quiet" disabled={busy} onClick={() => set('air')}>air</button>
+      <button className="btn-small btn-quiet" disabled={busy} onClick={() => set('sea')}>sea</button>
+      {err && <span className="c-warn">{err}</span>}
+    </span>
+  )
+}
+
+function Container({ c, seasons, seasonYears, reasons, onChange }) {
   const del = DELIVERY[c.delivery.state] || DELIVERY.unknown
   return (
     <section className="container-card">
@@ -189,7 +359,7 @@ function Container({ c, onChange }) {
       <div className="c-leg">
         <strong>China leg — {c.leg.known ? c.leg.leg : c.leg.why}</strong>
         <ul className="c-tos">
-          {c.transferOrders.map((t) => <Leg key={t.toNumber} t={t} onChange={onChange} />)}
+          {c.transferOrders.map((t) => <Leg key={t.toNumber} t={t} seasons={seasons} seasonYears={seasonYears} reasons={reasons} onChange={onChange} />)}
         </ul>
         {/* ⚠️ An unrecognised NetSuite status is NAMED, not folded into a neighbour. */}
         {c.leg.unrecognised?.length ? <p className="c-warn">⚠ unrecognised: {c.leg.unrecognised.join(', ')}</p> : null}
@@ -210,13 +380,7 @@ function Container({ c, onChange }) {
         {/* ⚠️ THE MODE IS A SUGGESTION UNTIL SOMEBODY CHOOSES IT, and the screen says
             which. A stored guess is indistinguishable from a decision, so the card shows
             the guess as a guess rather than filling the field in. */}
-        <span className="c-mode">
-          {c.mode
-            ? <>Mode <b>{c.mode}</b>{c.modeSource ? <small> · {c.modeSource}</small> : null}</>
-            : c.modeSuggested
-              ? <>Mode <b>not set</b> — looks like <b>{c.modeSuggested}</b> from the name</>
-              : <>Mode <b>not set</b></>}
-        </span>
+        <Mode c={c} onChange={onChange} />
         {c.delivery.state !== 'received' && <Arrived container={c} onDone={onChange} />}
       </footer>
 
@@ -256,7 +420,7 @@ export default function Containers() {
   if (err) return <div className="view"><p className="c-warn">{err}</p></div>
   if (!data) return <div className="view"><p>Loading containers…</p></div>
 
-  const { containers, orphans, awaitingReceipt } = data
+  const { containers, orphans, awaitingReceipt, seasons = [], seasonYears = [], reasons = [] } = data
   const openOrphans = orphans.filter((o) => !o.allReceived)
   const landed = containers.filter((c) => c.delivery.state === 'received')
   const enRoute = containers.filter((c) => c.delivery.state !== 'received')
@@ -290,7 +454,7 @@ export default function Containers() {
         </div>
       )}
 
-      {tab !== 'unmanifested' && shown.map((c) => <Container key={c.label} c={c} onChange={load} />)}
+      {tab !== 'unmanifested' && shown.map((c) => <Container key={c.label} c={c} seasons={seasons} seasonYears={seasonYears} reasons={reasons} onChange={load} />)}
       {/* ⚠️ AN EMPTY TAB SAYS WHY IT IS EMPTY. "Nothing here" next to a 0 is the state
           somebody argues with; naming the reason is the same rule the delivery states
           follow. */}

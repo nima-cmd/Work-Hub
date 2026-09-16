@@ -151,6 +151,31 @@ export function transitFrom(s) {
 export const MIN_SAMPLES = 3
 
 /**
+ * ⚠️ "air" IS NOT ONE LANE, AND THE BUCKET COUNTS SOMETHING OTHER THAN ITS LABEL.
+ *
+ * Measured 2026-09-16, the moment a mode was first confirmed on a live container. Every
+ * one of the five samples in the air bucket is DHL:
+ *
+ *     0d  10 Air DHL 2026.5.20        2d  1 air DHL 2026.8.8
+ *     3d  2 Air DHL                   2d  3 Air DHL 2026.5.11
+ *     0d  2 Air DHL 2026.6.9
+ *
+ * Median 2 days, spread 0-3, which `estimateEta` reports as `confidence: 'tight'`. But
+ * that is a DHL EXPRESS median, and the 11-carton shipment now in the air is UPS air
+ * FREIGHT booked through GLC: packed 09-07, arriving 09-16. The bucket would have
+ * answered "2026-09-09" with a tight confidence — a week early and sounding certain,
+ * which is worse than no answer.
+ *
+ * ⚠️ SO A MODE IS NOT A SERVICE. Splitting them needs the carrier on the HISTORICAL
+ * shipments, which we do not hold — the container labels say "DHL" and nothing says what
+ * the others were. Until then `AIR_IS_MIXED` is here so a surface can say so beside any
+ * air estimate rather than presenting a spread that looks tight because the samples all
+ * came from one courier.
+ */
+export const AIR_IS_MIXED =
+  'every air sample we hold is DHL express; air FREIGHT (UPS/GLC) runs longer and is not in this median'
+
+/**
  * Per-mode transit statistics from observed arrivals only.
  *
  * ⚠️ MEDIAN, NOT MEAN. One container held at customs for a month drags a mean into

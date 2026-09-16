@@ -3598,3 +3598,16 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .c-purpose-in { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 4px; padding: 3px 8px; font: inherit; font-size: 12.5px; min-width: 200px; }
 .c-purpose-btn { background: none; border: 1px dashed var(--line); color: var(--muted); border-radius: 4px; padding: 2px 8px; font: inherit; font-size: 12.5px; cursor: pointer; }
 .c-purpose-btn:hover { border-color: var(--accent); color: var(--text); }
+
+.c-season { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; padding-left: 2px; font-size: 12.5px; }
+.c-season-on { color: #9dc3ff; }
+.c-season-on small, .c-mode small { color: var(--muted); }
+.c-season-none { color: var(--muted); }
+.c-season-none b, .c-season-on b { color: var(--text); }
+.c-season-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.c-season-form select { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 12.5px; }
+.c-risk-why { color: var(--muted); font-size: 12px; }
+.pill.sev-mid { border-color: rgba(217,130,43,0.6); color: #f0b775; }
+
+.c-order { color: var(--accent); font-size: 12px; }
+.c-season-form optgroup { color: var(--muted); }

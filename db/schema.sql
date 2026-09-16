@@ -2318,3 +2318,73 @@ ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS destination TEXT;
 ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose    TEXT;
 ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose_by TEXT;
 ALTER TABLE container_transfer ADD COLUMN IF NOT EXISTS purpose_at TIMESTAMPTZ;
+
+-- ── Seasons, drops and why stock is coming (2026-09-16) ─────────────────────
+-- Nima: "the season and the calendar will let us know when a PO is late since we know
+-- when we need it." See src/model/poSeason.js and src/model/seasonDrops.js.
+--
+-- ⚠️ `doc_seasons` ALREADY EXISTED AND HELD 0 ROWS since 2026-07. It had `season` alone,
+-- which cannot answer "which drop" — and Spring/Summer/Fall each have two, on dates a
+-- month apart. A season without its drop is half a deadline.
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS drop_number  INTEGER;
+-- restock | launch | reorder — Nima's three reasons stock comes in.
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS reason       TEXT;
+-- ⚠️ CONFIRMED, NOT INFERRED, AND THE COLUMN SAYS WHICH. The season is SUGGESTED from
+-- the items on the PO (custitem_season_year, on 97% of them) and a person confirms it.
+-- The suggestion is deliberately NOT stored: it is recomputed from the item mix every
+-- time, so a row in this table always means somebody decided. An inferred value sitting
+-- in the same column would be indistinguishable from a decision — the standing rule in
+-- src/model/fieldAssumptions.js.
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS confirmed_by TEXT;
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+-- What the app suggested at the moment of confirming, kept so an override is visible
+-- later. ⚠️ NOT read back as the season — it is a record of what was disagreed with.
+ALTER TABLE doc_seasons ADD COLUMN IF NOT EXISTS suggested_was TEXT;
+
+-- The item-season mix per PO: the evidence the suggestion is computed from, cached so
+-- the Landing bay does not make a SuiteQL round trip per PO on every page load.
+--
+-- ⚠️ IT IS A CACHE OF AN OBSERVATION, not a decision, and it is keyed per season so the
+-- MIX survives — PO1747 is Resort 2026 = 350 AND Holiday 2026 = 350, and a single
+-- "dominant season" column would have thrown away the tie that makes it need a human.
+-- ⚠️ NO PRIMARY KEY ON (po_number, season), AND THAT IS THE POINT. A primary key makes
+-- every column in it NOT NULL, and the first sync failed on exactly that: PO1761 is 720
+-- units whose items carry NO season, which is the case the whole "confirm it" design
+-- exists for. The schema was forcing the one value that must stay nullable to be a lie.
+--
+-- Two partial unique indexes give the same guarantee without it: at most one row per
+-- (PO, season), and at most one no-season row per PO.
+CREATE TABLE IF NOT EXISTS po_item_season (
+  po_number  TEXT NOT NULL,
+  season     TEXT,            -- NULL is meaningful: units whose items carry no season
+  units      INTEGER NOT NULL,
+  synced_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS po_item_season_named
+  ON po_item_season (po_number, season) WHERE season IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS po_item_season_unseasoned
+  ON po_item_season (po_number) WHERE season IS NULL;
+
+-- The marketing calendar's drop dates. Read-only mirror of a human-maintained calendar.
+--
+-- ⚠️ THE TITLE IS KEPT VERBATIM, typo and all — the live calendar says "Hoilday Launch"
+-- and the fix belongs there, not in a rewrite here. seasonDrops.js matches leniently.
+CREATE TABLE IF NOT EXISTS season_drop (
+  season      TEXT NOT NULL,
+  drop_number INTEGER NOT NULL,
+  year        INTEGER NOT NULL,
+  on_date     DATE NOT NULL,
+  title       TEXT NOT NULL,
+  single      BOOLEAN NOT NULL DEFAULT false, -- Holiday and Resort have ONE launch
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (season, drop_number, year)
+);
+-- Product launches — real events, and NOT seasonal drops. Kept apart on purpose:
+-- folding "Charm Launch" into the drops would give Summer four of them.
+CREATE TABLE IF NOT EXISTS product_launch (
+  on_date   DATE NOT NULL,
+  title     TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (on_date, title)
+);
