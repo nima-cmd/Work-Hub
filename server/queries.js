@@ -17,7 +17,7 @@ import { containerLeg, nextAction } from '../src/model/containerTransfer.js'
 import { deliveryFor, unusableWindow, awaitingReceipt } from '../src/model/containerDelivery.js'
 import { purposeFor, purposeBreakdown } from '../src/model/transferPurpose.js'
 import { seasonFor, REASONS, SEASONS } from '../src/model/poSeason.js'
-import { dropsFrom, dropRisk } from '../src/model/seasonDrops.js'
+import { dropsFrom, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -6550,6 +6550,16 @@ export async function getContainers() {
     mixByPo.get(m.po_number).push({ season: m.season, units: m.units })
   }
   const confirmedByPo = new Map(confirmedRows.map((c) => [c.doc_number, c]))
+  // The PO→order links, so a linked PO can suggest "re-order" — a fact, which outranks
+  // any reading of the calendar.
+  const { rows: linkRows } = await pool.query(
+    `SELECT a_number AS po, b_type AS doc_type, b_number AS doc_number
+       FROM doc_links WHERE a_type = 'PO' AND b_type IN ('SO','OC')`)
+  const linksByPo = new Map()
+  for (const l of linkRows) {
+    if (!linksByPo.has(l.po)) linksByPo.set(l.po, [])
+    linksByPo.get(l.po).push({ docType: l.doc_type, docNumber: l.doc_number })
+  }
   // ⚠️ `on_date` ARRIVES AS A Date AND MUST BE ISO'd PROPERLY. `String(pgDate).slice(0,10)`
   // yields "Wed Feb 04" — not a date — and every year comparison in dropFor then fails
   // silently, reporting every container's risk as "unknown". That is exactly how I first
@@ -6609,17 +6619,19 @@ export async function getContainers() {
       // reason.
       transferOrders: legs.map((t) => {
         const confirmed = t.poNumber ? confirmedByPo.get(t.poNumber) : null
+        const orderLinks = t.poNumber ? (linksByPo.get(t.poNumber) || []) : []
         const season = seasonFor({
           lines: t.poNumber ? (mixByPo.get(t.poNumber) || []) : [],
           season: confirmed?.season || null,
           drop: confirmed?.drop_number ?? null,
           reason: confirmed?.reason || null,
           seasonBy: confirmed?.confirmed_by || null,
-        })
+        }, { drops, suggestReason, hasOrderLink: orderLinks.length > 0 })
         return {
           ...t,
           purposeState: purposeFor(t),
           seasonState: season,
+          orderLinks,
           // ⚠️ THE RISK USES THE CONTAINER'S ETA, and only an honest one. Never the port
           // date — the drayage is invisible (containerDelivery.js).
           dropRisk: dropRisk({
@@ -6666,6 +6678,16 @@ export async function getContainers() {
     // The vocabulary the dropdowns are built from — served with the data so the client
     // never carries its own copy of a list the model owns.
     seasons: SEASONS,
+    // ⚠️ THE YEARS COME FROM THE DATA, not from `new Date().getFullYear()`. Nima,
+    // 2026-09-16: "we need to keep the year in the list of information for the purchase
+    // orders as well." The client was building options as `${season} ${thisYear}`, which
+    // cannot express PO1754's Spring 2027 — stock for next year's drop, already on a
+    // container. The distinct years actually on these POs, newest first, plus next year
+    // so a forward booking can always be chosen.
+    seasonYears: [...new Set([
+      new Date().getFullYear() + 1,
+      ...mixRows.map((m) => Number(String(m.season || '').match(/(\d{4})$/)?.[1])).filter(Boolean),
+    ])].sort((a, b) => b - a),
     reasons: Object.values(REASONS),
     drops,
     orphans,

@@ -48,8 +48,13 @@ test('PO1785 — 1,330 units of one season, unambiguous', () => {
   const s = suggestPoSeason([{ season: 'Holiday 2026', units: 1330 }])
   assert.equal(s.suggestion.label, 'Holiday 2026')
   assert.equal(s.confident, true)
-  assert.equal(s.reason, REASONS.launch.key)
   assert.match(s.why, /1330 of 1330 units are Holiday 2026 \(100%\)/)
+  // ⚠️ AND IT SUGGESTS NO REASON. This used to assert `launch`, and removing that was a
+  // correction: a PO full of Fall 2026 stock is the Fall launch if it lands BEFORE the
+  // drop and a restock of goods that sold through if it lands AFTER. The item mix cannot
+  // tell them apart; only the calendar can (seasonDrops.suggestReason). Nima, 2026-09-16:
+  // "in the case of the 11 air we're restocking a launch item that sold well."
+  assert.equal(s.reason, undefined, 'the item mix must not imply a reason')
 })
 
 test('PO1722 — a clear majority is confident', () => {

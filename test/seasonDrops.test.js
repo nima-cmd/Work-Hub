@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseDrop, productLaunch, dropsFrom, dropFor, dropRisk } from '../src/model/seasonDrops.js'
+import { parseDrop, productLaunch, dropsFrom, dropFor, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
 
 const ev = (title, start) => ({ title, start })
 
@@ -196,4 +196,55 @@ test('⚠️ only a LAUNCH has a drop deadline — live data caught this one', (
   // default shape of inbound stock — staying silent until somebody picks a reason would
   // hide every real deadline.
   assert.equal(dropRisk(args).state, 'late')
+})
+
+// ── Why the stock is coming, which the season alone cannot say ──────────────────
+
+test('⚠️ THE 11 AIR: Fall 2026 stock AFTER Fall Drop 2 is a restock, not a launch', () => {
+  // Nima, 2026-09-16: "in the case of the 11 air we're restocking a launch item that
+  // sold well." Fall Drop 2 was 2026-09-08; the shipment lands 09-16.
+  const drops = dropsFrom(CALENDAR)
+  const today = new Date('2026-09-16T12:00:00Z')
+  const r = suggestReason({ seasonLabel: 'Fall 2026', drop: 2, drops, today })
+  assert.equal(r.reason, 'restock')
+  // ⚠️ NOT CONFIDENT. Stock arriving after its drop is usually replenishment and can
+  // equally be a launch that slipped — "we sold out" vs "we missed the date", and only a
+  // person knows which.
+  assert.equal(r.confident, false)
+  assert.match(r.why, /Fall Drop 2 Launch was 8 days ago/)
+  assert.match(r.why, /unless the shipment is simply late/)
+})
+
+test('⚠️ the SAME season before its drop is a launch — the season did not change', () => {
+  const drops = dropsFrom(CALENDAR)
+  // Holiday 2026, 27 days out from 09-16. Same shape of PO, opposite reason.
+  const r = suggestReason({ seasonLabel: 'Holiday 2026', drop: 1, drops, today: new Date('2026-09-16T12:00:00Z') })
+  assert.equal(r.reason, 'launch')
+  assert.equal(r.confident, true)
+  assert.match(r.why, /Hoilday Launch is 27 days away/)
+})
+
+test('an order link outranks the calendar — it is a fact, not a reading of dates', () => {
+  const drops = dropsFrom(CALENDAR)
+  const r = suggestReason({
+    seasonLabel: 'Holiday 2026', drop: 1, hasOrderLink: true, drops,
+    today: new Date('2026-09-16T12:00:00Z'),
+  })
+  assert.equal(r.reason, 'reorder')
+  assert.equal(r.confident, true)
+  assert.match(r.why, /linked to an order/)
+})
+
+test('Core is a restock by definition, and no drop means no guess', () => {
+  const drops = dropsFrom(CALENDAR)
+  const core = suggestReason({ evergreen: true, drops })
+  assert.equal(core.reason, 'restock')
+  assert.equal(core.confident, true)
+  assert.match(core.why, /belongs to no drop/)
+
+  // ⚠️ A reason nobody can defend is worse than an empty dropdown.
+  const none = suggestReason({ seasonLabel: 'Spring 2027', drop: 1, drops })
+  assert.equal(none.reason, null)
+  assert.match(none.why, /no Spring 2027 drop on the calendar/)
+  assert.equal(suggestReason({ drops }).reason, null)
 })

@@ -187,3 +187,60 @@ export function dropRisk({ seasonLabel, drop, reason, expectedOn, deliveredOn, d
     why: `${landed ? 'landed' : 'expected'} ${arrival}, ${days} days before ${target.title} on ${target.on}`,
   }
 }
+
+/**
+ * Why is this stock coming — restock, launch or re-order?
+ *
+ * ── ⚠️ THE SEASON DOES NOT SAY. THE CALENDAR DOES. ──────────────────────────────
+ *
+ * Nima, 2026-09-16: *"we also need to have the ability to show a restock of a season. so
+ * in the case of the 11 air we're restocking a launch item that sold well."*
+ *
+ * That is the case a season alone cannot express. A PO full of Fall 2026 stock is the
+ * Fall launch if it lands BEFORE the drop, and a restock of goods that sold through if
+ * it lands AFTER — same season, opposite reasons. poSeason.js used to answer `launch`
+ * for any PO whose top season parsed, which was a default wearing an inference's clothes.
+ *
+ * What settles it is whether the drop has already happened:
+ *
+ *     Fall Drop 2   2026-09-08   already gone  →  Fall 2026 arriving now is a RESTOCK
+ *     Holiday       2026-10-13   still ahead   →  Holiday 2026 arriving now is a LAUNCH
+ *
+ * Which is exactly the 11-carton air shipment: Fall 2026 goods, eight days after Fall
+ * Drop 2, restocking something that sold well.
+ *
+ * ⚠️ AN ORDER LINK OUTRANKS BOTH, because it is a fact rather than a reading of dates:
+ * a PO tied to a real SO or OC exists for that order whatever the calendar says.
+ *
+ * ⚠️ AND IT STILL RETURNS null RATHER THAN GUESSING when there is no drop to compare
+ * against. A reason nobody can defend is worse than an empty dropdown.
+ */
+export function suggestReason({ seasonLabel, drop, evergreen = false, hasOrderLink = false, drops = [], today = new Date() } = {}) {
+  if (hasOrderLink) {
+    return { reason: 'reorder', confident: true, why: 'this PO is linked to an order' }
+  }
+  // ⚠️ Evergreen cannot be a launch — Core belongs to no drop by definition.
+  if (evergreen) {
+    return { reason: 'restock', confident: true, why: 'Core stock belongs to no drop' }
+  }
+  const target = dropFor(seasonLabel, drop, drops)
+  if (!target) {
+    return { reason: null, confident: false, why: seasonLabel ? `no ${seasonLabel} drop on the calendar to compare against` : 'no season to compare against' }
+  }
+  const days = Math.round((new Date(target.on) - new Date(today)) / 86400000)
+  if (days < 0) {
+    return {
+      reason: 'restock',
+      // ⚠️ NOT confident. Stock arriving after its drop is USUALLY replenishment and can
+      // equally be a launch that slipped — which is the difference between "we sold out"
+      // and "we missed the date", and only a person knows which.
+      confident: false,
+      why: `${target.title} was ${-days} days ago (${target.on}), so this reads as a restock of goods already launched — unless the shipment is simply late`,
+    }
+  }
+  return {
+    reason: 'launch',
+    confident: true,
+    why: `${target.title} is ${days} days away (${target.on})`,
+  }
+}

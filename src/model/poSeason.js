@@ -160,11 +160,17 @@ export function suggestPoSeason(lines = []) {
   const share = total ? Math.round((top.units / total) * 100) : 0
   return {
     suggestion: top,
+    // ⚠️ NO REASON IS SUGGESTED FROM A SEASON, and removing this was a correction.
+    // It used to return `launch` whenever the top season parsed — which is a DEFAULT
+    // dressed as an inference. Nima, 2026-09-16: "in the case of the 11 air we're
+    // restocking a launch item that sold well." A PO full of Fall 2026 stock can be the
+    // Fall launch OR a restock of Fall goods that sold through, and the item mix cannot
+    // tell them apart. What CAN tell them apart is the calendar — see
+    // seasonDrops.suggestReason, which reads whether the drop has already happened.
     // ⚠️ A BARE PLURALITY IS NOT CONFIDENCE. A majority of the units, or nothing — the
     // difference between "most of this PO is Holiday" and "Holiday is the biggest of
     // four scattered seasons" is exactly what a person is being asked to settle.
     confident: top.units * 2 > total,
-    reason: top.kind === 'season' ? REASONS.launch.key : null,
     total, unknownUnits, mix, share,
     why: `${top.units} of ${total} units are ${top.label} (${share}%)`
       + (runnerUp ? `, next is ${runnerUp.label} at ${runnerUp.units}` : '')
@@ -180,8 +186,19 @@ export function suggestPoSeason(lines = []) {
  * Here the inference genuinely is a guess about intent, so a person's answer wins and
  * the suggestion is kept only to show what was overridden.
  */
-export function seasonFor(po = {}) {
+export function seasonFor(po = {}, { drops = [], today = new Date(), hasOrderLink = false, suggestReason } = {}) {
   const suggested = suggestPoSeason(po.lines || [])
+  // ⚠️ THE REASON IS SUGGESTED BY THE CALENDAR, NOT BY THE ITEM MIX — injected rather
+  // than imported so this module keeps no dependency on seasonDrops.js (which imports
+  // SEASONS from here; importing back would be a cycle).
+  const reasonHint = suggestReason && (suggested.suggestion || suggested.reason)
+    ? suggestReason({
+      seasonLabel: suggested.suggestion?.kind === 'evergreen' ? null : suggested.suggestion?.label,
+      drop: po.drop ?? null,
+      evergreen: suggested.suggestion?.kind === 'evergreen',
+      hasOrderLink, drops, today,
+    })
+    : null
   if (po.season) {
     return {
       state: 'confirmed',
@@ -190,6 +207,7 @@ export function seasonFor(po = {}) {
       reason: po.reason ?? null,
       by: po.seasonBy || null,
       suggestion: suggested.suggestion?.label || null,
+      reasonHint,
       // ⚠️ Named when a person chose something the items do not support — not blocked.
       // They may know a thing the catalogue does not; the disagreement is the signal.
       differs: suggested.suggestion && suggested.suggestion.label !== po.season
@@ -202,7 +220,13 @@ export function seasonFor(po = {}) {
     state: suggested.suggestion ? 'suggested' : 'unknown',
     label: suggested.suggestion?.label || null,
     drop: null,
-    reason: suggested.reason || null,
+    // ⚠️ THE SUGGESTED REASON COMES FROM THE CALENDAR AND CARRIES ITS OWN CONFIDENCE.
+    // Stock arriving AFTER its drop reads as a restock but is not confident — it can
+    // equally be a launch that slipped, and that is the difference between "we sold out"
+    // and "we missed the date".
+    reason: reasonHint?.reason || null,
+    reasonWhy: reasonHint?.why || null,
+    reasonConfident: reasonHint?.confident ?? false,
     confident: suggested.confident,
     mix: suggested.mix,
     why: suggested.why,
