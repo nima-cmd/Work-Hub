@@ -6575,6 +6575,18 @@ export async function getContainers() {
     if (!byLabel.has(t.container_label)) byLabel.set(t.container_label, [])
     byLabel.get(t.container_label).push(t)
   }
+
+  // ⚠️ A PO CAN SIT ON SEVERAL TRANSFER ORDERS, ON DIFFERENT CONTAINERS. Measured
+  // 2026-09-16: 3 of 9 container POs do — PO1747 is on TO220 (the 55) AND TO225 (the
+  // 59). The season is confirmed on the PO, so editing it from one leg changes what
+  // another container's card says. The card has to be able to warn, so the legs that
+  // share a PO travel with it.
+  const legsByPo = new Map()
+  for (const t of tos) {
+    if (!t.poNumber) continue
+    if (!legsByPo.has(t.poNumber)) legsByPo.set(t.poNumber, [])
+    legsByPo.get(t.poNumber).push({ toNumber: t.toNumber, container: t.container_label })
+  }
   const aliasBy = new Map()
   for (const a of aliases) {
     if (!aliasBy.has(a.container_label)) aliasBy.set(a.container_label, [])
@@ -6634,6 +6646,8 @@ export async function getContainers() {
           purposeState: purposeFor(t),
           seasonState: season,
           orderLinks,
+          // Other legs drawing on the same PO — empty when this one is alone.
+          sharesPoWith: (legsByPo.get(t.poNumber) || []).filter((l) => l.toNumber !== t.toNumber),
           // ⚠️ THE RISK USES THE CONTAINER'S ETA, and only an honest one. Never the port
           // date — the drayage is invisible (containerDelivery.js).
           dropRisk: dropRisk({

@@ -95,6 +95,9 @@ const RISK = {
 function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
   const st = t.seasonState || {}
   const [open, setOpen] = useState(false)
+  // ⚠️ A SET, NOT A VALUE. 46% of POs span more than one season and the old single
+  // <select> made it impossible to say so — which is exactly what Nima hit on PO1777.
+  const [picked, setPicked] = useState(() => new Set(st.seasons?.length ? st.seasons : (st.label && st.state === 'confirmed' ? [st.label] : [])))
   const [season, setSeason] = useState(st.state === 'confirmed' ? st.label : '')
   const [drop, setDrop] = useState(st.drop ?? '')
   const [reason, setReason] = useState(st.reason ?? '')
@@ -107,7 +110,13 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
   const save = async (override) => {
     setBusy(true); setErr(null)
     try {
-      await confirmPoSeason(t.poNumber, override || { season, drop: drop || null, reason: reason || null, by: 'Nima' })
+      // ⚠️ THE LEAD IS THE ONE WITH THE MOST UNITS, not the first ticked. It is what a
+      // launch deadline hangs off, so it must not depend on click order.
+      const all = [...picked]
+      const lead = all.slice().sort((a, b) => (st.units?.[b] ?? 0) - (st.units?.[a] ?? 0))[0] || null
+      await confirmPoSeason(t.poNumber, override || {
+        season: lead, seasons: all, drop: drop || null, reason: reason || null, by: 'Nima',
+      })
       setOpen(false); await onChange()
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -165,25 +174,51 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
 
       {open && (
         <span className="c-season-form">
-          {/* ⚠️ THE YEAR IS PART OF THE SEASON AND COMES FROM THE DATA. This used to
-              build options as `${season} ${thisYear}`, which cannot express PO1754's
-              Spring 2027 — stock for next year's drop, already on a container. Nima,
-              2026-09-16: "we need to keep the year in the list of information for the
-              purchase orders as well." The years are the ones actually on these POs,
-              served by the API, plus next year for a forward booking. */}
-          <select value={season} onChange={(e) => setSeason(e.target.value)}>
-            <option value="">— season —</option>
-            {st.mix?.length ? (
-              <optgroup label="on this PO">
-                {st.mix.map((m) => <option key={m.label} value={m.label}>{m.label} — {m.units} units</option>)}
-              </optgroup>
+          {/* ⚠️ THIS EDITS THE PO, NOT THE TRANSFER ORDER, and the form has to say so.
+              The button sits on a leg, so without this it reads as "TO218's season" —
+              and for the 3 of 9 container POs that sit on two legs, saving here changes
+              ANOTHER container's card. */}
+          <span className="c-season-scope">
+            Season for <b>{t.poNumber}</b>
+            {t.sharesPoWith?.length ? (
+              <span className="c-warn"> — also on {t.sharesPoWith.map((l) => l.toNumber).join(', ')}, which will change too</span>
             ) : null}
-            <optgroup label="any season">
-              {seasonYears.flatMap((y) => seasons.map((x) => (
-                <option key={`${x} ${y}`} value={`${x} ${y}`}>{x} {y}</option>
-              )))}
-            </optgroup>
+          </span>
+
+          {/* ⚠️ CHECKBOXES, NOT A SELECT. A PO is a mix; the old single-value control
+              could not express "Fall 2025 AND Fall 2026" at all. Units are shown so the
+              choice is made against the evidence rather than from memory. */}
+          {st.mix?.length ? (
+            <span className="c-season-picks">
+              {st.mix.map((m) => (
+                <label key={m.label} className="c-season-pick">
+                  <input type="checkbox" checked={picked.has(m.label)}
+                         onChange={(e) => {
+                           const next = new Set(picked)
+                           if (e.target.checked) next.add(m.label); else next.delete(m.label)
+                           setPicked(next)
+                         }} />
+                  {m.label} <small>{m.units}u</small>
+                </label>
+              ))}
+            </span>
+          ) : null}
+
+          {/* A season the items do not mention — kept, because somebody may know
+              something the catalogue does not. */}
+          <select value="" onChange={(e) => { if (e.target.value) setPicked(new Set([...picked, e.target.value])) }}>
+            <option value="">+ another season…</option>
+            {seasonYears.flatMap((y) => seasons.map((x) => (
+              <option key={`${x} ${y}`} value={`${x} ${y}`}>{x} {y}</option>
+            )))}
           </select>
+          {[...picked].filter((x) => !(st.mix || []).some((m) => m.label === x)).map((x) => (
+            <span key={x} className="c-season-extra">
+              {x}
+              <button type="button" className="c-x" title="remove"
+                      onClick={() => { const n = new Set(picked); n.delete(x); setPicked(n) }}>×</button>
+            </span>
+          ))}
           <select value={drop} onChange={(e) => setDrop(e.target.value)}>
             <option value="">— drop —</option>
             <option value="1">Drop 1</option>
@@ -203,12 +238,14 @@ function Season({ t, seasons = [], seasonYears = [], reasons = [], onChange }) {
               {st.reasonConfident ? '' : 'maybe '}{st.reason}?
             </button>
           )}
-          <button className="btn-small" disabled={busy || !season} onClick={() => save()}>{busy ? 'Saving…' : 'Confirm'}</button>
+          <button className="btn-small" disabled={busy || !picked.size} onClick={() => save()}>
+            {busy ? 'Saving…' : `Confirm ${picked.size || ''} season${picked.size === 1 ? '' : 's'}`}
+          </button>
           <button className="btn-small btn-quiet" onClick={() => { setOpen(false); setErr(null) }}>Cancel</button>
           {/* Clearing returns the card to showing the suggestion. */}
           {st.state === 'confirmed' && (
             <button className="btn-small btn-quiet" disabled={busy}
-                    onClick={() => save({ season: null, by: 'Nima' })}>Clear</button>
+                    onClick={() => save({ season: null, seasons: [], by: 'Nima' })}>Clear</button>
           )}
         </span>
       )}
