@@ -38,6 +38,7 @@ import { fetchBulkPickLines, fetchPickStock, fetchFulfilments, STOCK_LOCATIONS }
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
+import { resendFindings, resendBanner } from '../src/model/po850Resend.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled, isDepartureConfirmed } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -6913,4 +6914,60 @@ export async function waiveShipmentAsn({ bolNumber, reason, by } = {}) {
     [bol, by || null, why])
   if (!rows.length) return { ok: false, status: 404, error: `no shipment on BOL ${bol}` }
   return { ok: true, ...rows[0] }
+}
+
+// ── The same PO sent again (2026-09-17) ──────────────────────────────────────
+// Nima: "50184318 was in our app unallocated but we just got the allocation and it
+// didn't show up in our feed or tell us to look."
+//
+// ⚠️ IT READS STORED COLUMNS, NOT MESSAGE BODIES. edi850Diff needs both raw payloads
+// from Orderful — a watch that fetches 32 of them to decide whether to raise a flag gets
+// switched off. Everything here comes from what the sync already persisted. The deep
+// diff (/api/edi/850-versions) stays the thing you open AFTER this points at a PO.
+export async function getPo850Resends({ withinDays } = {}) {
+  const { rows } = await pool.query(`
+    SELECT business_number AS po, id, created_at, po_purpose_code,
+           store_codes, store_quantities, total_units, line_count, trading_partner
+      FROM edi_transactions
+     WHERE type = '850_PURCHASE_ORDER' AND direction = 'IN' AND business_number IS NOT NULL
+       AND business_number IN (
+         SELECT business_number FROM edi_transactions
+          WHERE type = '850_PURCHASE_ORDER' AND direction = 'IN' AND business_number IS NOT NULL
+          GROUP BY business_number HAVING count(*) > 1)
+     ORDER BY business_number, created_at`)
+
+  const byPo = new Map()
+  const partnerOf = new Map()
+  for (const r of rows) {
+    if (!byPo.has(r.po)) byPo.set(r.po, [])
+    byPo.get(r.po).push({
+      id: r.id,
+      createdAt: r.created_at,
+      purposeCode: r.po_purpose_code,
+      storeCodes: r.store_codes,
+      storeQuantities: r.store_quantities,
+      totalUnits: r.total_units,
+      lineCount: r.line_count,
+    })
+    partnerOf.set(r.po, r.trading_partner)
+  }
+
+  // ⚠️ THE SALES-ORDER COUNT IS THE "IS IT ENTERED?" FACT, and it is a SEPARATE
+  // question from "did it change". 50184318 has zero — which is why Bulk Pick answered
+  // `verdict: missing` and there was nothing to pick.
+  const { rows: soRows } = await pool.query(
+    `SELECT po_number, count(*)::int n FROM orders
+      WHERE po_number = ANY($1::text[]) GROUP BY po_number`, [[...byPo.keys()]])
+  const soByPo = new Map(soRows.map((r) => [r.po_number, r.n]))
+
+  const out = resendFindings(byPo, {
+    soCountFor: (po) => soByPo.get(po) ?? 0,
+    ...(withinDays ? { withinDays: Number(withinDays) } : {}),
+  })
+  return {
+    ...out,
+    recent: out.recent.map((f) => ({ ...f, partner: partnerOf.get(f.po) ?? null })),
+    banner: resendBanner(out),
+    checkedAt: new Date().toISOString(),
+  }
 }

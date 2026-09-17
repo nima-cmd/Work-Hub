@@ -27,6 +27,7 @@ import {
   getInboundContainers,
   recordContainerDelivered,
   getContainers,
+  getPo850Resends,
   waiveShipmentAsn,
   setTransferPurpose,
   confirmPoSeason,
@@ -379,6 +380,14 @@ app.get('/api/edi/shipment-evidence', async (req, res) => {
     console.error(e)
     res.status(400).json({ error: e.message })
   }
+})
+
+// POs sent again whose latest 850 asks something of us. ⚠️ RECENT ONLY — the older ones
+// come back as a count, never as alarms (Nima: "flag the recent ones only").
+app.get('/api/edi/850-resends', async (req, res) => {
+  try {
+    res.json(await getPo850Resends({ withinDays: req.query.days }))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 app.get('/api/edi/850-versions', async (req, res) => {

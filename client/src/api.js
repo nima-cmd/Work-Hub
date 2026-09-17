@@ -1416,3 +1416,13 @@ export async function linkPoToOrder(poNumber, { docType, docNumber, label } = {}
     body: JSON.stringify({ docType, docNumber, label }),
   }), 'linking the order')
 }
+
+/**
+ * POs sent again whose latest 850 asks something of us.
+ *
+ * ⚠️ RECENT ONLY. The older ones come back as a count — sixteen POs stretch to last
+ * October, and raising fourteen historical alarms is how a banner becomes wallpaper.
+ */
+export async function fetchPo850Resends() {
+  return asJson(await fetch('/api/edi/850-resends'), 'checking for resent POs')
+}
