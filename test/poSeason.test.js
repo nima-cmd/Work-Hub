@@ -171,3 +171,44 @@ test('the three reasons are restock, launch and re-order', () => {
   assert.deepEqual(Object.keys(REASONS), ['restock', 'launch', 'reorder'])
   assert.match(REASONS.reorder.detail, /link the OC or SO/)
 })
+
+test('⚠️ THE LEG AND ITS PO GIVE DIFFERENT ANSWERS — ask the leg', () => {
+  // Nima, 2026-09-16: "that transfer order didn't have the whole PO on it just some
+  // units and they were from fall 2026 only."
+  //
+  // TO218 carries 100 units, all Fall 2026. PO1777 holds Fall 2025 = 175 AND Fall
+  // 2026 = 140. Asking the PO describes merchandise that never got on the boat — and
+  // it told him "mostly Fall 2025" about a shipment with no Fall 2025 in it at all.
+  const legLines = [{ season: 'Fall 2026', units: 100 }]
+  const poLines = [{ season: 'Fall 2025', units: 175 }, { season: 'Fall 2026', units: 140 }]
+
+  const leg = suggestPoSeason(legLines)
+  assert.equal(leg.suggestion.label, 'Fall 2026')
+  assert.equal(leg.confident, true, '100 of 100 is not ambiguous')
+  assert.equal(leg.mix.length, 1)
+
+  const po = suggestPoSeason(poLines)
+  assert.equal(po.suggestion.label, 'Fall 2025', 'the PO says something else entirely')
+  assert.notEqual(leg.suggestion.label, po.suggestion.label,
+    'the two grains disagree — which is the whole reason the leg is the one to ask')
+})
+
+test('⚠️ measuring the leg DISSOLVES the tie that looked unbreakable', () => {
+  // At PO level PO1747 was Resort 2026 = 350 and Holiday 2026 = 350 — a perfect tie
+  // this model deliberately refuses to break. Its two legs each have an answer:
+  //   TO220  Resort 106 · Holiday 53
+  //   TO225  Holiday 187 · Resort 172
+  // The tie was an artifact of summing two separate shipments.
+  const tied = suggestPoSeason([{ season: 'Resort 2026', units: 350 }, { season: 'Holiday 2026', units: 350 }])
+  assert.equal(tied.suggestion, null, 'the PO still refuses, correctly')
+
+  const to220 = suggestPoSeason([{ season: 'Resort 2026', units: 106 }, { season: 'Holiday 2026', units: 53 }])
+  assert.equal(to220.suggestion.label, 'Resort 2026')
+  assert.equal(to220.confident, true, '106 of 159 is a majority')
+
+  const to225 = suggestPoSeason([{ season: 'Holiday 2026', units: 187 }, { season: 'Resort 2026', units: 172 }])
+  assert.equal(to225.suggestion.label, 'Holiday 2026')
+  // ⚠️ 187 of 359 is 52% — a majority by four units. Confident by the letter of the
+  // rule, and worth knowing it is that close; the card shows both with their units.
+  assert.equal(to225.confident, true)
+})

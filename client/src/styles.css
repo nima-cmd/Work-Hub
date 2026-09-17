@@ -3613,3 +3613,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .c-season-form optgroup { color: var(--muted); }
 
 .c-season-chip small { color: var(--accent); }
+
+.c-season-scope { width: 100%; color: var(--muted); font-size: 12px; }
+.c-season-scope b { color: var(--text); }
+.c-season-picks { display: flex; gap: 10px; flex-wrap: wrap; }
+.c-season-pick { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.c-season-pick small { color: var(--accent); }
+.c-season-extra { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 9px; font-size: 12px; }
+.c-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 4px; }
+.c-x:hover { color: #ffb3ad; }
+
+.c-remainder { color: var(--muted); font-size: 12px; font-style: italic; }

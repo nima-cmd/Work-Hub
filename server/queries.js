@@ -38,6 +38,7 @@ import { fetchBulkPickLines, fetchPickStock, fetchFulfilments, STOCK_LOCATIONS }
 import { hangTags } from '../src/model/hangTag.js'
 import { groupSearchHits, hitSummary, normalizeQuery } from '../src/model/ediSearch.js'
 import { diff850, diff850Headline } from '../src/model/edi850Diff.js'
+import { resendFindings, resendBanner } from '../src/model/po850Resend.js'
 import { refreshProgress } from '../src/model/netsuiteRefreshSteps.js'
 import { DEPARTURE_CONFIRMED, DEPARTURE_UNCONFIRMED, boardSettled, isDepartureConfirmed } from '../src/model/netDeparture.js'
 import { PULSE_SOURCES, pulseVersion } from '../src/model/pulse.js'
@@ -6101,11 +6102,17 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
     try {
       onStep?.('containers')
       const { syncContainerTransfers, syncContainerAliases } = await import('../src/ingest/containerTransferSync.js')
+      const { syncToItemSeasons, syncPoItemSeasons } = await import('../src/ingest/seasonSync.js')
       const r = await syncContainerTransfers({})
       if (r.ok) {
         containerLegs = { matched: r.matched, containers: r.containers, dated: r.dated }
         // Aliases second — it reads the names the leg sync just recorded.
         await syncContainerAliases({})
+        // ⚠️ AND THE SEASON MIXES AFTER THAT — both are scoped to the transfer orders
+        // and POs the sync just matched, so running them earlier would miss this
+        // cycle's new legs entirely.
+        await syncToItemSeasons({})
+        await syncPoItemSeasons({})
       } else if (busyFrom(r.error)) {
         return { busy: true, reason: 'netsuite', partial: 'orders are in; the container legs hit the limit' }
       } else {
@@ -6537,6 +6544,12 @@ export async function getContainers() {
   // ⚠️ THREE QUERIES, NOT THREE PER PO. The Landing bay carries ~30 distinct POs; a
   // per-PO round trip would be 90 queries on a one-vCPU deploy for a screen meant to
   // stay open. The mix is a cache (po_item_season) precisely so this stays cheap.
+  // ⚠️ THE LEG'S OWN MIX IS THE ANSWER; the PO's is CONTEXT. A transfer order carries a
+  // subset of its PO — TO218 is 100 units of Fall 2026 while PO1777 also holds 175 of
+  // Fall 2025 that did not ship. Asking the PO describes merchandise that is not on the
+  // boat (Nima, 2026-09-16).
+  const { rows: legMixRows } = await pool.query(
+    'SELECT to_number, season, units FROM to_item_season')
   const { rows: mixRows } = await pool.query(
     'SELECT po_number, season, units FROM po_item_season')
   const { rows: confirmedRows } = await pool.query(
@@ -6549,6 +6562,11 @@ export async function getContainers() {
   for (const m of mixRows) {
     if (!mixByPo.has(m.po_number)) mixByPo.set(m.po_number, [])
     mixByPo.get(m.po_number).push({ season: m.season, units: m.units })
+  }
+  const legMixByTo = new Map()
+  for (const m of legMixRows) {
+    if (!legMixByTo.has(m.to_number)) legMixByTo.set(m.to_number, [])
+    legMixByTo.get(m.to_number).push({ season: m.season, units: m.units })
   }
   const confirmedByPo = new Map(confirmedRows.map((c) => [c.doc_number, c]))
   // The PO→order links, so a linked PO can suggest "re-order" — a fact, which outranks
@@ -6574,6 +6592,18 @@ export async function getContainers() {
   for (const t of tos) {
     if (!byLabel.has(t.container_label)) byLabel.set(t.container_label, [])
     byLabel.get(t.container_label).push(t)
+  }
+
+  // ⚠️ A PO CAN SIT ON SEVERAL TRANSFER ORDERS, ON DIFFERENT CONTAINERS. Measured
+  // 2026-09-16: 3 of 9 container POs do — PO1747 is on TO220 (the 55) AND TO225 (the
+  // 59). The season is confirmed on the PO, so editing it from one leg changes what
+  // another container's card says. The card has to be able to warn, so the legs that
+  // share a PO travel with it.
+  const legsByPo = new Map()
+  for (const t of tos) {
+    if (!t.poNumber) continue
+    if (!legsByPo.has(t.poNumber)) legsByPo.set(t.poNumber, [])
+    legsByPo.get(t.poNumber).push({ toNumber: t.toNumber, container: t.container_label })
   }
   const aliasBy = new Map()
   for (const a of aliases) {
@@ -6621,8 +6651,12 @@ export async function getContainers() {
       transferOrders: legs.map((t) => {
         const confirmed = t.poNumber ? confirmedByPo.get(t.poNumber) : null
         const orderLinks = t.poNumber ? (linksByPo.get(t.poNumber) || []) : []
+        const legLines = legMixByTo.get(t.toNumber) || []
+        const poLines = t.poNumber ? (mixByPo.get(t.poNumber) || []) : []
+        // ⚠️ THE LEG'S LINES, falling back to the PO's only when the leg has not been
+        // synced — never preferring the PO, which is what made TO218 read "Fall 2025".
         const season = seasonFor({
-          lines: t.poNumber ? (mixByPo.get(t.poNumber) || []) : [],
+          lines: legLines.length ? legLines : poLines,
           season: confirmed?.season || null,
           seasons: confirmed?.seasons || [],
           drop: confirmed?.drop_number ?? null,
@@ -6634,6 +6668,16 @@ export async function getContainers() {
           purposeState: purposeFor(t),
           seasonState: season,
           orderLinks,
+          // Other legs drawing on the same PO — empty when this one is alone.
+          sharesPoWith: (legsByPo.get(t.poNumber) || []).filter((l) => l.toNumber !== t.toNumber),
+          // ⚠️ WHAT IS ON THE PO BUT NOT ON THIS LEG. TO218 is Fall 2026 only while
+          // PO1777 still holds 175 units of Fall 2025 — stock that exists, is bought,
+          // and is not on this boat. Worth seeing; never folded into the leg's season.
+          poRemainder: (() => {
+            if (!legLines.length || !poLines.length) return []
+            const onLeg = new Set(legLines.map((l) => l.season))
+            return poLines.filter((l) => !onLeg.has(l.season))
+          })(),
           // ⚠️ THE RISK USES THE CONTAINER'S ETA, and only an honest one. Never the port
           // date — the drayage is invisible (containerDelivery.js).
           dropRisk: dropRisk({
@@ -6870,4 +6914,60 @@ export async function waiveShipmentAsn({ bolNumber, reason, by } = {}) {
     [bol, by || null, why])
   if (!rows.length) return { ok: false, status: 404, error: `no shipment on BOL ${bol}` }
   return { ok: true, ...rows[0] }
+}
+
+// ── The same PO sent again (2026-09-17) ──────────────────────────────────────
+// Nima: "50184318 was in our app unallocated but we just got the allocation and it
+// didn't show up in our feed or tell us to look."
+//
+// ⚠️ IT READS STORED COLUMNS, NOT MESSAGE BODIES. edi850Diff needs both raw payloads
+// from Orderful — a watch that fetches 32 of them to decide whether to raise a flag gets
+// switched off. Everything here comes from what the sync already persisted. The deep
+// diff (/api/edi/850-versions) stays the thing you open AFTER this points at a PO.
+export async function getPo850Resends({ withinDays } = {}) {
+  const { rows } = await pool.query(`
+    SELECT business_number AS po, id, created_at, po_purpose_code,
+           store_codes, store_quantities, total_units, line_count, trading_partner
+      FROM edi_transactions
+     WHERE type = '850_PURCHASE_ORDER' AND direction = 'IN' AND business_number IS NOT NULL
+       AND business_number IN (
+         SELECT business_number FROM edi_transactions
+          WHERE type = '850_PURCHASE_ORDER' AND direction = 'IN' AND business_number IS NOT NULL
+          GROUP BY business_number HAVING count(*) > 1)
+     ORDER BY business_number, created_at`)
+
+  const byPo = new Map()
+  const partnerOf = new Map()
+  for (const r of rows) {
+    if (!byPo.has(r.po)) byPo.set(r.po, [])
+    byPo.get(r.po).push({
+      id: r.id,
+      createdAt: r.created_at,
+      purposeCode: r.po_purpose_code,
+      storeCodes: r.store_codes,
+      storeQuantities: r.store_quantities,
+      totalUnits: r.total_units,
+      lineCount: r.line_count,
+    })
+    partnerOf.set(r.po, r.trading_partner)
+  }
+
+  // ⚠️ THE SALES-ORDER COUNT IS THE "IS IT ENTERED?" FACT, and it is a SEPARATE
+  // question from "did it change". 50184318 has zero — which is why Bulk Pick answered
+  // `verdict: missing` and there was nothing to pick.
+  const { rows: soRows } = await pool.query(
+    `SELECT po_number, count(*)::int n FROM orders
+      WHERE po_number = ANY($1::text[]) GROUP BY po_number`, [[...byPo.keys()]])
+  const soByPo = new Map(soRows.map((r) => [r.po_number, r.n]))
+
+  const out = resendFindings(byPo, {
+    soCountFor: (po) => soByPo.get(po) ?? 0,
+    ...(withinDays ? { withinDays: Number(withinDays) } : {}),
+  })
+  return {
+    ...out,
+    recent: out.recent.map((f) => ({ ...f, partner: partnerOf.get(f.po) ?? null })),
+    banner: resendBanner(out),
+    checkedAt: new Date().toISOString(),
+  }
 }

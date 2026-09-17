@@ -27,6 +27,7 @@ import {
   getInboundContainers,
   recordContainerDelivered,
   getContainers,
+  getPo850Resends,
   waiveShipmentAsn,
   setTransferPurpose,
   confirmPoSeason,
@@ -64,6 +65,7 @@ import {
 import { importBatch } from '../src/ingest/importer.js'
 import { syncFromNetsuite } from '../src/ingest/netsuiteSync.js'
 import { syncContainerTransfers, syncContainerAliases } from '../src/ingest/containerTransferSync.js'
+import { syncToItemSeasons, syncPoItemSeasons, syncSeasonDrops } from '../src/ingest/seasonSync.js'
 import { syncEdiPackagesLive } from '../src/ingest/ediPackagesLive.js'
 import { syncFulfillmentDc } from '../src/ingest/fulfillmentDc.js'
 import { netsuiteConfigured } from '../src/ingest/netsuiteApi.js'
@@ -378,6 +380,14 @@ app.get('/api/edi/shipment-evidence', async (req, res) => {
     console.error(e)
     res.status(400).json({ error: e.message })
   }
+})
+
+// POs sent again whose latest 850 asks something of us. ⚠️ RECENT ONLY — the older ones
+// come back as a count, never as alarms (Nima: "flag the recent ones only").
+app.get('/api/edi/850-resends', async (req, res) => {
+  try {
+    res.json(await getPo850Resends({ withinDays: req.query.days }))
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 app.get('/api/edi/850-versions', async (req, res) => {
@@ -2276,6 +2286,10 @@ app.post('/api/internal/recurring-check', async (req, res) => {
         // Aliases second: it reads the names the leg sync just recorded, so running it
         // first would miss anything new this cycle.
         await syncContainerAliases({})
+        // ⚠️ AND THE LEG-LEVEL SEASON MIX, which must run AFTER the legs exist — it is
+        // scoped to the transfer orders the sync above just matched to containers.
+        await syncToItemSeasons({})
+        await syncPoItemSeasons({})
       } catch (e) {
         console.error('container transfer sync failed (rest of the check continues):', e.message)
       }

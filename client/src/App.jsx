@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers, fetchContainers, fetchTransfers, recordViewVisit } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers, fetchContainers, fetchPo850Resends, fetchTransfers, recordViewVisit } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -272,6 +272,9 @@ export default function App() {
   // ⚠️ null UNTIL IT LOADS, and buildingStates reads that as "no honest number" rather
   // than an empty port — see the Landing bay in src/model/baseMap.js.
   const [containers, setContainers] = useState(null)
+  // ⚠️ null until it loads — see the Landing bay note. An empty object here would read
+  // as "no POs were resent", which is a claim rather than a loading state.
+  const [resends, setResends] = useState(null)
   // Manual NetSuite refresh (Nima, 2026-07-31). `nsBusy` is NOT an error state:
   // it means Celigo is mid-run and holds the concurrency, which has priority.
   const [nsSync, setNsSync] = useState({ state: 'idle', msg: null })
@@ -330,6 +333,7 @@ export default function App() {
     // Inbound containers past their arrival date (open POs grouped by due date).
     fetchInboundContainers().then(setInbound).catch(() => setInbound(null))
     fetchContainers().then(setContainers).catch(() => setContainers(null))
+    fetchPo850Resends().then(setResends).catch(() => setResends(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
   }
@@ -444,7 +448,7 @@ export default function App() {
   // copy would quietly lose a feature the tab kept.
   const viewProps = {
     orders, transfers, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
-    labelGaps, custody, bay, containers,
+    labelGaps, custody, bay, containers, resends,
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     handoffPo, onHandoffPoTaken: () => setHandoffPo(null), onOpenBulkPick: openBulkPick,
     asnFocus, onAsnFocusTaken: () => setAsnFocus(null),
@@ -549,6 +553,34 @@ export default function App() {
             </span>
             <button className="arrivalGo" onClick={() => setView('edi')}>Open EDI →</button>
             <button className="arrivalX" onClick={onDismissArrivals} title="Dismiss (keeps the tasks)">✕</button>
+          </div>
+        )}
+        {/* ── The same PO sent again (Nima, 2026-09-17) ────────────────────────
+            "50184318 was in our app unallocated but we just got the allocation and it
+            didn't show up in our feed or tell us to look to see if there was an
+            allocation as its the same PO sent again."
+
+            ⚠️ IT SITS BESIDE THE NEW-PO BANNER BECAUSE IT IS THE SAME WORK. A first 850
+            raises "enter into NetSuite"; a second one carrying the allocation raises
+            exactly that again, and only the first had a banner.
+
+            ⚠️ AND IT IS NOT DISMISSIBLE. The new-arrival banner can be dismissed because
+            its tasks survive the dismissal; this has no task behind it yet, so hiding it
+            would lose the only notice there is. */}
+        {resends?.banner && (
+          <div className={`banner arrival ${resends.banner.severity === 'warn' ? 'sev-hi' : ''}`}>
+            <span className="arrivalGlyph">♻️</span>
+            <span className="arrivalMsg">
+              {resends.banner.text} —{' '}
+              {resends.recent.slice(0, 4).map((f, i) => (
+                <span key={f.po}>
+                  {i > 0 && ', '}
+                  <strong>{f.po}</strong> <small>{f.summary}</small>
+                </span>
+              ))}
+              {resends.recent.length > 4 && ` +${resends.recent.length - 4} more`}
+            </span>
+            <button className="arrivalGo" onClick={() => setView('edi')}>Open EDI →</button>
           </div>
         )}
         {/* Whose-court strip — app-wide on purpose (Nima, 2026-07-31): the
