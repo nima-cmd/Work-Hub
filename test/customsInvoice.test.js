@@ -1,18 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildCustomsLines, categoryOf, describeLine, toDhlRows, toUpsRows, toCsv,
+  buildCustomsLines, categoryOf, describeLine, toDhlRows, toUpsRows, toCsv, hsCodeFor,
   HS_CODES, TAX_ID, DHL_COLUMNS, UPS_COLUMNS,
 } from '../src/model/customsInvoice.js'
 
 // Real lines off SO12302 (IF7508, Gee Beauty Canada), pulled live 2026-08-14.
 const LIVE = [
-  { item: 'SN03012LD-SEYCHELLES', displayName: 'St. Barths Small Tote | Seychelles', qty: 3, rate: 114, coo: 'CN', weight: 1.6 },
-  { item: 'SN03012LD-CASHMERE', displayName: 'St. Barths Small Tote | Cashmere', qty: 3, rate: 114, coo: 'CN', weight: 1.6 },
-  { item: 'SN03012LD-ONYX', displayName: 'St. Barths Small Tote | Onyx', qty: 3, rate: 114, coo: 'CN', weight: 1.6 },
-  { item: 'SN27183LD-CASHMERE', displayName: 'Soho Envelope Crossbody | Cashmere', qty: 2, rate: 114, coo: 'CN', weight: 1 },
-  { item: 'SN27183LD-CHOCOLATE', displayName: 'Soho Envelope Crossbody | Chocolate', qty: 2, rate: 114, coo: 'CN', weight: 1 },
-  { item: 'SN41263LD-ONYX', displayName: 'Porto Medium Half-Moon Bag | Onyx', qty: 1, rate: 154, coo: 'CN', weight: 1.17 },
+  { item: 'SN03012LD-SEYCHELLES', displayName: 'St. Barths Small Tote | Seychelles', qty: 3, rate: 114, coo: 'CN', weight: 1.6, hts: '4202228100' },
+  { item: 'SN03012LD-CASHMERE', displayName: 'St. Barths Small Tote | Cashmere', qty: 3, rate: 114, coo: 'CN', weight: 1.6, hts: '4202228100' },
+  { item: 'SN03012LD-ONYX', displayName: 'St. Barths Small Tote | Onyx', qty: 3, rate: 114, coo: 'CN', weight: 1.6, hts: '4202228100' },
+  { item: 'SN27183LD-CASHMERE', displayName: 'Soho Envelope Crossbody | Cashmere', qty: 2, rate: 114, coo: 'CN', weight: 1, hts: '4202228100' },
+  { item: 'SN27183LD-CHOCOLATE', displayName: 'Soho Envelope Crossbody | Chocolate', qty: 2, rate: 114, coo: 'CN', weight: 1, hts: '4202228100' },
+  { item: 'SN41263LD-ONYX', displayName: 'Porto Medium Half-Moon Bag | Onyx', qty: 1, rate: 154, coo: 'CN', weight: 1.17, hts: '4202228100' },
 ]
 
 // ⚠️ NIMA'S RULE, VERBATIM: "if multiple bags have the same price they can be counted
@@ -36,15 +36,36 @@ test('a shoe at the SAME price never joins a bag line', () => {
   assert.equal(at114.find((l) => l.category === 'shoe').qty, 4)
 })
 
-test('each category carries its own tariff code', () => {
+test("\u26a0\ufe0f the tariff code is the ITEM'S OWN, not a per-category constant", () => {
+  // Measured 2026-09-18: the bag constant '4202221000' is carried by ZERO of 4,153
+  // coded items, and the shoe constant matched 420 of 2,267. Shoes span seven codes,
+  // handbags four, accessories nine. Two constants cannot describe this catalogue.
   const b = buildCustomsLines([
-    { item: 'SN03012LD-ONYX', displayName: 'Tote', qty: 1, rate: 10, coo: 'CN', weight: 1 },
-    { item: 'NS03090CB-COSTA', displayName: 'Slide', qty: 1, rate: 10, coo: 'CN', weight: 1 },
+    { item: 'SN03012LD-ONYX', displayName: 'Tote', qty: 1, rate: 10, coo: 'CN', weight: 1, hts: '4202228100' },
+    { item: 'NS03090CB-COSTA', displayName: 'Slide', qty: 1, rate: 10, coo: 'CN', weight: 1, hts: '6404.20.4060' },
   ])
-  assert.equal(b.lines.find((l) => l.category === 'bag').hsCode, HS_CODES.bag)
-  assert.equal(b.lines.find((l) => l.category === 'shoe').hsCode, HS_CODES.shoe)
-  assert.equal(HS_CODES.bag, '4202221000')
-  assert.equal(HS_CODES.shoe, '6404193760')
+  assert.equal(b.lines.find((l) => l.category === 'bag').hsCode, '4202228100')
+  assert.equal(b.lines.find((l) => l.category === 'shoe').hsCode, '6404.20.4060')
+  assert.notEqual(b.lines[0].hsCode, HS_CODES.bag)
+})
+
+test('\u26a0\ufe0f FORMATTING IS PRESERVED \u2014 the catalogue holds dotted and undotted', () => {
+  // Both come straight from NetSuite. Normalising would be this app inventing a format
+  // for a legal identifier it does not own.
+  assert.equal(hsCodeFor({ hts: '6404.20.4060' }), '6404.20.4060')
+  assert.equal(hsCodeFor({ hts: '4202228100' }), '4202228100')
+  assert.equal(hsCodeFor({}), null)
+})
+
+test('\u26a0\ufe0f two items at the same price with DIFFERENT codes never merge', () => {
+  // Chelly supplies handbags AND pendants; a pendant is 711719, a bag is 4202228100.
+  // Merging them would declare jewellery as a handbag on a form somebody signs.
+  const b = buildCustomsLines([
+    { item: 'SN03012LD-ONYX', displayName: 'Tote', qty: 1, rate: 96, coo: 'CN', weight: 1, hts: '4202228100' },
+    { item: 'SN90001LD-GOLD', displayName: 'Pendant', qty: 1, rate: 96, coo: 'CN', weight: 0.1, hts: '711719' },
+  ])
+  assert.equal(b.lines.length, 2, 'same category, same price, different code \u2014 two lines')
+  assert.deepEqual(b.lines.map((l) => l.hsCode).sort(), ['4202228100', '711719'])
 })
 
 // ⚠️ Category comes from the item-number prefix because NetSuite's `class` is EMPTY on
@@ -57,11 +78,19 @@ test('category comes from the item prefix, and anything else is UNKNOWN', () => 
 
 // ⚠️ A wrong tariff code is a penalty and a held shipment. An item that is neither a
 // bag nor a shoe gets NO code and blocks the form, rather than quietly inheriting one.
-test('an unclassified item gets no HS code and stops the document', () => {
+test('an item with no tariff code stops the document', () => {
+  // \u26a0\ufe0f THE TEST CHANGED SHAPE WITH THE FIX. It used to assert "not a bag or a shoe",
+  // which was a proxy for "we cannot pick a code". The real question is whether the
+  // ITEM has one \u2014 a CC-prefixed item WITH an hts is now perfectly declarable.
+  // 72 shoes and 5 accessories have no hts on record; those are catalogue gaps.
   const b = buildCustomsLines([{ item: 'CC0001', displayName: 'Gift Card', qty: 1, rate: 50, coo: 'CN', weight: 0.1 }])
   assert.equal(b.lines[0].hsCode, null)
   assert.equal(b.ready, false)
-  assert.match(b.problems[0], /not a bag or a shoe/)
+  assert.match(b.problems[0], /no tariff code/)
+
+  const coded = buildCustomsLines([{ item: 'CC0001', displayName: 'Gift Card', qty: 1, rate: 50, coo: 'CN', weight: 0.1, hts: '4911.99' }])
+  assert.equal(coded.lines[0].hsCode, '4911.99')
+  assert.equal(coded.ready, true, 'an unknown CATEGORY is fine once the item has a code')
 })
 
 test('a clean shipment is ready', () => {

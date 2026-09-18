@@ -4643,9 +4643,29 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
        FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
        JOIN item i ON i.id = tl.item
       WHERE t.tranid = '${String(head.soNumber).replace(/'/g, "''")}' AND tl.itemtype = 'InvtPart'`)
+
+  // ⚠️ THE TARIFF CODE COMES FROM OUR OWN MIRROR, NOT FROM THIS QUERY, and that is not a
+  // shortcut. SuiteQL's `item` table exposes no HTS column — `hts`, `htsCode`, `hscode`
+  // and `itemhts` all 500 — because the field reaches us through the REST item record,
+  // which `weaver_netsuite_item` already mirrors for 4,153 of 4,284 items. Adding
+  // `i.hts` to the SELECT silently returned ZERO ROWS and emptied the declaration; the
+  // join below is what actually works.
+  //
+  // ⚠️ JOINED ON THE BARE SKU, which is what BUILTIN.DF returns here and what the mirror
+  // stores — verified at 1,381 of 1,382 open PO lines.
+  const skus = [...new Set((q.rows || []).map((r) => String(r.item || '').trim()).filter(Boolean))]
+  const htsBySku = new Map()
+  if (skus.length) {
+    const { rows: htsRows } = await pool.query(
+      'SELECT sku, hts FROM weaver_netsuite_item WHERE sku = ANY($1) AND hts IS NOT NULL', [skus])
+    for (const r of htsRows) htsBySku.set(r.sku, r.hts)
+  }
+
   const lines = (q.rows || []).map((r) => ({
     item: r.item, displayName: r.displayname, qty: Number(r.qty || 0),
     rate: Number(r.rate || 0), coo: r.coo || null, weight: Number(r.weight || 0),
+    // ⚠️ null, never a category default — a missing code must BLOCK the form.
+    hts: htsBySku.get(String(r.item || '').trim()) || null,
   }))
 
   // ⚠️ THE FULFILMENT IS READ BEFORE THE FORM IS BUILT, and that ordering is the fix

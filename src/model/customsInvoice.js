@@ -21,7 +21,29 @@
 // almost never split a line — but a customs declaration that averages two origins is
 // a false declaration, and "it never happens" is not a reason to make it possible.
 
-/** Nima's tariff codes, 2026-08-14. */
+/**
+ * ⚠️ THESE TWO CODES ARE A LAST RESORT, AND ON LIVE DATA THEY MATCH ALMOST NOTHING.
+ *
+ * Measured 2026-09-18 against `weaver_netsuite_item.hts`, which mirrors NetSuite and
+ * covers 4,153 of 4,284 items across 22 distinct codes:
+ *
+ *     bag  '4202221000'  → ZERO items carry it. Real handbags are '4202228100' (1,431).
+ *     shoe '6404193760'  → 420 of 2,267 shoes. Most are '6404.20.4060' (1,574).
+ *
+ * So every bag this app ever declared went out under a code that exists nowhere in the
+ * catalogue, and four shoes in five were declared under the wrong one. The codes were
+ * entered by hand in 2026-08 as a stand-in, and nothing checked them against the item
+ * master — which had them all along.
+ *
+ * ⚠️ AND TWO CODES CANNOT COVER THIS CATALOGUE. Shoes span SEVEN codes, handbags four,
+ * and accessories NINE — including 711719 and 7113.11, which are jewellery. Nima,
+ * 2026-09-18: "chelly ... does provide accessories like pendants as well which are
+ * totaly different items and have a different code attached". A per-category constant
+ * is the wrong shape for the problem; the item knows its own code.
+ *
+ * Kept only so an item with NO hts on record can still be described — and even then
+ * `hsCode` is left NULL rather than filled from here. See hsCodeFor.
+ */
 export const HS_CODES = { bag: '4202221000', shoe: '6404193760' }
 /** Naghedi's tax ID — the UPS form's "Manufacturer's ID". */
 export const TAX_ID = '850727470'
@@ -39,6 +61,36 @@ export function categoryOf(itemId) {
   if (p === 'SN') return 'bag'
   if (p === 'NS') return 'shoe'
   return 'unknown'
+}
+
+/**
+ * The tariff code for one line — the ITEM'S OWN, never a category default.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ Every item in NetSuite carries its own HTS code (the number customs uses to │
+ * │ decide the duty). We mirror all of them. This returns that code.            │
+ * │                                                                             │
+ * │ Until now the app ignored them and stamped one code on every bag and        │
+ * │ another on every shoe. Both were wrong: the bag code matches no item at     │
+ * │ all, and most shoes are a different code from the one we used.              │
+ * │                                                                             │
+ * │ If an item has no code on record, this returns NOTHING rather than          │
+ * │ guessing. A missing code stops the paperwork and someone fills it in; a     │
+ * │ guessed one is a false declaration that nobody ever notices.                │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ⚠️ FORMATTING IS PRESERVED EXACTLY AS NETSUITE HOLDS IT. The same catalogue stores
+ * both '4202228100' and '6404.20.4060' — dotted and undotted. Normalising here would
+ * be this app inventing a format for a legal identifier it does not own, and the dots
+ * are how a person recognises the code on the DHL form. Compare on digits if you must
+ * compare; transmit what the item says.
+ */
+export function hsCodeFor(line = {}) {
+  const hts = String(line.hts ?? '').trim()
+  // ⚠️ NO FALLBACK TO HS_CODES. An item with no tariff code on record is a catalogue
+  // gap (72 shoes and 5 accessories on 2026-09-18) and must surface as a problem, not
+  // be quietly filled from a category constant that is wrong anyway.
+  return hts || null
 }
 
 /**
@@ -125,7 +177,11 @@ const round2 = (n) => Math.round(Number(n || 0) * 100) / 100
  * @param lines [{ item, displayName, qty, rate, coo, weight }]
  */
 export function buildCustomsLines(lines = [], opts = {}) {
-  const { hsCodes = HS_CODES } = opts
+  // ⚠️ `hsCodes` IS ACCEPTED AND DELIBERATELY UNUSED. It was the category→code map; the
+  // code now comes from the item itself (hsCodeFor). The option stays so existing
+  // callers do not break, and this note stays so nobody wires it back in believing it
+  // is the source of truth. Remove both once no caller passes it.
+  const { hsCodes: _unusedHsCodes = HS_CODES } = opts
   const byKey = new Map()
   for (const l of lines) {
     const qty = Number(l.qty || 0)
@@ -133,11 +189,21 @@ export function buildCustomsLines(lines = [], opts = {}) {
     const category = categoryOf(l.item)
     const unitPrice = money(l.rate)
     const coo = (l.coo || '').toUpperCase() || null
-    const key = `${category}|${unitPrice}|${coo || '?'}`
+    // ⚠️ THE TARIFF CODE JOINS THE KEY, and it is load-bearing for the same reason the
+    // country of origin is. Chelly supplies handbags AND pendants; a pendant is 711719
+    // and a bag is 4202228100. Two such items at the same price would otherwise collapse
+    // into one line and be declared under whichever sorted first — jewellery filed as a
+    // handbag, on a form somebody signs. Nima, 2026-09-18: pendants "are totaly
+    // different items and have a different code attached".
+    const hsCode = hsCodeFor(l)
+    const key = `${category}|${unitPrice}|${coo || '?'}|${hsCode || '?'}`
     if (!byKey.has(key)) {
       byKey.set(key, {
         category, unitPrice, coo,
-        hsCode: hsCodes[category] || null,
+        // ⚠️ THE ITEM'S OWN CODE. `hsCodes` is no longer consulted — see HS_CODES for
+        // what the two category constants actually matched on live data (a bag code
+        // carried by zero items).
+        hsCode,
         qty: 0, weightLb: 0, items: [], names: [],
       })
     }
@@ -167,7 +233,14 @@ export function buildCustomsLines(lines = [], opts = {}) {
 
   const problems = []
   for (const l of out) {
-    if (l.category === 'unknown') problems.push(`${l.items[0]}: not a bag or a shoe by item number — needs an HS code by hand`)
+    // ⚠️ NO TARIFF CODE IS THE BLOCKING PROBLEM NOW, and it replaces the category test.
+    // "Not a bag or a shoe by item number" was a proxy for "we cannot pick a code"; the
+    // real question is simply whether the ITEM has one. 72 shoes and 5 accessories have
+    // no hts on record (2026-09-18) — those are catalogue gaps someone must fill, and a
+    // line without a code cannot be declared at all.
+    if (!l.hsCode) {
+      problems.push(`${l.items[0]}: no tariff code (HTS) on the item record — it cannot be declared until one is set in NetSuite`)
+    }
     if (!l.coo) problems.push(`${l.items[0]}: no country of origin on the item record`)
     if (l.missingWeight) problems.push(`${l.items[0]}: no weight on the item record`)
   }
