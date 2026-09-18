@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BUILDINGS, BUILDING, ROADS, roadFor, buildingStates, moversFrom, isMoverEvent, centreOf, CORRIDOR_Y,
+  BUILDINGS, BUILDING, ROADS, roadFor, buildingStates, moversFrom, isMoverEvent, centreOf, CORRIDOR_Y, CORRIDORS,
 } from '../src/model/baseMap.js'
 
 // ── The base is coherent ────────────────────────────────────────────────────
@@ -425,16 +425,18 @@ test('the Archive declares itself uncountable rather than inventing a number', (
   assert.equal(s.datapad.count, 0)
 })
 
-test('every building still has a state after growing to fourteen', () => {
+test('every building still has a state after growing to fifteen', () => {
   const s = buildingStates({ orders: [so()] })
   // ⚠️ A DELIBERATE CANARY: adding a building must trip this and make someone check
   // that it has a state, a road and a real sprite. Bump it knowingly, never reflexively.
   // Bumped 2026-09-15 for the Landing bay — checked: it has a state (above), two roads
   // (port→receiving, port→stock) and a real sprite (bldg-02, mirrored off Receiving).
   // Bumped 2026-09-18 for Seasons — checked: it has a state (uncountable, like the
-  // Archive), two roads (calendar→seasons, seasons→port) and a real sprite (bldg-09,
-  // mirrored off the Almanac, which is the only other date building).
-  assert.equal(BUILDINGS.length, 14)
+  // Archive), two roads and a real sprite.
+  // Bumped 2026-09-18 for the Barracks — checked: it has a state (uncountable), two
+  // roads (stock→barracks, barracks→edi) and a real sprite (bldg-08, the long low
+  // block, mirrored off the EDI relay).
+  assert.equal(BUILDINGS.length, 15)
   for (const b of BUILDINGS) {
     assert.ok(s[b.key], `${b.key} has no state`)
     assert.ok(Array.isArray(s[b.key].items))
@@ -539,17 +541,31 @@ test('⚠️ NO ROAD MAY CUT THROUGH A BUILDING IT DOES NOT CONNECT', () => {
       }
     }
   }
-  assert.ok(crossings.size <= 3, `roads cut through buildings: ${[...crossings].join(', ')}`)
+  assert.ok(crossings.size <= 2, `roads cut through buildings: ${[...crossings].join(', ')}`)
   for (const c of crossings) assert.ok(!c.endsWith('-> seasons'), `a road cuts the Command Center: ${c}`)
 })
 
-test('⚠️ the corridor is empty — no building sits in the lane the roads use', () => {
-  // CORRIDOR_Y only works because nothing is there. If a building is ever placed across
-  // it, the re-routed roads start cutting through that instead, silently.
-  for (const b of BUILDINGS) {
-    const spans = b.y < CORRIDOR_Y && b.y + b.h > CORRIDOR_Y
-    assert.ok(!spans, `${b.key} sits across the corridor at y=${CORRIDOR_Y}`)
+test('⚠️ EVERY corridor is empty — no building sits in a lane the roads use', () => {
+  // A corridor only works because nothing is there. Place a building across one and the
+  // re-routed roads start cutting through it, silently. There are two now: the band
+  // between the north and goods rows, and the one between goods and supply.
+  assert.ok(CORRIDORS.length >= 2)
+  for (const cy of CORRIDORS) {
+    for (const b of BUILDINGS) {
+      assert.ok(!(b.y < cy && b.y + b.h > cy), `${b.key} sits across the corridor at y=${cy}`)
+    }
   }
+})
+
+test('the Barracks is a building, and anyone may walk in', () => {
+  const b = BUILDINGS.find((x) => x.key === 'barracks')
+  assert.ok(b, 'it is on the map')
+  assert.equal(b.view, 'barracks')
+  assert.equal(b.countable, false)
+  // ⚠️ No minimum rank: the place you go to BE ranked cannot require a rank.
+  assert.equal(b.minRank, null)
+  assert.ok(roadFor('stock', 'barracks'))
+  assert.ok(roadFor('barracks', 'edi'))
 })
 
 test('⚠️ the Command Center is NOT COUNTABLE — its real number has no feed here', () => {

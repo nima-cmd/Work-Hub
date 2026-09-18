@@ -2450,3 +2450,54 @@ CREATE UNIQUE INDEX IF NOT EXISTS to_item_season_named
   ON to_item_season (to_number, season) WHERE season IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS to_item_season_unseasoned
   ON to_item_season (to_number) WHERE season IS NULL;
+
+-- ── Crew: rank is CONFERRED, posting is a DAY'S ASSIGNMENT (2026-09-18) ──────
+--
+-- Nima: "i want affection and rank to be two separate things affection could make the
+-- case to promote but i think the promotion should be left to me."
+--
+-- ⚠️ BOTH TABLES HOLD ENTERED VALUES, WHICH IS THE WHOLE POINT. Affection is DERIVED
+-- from completed quest_tasks every time it is asked for, and nothing stores it. A rank
+-- and a posting are decisions somebody made, so they are stored WITH WHO MADE THEM —
+-- the [[prefer-entered-over-derived]] rule, which requires an entered value to be
+-- schema-distinguishable from an observed one and to carry its reason.
+--
+-- ⚠️ NOBODY IS SEEDED. Yoda has 3,531 affection and 236 completed missions and holds no
+-- row here until a person grants him one; src/model/crewRank.js treats a missing row as
+-- Recruit. Seeding rank from affection would merge the two systems the schema exists to
+-- keep apart.
+CREATE TABLE IF NOT EXISTS crew_rank (
+  character_id TEXT PRIMARY KEY,
+  rank         TEXT NOT NULL,
+  granted_by   TEXT,
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- What the app would have suggested when the promotion was made. ⚠️ NEVER read back
+  -- as the rank — it is a record of what was overridden, exactly like
+  -- doc_seasons.suggested_was.
+  suggested_was TEXT,
+  note         TEXT
+);
+
+-- One crew member per building per day.
+--
+-- ⚠️ KEYED ON (day, building), NOT ON character. A person may not hold two posts on the
+-- same day and a building may not have two people — but the SAME person on DIFFERENT
+-- days is the normal case, and a character-keyed table could not express a history.
+--
+-- ⚠️ AND IT IS PER DAY ON PURPOSE. Nima wants the posting to earn affection from work
+-- done in that building, so "who was posted when" has to be answerable after the fact.
+-- A single current-assignment column would overwrite the evidence every morning.
+CREATE TABLE IF NOT EXISTS crew_posting (
+  on_date      DATE NOT NULL,
+  building     TEXT NOT NULL,
+  character_id TEXT NOT NULL,
+  posted_by    TEXT,
+  posted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (on_date, building)
+);
+-- ⚠️ ONE POST PER PERSON PER DAY, enforced rather than trusted: without this a character
+-- could be posted to three buildings at once and every "who is manning X" answer would
+-- still look right.
+CREATE UNIQUE INDEX IF NOT EXISTS crew_posting_one_post_per_day
+  ON crew_posting (on_date, character_id);
+CREATE INDEX IF NOT EXISTS crew_posting_by_character ON crew_posting (character_id, on_date DESC);

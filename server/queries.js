@@ -20,6 +20,9 @@ import { seasonFor, REASONS, SEASONS } from '../src/model/poSeason.js'
 import { dropsFrom, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
 import { seasonBoard } from '../src/model/seasonBoard.js'
 import { mirrorFreshness } from '../src/model/mirrorFreshness.js'
+import { RANKS, rankFor, canMan, recommend, promotionBoard } from '../src/model/crewRank.js'
+import { postingsForBase } from '../src/model/crewOnBase.js'
+import { BUILDINGS } from '../src/model/baseMap.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -66,7 +69,7 @@ import { computeContainerView } from '../src/model/ocPoContainers.js'
 import { groupContainers, lateContainers } from '../src/model/containers.js'
 import { computeEdiPipeline } from '../src/model/ediPipeline.js'
 import { computeEdiWork } from '../src/model/ediWork.js'
-import { computeAffection } from '../src/model/affection.js'
+import { computeAffection, levelFor } from '../src/model/affection.js'
 import { SPINE_LABEL, timeline, isOurInvoiceNumber, invNumberFrom810 } from '../src/model/orderEvents.js'
 import {
   TRACE_TYPES, normalizeRef, buildTrace, orderCard, fulfillmentCards, invoiceCards,
@@ -7154,5 +7157,152 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
     // the count is on the screen rather than inferred from a blank column.
     unmixed: pos.filter((p) => !p.mix.length).map((p) => p.poNumber),
     drops,
+  }
+}
+
+// ── The barracks: rank, and today's postings (2026-09-18) ────────────────────
+//
+// Nima: "i want affection and rank to be two separate things affection could make the
+// case to promote but i think the promotion should be left to me", and later: "we may
+// need a new building in the base called barracks for crew managment".
+//
+// ⚠️ AFFECTION IS COMPUTED, RANK IS READ. They come from different places on purpose and
+// are never merged: `computeAffection` derives a bond from completed quest_tasks every
+// time it is asked for, while `crew_rank` holds a decision somebody made, with their name
+// and the date on it. See src/model/crewRank.js.
+export async function getBarracks({ on = null } = {}) {
+  const day = on || new Date().toISOString().slice(0, 10)
+  const affection = await getAffection()
+  const bondByChar = new Map(affection.map((a) => [a.characterId, a]))
+
+  const { rows: rankRows } = await pool.query(
+    `SELECT character_id, rank, granted_by, granted_at, suggested_was, note FROM crew_rank`)
+  const rankByChar = new Map(rankRows.map((r) => [r.character_id, {
+    rank: r.rank, grantedBy: r.granted_by, grantedAt: r.granted_at,
+    suggestedWas: r.suggested_was, note: r.note,
+  }]))
+
+  const { rows: postRows } = await pool.query(
+    `SELECT building, character_id, posted_by, posted_at FROM crew_posting WHERE on_date = $1`, [day])
+
+  // ⚠️ THE WHOLE ROSTER, not just people with a rank or a bond. A character nobody has
+  // worked with yet is still someone you can post — and the promotion pass has to show
+  // all 43 at once, which is what `promotionBoard` is for.
+  const crew = CHARACTERS.map((c) => {
+    const a = bondByChar.get(c.id)
+    const points = a?.points ?? 0
+    return {
+      id: c.id,
+      name: c.name,
+      universe: c.universe,
+      bond: { ...levelFor(points), points },
+      missions: a?.missions?.length ?? a?.completed ?? 0,
+      record: rankByChar.get(c.id) || null,
+    }
+  })
+
+  const board = promotionBoard(crew.map((c) => ({ ...c, record: c.record })))
+
+  const postings = postRows.map((p) => ({
+    building: p.building, characterId: p.character_id,
+    postedBy: p.posted_by, postedAt: p.posted_at,
+  }))
+  const postedIds = new Set(postings.map((p) => p.characterId))
+
+  return {
+    day,
+    crew: board,
+    postings,
+    byBuilding: postingsForBase({
+      postings, ranks: rankByChar, buildings: BUILDINGS, canMan,
+    }),
+    // ⚠️ Posts nobody is standing in — the honest headline for the Barracks building,
+    // and the number it will show once the Base is given this feed.
+    unmanned: BUILDINGS.filter((b) => !postedIds.has(null) && !postings.some((p) => p.building === b.key))
+      .map((b) => ({ key: b.key, label: b.label, minRank: b.minRank || null })),
+    ranks: RANKS,
+  }
+}
+
+/**
+ * Grant a rank. ⚠️ THE ONLY WAY A RANK EVER CHANGES.
+ *
+ * Nothing computes this, nothing schedules it, and there is no path from affection to
+ * here — `recommend()` returns a suggestion and a person acts on it or does not.
+ */
+export async function grantRank({ characterId, rank, by, note } = {}) {
+  const id = String(characterId || '').trim()
+  if (!id || !getCharacterById(id)) return { ok: false, status: 400, error: `not a crew member: ${characterId}` }
+
+  // ⚠️ CLEARING IS AN OUTCOME, not an error — removing the row returns them to Recruit,
+  // which crewRank.js treats as "never granted" rather than "demoted".
+  if (!rank) {
+    await pool.query('DELETE FROM crew_rank WHERE character_id = $1', [id])
+    return { ok: true, characterId: id, cleared: true }
+  }
+  if (!rankFor(rank)) return { ok: false, status: 400, error: `not a rank on the ladder: ${rank}` }
+
+  // What the app would have suggested, captured at the moment of granting — the same
+  // pattern as doc_seasons.suggested_was, and never read back as the rank.
+  const affection = await getAffection()
+  const a = affection.find((x) => x.characterId === id)
+  const suggestion = recommend({
+    bond: a ? { ...levelFor(a.points || 0), points: a.points } : null,
+    record: null,
+    missions: a?.missions?.length ?? 0,
+  })
+
+  const { rows } = await pool.query(
+    `INSERT INTO crew_rank (character_id, rank, granted_by, granted_at, suggested_was, note)
+          VALUES ($1, $2, $3, now(), $4, $5)
+     ON CONFLICT (character_id) DO UPDATE SET
+       rank = EXCLUDED.rank, granted_by = EXCLUDED.granted_by, granted_at = now(),
+       suggested_was = EXCLUDED.suggested_was, note = EXCLUDED.note
+     RETURNING character_id AS "characterId", rank, granted_by AS "grantedBy", granted_at AS "grantedAt"`,
+    [id, rank, by || null, suggestion.target?.key || null, note || null])
+  return { ok: true, ...rows[0] }
+}
+
+/**
+ * Post a crew member to a building for a day.
+ *
+ * ⚠️ IT REFUSES WHEN THE RANK IS TOO LOW, and says what would fix it. The gate is the
+ * point of the ladder — a Commander's post that anyone can be dropped into is decoration.
+ */
+export async function postCrew({ building, characterId, on = null, by } = {}) {
+  const day = on || new Date().toISOString().slice(0, 10)
+  const b = BUILDINGS.find((x) => x.key === building)
+  if (!b) return { ok: false, status: 400, error: `not a building: ${building}` }
+
+  // ⚠️ CLEARING A POST IS AN OUTCOME — the building goes back to "needs crew".
+  if (!characterId) {
+    await pool.query('DELETE FROM crew_posting WHERE on_date = $1 AND building = $2', [day, building])
+    return { ok: true, building, cleared: true, day }
+  }
+  const id = String(characterId).trim()
+  if (!getCharacterById(id)) return { ok: false, status: 400, error: `not a crew member: ${characterId}` }
+
+  const { rows: rr } = await pool.query('SELECT rank FROM crew_rank WHERE character_id = $1', [id])
+  const check = canMan(rr[0] || null, b.minRank)
+  if (!check.ok) return { ok: false, status: 409, error: check.why }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO crew_posting (on_date, building, character_id, posted_by, posted_at)
+            VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (on_date, building) DO UPDATE SET
+         character_id = EXCLUDED.character_id, posted_by = EXCLUDED.posted_by, posted_at = now()
+       RETURNING building, character_id AS "characterId", on_date AS "day"`,
+      [day, building, id, by || null])
+    return { ok: true, ...rows[0] }
+  } catch (e) {
+    // ⚠️ THE ONE-POST-PER-DAY INDEX FIRING IS NOT A CRASH, it is the rule working. Say
+    // where they already are rather than reporting a database error.
+    if (e.code === '23505') {
+      const { rows: where } = await pool.query(
+        'SELECT building FROM crew_posting WHERE on_date = $1 AND character_id = $2', [day, id])
+      return { ok: false, status: 409, error: `they are already posted to ${where[0]?.building || 'another building'} today` }
+    }
+    throw e
   }
 }

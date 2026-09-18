@@ -1169,14 +1169,22 @@ export function CustomsButton({ ifNumber }) {
               <ul>{doc.problems.map((p) => <li key={p}>{p}</li>)}</ul>
             </div>
           )}
-          <table className="cxTable">
-            <thead><tr>{doc.dhl.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-            <tbody>
-              {doc.dhl.rows.map((row, i) => (
-                <tr key={i}>{row.map((c, j) => <td key={j} className={j === 1 ? 'rt-mono' : ''}>{String(c)}</td>)}</tr>
-              ))}
-            </tbody>
-          </table>
+          {/* ⚠️ THE TABLE SCROLLS SIDEWAYS RATHER THAN BEING CUT OFF. It has seven
+              columns inside a card sized for a kanban lane, so the description and the
+              last columns were being clipped with no way to reach them — a customs form
+              you cannot read all of is worse than no preview (Nima, 2026-09-18:
+              "information not lost"). The panel itself scrolls vertically for the same
+              reason: a 20-line declaration ran off the bottom. */}
+          <div className="cxTableWrap">
+            <table className="cxTable">
+              <thead><tr>{doc.dhl.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+              <tbody>
+                {doc.dhl.rows.map((row, i) => (
+                  <tr key={i}>{row.map((c, j) => <td key={j} className={j === 1 ? 'rt-mono' : ''}>{String(c)}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="cxFoot">
             <a className="btn" href={`/api/customs/${ifNumber}/dhl.csv`}>⤓ DHL CSV</a>
             <a className="btn" href={`/api/customs/${ifNumber}/ups.csv`}>⤓ UPS CSV</a>

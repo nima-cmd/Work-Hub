@@ -2914,7 +2914,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .kbSearch { padding: 5px 9px; font-size: 12px; min-width: 260px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: inherit; }
 
 /* Commercial invoice panel */
-.cxDoc { margin: 6px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; }
+.cxDoc { margin: 6px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 11px;
+  /* ⚠️ A long declaration used to run off the bottom of the card with no way to reach
+     the rest of it. 75vh keeps the whole panel on screen and scrolls the overflow. */
+  max-height: 75vh; overflow-y: auto; }
+/* ⚠️ Seven columns inside a kanban-width card. Without this the description and the
+   right-hand columns are simply cut off — see the note in lib.jsx. */
+.cxTableWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.cxTableWrap .cxTable { min-width: 560px; }
 .cxHead { margin-bottom: 6px; }
 .cxTable { width: 100%; border-collapse: collapse; font-size: 10.5px; }
 .cxTable th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 6px 3px 0; }

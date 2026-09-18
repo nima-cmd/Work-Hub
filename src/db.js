@@ -354,6 +354,10 @@ export const APP_OWNED_TABLES = [
   'recurring_task_templates', 'notes', 'doc_links', 'email_links', 'oc_po_links',
   'edi_manual_links', 'edi_manual_orders', 'edi_po_resolutions', 'shipstation_order',
   'day_plan_item', 'email_character_prefs', 'doc_seasons', 'transfer_receipt',
+  // ⚠️ Rank and postings are DECISIONS A PERSON MADE. Affection is derived and comes
+  // back on its own; a promotion does not. Losing these is losing the only record of
+  // who was given what and who was posted where.
+  'crew_rank', 'crew_posting',
 ]
 
 // ⚠️ CLIENTS TOO, and this was a real hole. The meter originally wrapped only
