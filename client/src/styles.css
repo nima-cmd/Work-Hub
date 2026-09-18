@@ -3624,3 +3624,22 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .c-x:hover { color: #ffb3ad; }
 
 .c-remainder { color: var(--muted); font-size: 12px; font-style: italic; }
+
+/* ── The season board (2026-09-18) ───────────────────────────────────────── */
+.seasons-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.seasons-note { max-width: 70ch; font-size: 13px; margin: 0 0 14px; }
+.card.season { display: block; padding: 14px 16px; margin-bottom: 12px; }
+.season-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; cursor: pointer; flex-wrap: wrap; }
+.season-head h3 { margin: 0 0 3px; font-size: 16px; }
+.season-sub { font-size: 12px; }
+.season-figs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.season-lanes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.season-grid { margin-top: 12px; width: 100%; }
+.season-grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+.season-grid th { font-size: 11px; line-height: 1.3; vertical-align: bottom; }
+/* ⚠️ FOB and unrouted stock are stock that does NOT arrive here — dimmed so a row of
+   "China" never reads as inbound supply for a drop. See src/model/poLane.js. */
+.season-grid .lane-fob { color: var(--muted); font-style: italic; }
+.season-grid .lane-unknown { color: var(--hi); }
+.overdue-pill { margin-left: 6px; font-size: 11px; padding: 1px 6px; white-space: nowrap; }
+.season-grid td:nth-child(6) { white-space: nowrap; }

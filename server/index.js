@@ -27,6 +27,7 @@ import {
   getInboundContainers,
   recordContainerDelivered,
   getContainers,
+  getSeasonBoard,
   getPo850Resends,
   waiveShipmentAsn,
   setTransferPurpose,
@@ -1597,6 +1598,17 @@ app.post('/api/seasons', async (req, res) => {
   } catch (e) {
     console.error(e)
     res.status(400).json({ error: e.message })
+  }
+})
+
+// The season board (2026-09-18) — open POs grouped by the season they buy for, with
+// the lane the stock is going to and the drop it has to make.
+app.get('/api/season-board', async (_req, res) => {
+  try {
+    res.json(await getSeasonBoard({}))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
   }
 })
 
