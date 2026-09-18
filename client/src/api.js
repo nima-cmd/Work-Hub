@@ -1431,3 +1431,18 @@ export async function fetchPo850Resends() {
 export async function fetchSeasonBoard() {
   return asJson(await fetch('/api/season-board'), 'loading the season board')
 }
+
+// The barracks — rank and postings (2026-09-18).
+export async function fetchBarracks(on) {
+  return asJson(await fetch(`/api/barracks${on ? `?on=${encodeURIComponent(on)}` : ''}`), 'loading the barracks')
+}
+export async function grantRank(body) {
+  return asJson(await fetch('/api/barracks/rank', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }), 'granting the rank')
+}
+export async function postCrew(body) {
+  return asJson(await fetch('/api/barracks/post', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }), 'posting the crew member')
+}

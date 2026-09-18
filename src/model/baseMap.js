@@ -171,14 +171,34 @@ export const BUILDINGS = [
   {
     key: 'stock', label: 'Stock depot', sprite: 'bldg-03', tone: 'money',
     // Twin silos beside a long hall — the pool ATS orders pull from.
-    x: 10, y: 66, w: 12, h: 16,
+    x: 4, y: 66, w: 12, h: 16,
     of: 'orders pulling from stock', view: 'table',
     minRank: 'sergeant',
   },
   {
+    key: 'barracks', label: 'Barracks', sprite: 'bldg-08', tone: 'hands', flip: true,
+    // ⚠️ THE LONG LOW BLOCK, MIRRORED — bldg-08 is described in the sprite README as
+    // exactly that, which is what barracks look like from above. The EDI relay uses it
+    // natural; sprite+flip stays unique.
+    //
+    // Nima, 2026-09-18: "we may need a new building in the base called barracks for crew
+    // managment". It is where the crew live, so it is a building about PEOPLE rather than
+    // about goods or dates — it sits in the south row with room around it, and the Stock
+    // depot and EDI relay shifted to make that room (the PLATES are ~14% of the map wide,
+    // so neighbours are spaced by the label, not the sprite).
+    x: 21, y: 66, w: 11, h: 16,
+    // ⚠️ NOT COUNTABLE — and unlike the Archive this one has an honest number waiting.
+    // "How many posts are unmanned today" is real and cheap, but the Base is fed only
+    // what App already loads and postings are not in that feed yet. It shows its label
+    // until they are, rather than a figure that almost means the same thing.
+    of: 'rank and post the crew', view: 'barracks', countable: false,
+    // Anyone may walk into the barracks.
+    minRank: null,
+  },
+  {
     key: 'edi', label: 'EDI relay', sprite: 'bldg-08', tone: 'edi',
     // A long low block: the transmission hall for the partner lane.
-    x: 34, y: 67, w: 13, h: 15,
+    x: 36, y: 67, w: 13, h: 15,
     of: 'partner orders still open', view: 'edi',
     minRank: 'captain',
   },
@@ -232,6 +252,14 @@ export const centreOf = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
 // while its freight roads still reach the Pack house and the Launch pad.
 export const CORRIDOR_Y = 23.5
 
+// ⚠️ THE SECOND EMPTY BAND, between the goods row (ends y=52) and the supply row (starts
+// y=66). Needed once the Barracks moved into the south row: `stock-pack` carries
+// IF_CREATED and its halfway dogleg now turns straight through the new building.
+export const SOUTH_CORRIDOR_Y = 59
+
+/** Every horizontal lane roads may route along. Nothing may be placed across one. */
+export const CORRIDORS = [CORRIDOR_Y, SOUTH_CORRIDOR_Y]
+
 export const ROADS = [
   // The flow of goods, west to east. The port is the first door: freight lands there
   // before anything downstream can draw on it.
@@ -239,7 +267,10 @@ export const ROADS = [
   { key: 'port-stock', from: 'port', to: 'stock' },
   { key: 'in-stock', from: 'receiving', to: 'stock' },
   { key: 'in-pack', from: 'receiving', to: 'pack' },
-  { key: 'stock-pack', from: 'stock', to: 'pack' },
+  // ⚠️ CORRIDOR-ROUTED since the Barracks arrived. This road carries IF_CREATED, so
+  // dropping it would silently delete movers; its halfway turn now runs through the
+  // Barracks, so it takes the empty band below the goods row instead.
+  { key: 'stock-pack', from: 'stock', to: 'pack', viaY: SOUTH_CORRIDOR_Y },
   // ⚠️ THESE TWO TAKE THE CORRIDOR (`viaY`), not the default halfway dogleg. With the
   // Scan bay up in the north row the halfway turn drove both roads through the Command
   // Center and the Archive. CORRIDOR_Y is the empty band between the two rows — the
@@ -247,7 +278,13 @@ export const ROADS = [
   { key: 'pack-scan', from: 'pack', to: 'scan', viaY: CORRIDOR_Y },
   { key: 'scan-launch', from: 'scan', to: 'launch', viaY: CORRIDOR_Y },
   // The partner lane, along the south side.
-  { key: 'stock-edi', from: 'stock', to: 'edi' },
+  // ⚠️ WAS `stock-edi`, WHICH NOW RAN THROUGH THE BARRACKS — it moved in between them.
+  // Chained through it instead, the same fix as the Almanac/Scan bay/Archive row.
+  // ⚠️ THE BARRACKS JOINS ITS NEIGHBOURS IN THE ROW, not the Ops centre. The straight
+  // line from the desk to the south row runs through the Pack house — see the Command
+  // Center's note on what happens when a building inherits roads it has not earned.
+  { key: 'stock-barracks', from: 'stock', to: 'barracks' },
+  { key: 'barracks-edi', from: 'barracks', to: 'edi' },
   { key: 'pack-edi', from: 'pack', to: 'edi' },
   { key: 'edi-routing', from: 'edi', to: 'routing' },
   { key: 'routing-launch', from: 'routing', to: 'launch' },
@@ -467,6 +504,9 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
     // its label until the feed reaches it — never a cheaper number that almost means
     // the same thing. See the building's note.
     seasons: state(0, [], 'none', () => null),
+    // ⚠️ NOT COUNTABLE YET — see the building. "Unmanned posts today" is the honest
+    // number and it needs the postings feed the Base is not given.
+    barracks: state(0, [], 'none', () => null),
     comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
     ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }

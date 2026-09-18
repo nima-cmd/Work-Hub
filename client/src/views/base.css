@@ -378,3 +378,37 @@
 }
 
 @media (prefers-reduced-motion: reduce) { .bsWinOn, .bsWinOn::after { animation: none; } }
+
+/* ── Who mans this building, on the stage itself (2026-09-18) ────────────── */
+/* ⚠️ TOP-RIGHT, where the sprite is not. The building art is centred and square-ish,
+   so the corners are the only space that can be claimed without covering it. Sized in
+   `min()` so it grows with the panel and stops before it reaches the roof. */
+.biStageCrew {
+  position: absolute; right: 10px; top: 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  z-index: 2; pointer-events: none;
+}
+.biStageFace {
+  width: min(9vw, 120px); height: min(9vw, 120px);
+  border-radius: 50%; object-fit: cover;
+  border: 2px solid var(--tone);
+  box-shadow: 0 0 18px rgba(0,0,0,0.65), 0 0 12px var(--tone);
+  background: #05070d;
+}
+.biStageFaceNone {
+  display: grid; place-items: center;
+  color: var(--muted); border-style: dashed; border-color: var(--line);
+  box-shadow: none; font-size: 26px;
+}
+.biStageWho {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  background: rgba(5,7,13,0.82); border: 1px solid var(--line); border-radius: 4px;
+  padding: 3px 8px; max-width: min(16vw, 170px);
+}
+.biStageName { font-size: 11px; font-weight: 600; text-align: center; }
+.biStageRank {
+  font-family: var(--display); font-size: 8.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--tone);
+}
+.biStageCrewEmpty .biStageName { color: var(--mid); }
+.biStageCrewEmpty .biStageRank { color: var(--muted); }

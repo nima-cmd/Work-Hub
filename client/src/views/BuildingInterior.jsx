@@ -16,7 +16,10 @@
 
 const CRT_ROWS = 7
 
-export default function BuildingInterior({ building, state, onBack }) {
+import { imagesFor } from '../data/characterImages.js'
+import { faceFor } from '../data/crewFaces.js'
+
+export default function BuildingInterior({ building, state, posting = null, onBack }) {
   const alerts = state?.alerts || []
   const count = state?.count ?? 0
 
@@ -38,6 +41,36 @@ export default function BuildingInterior({ building, state, onBack }) {
         <span className="biScan" />
         {/* The affordance. Without it the image is a secret door. */}
         <span className="biBackHint">← the whole base</span>
+
+        {/* ⚠️ WHO MANS THIS BUILDING, LARGE, IN THE TOP-RIGHT (Nima, 2026-09-18: "the
+            portrait should be in the top right corner as big as we can without
+            conflicting with the actual base"). The sprite is centred and its corners are
+            empty, so this claims space nothing else uses.
+            ⚠️ IT IS AN <img> AND A <span>, DELIBERATELY. This subtree lives inside the
+            back button, and anything interactive here would be a button in a button —
+            the trap the note above records. Clicking the portrait leaves the building,
+            exactly like clicking the roof does, so the gesture stays consistent. */}
+        <span className={`biStageCrew${posting?.characterId ? '' : ' biStageCrewEmpty'}`}>
+          {posting?.characterId && (faceFor(posting.characterId) || imagesFor(posting.characterId)?.[0])
+            ? <img className="biStageFace"
+                   src={faceFor(posting.characterId) || imagesFor(posting.characterId)[0]} alt="" />
+            : <span className="biStageFace biStageFaceNone">?</span>}
+          <span className="biStageWho">
+            {posting?.characterId
+              ? (
+                <>
+                  <span className="biStageName">{posting.name || posting.characterId}</span>
+                  {posting.rank && <span className="biStageRank">{posting.rank}</span>}
+                </>
+              )
+              : (
+                <>
+                  <span className="biStageName">unmanned</span>
+                  {building.minRank && <span className="biStageRank">needs {building.minRank}</span>}
+                </>
+              )}
+          </span>
+        </span>
       </button>
 
       {/* ── The console ───────────────────────────────────────────────────── */}
@@ -45,6 +78,33 @@ export default function BuildingInterior({ building, state, onBack }) {
         <div className="biConsoleTop">
           <span className="biName">{building.label}</span>
           <span className="biSub">interior · live</span>
+          {/* ⚠️ WHO IS STANDING IN HERE. Nima, 2026-09-18: "we need the associated
+              character to show up in the in building view as the building does". An
+              unmanned post SAYS SO rather than showing nothing — the empty state is the
+              whole reason the ladder exists. */}
+          <span className={`biCrew${posting?.characterId ? '' : ' biCrewEmpty'}`}>
+            {posting?.characterId
+              ? (
+                <>
+                  {faceFor(posting.characterId) || imagesFor(posting.characterId)?.[0]
+                    ? <img className="biCrewFace" src={faceFor(posting.characterId) || imagesFor(posting.characterId)[0]} alt="" />
+                    : <span className="biCrewFace biCrewNone">{(posting.name || '?').slice(0, 1)}</span>}
+                  <span className="biCrewText">
+                    {posting.name || posting.characterId}
+                    {posting.rank && <span className="biCrewRank">{posting.rank}</span>}
+                    {posting.underRanked && <span className="pill danger">outranked by this post</span>}
+                  </span>
+                </>
+              )
+              : (
+                <>
+                  <span className="biCrewFace biCrewNone">?</span>
+                  <span className="biCrewText">
+                    unmanned{building.minRank ? ` · needs ${building.minRank}` : ''}
+                  </span>
+                </>
+              )}
+          </span>
         </div>
 
         <div className="biBanks">
