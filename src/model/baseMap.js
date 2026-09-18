@@ -35,6 +35,7 @@ export const BUILDINGS = [
     key: 'comms', label: 'Comms tower', sprite: 'bldg-06', tone: 'edi',
     x: 10, y: 3, w: 9, h: 13,
     of: 'transmissions to answer', view: 'transmissions',
+    minRank: 'general',
   },
   {
     key: 'ops', label: 'Ops centre', sprite: 'bldg-01', tone: 'go',
@@ -52,12 +53,18 @@ export const BUILDINGS = [
     // is not a fix. If the day-plan figure is the one wanted, those inputs have to
     // reach the Base first.
     of: 'open tasks', view: 'plan',
+    minRank: 'major',
   },
   {
     key: 'calendar', label: 'Almanac', sprite: 'bldg-09', tone: 'arrive',
     // A narrow tower — a clock tower, for the view about dates.
-    x: 56, y: 3, w: 8, h: 13,
+    // ⚠️ SHIFTED LEFT when the Scan bay moved into this row. The PLATES are ~13% of the
+    // map wide while these buildings are 7-10%, so neighbours need spacing set by the
+    // LABEL, not by the sprite — measured in the browser, where the Scan bay's plate
+    // overlapped both the Almanac's and the Archive's.
+    x: 50, y: 3, w: 8, h: 13,
     of: 'ship windows closing or closed', view: 'calendar',
+    minRank: 'private',
   },
   {
     key: 'seasons', label: 'Command Center', sprite: 'bldg-01', tone: 'arrive', flip: true,
@@ -71,24 +78,19 @@ export const BUILDINGS = [
     // were getting at". It sits in the NORTH row, which is the planning row (the desk
     // and the wires), not the middle row, which is the physical flow of goods. A PO
     // that will miss its launch is a planning fact before it is a freight one.
-    // ⚠️ THE DEAD CENTRE OF THE MAP — below the goods row, above the supply row.
+    // ⚠️ THE LARGEST BUILDING ON THE MAP, in the central slot the Scan bay used to
+    // hold. Nima, 2026-09-18: "command center to be the largest building where scan bay
+    // is", with the Scan bay shrunk and moved up between the Almanac and the Archive.
     //
-    // Nima asked to swap it with the Scan bay: "i think this fits in better with how
-    // important and central seasons is". Taking the Scan bay's slot literally did make
-    // it central and BROKE THE ROAD NETWORK: the Scan bay sits in the middle of the
-    // Pack house → Scan bay → Launch pad chain, so moving it to the north row sent
-    // those roads the length of the map. Measured every road against every building:
-    // 3 crossings before, 7 after — and `pack-scan` ran straight THROUGH the Command
-    // Center, so a road would have visibly cut the new building in half.
+    // ⚠️ THE SWAP BREAKS THE ROAD NETWORK UNLESS THE ROADS ARE RE-ROUTED, and this was
+    // measured rather than assumed. The Scan bay sat mid-chain (Pack house → Scan bay →
+    // Launch pad); moving it to the north row sends those roads across the middle of the
+    // map, and the default dogleg — out to the halfway line, then across — drove
+    // `pack-scan` straight THROUGH this building. 3 crossings became 7.
     //
-    // This placement is more central than the Scan bay's slot ever was (the middle of
-    // everything rather than the middle of one row), leaves the goods chain unbroken,
-    // and measures back at 3 — all of them pre-existing. The layout is the topology.
-    //
-    // ⚠️ THE OPS CENTRE'S BLOCK, MIRRORED — the twin rule again, and the right twin:
-    // Ops is the desk (what is open today), the Command Center is the strategic view
-    // (what is coming and what will miss its drop). Same building, facing the other way.
-    x: 47, y: 53, w: 15, h: 12,
+    // The fix is `viaY` on those two roads: they now run up into the empty corridor
+    // between the two rows and travel along it. See ROADS and roadPath. Back to 3.
+    x: 46, y: 31, w: 18, h: 21,
     // ⚠️ NOT COUNTABLE, and this is the Archive's and Catalogue's reason exactly.
     // The season board is SIX queries (purchase orders, the item-season mix, the
     // confirmations, the drops, product types and order links). `buildingStates` is
@@ -98,12 +100,14 @@ export const BUILDINGS = [
     // cheaper stand-in that ALMOST means that is the counts-something-other-than-its-
     // label bug this file keeps catching. Give the Base the feed, then make it count.
     of: 'drops, and what will miss them', view: 'seasons', countable: false,
+    minRank: 'commander',
   },
   {
     key: 'datapad', label: 'Archive', sprite: 'bldg-07', tone: 'accent',
     // The data packet surface. ⚠️ NOT COUNTABLE — see `countable` below.
-    x: 76, y: 3, w: 10, h: 13,
+    x: 80, y: 3, w: 10, h: 13,
     of: 'trace anything', view: 'datapad', countable: false,
+    minRank: 'private',
   },
 
   // ── Middle row: the flow of goods, west to east ─────────────────────────
@@ -111,6 +115,7 @@ export const BUILDINGS = [
     key: 'receiving', label: 'Receiving', sprite: 'bldg-02', tone: 'arrive',
     x: 2, y: 34, w: 13, h: 17,
     of: 'presold, waiting on stock', view: 'allocations',
+    minRank: 'corporal',
   },
   {
     // ⚠️ THE PORT IS NOT THE RECEIVING BUILDING, and the distinction is the whole reason
@@ -131,12 +136,14 @@ export const BUILDINGS = [
     // like, and `flip` is what keeps them apart visually.
     x: 17, y: 34, w: 12, h: 17,
     of: 'containers in transit', view: 'containers',
+    minRank: 'lieutenant',
   },
   {
     key: 'pack', label: 'Pack house', sprite: 'bldg-04', tone: 'hands',
     // Dock doors right around the perimeter.
     x: 30, y: 32, w: 14, h: 19,
     of: 'out on the floor, not back', view: 'kanban',
+    minRank: 'sergeant',
   },
   {
     key: 'scan', label: 'Scan bay', sprite: 'bldg-04', tone: 'money', flip: true,
@@ -144,17 +151,20 @@ export const BUILDINGS = [
     // duplicating buildings for the new lanes, and a second dock hall beside the
     // first is what a warehouse complex actually looks like. `flip` keeps them
     // visually distinct; the sprite+flip pair is what has to be unique.
-    // ⚠️ IT STAYS HERE, and the Command Center's note records why the swap was undone:
-    // this slot is the middle of the Pack house → Scan bay → Launch pad chain, and the
-    // roads those events travel are only honest while it sits between them.
-    x: 48, y: 33, w: 13, h: 18,
+    // ⚠️ SHRUNK AND MOVED UP, between the Almanac and the Archive, so the Command
+    // Center can have the central hall. Its two event roads (pack↔scan, scan→launch)
+    // are re-routed through the corridor rather than dropped — dropping one would
+    // silently delete movers instead of failing loudly.
+    x: 64, y: 4, w: 7, h: 11,
     of: 'scanned back in, needs a label', view: 'scan',
+    minRank: 'corporal',
   },
   {
     key: 'launch', label: 'Launch pad', sprite: 'bldg-00', tone: 'holo',
     // The docking ring, twelve bays. East end: where it leaves.
     x: 76, y: 30, w: 17, h: 22,
     of: 'clear for departure', view: 'ship',
+    minRank: 'captain',
   },
 
   // ── South row: supply and the partners ─────────────────────────────────
@@ -163,17 +173,20 @@ export const BUILDINGS = [
     // Twin silos beside a long hall — the pool ATS orders pull from.
     x: 10, y: 66, w: 12, h: 16,
     of: 'orders pulling from stock', view: 'table',
+    minRank: 'sergeant',
   },
   {
     key: 'edi', label: 'EDI relay', sprite: 'bldg-08', tone: 'edi',
     // A long low block: the transmission hall for the partner lane.
     x: 34, y: 67, w: 13, h: 15,
     of: 'partner orders still open', view: 'edi',
+    minRank: 'captain',
   },
   {
     key: 'routing', label: 'Routing yard', sprite: 'bldg-05', tone: 'mid',
     x: 58, y: 67, w: 11, h: 15,
     of: 'freight waiting to be routed', view: 'routing',
+    minRank: 'lieutenant',
   },
   {
     key: 'catalogue', label: 'Catalogue', sprite: 'bldg-03', tone: 'accent', flip: true,
@@ -193,6 +206,7 @@ export const BUILDINGS = [
     // screen adds no query load to a one-vCPU deploy — and an INVENTED number sitting
     // among real ones is worse than none at all.
     of: 'UPC and product master', view: 'catalogue', countable: false,
+    minRank: 'private',
   },
 ]
 
@@ -211,6 +225,13 @@ export const centreOf = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 })
 // ⚠️ A leg that is not in this list is not a road, and `roadFor` returns null rather
 // than inventing one. That is the whole guarantee — a mover can only ever travel
 // between buildings that are genuinely connected.
+// ⚠️ THE EMPTY BAND BETWEEN THE TWO ROWS. The north row ends at y=17 and the goods row
+// starts at y=30, so y=23.5 is the one horizontal lane that crosses the whole map
+// without meeting a building. Roads carrying `viaY` run up into it and along it instead
+// of turning at the halfway line — which is what lets the Scan bay live in the north row
+// while its freight roads still reach the Pack house and the Launch pad.
+export const CORRIDOR_Y = 23.5
+
 export const ROADS = [
   // The flow of goods, west to east. The port is the first door: freight lands there
   // before anything downstream can draw on it.
@@ -219,8 +240,12 @@ export const ROADS = [
   { key: 'in-stock', from: 'receiving', to: 'stock' },
   { key: 'in-pack', from: 'receiving', to: 'pack' },
   { key: 'stock-pack', from: 'stock', to: 'pack' },
-  { key: 'pack-scan', from: 'pack', to: 'scan' },
-  { key: 'scan-launch', from: 'scan', to: 'launch' },
+  // ⚠️ THESE TWO TAKE THE CORRIDOR (`viaY`), not the default halfway dogleg. With the
+  // Scan bay up in the north row the halfway turn drove both roads through the Command
+  // Center and the Archive. CORRIDOR_Y is the empty band between the two rows — the
+  // only horizontal lane that crosses the map without meeting a building.
+  { key: 'pack-scan', from: 'pack', to: 'scan', viaY: CORRIDOR_Y },
+  { key: 'scan-launch', from: 'scan', to: 'launch', viaY: CORRIDOR_Y },
   // The partner lane, along the south side.
   { key: 'stock-edi', from: 'stock', to: 'edi' },
   { key: 'pack-edi', from: 'pack', to: 'edi' },
@@ -234,17 +259,21 @@ export const ROADS = [
   { key: 'comms-ops', from: 'comms', to: 'ops' },
   { key: 'comms-pack', from: 'comms', to: 'pack' },
   { key: 'ops-calendar', from: 'ops', to: 'calendar' },
-  { key: 'ops-scan', from: 'ops', to: 'scan' },
-  { key: 'calendar-archive', from: 'calendar', to: 'datapad' },
+  // ⚠️ `ops-scan` REMOVED. No event leg travelled it (it was decorative), and from the
+  // Scan bay's new home the straight run to the Ops centre passes through the Almanac.
+  // ⚠️ WAS `calendar-archive`, WHICH NOW RAN THROUGH THE SCAN BAY — it moved in
+  // between the two. Chained through it instead, because that is what the row is: the
+  // Almanac, the Scan bay, the Archive, side by side.
+  { key: 'calendar-scan', from: 'calendar', to: 'scan' },
+  { key: 'scan-archive', from: 'scan', to: 'datapad' },
   // ⚠️ `seasons-port` WAS REMOVED WHEN THE COMMAND CENTER TOOK THE CENTRAL SPOT
   // (2026-09-18). It made sense when Seasons sat in the north row; from the middle of
   // the map the straight line to the Landing bay runs THROUGH THE PACK HOUSE, which is
   // the dot-crosses-a-building failure this file's header warns about. The layout is
   // the topology: move a building and its roads have to be re-earned, not inherited.
-  // ⚠️ `calendar-seasons` WENT WITH THE MOVE. From the dead centre the dogleg up to the
-  // Almanac runs through the Scan bay; these two are the honest neighbours now — the
-  // floor directly above, and the partner row directly below.
-  { key: 'seasons-scan', from: 'seasons', to: 'scan' },
+  // ⚠️ THE COMMAND CENTER'S OWN ROADS. It sits in the middle of the goods row now, so
+  // its neighbours are the desk above and the partner row below.
+  { key: 'ops-seasons', from: 'ops', to: 'seasons' },
   { key: 'seasons-routing', from: 'seasons', to: 'routing' },
   { key: 'archive-launch', from: 'datapad', to: 'launch' },
 ]

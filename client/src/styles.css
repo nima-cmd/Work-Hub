@@ -3643,3 +3643,16 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .season-grid .lane-unknown { color: var(--hi); }
 .overdue-pill { margin-left: 6px; font-size: 11px; padding: 1px 6px; white-space: nowrap; }
 .season-grid td:nth-child(6) { white-space: nowrap; }
+
+/* ── Who is posted to a building (2026-09-18) ────────────────────────────── */
+.bsCrew { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 10px; line-height: 1.2; }
+.bsCrewFace { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; flex: 0 0 18px;
+  border: 1px solid var(--line); }
+.bsCrewNone { display: grid; place-items: center; color: var(--muted); background: var(--panel2); font-size: 10px; }
+.bsCrewText { color: var(--muted); display: flex; gap: 4px; align-items: baseline; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bsCrewRank { color: var(--lo); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+/* ⚠️ An unmanned post is drawn as a GAP, not as a quiet grey line — the whole point is
+   that it asks to be filled. */
+.bsCrewEmpty .bsCrewText { color: var(--mid); }
+.bsCrewEmpty .bsCrewFace { border-style: dashed; }
