@@ -1,5 +1,46 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from '../../../src/model/baseMap.js'
+import { rankFor } from '../../../src/model/crewRank.js'
+import { imagesFor } from '../data/characterImages.js'
+import { CHARACTERS } from '../../../src/model/characters.js'
+
+const CREW_NAME = new Map(CHARACTERS.map((c) => [c.id, c.name]))
+
+// ⚠️ AN UNMANNED POST SAYS SO, rather than showing nothing (Nima, 2026-09-18: "either
+// see character assigned to the building or a message in the building letting us know
+// they need a crew member to operate"). Today NOTHING is posted anywhere — no rank has
+// been conferred and there is no posting table yet — so every building shows the empty
+// state. That is the honest picture, not a placeholder: the Base is unmanned until
+// somebody is promoted and posted.
+function CrewSlot({ building, posting }) {
+  const need = rankFor(building.minRank)
+  if (!posting) {
+    return (
+      <span className="bsCrew bsCrewEmpty"
+            title={need ? `No one is posted here. Needs ${need.name} or above.` : 'No one is posted here.'}>
+        <span className="bsCrewFace bsCrewNone" aria-hidden="true">?</span>
+        {/* ⚠️ COMPACT ON PURPOSE. The full sentence is in the tooltip; spelled out on the
+            plate it made every building wider than its own footprint and the Scan bay's
+            plate overlapped both its neighbours. Fourteen copies of "needs a crew
+            member" is also noise — the empty seat and the rank say it. */}
+        <span className="bsCrewText">needs crew{need ? <span className="bsCrewRank">{need.name}+</span> : null}</span>
+      </span>
+    )
+  }
+  const face = imagesFor(posting.characterId)?.[0] || null
+  const name = CREW_NAME.get(posting.characterId) || posting.characterId
+  const held = rankFor(posting.rank)
+  return (
+    <span className="bsCrew" title={`${held ? held.name + ' ' : ''}${name} is posted here`}>
+      {face
+        ? <img className="bsCrewFace" src={face} alt="" />
+        : <span className="bsCrewFace bsCrewNone" aria-hidden="true">{name.slice(0, 1)}</span>}
+      <span className="bsCrewText">
+        {name}{held ? <span className="bsCrewRank">{held.name}</span> : null}
+      </span>
+    </span>
+  )
+}
 
 // ⚠️ AN UNCOUNTABLE BUILDING MUST NOT BE DESCRIBED WITH A ZERO (fixed 2026-09-18).
 // The visible plate has always shown "open" for the Archive, the Catalogue and now
@@ -47,10 +88,17 @@ const px = (x) => (x / 100) * VB_W
 // turn corners; a straight diagonal between every pair reads as a cobweb.
 // `vbH` is passed in because the viewBox height follows the rendered box — see the
 // note in the component.
-function roadPath(from, to, vbH) {
+function roadPath(from, to, vbH, viaY = null) {
   const a = centreOf(BUILDING[from])
   const b = centreOf(BUILDING[to])
   const py = (y) => (y / 100) * vbH
+  // ⚠️ A CORRIDOR ROUTE, when the road asks for one. The halfway dogleg turns in the
+  // middle of the map, which is fine between neighbours and drives a road straight
+  // through whatever sits between two buildings that are far apart. `viaY` instead goes
+  // UP first, runs along an empty horizontal band, and comes down — see CORRIDOR_Y.
+  if (viaY != null) {
+    return `M ${px(a.x)} ${py(a.y)} L ${px(a.x)} ${py(viaY)} L ${px(b.x)} ${py(viaY)} L ${px(b.x)} ${py(b.y)}`
+  }
   const mx = (a.x + b.x) / 2
   return `M ${px(a.x)} ${py(a.y)} L ${px(mx)} ${py(a.y)} L ${px(mx)} ${py(b.y)} L ${px(b.x)} ${py(b.y)}`
 }
@@ -72,7 +120,9 @@ const AGE = (iso) => {
   return days <= 0 ? 'today' : `${days}d`
 }
 
-export default function Base({ orders = [], tasks = [], emails = [], events = [], containers = null, onNavigate, viewFor }) {
+// ⚠️ `postings` IS AN INPUT, not something this view fetches or invents. It arrives as
+// {buildingKey: {characterId, rank}} and is EMPTY today — see CrewSlot.
+export default function Base({ orders = [], tasks = [], emails = [], events = [], containers = null, postings = {}, onNavigate, viewFor }) {
   // ── OPENING A BUILDING, WITHOUT MAKING THE CLICK WAIT FOR IT ──────────────
   //
   // Measured 2026-08-21 in Nima's Performance panel: INP 208ms on a pointer, against
@@ -243,7 +293,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               <path d="M40 0 L0 0 0 40" fill="none" stroke="#14304d" strokeWidth="0.8" opacity="0.5" />
             </pattern>
             {ROADS.map((r) => (
-              <path key={r.key} id={`bsRoad-${r.key}`} d={roadPath(r.from, r.to, vbH)} />
+              <path key={r.key} id={`bsRoad-${r.key}`} d={roadPath(r.from, r.to, vbH, r.viaY ?? null)} />
             ))}
           </defs>
 
@@ -310,6 +360,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
                   ? <span className="bsOpen">open</span>
                   : <span className="bsCount">{st.count}</span>}
                 <span className="bsOf">{b.of}</span>
+                <CrewSlot building={b} posting={postings[b.key] || null} />
                 {/* More than a number: how long the oldest thing here has sat.
                     Absent rather than zero when nothing carries a date. */}
                 {age && <span className="bsAge">oldest {age}</span>}
