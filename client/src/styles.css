@@ -3693,3 +3693,14 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .biCrewText { display: flex; align-items: baseline; gap: 5px; }
 .biCrewRank { color: var(--lo); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
 .biCrewEmpty .biCrewText { color: var(--mid); }
+/* The whole-PO total beside what it still owes — context for a number that is not
+   this season's. See the note in Seasons.jsx. */
+.ofTotal { color: var(--muted); font-size: 10px; }
+/* How much of the whole PO has landed. ⚠️ Green only at 100% — a bar that is green at
+   90% reads as done, and the last 10% is the part that misses a launch. */
+.poProg { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.poProgNums { font-variant-numeric: tabular-nums; }
+.poProgBar { display: block; width: 78px; height: 4px; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+.poProgFill { display: block; height: 100%; background: var(--mid); }
+.poProgFill.done { background: #7ee787; }

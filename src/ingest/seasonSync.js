@@ -105,22 +105,44 @@ export async function syncSeasonDrops({ from = '2026-01-01', db = pool } = {}) {
  * than a PO with nothing to infer from — and poSeason.js counts them toward the total so
  * a minority season cannot be auto-accepted.
  */
-export async function fetchPoItemSeasons({ poNumbers = [] } = {}) {
+export async function fetchPoItemSeasons({ poNumbers = [], sinceMonths = null } = {}) {
   const pos = poNumbers.map((p) => String(p).trim().toUpperCase()).filter((p) => /^PO\d+$/.test(p))
-  if (!pos.length) return { ok: true, rows: [] }
-  const list = pos.map((p) => `'${p}'`).join(',')
+  // ⚠️ A DATE WINDOW *OR* A LIST, AND THE WINDOW IS WHY. Scoping by "POs that still owe
+  // units" made every FULLY RECEIVED PO invisible — and a fully received PO is exactly
+  // the one carrying stock that has arrived. Eight of them held 838 Holiday 2026 units,
+  // all 838 received, so the board reported 1,163 of 6,547 when the truth was 2,330 of
+  // 7,714. It was showing HALF the received stock and calling it 18%.
+  //
+  // Nima found it from the floor: "we received no holiday that doesn't make sense since
+  // we have the net bag which should be holliday."
+  const where = sinceMonths
+    ? `t.trandate >= ADD_MONTHS(SYSDATE, -${Number(sinceMonths)})`
+    : (pos.length ? `t.tranid IN (${pos.map((p) => `'${p}'`).join(',')})` : null)
+  if (!where) return { ok: true, rows: [] }
+  // ⚠️ `received` IS SUMMED IN THE SAME GROUPING, and adding it closed a gap that had
+  // blocked the same question twice: the mix knew what was ORDERED for a season and
+  // nothing about what had ARRIVED. PO1785 is 1,330 Holiday units with 830 received —
+  // a fact this query was one column away from all along.
   const r = await runSuiteQL(`
-    SELECT t.tranid AS po, i.custitem_season_year AS season, SUM(tl.quantity) AS units
+    SELECT t.tranid AS po, i.custitem_season_year AS season,
+           SUM(tl.quantity) AS units,
+           SUM(COALESCE(tl.quantityshiprecv, 0)) AS received
       FROM transaction t
       JOIN transactionline tl ON tl.transaction = t.id
       JOIN item i ON i.id = tl.item
-     WHERE t.type = 'PurchOrd' AND t.tranid IN (${list})
+     WHERE t.type = 'PurchOrd' AND ${where}
        AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
      GROUP BY t.tranid, i.custitem_season_year`)
   if (!r.ok) return { ok: false, error: r.error }
   return {
     ok: true,
-    rows: r.rows.map((x) => ({ poNumber: x.po, season: x.season ?? null, units: Number(x.units) || 0 })),
+    // ⚠️ `units` KEEPS ITS MEANING — ordered. Everything that reads it is unchanged;
+    // `received` is additive.
+    rows: r.rows.map((x) => ({
+      poNumber: x.po, season: x.season ?? null,
+      units: Number(x.units) || 0,
+      received: Number(x.received) || 0,
+    })),
   }
 }
 
@@ -194,16 +216,19 @@ export async function syncToItemSeasons({ db = pool } = {}) {
  * Cost: one SuiteQL call, grouped per (PO, season) in NetSuite rather than per line.
  * The union is ~164 POs against the 89 it asked for before.
  */
-export async function syncPoItemSeasons({ db = pool } = {}) {
-  const { rows: pos } = await db.query(
-    `SELECT po_number FROM container_transfer WHERE po_number IS NOT NULL
-      UNION
-     SELECT po_number FROM purchase_orders WHERE qty_remaining > 0
-      ORDER BY po_number`)
-  const poNumbers = pos.map((r) => r.po_number)
-  if (!poNumbers.length) return { ok: true, pos: 0, rows: 0 }
+/**
+ * ⚠️ EIGHTEEN MONTHS, NOT "STILL OWES UNITS". Measured before choosing: 369 POs and 864
+ * stored rows across 18 months, against 164 POs and 381 rows under the old scope. The
+ * window is what makes a received PO visible at all, and it is cheap.
+ *
+ * Why 18: it covers every season with a drop still ahead of it plus the one behind, so a
+ * "how much of Holiday has landed" question can be answered for a PO raised last autumn.
+ * 12 months would have cut 114 POs; 24 drags in seasons nobody is working toward.
+ */
+export const SEASON_WINDOW_MONTHS = 18
 
-  const r = await fetchPoItemSeasons({ poNumbers })
+export async function syncPoItemSeasons({ db = pool, sinceMonths = SEASON_WINDOW_MONTHS } = {}) {
+  const r = await fetchPoItemSeasons({ sinceMonths })
   if (!r.ok) return { ok: false, error: r.error }
 
   // ⚠️ REPLACE PER PO, INSIDE A TRANSACTION. An upsert alone would leave a stale
@@ -220,15 +245,92 @@ export async function syncPoItemSeasons({ db = pool } = {}) {
     // named-season rows are guarded by two DIFFERENT indexes (see the schema note).
     for (const x of r.rows) {
       await client.query(
-        'INSERT INTO po_item_season (po_number, season, units, synced_at) VALUES ($1,$2,$3, now())',
-        [x.poNumber, x.season, x.units])
+        'INSERT INTO po_item_season (po_number, season, units, received, synced_at) VALUES ($1,$2,$3,$4, now())',
+        [x.poNumber, x.season, x.units, x.received ?? null])
     }
     await client.query('COMMIT')
-    return { ok: true, pos: touched.size, rows: r.rows.length, asked: poNumbers.length }
+    return { ok: true, pos: touched.size, rows: r.rows.length, windowMonths: sinceMonths }
   } catch (e) {
     await client.query('ROLLBACK')
     return { ok: false, error: e.message }
   } finally {
     client.release()
   }
+}
+
+/**
+ * How much of each PO has actually been received — the WHOLE PO, every line.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ The purchase_orders table only keeps lines that still owe units, so it      │
+ * │ cannot say how much of a PO has arrived. PO1785 has had 830 of its 1,330    │
+ * │ units delivered and our table shows zero received, because the delivered    │
+ * │ lines are simply not in it.                                                 │
+ * │                                                                             │
+ * │ This asks NetSuite for the totals across every line and stores them beside  │
+ * │ that table, so "is this PO fully received?" has an answer.                   │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ⚠️ IT DOES NOT WIDEN purchase_orders, and that is the point — see the schema note.
+ * Nine queries read that table expecting open lines only.
+ */
+export async function fetchPoProgress({ poNumbers = [], sinceMonths = null } = {}) {
+  const pos = poNumbers.map((p) => String(p).trim().toUpperCase()).filter((p) => /^PO\d+$/.test(p))
+  // Same window rule as the season mix, and for the same reason — see fetchPoItemSeasons.
+  const where = sinceMonths
+    ? `t.trandate >= ADD_MONTHS(SYSDATE, -${Number(sinceMonths)})`
+    : (pos.length ? `t.tranid IN (${pos.map((p) => `'${p}'`).join(',')})` : null)
+  if (!where) return { ok: true, rows: [] }
+  // ⚠️ THE HEADER FACTS COME WITH IT — vendor, status, destination and due date. The
+  // board read those from `purchase_orders`, which drops a PO once it owes nothing, so a
+  // received PO had no vendor and no lane and could not be drawn at all.
+  const r = await runSuiteQL(`
+    SELECT t.tranid AS po, COUNT(*) AS lines, SUM(tl.quantity) AS ordered,
+           SUM(COALESCE(tl.quantityshiprecv, 0)) AS received,
+           MAX(BUILTIN.DF(t.entity)) AS vendor, MAX(BUILTIN.DF(t.status)) AS status,
+           MAX(loc.fullname) AS destination, MAX(TO_CHAR(t.duedate,'YYYY-MM-DD')) AS duedate
+      FROM transaction t
+      JOIN transactionline tl ON tl.transaction = t.id
+      LEFT JOIN location loc ON loc.id = t.custbody_acs_final_destination
+     WHERE t.type = 'PurchOrd' AND ${where}
+       AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+     GROUP BY t.tranid`)
+  if (!r.ok) return { ok: false, error: r.error }
+  return {
+    ok: true,
+    rows: r.rows.map((x) => {
+      const ordered = Number(x.ordered) || 0
+      const received = Number(x.received) || 0
+      return {
+        poNumber: x.po, lines: Number(x.lines) || 0, ordered, received,
+        vendor: x.vendor || null,
+        status: String(x.status || '').replace(/^Purchase Order\s*:\s*/i, '').trim() || null,
+        destination: x.destination || null,
+        dueDate: x.duedate || null,
+        // ⚠️ DERIVED HERE, NOT ASKED FOR. SuiteQL will happily sum a per-line
+        // subtraction, but a line whose received exceeds its ordered (it happens) would
+        // make the total smaller than reality. Clamped at zero, from two honest sums.
+        remaining: Math.max(0, ordered - received),
+      }
+    }),
+  }
+}
+
+/** Cache it for every PO still owing units, and every PO on a container. */
+export async function syncPoProgress({ db = pool, sinceMonths = SEASON_WINDOW_MONTHS } = {}) {
+  const r = await fetchPoProgress({ sinceMonths })
+  if (!r.ok) return { ok: false, error: r.error }
+  for (const x of r.rows) {
+    await db.query(
+      `INSERT INTO po_progress (po_number, lines, ordered, received, remaining,
+                                vendor, status, destination, due_date, synced_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       ON CONFLICT (po_number) DO UPDATE SET
+         lines = EXCLUDED.lines, ordered = EXCLUDED.ordered, received = EXCLUDED.received,
+         remaining = EXCLUDED.remaining, vendor = EXCLUDED.vendor, status = EXCLUDED.status,
+         destination = EXCLUDED.destination, due_date = EXCLUDED.due_date, synced_at = now()`,
+      [x.poNumber, x.lines, x.ordered, x.received, x.remaining,
+       x.vendor, x.status, x.destination, x.dueDate])
+  }
+  return { ok: true, pos: r.rows.length, windowMonths: sinceMonths }
 }

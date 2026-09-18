@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { fetchSeasonBoard } from '../api.js'
+import { vendorShort } from '../../../src/model/vendorName.js'
 
 const d = (s) => (s ? new Date(`${s}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null)
 const n = (x) => (x == null ? '—' : Number(x).toLocaleString())
@@ -61,14 +62,41 @@ function PoRow({ po, risk }) {
   return (
     <tr className={tone}>
       <td><NsLink doc={po.poNumber} /></td>
-      <td>{po.vendor || '—'}</td>
+      {/* ⚠️ THE SHORT NAME, WITH THE FULL ONE ON HOVER. 42 characters of factory name
+          on most rows pushed the numbers off the screen. */}
+      <td title={vendorShort(po.vendor).full || undefined}>{vendorShort(po.vendor).short || '—'}</td>
       <td className={`lane-${po.lane.lane}`} title={po.lane.why}>
         {po.lane.partner || po.lane.label}
       </td>
-      {/* ⚠️ TWO COLUMNS, LABELLED. This season's ordered slice, and what the whole PO
-          still owes — the second is a PO fact and is not this season's number. */}
+      {/* ⚠️ THESE TWO COLUMNS HAVE DIFFERENT DENOMINATORS, which misled Nima on his own
+          board (2026-09-18): he read them as "total" and "not yet received". They are
+          not. The first is THIS SEASON's slice of the PO; the second is what the WHOLE
+          PO still owes across every season on it. PO1786 is 750 Holiday units inside a
+          1,690-unit order that also carries Core, Resort, Summer and three more — so
+          "remaining" being larger than "ordered" is arithmetic, not an error.
+          ⚠️ The honest fix is a per-season received figure, which needs an item→season
+          map we do not hold; the sync caches the mix per (PO, season) only. Until then
+          the headers name the denominator and the PO total is shown beside it. */}
       <td className="num">{n(po.units)}</td>
-      <td className="num muted">{n(po.remaining)}</td>
+      {/* ⚠️ THIS SEASON'S received, against THIS SEASON'S ordered — the same denominator
+          at last. The whole PO's figure rides in the tooltip, because it answers a
+          different question: PO1786 is 750 Holiday units inside a 1,690-unit order.
+          ⚠️ AND "not synced" IS NOT "nothing landed" — an unsynced PO shows a dash. */}
+      <td className="num muted">
+        {po.received != null
+          ? (
+            <span className="poProg"
+                  title={`${n(po.received)} of ${n(po.units)} ${po.seasonLabel || 'season'} units received`
+                    + (po.progress ? ` · the whole PO is ${n(po.progress.received)} of ${n(po.progress.ordered)}, across every season on it` : '')}>
+              <span className="poProgNums">{n(po.received)} / {n(po.units)}</span>
+              <span className="poProgBar">
+                <span className={po.received >= po.units ? 'poProgFill done' : 'poProgFill'}
+                      style={{ width: `${po.units ? Math.min(100, Math.round((po.received / po.units) * 100)) : 0}%` }} />
+              </span>
+            </span>
+          )
+          : <span title="NetSuite has not been asked about this PO yet — not the same as nothing having landed">—</span>}
+      </td>
       {/* ⚠️ AN OVERDUE DUE DATE IS MARKED, NOT QUIETLY REUSED. The verdict column
           deliberately stops predicting once this date has gone by — see seasonBoard.js.
           Showing the date alone would read as a plan. */}
@@ -132,6 +160,15 @@ function Season({ s }) {
           {/* ⚠️ AND WHAT IS ACTUALLY COMING HERE, which excludes FOB and unrouted
               stock. Holiday 2026 is 6,547 bought and 3,600 arriving. */}
           {s.arriving !== s.units && <span className="pill">{n(s.arriving)} arriving here</span>}
+          {/* ⚠️ THE NUMBER THIS SCREEN EXISTS FOR — how much of the drop is actually in.
+              Null when nothing has been synced, so an empty bar can never be mistaken
+              for "nothing has arrived". */}
+          {s.receivedUnits != null && s.receivedOf > 0 && (
+            <span className={`pill${s.receivedUnits >= s.receivedOf ? ' fresh' : ''}`}
+                  title={`${n(s.receivedUnits)} of ${n(s.receivedOf)} ordered units have been received`}>
+              {Math.round((s.receivedUnits / s.receivedOf) * 100)}% received · {n(s.receivedUnits)} in
+            </span>
+          )}
           <span className="pill">{s.poCount} PO{s.poCount > 1 ? 's' : ''}</span>
         </div>
       </header>
@@ -141,8 +178,8 @@ function Season({ s }) {
           <thead>
             <tr>
               <th>PO</th><th>Vendor</th><th>Lane</th>
-              <th className="num">Ordered<br /><span className="muted">this season</span></th>
-              <th className="num">Remaining<br /><span className="muted">whole PO</span></th>
+              <th className="num">{s.label}<br /><span className="muted">units on this PO</span></th>
+              <th className="num">Received<br /><span className="muted">of this season's units</span></th>
               <th>Due</th><th>Reason</th><th>Verdict</th>
             </tr>
           </thead>

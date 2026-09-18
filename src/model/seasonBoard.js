@@ -99,6 +99,10 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
     const mix = (po.mix || []).filter((m) => (Number(m.units) || 0) > 0)
     for (const m of mix) {
       const units = Number(m.units) || 0
+      // ⚠️ THIS SEASON'S received, at last. Distinct from the PO's, which mixes every
+      // season on it — PO1786 is 0 of 1,690 overall AND 0 of 750 Holiday, but PO1785 is
+      // 830 of 1,330 and every one of those is Holiday.
+      const received = m.received == null ? null : Number(m.received) || 0
       const parsed = parseSeason(m.season)
       // ⚠️ UNSEASONED UNITS ARE A GROUP, NOT A DISCARD. Items carrying no season at all
       // are real stock on a real PO — PO1761 is 720 of them. Dropping the row would make
@@ -113,9 +117,16 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
         expectedReceipt: po.expectedReceipt || null,
         // ⚠️ THIS season's slice of the PO, not the PO's total.
         units,
+        received,
+        // So a tooltip can name which season the figure belongs to.
+        seasonLabel: label,
         // Carried, never summed into the season — see the header note.
         remaining: po.qtyRemaining ?? null,
         ordered: po.qtyOrdered ?? null,
+        // ⚠️ THE WHOLE PO's real progress, and it is NOT this season's. PO1785 is 830 of
+        // 1,330 received — but which season those 830 belong to needs an item→season map
+        // we do not hold, so this is labelled as the PO's figure and never as Holiday's.
+        progress: po.progress || null,
         lane,
         confirmed: po.confirmed || null,
         orderLinks: po.orderLinks || [],
@@ -177,7 +188,13 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
       const dueDays = p.expectedReceipt
         ? Math.round((new Date(p.expectedReceipt) - new Date(today)) / 86400000)
         : null
-      const overdue = dueDays != null && dueDays < 0 ? -dueDays : null
+      // ⚠️ A PO THAT HAS FULLY LANDED IS NOT OVERDUE, however old its due date. Widening
+      // the board to 18 months made this visible at once: 331 POs read "past due" when
+      // most had simply been received months ago and closed. A date in the past is only
+      // a finding while something is still owed.
+      const settled = p.remaining != null ? Number(p.remaining) <= 0
+        : (p.received != null && p.units != null && p.received >= p.units)
+      const overdue = dueDays != null && dueDays < 0 && !settled ? -dueDays : null
       return {
         poNumber: p.poNumber,
         reason,
@@ -197,10 +214,18 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
     })
     const late = risks.filter((r) => r.risk.state === 'late')
     const tight = risks.filter((r) => r.risk.state === 'tight')
+    // ⚠️ SUMMED ONLY WHERE IT IS KNOWN. A season where no PO has been synced reports
+    // null rather than 0 — the screen must be able to say "not asked" instead of
+    // drawing an empty bar that looks like nothing has arrived.
+    const known = g.pos.filter((p) => p.received != null)
+    const receivedUnits = known.length ? known.reduce((n, p) => n + p.received, 0) : null
     return {
       ...g,
       lanes: lanes.lanes,
       arriving: lanes.arriving,
+      receivedUnits,
+      // The ordered total behind that figure, so a percentage has an honest denominator.
+      receivedOf: known.length ? known.reduce((n, p) => n + p.units, 0) : null,
       poCount: g.pos.length,
       risks,
       late,

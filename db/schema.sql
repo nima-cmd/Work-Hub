@@ -2501,3 +2501,52 @@ CREATE TABLE IF NOT EXISTS crew_posting (
 CREATE UNIQUE INDEX IF NOT EXISTS crew_posting_one_post_per_day
   ON crew_posting (on_date, character_id);
 CREATE INDEX IF NOT EXISTS crew_posting_by_character ON crew_posting (character_id, on_date DESC);
+
+-- ── How much of a PO has actually landed (2026-09-18) ───────────────────────
+--
+-- Nima, on PO1785: "are you saying that that PO need 500 units of the total 500 units
+-- for holiday? ... we would also like to know if the po is fully received or if it has
+-- more units of another season pending to be received on it."
+--
+-- ⚠️ `purchase_orders` CANNOT ANSWER THAT, and the reason is its scope. It stores only
+-- lines that still owe units (foldPurchaseOrderLines filters `qtyRemaining > 0`), which
+-- mirrors the saved search it replaced. So a FULLY received line is not in it at all:
+-- PO1785 is 31 lines and 1,330 units in NetSuite with 830 received, and 12 lines / 500
+-- units / 0 received here. Across the 80 open POs we are missing 415 lines and 8,202
+-- units of received stock.
+--
+-- ⚠️ AND THE SCOPE IS NOT WIDENED, DELIBERATELY. Nine other queries read
+-- `purchase_orders` and every one of them assumes an open line; adding received lines
+-- would change what each counts without touching any of them — the counts-something-
+-- other-than-its-label bug, applied to nine surfaces at once. This table sits BESIDE it
+-- and says only what it is: the whole PO's progress, straight from NetSuite.
+CREATE TABLE IF NOT EXISTS po_progress (
+  po_number   TEXT PRIMARY KEY,
+  lines       INTEGER,
+  ordered     NUMERIC,
+  received    NUMERIC,
+  remaining   NUMERIC,
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ⚠️ THE SEASON MIX NOW CARRIES WHAT HAS LANDED (2026-09-18). `units` was ordered only,
+-- so the board could say "6,547 Holiday units bought" and nothing about how many arrived
+-- — a gap that blocked the same question TWICE in one session (a completion bar, then
+-- "is this PO fully received or does it have another season pending"). Nima: "if it
+-- burnt us twice then we should fix it."
+--
+-- One extra SUM in a query that was already running. `units` keeps its meaning (ORDERED)
+-- so nothing that reads it changes; `received` is new and additive.
+ALTER TABLE po_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;
+ALTER TABLE to_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;
+
+-- ⚠️ po_progress CARRIES THE HEADER FACTS TOO (2026-09-18). The season board used to be
+-- driven by `purchase_orders`, which holds only lines that still owe units — so a PO
+-- vanished from the board the moment it was fully received, taking its received units
+-- with it. Eight such POs held 838 Holiday 2026 units, every one delivered. These
+-- columns let the board be driven by the SEASON data instead, with the header read from
+-- here rather than from a table scoped to open work.
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS vendor      TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS status      TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS destination TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS due_date    DATE;
