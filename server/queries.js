@@ -19,6 +19,7 @@ import { purposeFor, purposeBreakdown } from '../src/model/transferPurpose.js'
 import { seasonFor, REASONS, SEASONS } from '../src/model/poSeason.js'
 import { dropsFrom, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
 import { seasonBoard } from '../src/model/seasonBoard.js'
+import { mirrorFreshness } from '../src/model/mirrorFreshness.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -4643,9 +4644,46 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
        FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
        JOIN item i ON i.id = tl.item
       WHERE t.tranid = '${String(head.soNumber).replace(/'/g, "''")}' AND tl.itemtype = 'InvtPart'`)
+
+  // ⚠️ THE TARIFF CODE COMES FROM OUR OWN MIRROR, NOT FROM THIS QUERY, and that is not a
+  // shortcut. SuiteQL's `item` table exposes no HTS column — `hts`, `htsCode`, `hscode`
+  // and `itemhts` all 500 — because the field reaches us through the REST item record,
+  // which `weaver_netsuite_item` already mirrors for 4,153 of 4,284 items. Adding
+  // `i.hts` to the SELECT silently returned ZERO ROWS and emptied the declaration; the
+  // join below is what actually works.
+  //
+  // ⚠️ JOINED ON THE BARE SKU, which is what BUILTIN.DF returns here and what the mirror
+  // stores — verified at 1,381 of 1,382 open PO lines.
+  const skus = [...new Set((q.rows || []).map((r) => String(r.item || '').trim()).filter(Boolean))]
+  const htsBySku = new Map()
+  if (skus.length) {
+    const { rows: htsRows } = await pool.query(
+      'SELECT sku, hts FROM weaver_netsuite_item WHERE sku = ANY($1) AND hts IS NOT NULL', [skus])
+    for (const r of htsRows) htsBySku.set(r.sku, r.hts)
+  }
+
+  // ⚠️ THE TARIFF CODES COME FROM A TABLE THIS REPO DOES NOT WRITE. `weaver_netsuite_item`
+  // is filled by ~/src/weaver; nothing in Work-Hub maintains it. If that program stops,
+  // our codes silently age and this app has no way to know — so it asks the TABLE how
+  // recently it was written rather than trusting the other program to report.
+  //
+  // ⚠️ IT WARNS, IT DOES NOT BLOCK. A stopped mirror already fails safe for NEW items
+  // (no row → no code → the line blocks). What staleness risks is a RECLASSIFIED code on
+  // an existing item, which is rarer — and halting a real shipment over a late data
+  // pipeline would stop the warehouse for something the warehouse cannot fix.
+  const { rows: mirrorRows } = await pool.query(
+    'SELECT MAX(observed_at) AS newest FROM weaver_netsuite_item')
+  const mirror = mirrorFreshness({
+    newestAt: mirrorRows[0]?.newest || null,
+    label: 'the item catalogue (tariff codes, origin, weights)',
+    owner: 'the weaver sync',
+  })
+
   const lines = (q.rows || []).map((r) => ({
     item: r.item, displayName: r.displayname, qty: Number(r.qty || 0),
     rate: Number(r.rate || 0), coo: r.coo || null, weight: Number(r.weight || 0),
+    // ⚠️ null, never a category default — a missing code must BLOCK the form.
+    hts: htsBySku.get(String(r.item || '').trim()) || null,
   }))
 
   // ⚠️ THE FULFILMENT IS READ BEFORE THE FORM IS BUILT, and that ordering is the fix
@@ -4714,6 +4752,10 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
   // so these inform rather than block. Blocking a real shipment on a legal price
   // difference would teach everyone to ignore the gate.
   const warnings = reconcileWarnings(reconciliation, anomalies, { ifNumber: ifNum, soNumber: head.soNumber })
+  // ⚠️ FIRST, because it colours everything below it. If the catalogue is a month old,
+  // every tariff code on this form is a month old, and a reader should know that before
+  // reading the lines rather than after.
+  if (mirror.state !== 'fresh') warnings.unshift(mirror.why)
 
   return {
     ifNumber: ifNum, soNumber: head.soNumber, customer: head.customer,
@@ -4723,6 +4765,9 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
     // ⚠️ WHAT THE FORM IS BUILT FROM, stated rather than assumed. 'fulfilment' means the
     // lines are the box's contents; 'order' means the IF could not be read and the form
     // fell back to the order UNVERIFIED — a reader must be able to tell those apart.
+    // ⚠️ Carried so a screen can show WHERE the tariff codes came from and how old they
+    // are — a cross-repo dependency that is invisible unless it is stated.
+    catalogueMirror: mirror,
     declaredFrom: declared.source,
     contentsVerified: declared.verified,
     excludedFromBox: declared.excluded,
