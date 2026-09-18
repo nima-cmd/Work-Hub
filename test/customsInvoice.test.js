@@ -137,3 +137,79 @@ test('totals add up and CSV escapes commas in names', () => {
 test('zero-quantity lines are dropped, not declared', () => {
   assert.equal(buildCustomsLines([{ item: 'SN1', qty: 0, rate: 100, coo: 'CN', weight: 1 }]).lines.length, 0)
 })
+
+// ── Declaring the BOX, not the order (2026-09-18) ────────────────────────────
+//
+// Nima: "lets use that method if possible of IF for units and sales order for price."
+// Before this, the form was built entirely from the sales order, so pulling an item off
+// the fulfilment left it on the customs declaration and only raised a warning.
+// Real case: IF7702 / SO12576, removing SN03014LD-COCOA ($126).
+
+import { declarableLines } from '../src/model/customsInvoice.js'
+
+const SO12576 = [
+  { item: 'SN03011LD-ECRU', displayName: 'St. Barths Petit Tote', qty: 1, rate: 98, coo: 'CN', weight: 1 },
+  { item: 'SN03012LD-TURMERIC', displayName: 'St. Barths Small Tote', qty: 1, rate: 114, coo: 'CN', weight: 1.6 },
+  { item: 'SN03014LD-COCOA', displayName: 'St. Barths Large Tote', qty: 1, rate: 126, coo: 'CN', weight: 2.2 },
+]
+
+test('⚠️ an item pulled off the fulfilment leaves the declaration', () => {
+  const box = [{ item: 'SN03011LD-ECRU', qty: 1 }, { item: 'SN03012LD-TURMERIC', qty: 1 }]
+  const d = declarableLines({ priced: SO12576, shipped: box })
+  assert.deepEqual(d.lines.map((l) => l.item), ['SN03011LD-ECRU', 'SN03012LD-TURMERIC'])
+  // Named, so the screen can say WHY the form is short of the order.
+  assert.deepEqual(d.excluded.map((e) => e.item), ['SN03014LD-COCOA'])
+  assert.equal(d.source, 'fulfilment')
+  assert.equal(d.verified, true)
+})
+
+test('the QUANTITY comes from the box and the PRICE from the order', () => {
+  // The order priced 1; the warehouse actually packed 3.
+  const d = declarableLines({
+    priced: [{ item: 'SN03011LD-ECRU', displayName: 'Petit Tote', qty: 1, rate: 98, coo: 'CN' }],
+    shipped: [{ item: 'SN03011LD-ECRU', qty: 3 }],
+  })
+  assert.equal(d.lines[0].qty, 3)
+  assert.equal(d.lines[0].rate, 98)
+  // The item's own facts still come from the order's join to the item record.
+  assert.equal(d.lines[0].coo, 'CN')
+  assert.equal(d.lines[0].displayName, 'Petit Tote')
+})
+
+test('⚠️ an item in the box with no price is a PROBLEM, never a zero', () => {
+  const d = declarableLines({
+    priced: SO12576,
+    shipped: [{ item: 'SN03011LD-ECRU', qty: 1 }, { item: 'SN99999LD-MYSTERY', qty: 2 }],
+  })
+  // It is NOT declared at a guessed value...
+  assert.deepEqual(d.lines.map((l) => l.item), ['SN03011LD-ECRU'])
+  // ...it is named so the caller can block the document.
+  assert.deepEqual(d.unpriced, [{ item: 'SN99999LD-MYSTERY', qty: 2 }])
+})
+
+test('⚠️ an unreadable fulfilment falls back to the order, and SAYS it is unverified', () => {
+  // Empty cannot mean "the box is empty" — a zero-line customs form for a real
+  // shipment is worse than over-declaring. The caller must see verified: false.
+  const d = declarableLines({ priced: SO12576, shipped: [] })
+  assert.equal(d.lines.length, 3)
+  assert.equal(d.source, 'order')
+  assert.equal(d.verified, false)
+})
+
+test('a box matching the order declares exactly the order', () => {
+  const d = declarableLines({
+    priced: SO12576,
+    shipped: SO12576.map((l) => ({ item: l.item, qty: 1 })),
+  })
+  assert.equal(d.lines.length, 3)
+  assert.deepEqual(d.excluded, [])
+  assert.deepEqual(d.unpriced, [])
+})
+
+test('a zero-quantity line in the box is not declared', () => {
+  const d = declarableLines({
+    priced: SO12576,
+    shipped: [{ item: 'SN03011LD-ECRU', qty: 1 }, { item: 'SN03012LD-TURMERIC', qty: 0 }],
+  })
+  assert.deepEqual(d.lines.map((l) => l.item), ['SN03011LD-ECRU'])
+})

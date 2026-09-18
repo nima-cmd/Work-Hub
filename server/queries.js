@@ -119,7 +119,7 @@ import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/s
 import { ASSUMPTIONS, MECHANICAL, summarize as summarizeAssumptions } from '../src/model/fieldAssumptions.js'
 import { summarizeTransfer } from '../src/model/transferMeter.js'
 import {
-  buildCustomsLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
+  buildCustomsLines, declarableLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
 } from '../src/model/customsInvoice.js'
 import { reconcileShipment, priceAnomalies, reconcileWarnings } from '../src/model/customsReconcile.js'
 export { toCsv }
@@ -4648,7 +4648,39 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
     rate: Number(r.rate || 0), coo: r.coo || null, weight: Number(r.weight || 0),
   }))
 
-  const built = buildCustomsLines(lines)
+  // ⚠️ THE FULFILMENT IS READ BEFORE THE FORM IS BUILT, and that ordering is the fix
+  // (2026-09-18). It used to be read afterwards, only to RECONCILE — so pulling an item
+  // off the IF left it on the declaration and merely raised a warning. Nima: "lets use
+  // that method if possible of IF for units and sales order for price."
+  //
+  // ⚠️ POSITIVE InvtPart LINES ONLY. An Item Fulfilment writes THREE lines per item
+  // (-qty, +qty, -qty) for the inventory movement — verified on IF7594: SN03013LD-
+  // BORDEAUX comes back as -2, +2, -2. SUM(ABS()) triples every count.
+  let shippedRows = []
+  let readError = null
+  try {
+    const f = await runSuiteQL(
+      `SELECT BUILTIN.DF(tl.item) AS item, SUM(tl.quantity) AS qty
+         FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
+        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}'
+          AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+        GROUP BY BUILTIN.DF(tl.item)`)
+    shippedRows = (f.rows || []).map((r) => ({ item: r.item, qty: Number(r.qty || 0) }))
+  } catch (e) {
+    // ⚠️ A failed read is "not checked", never "agrees" — and never an empty box.
+    readError = e.message
+  }
+
+  // Contents from the fulfilment, prices from the order. See declarableLines.
+  const declared = declarableLines({ priced: lines, shipped: shippedRows })
+  const built = buildCustomsLines(declared.lines)
+
+  // ⚠️ AN ITEM IN THE BOX WITH NO PRICE BLOCKS THE DOCUMENT. `problems` is the gate that
+  // already stops an unclassified line being exported; an unpriced one is the same class
+  // of failure — a line we cannot legally fill in.
+  const unpricedProblems = declared.unpriced.map(
+    (u) => `${u.item} is in ${ifNum} (${u.qty}) but is not priced on ${head.soNumber} — it cannot be declared until someone gives it a value.`)
+  if (unpricedProblems.length) built.problems = [...(built.problems || []), ...unpricedProblems]
 
   // ⚠️ PER ITEM, NOT A TOTAL. This compared the fulfilment's unit COUNT against the
   // order's, which cannot see a SWAP: ship 2 Onyx in place of 2 Rosso and the total is
@@ -4661,25 +4693,13 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
   // same rule as ediPackagesLive.ifUnitsSql, which measured it on IF7420, rather than
   // a second private fix for one NetSuite quirk. The old code deduped on `item|qty`,
   // which also collapsed two genuine lines of the same item and quantity into one.
-  let reconciliation = null
+  // ⚠️ THE RECONCILIATION STILL RUNS, and still compares the ORDER against the BOX —
+  // not the declaration against the box, which would now always agree and prove nothing.
+  // Its job changed from gatekeeper to explanation: it is how the screen says WHY the
+  // form shows 9 units when the order was for 10.
   let shipmentNote = null
-  try {
-    const f = await runSuiteQL(
-      `SELECT BUILTIN.DF(tl.item) AS item, SUM(tl.quantity) AS qty
-         FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
-        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}'
-          AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
-        GROUP BY BUILTIN.DF(tl.item)`)
-    reconciliation = reconcileShipment({
-      priced: lines,
-      shipped: (f.rows || []).map((r) => ({ item: r.item, qty: Number(r.qty || 0) })),
-    })
-  } catch (e) {
-    // ⚠️ A failed read is "not checked", never "agrees". Swallowing this to null was
-    // how an unreadable fulfilment came to look like a verified one.
-    reconciliation = reconcileShipment({ priced: lines, shipped: [] })
-    reconciliation.error = e.message
-  }
+  const reconciliation = reconcileShipment({ priced: lines, shipped: shippedRows })
+  if (readError) reconciliation.error = readError
   if (reconciliation && reconciliation.checked && !reconciliation.agrees
       && reconciliation.pricedUnits !== reconciliation.shippedUnits) {
     shipmentNote = `${ifNum} holds ${reconciliation.shippedUnits} unit(s) but ${head.soNumber} is priced at `
@@ -4700,6 +4720,13 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
     status: head.status, location: head.location,
     ...built,
     shipmentNote,
+    // ⚠️ WHAT THE FORM IS BUILT FROM, stated rather than assumed. 'fulfilment' means the
+    // lines are the box's contents; 'order' means the IF could not be read and the form
+    // fell back to the order UNVERIFIED — a reader must be able to tell those apart.
+    declaredFrom: declared.source,
+    contentsVerified: declared.verified,
+    excludedFromBox: declared.excluded,
+    unpricedInBox: declared.unpriced,
     reconciliation, priceAnomalies: anomalies, warnings,
     dhl: { columns: DHL_COLUMNS, rows: toDhlRows(built) },
     ups: { columns: UPS_COLUMNS, rows: toUpsRows(built) },
