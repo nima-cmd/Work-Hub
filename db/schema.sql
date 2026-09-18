@@ -2539,3 +2539,14 @@ CREATE TABLE IF NOT EXISTS po_progress (
 -- so nothing that reads it changes; `received` is new and additive.
 ALTER TABLE po_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;
 ALTER TABLE to_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;
+
+-- ⚠️ po_progress CARRIES THE HEADER FACTS TOO (2026-09-18). The season board used to be
+-- driven by `purchase_orders`, which holds only lines that still owe units — so a PO
+-- vanished from the board the moment it was fully received, taking its received units
+-- with it. Eight such POs held 838 Holiday 2026 units, every one delivered. These
+-- columns let the board be driven by the SEASON data instead, with the header read from
+-- here rather than from a table scoped to open work.
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS vendor      TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS status      TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS destination TEXT;
+ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS due_date    DATE;

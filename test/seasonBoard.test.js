@@ -332,3 +332,30 @@ test('a fully received season reports its own total, not more', () => {
   const h = b.seasons.find((s) => s.label === 'Holiday 2026')
   assert.equal(h.receivedUnits, h.receivedOf)
 })
+
+test('⚠️ a PO that has fully landed is NOT overdue, however old its due date', () => {
+  // Widening the board to 18 months made 331 POs read "past due" when most had been
+  // received months ago. A date in the past is only a finding while something is owed.
+  const b = seasonBoard({
+    pos: [
+      { poNumber: 'DONE', destination: 'Warehouse', expectedReceipt: '2025-01-01',
+        qtyRemaining: 0, mix: [{ season: 'Holiday 2026', units: 100, received: 100 }] },
+      { poNumber: 'OWING', destination: 'Warehouse', expectedReceipt: '2025-01-01',
+        qtyRemaining: 50, mix: [{ season: 'Holiday 2026', units: 100, received: 50 }] },
+    ],
+    drops: DROPS, today: TODAY,
+  })
+  const h = b.seasons.find((s) => s.label === 'Holiday 2026')
+  assert.equal(h.risks.find((r) => r.poNumber === 'DONE').overdue, null)
+  assert.ok(h.risks.find((r) => r.poNumber === 'OWING').overdue > 0)
+  assert.equal(b.totals.overdue, 1)
+})
+
+test('with no remaining figure, a fully received season slice settles it', () => {
+  const b = seasonBoard({
+    pos: [{ poNumber: 'X', destination: 'Warehouse', expectedReceipt: '2025-01-01',
+      mix: [{ season: 'Holiday 2026', units: 80, received: 80 }] }],
+    drops: DROPS, today: TODAY,
+  })
+  assert.equal(b.totals.overdue, 0)
+})

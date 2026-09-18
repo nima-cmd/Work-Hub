@@ -7075,19 +7075,34 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
   // Same helper the Landing bay uses: a `date` column arrives as local midnight, which
   // lands on the same calendar day in a negative UTC offset.
   const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null)
+  // ⚠️ THE SEASON DATA IS THE SPINE NOW, NOT `purchase_orders`. That table holds only
+  // lines still owing units, so a PO LEFT THE BOARD THE MOMENT IT WAS FULLY RECEIVED —
+  // taking its received units with it. Eight such POs held 838 Holiday 2026 units, all
+  // delivered, and the board reported 1,163 of 6,547 received when the truth was 2,330
+  // of 7,714. It was showing half the arrived stock and calling it 18%.
+  //
+  // `po_progress` carries the header facts (vendor, status, destination, due) precisely
+  // so this no longer depends on a table scoped to open work. `purchase_orders` is still
+  // read, but only to COALESCE over anything the progress sync has not seen.
   const { rows: poRows } = await pool.query(
-    `SELECT po_number, vendor, status, destination,
-            MIN(expected_receipt) AS expected_receipt,
-            SUM(qty_ordered)   AS qty_ordered,
-            SUM(qty_remaining) AS qty_remaining
-       FROM purchase_orders
-      WHERE qty_remaining > 0 AND NOT COALESCE(dismissed, false)
-      GROUP BY po_number, vendor, status, destination`)
+    `SELECT g.po_number,
+            COALESCE(g.vendor, p.vendor)           AS vendor,
+            COALESCE(g.status, p.status)           AS status,
+            COALESCE(g.destination, p.destination) AS destination,
+            COALESCE(g.due_date, p.expected_receipt) AS expected_receipt,
+            COALESCE(g.ordered, p.qty_ordered)     AS qty_ordered,
+            COALESCE(g.remaining, p.qty_remaining) AS qty_remaining
+       FROM (SELECT DISTINCT po_number FROM po_item_season) s
+       JOIN po_progress g ON g.po_number = s.po_number
+       LEFT JOIN (SELECT po_number, MAX(vendor) vendor, MAX(status) status,
+                         MAX(destination) destination, MIN(expected_receipt) expected_receipt,
+                         SUM(qty_ordered) qty_ordered, SUM(qty_remaining) qty_remaining
+                    FROM purchase_orders WHERE NOT COALESCE(dismissed, false)
+                   GROUP BY po_number) p ON p.po_number = g.po_number`)
 
+  // ⚠️ AND THE MIX IS NO LONGER FILTERED THROUGH THE OPEN-PO TABLE, for the same reason.
   const { rows: mixRows } = await pool.query(
-    `SELECT s.po_number, s.season, s.units, s.received FROM po_item_season s
-      WHERE EXISTS (SELECT 1 FROM purchase_orders p
-                     WHERE p.po_number = s.po_number AND p.qty_remaining > 0)`)
+    'SELECT s.po_number, s.season, s.units, s.received FROM po_item_season s')
 
   const { rows: confirmedRows } = await pool.query(
     `SELECT doc_number, season, seasons, drop_number, reason, confirmed_by, suggested_was
@@ -7107,6 +7122,8 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
        LEFT JOIN weaver_netsuite_item w ON w.sku = p.item
       WHERE p.qty_remaining > 0
       GROUP BY p.po_number, w.product_type`)
+  // ⚠️ Product type still comes from the OPEN lines only — it describes outstanding
+  // work, not history, and widening it would change what it counts.
 
   // ⚠️ HOW MUCH OF EACH PO HAS LANDED — from `po_progress`, not from `purchase_orders`,
   // which only holds lines that still owe units and therefore reports 0 received on a PO

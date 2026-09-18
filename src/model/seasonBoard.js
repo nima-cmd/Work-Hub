@@ -188,7 +188,13 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
       const dueDays = p.expectedReceipt
         ? Math.round((new Date(p.expectedReceipt) - new Date(today)) / 86400000)
         : null
-      const overdue = dueDays != null && dueDays < 0 ? -dueDays : null
+      // ⚠️ A PO THAT HAS FULLY LANDED IS NOT OVERDUE, however old its due date. Widening
+      // the board to 18 months made this visible at once: 331 POs read "past due" when
+      // most had simply been received months ago and closed. A date in the past is only
+      // a finding while something is still owed.
+      const settled = p.remaining != null ? Number(p.remaining) <= 0
+        : (p.received != null && p.units != null && p.received >= p.units)
+      const overdue = dueDays != null && dueDays < 0 && !settled ? -dueDays : null
       return {
         poNumber: p.poNumber,
         reason,
