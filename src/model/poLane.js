@@ -1,5 +1,27 @@
 // src/model/poLane.js — where a PO's stock is actually going, and who it is for.
 //
+// ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+// │ Every purchase order has a "final destination" typed into NetSuite. It is   │
+// │ just a location name, like "Virtual Warehouse" or "Warehouse Bulk :         │
+// │ Nordstrom". This file turns that name into a LANE — a plain answer to "who  │
+// │ is this stock for?"                                                         │
+// │                                                                             │
+// │   Virtual Warehouse       -> Retail      (our own ecom stock)               │
+// │   Warehouse               -> Boutique    (the boutique/wholesale floor)     │
+// │   Warehouse Bulk : <name> -> Partner     (bought for Nordstrom, Bloomies…)  │
+// │   China                   -> FOB         (collected there; NEVER arrives)   │
+// │   (blank) or anything else-> Unknown     (nobody has said where it goes)    │
+// │                                                                             │
+// │ Why it matters: "how many units are coming for the Holiday launch?" is a    │
+// │ different number from "how many did we buy". FOB stock is bought and never  │
+// │ arrives here. If we counted it, we would promise merchandise to a launch    │
+// │ that physically cannot have it.                                             │
+// │                                                                             │
+// │ The one rule to remember: this file NEVER guesses. A blank destination      │
+// │ stays "Unknown" instead of quietly becoming "Retail". 20 of our 80 open POs │
+// │ are blank — that is a question for a person, not a gap to paper over.       │
+// └─────────────────────────────────────────────────────────────────────────────┘
+//
 // `purchase_orders.destination` is `custbody_acs_final_destination` resolved through
 // `location.fullname` (src/ingest/netsuiteSync.js). The app has stored it since the PO
 // table went live and has never once asked what it MEANS — every screen shows the raw

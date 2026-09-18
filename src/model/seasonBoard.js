@@ -1,5 +1,33 @@
 // src/model/seasonBoard.js — the open POs, grouped by the season they are buying for.
 //
+// ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+// │ This builds the Seasons screen. It takes every purchase order that still    │
+// │ owes us goods and sorts them into piles by which season they were bought    │
+// │ for, then asks one question of each pile: will this arrive before that      │
+// │ season launches?                                                            │
+// │                                                                             │
+// │ Three facts get combined, each from somewhere different:                    │
+// │   WHICH SEASON  from the items on the PO (each item carries a season)       │
+// │   WHICH LANE    from the PO's final destination (see poLane.js)             │
+// │   WHICH DEADLINE from the marketing calendar's launch dates                 │
+// │                                                                             │
+// │ Three counting rules that are easy to get wrong, and why they matter:       │
+// │                                                                             │
+// │ 1. "Units" here means units ORDERED, not units still owed. We only know the │
+// │    season totals per PO, so we cannot honestly split "what is still owed"   │
+// │    by season. Showing one number and letting you assume the other would be  │
+// │    a lie of omission, so the two sit in separate columns.                   │
+// │                                                                             │
+// │ 2. A PO often buys for several seasons at once. It appears under each one,  │
+// │    but only with THAT season's share of the units — never its full total,   │
+// │    or one 840-unit PO would look like 1,680 units of stock.                 │
+// │                                                                             │
+// │ 3. A season whose launch has already passed gets NO verdict. Stock arriving │
+// │    for a launch that happened in February is a restock, not a late          │
+// │    delivery. Calling it "late" would be shouting about nothing, and would   │
+// │    train you to ignore the real warnings.                                   │
+// └─────────────────────────────────────────────────────────────────────────────┘
+//
 // Nima's ask (2026-09-18): *"a season view — POs grouped by season + year, with lane and
 // deadline."* Every input already existed and nothing put them on one screen:
 //
