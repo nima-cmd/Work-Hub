@@ -109,8 +109,14 @@ export async function fetchPoItemSeasons({ poNumbers = [] } = {}) {
   const pos = poNumbers.map((p) => String(p).trim().toUpperCase()).filter((p) => /^PO\d+$/.test(p))
   if (!pos.length) return { ok: true, rows: [] }
   const list = pos.map((p) => `'${p}'`).join(',')
+  // ⚠️ `received` IS SUMMED IN THE SAME GROUPING, and adding it closed a gap that had
+  // blocked the same question twice: the mix knew what was ORDERED for a season and
+  // nothing about what had ARRIVED. PO1785 is 1,330 Holiday units with 830 received —
+  // a fact this query was one column away from all along.
   const r = await runSuiteQL(`
-    SELECT t.tranid AS po, i.custitem_season_year AS season, SUM(tl.quantity) AS units
+    SELECT t.tranid AS po, i.custitem_season_year AS season,
+           SUM(tl.quantity) AS units,
+           SUM(COALESCE(tl.quantityshiprecv, 0)) AS received
       FROM transaction t
       JOIN transactionline tl ON tl.transaction = t.id
       JOIN item i ON i.id = tl.item
@@ -120,7 +126,13 @@ export async function fetchPoItemSeasons({ poNumbers = [] } = {}) {
   if (!r.ok) return { ok: false, error: r.error }
   return {
     ok: true,
-    rows: r.rows.map((x) => ({ poNumber: x.po, season: x.season ?? null, units: Number(x.units) || 0 })),
+    // ⚠️ `units` KEEPS ITS MEANING — ordered. Everything that reads it is unchanged;
+    // `received` is additive.
+    rows: r.rows.map((x) => ({
+      poNumber: x.po, season: x.season ?? null,
+      units: Number(x.units) || 0,
+      received: Number(x.received) || 0,
+    })),
   }
 }
 
@@ -220,8 +232,8 @@ export async function syncPoItemSeasons({ db = pool } = {}) {
     // named-season rows are guarded by two DIFFERENT indexes (see the schema note).
     for (const x of r.rows) {
       await client.query(
-        'INSERT INTO po_item_season (po_number, season, units, synced_at) VALUES ($1,$2,$3, now())',
-        [x.poNumber, x.season, x.units])
+        'INSERT INTO po_item_season (po_number, season, units, received, synced_at) VALUES ($1,$2,$3,$4, now())',
+        [x.poNumber, x.season, x.units, x.received ?? null])
     }
     await client.query('COMMIT')
     return { ok: true, pos: touched.size, rows: r.rows.length, asked: poNumbers.length }

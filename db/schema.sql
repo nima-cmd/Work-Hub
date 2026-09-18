@@ -2528,3 +2528,14 @@ CREATE TABLE IF NOT EXISTS po_progress (
   remaining   NUMERIC,
   synced_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ⚠️ THE SEASON MIX NOW CARRIES WHAT HAS LANDED (2026-09-18). `units` was ordered only,
+-- so the board could say "6,547 Holiday units bought" and nothing about how many arrived
+-- — a gap that blocked the same question TWICE in one session (a completion bar, then
+-- "is this PO fully received or does it have another season pending"). Nima: "if it
+-- burnt us twice then we should fix it."
+--
+-- One extra SUM in a query that was already running. `units` keeps its meaning (ORDERED)
+-- so nothing that reads it changes; `received` is new and additive.
+ALTER TABLE po_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;
+ALTER TABLE to_item_season ADD COLUMN IF NOT EXISTS received NUMERIC;

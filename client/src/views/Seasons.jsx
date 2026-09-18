@@ -78,18 +78,20 @@ function PoRow({ po, risk }) {
           map we do not hold; the sync caches the mix per (PO, season) only. Until then
           the headers name the denominator and the PO total is shown beside it. */}
       <td className="num">{n(po.units)}</td>
-      {/* ⚠️ THE WHOLE PO's PROGRESS, and it is deliberately not this season's. PO1785 is
-          830 of 1,330 received; which season those 830 belong to needs an item→season map
-          we do not hold. So the bar is labelled as the PO's, never as the season's.
-          ⚠️ AND "not synced" IS NOT "nothing landed" — no progress row shows a dash. */}
+      {/* ⚠️ THIS SEASON'S received, against THIS SEASON'S ordered — the same denominator
+          at last. The whole PO's figure rides in the tooltip, because it answers a
+          different question: PO1786 is 750 Holiday units inside a 1,690-unit order.
+          ⚠️ AND "not synced" IS NOT "nothing landed" — an unsynced PO shows a dash. */}
       <td className="num muted">
-        {po.progress
+        {po.received != null
           ? (
-            <span className="poProg" title={`${n(po.progress.received)} of ${n(po.progress.ordered)} units received on the whole PO (every season on it)`}>
-              <span className="poProgNums">{n(po.progress.received)} / {n(po.progress.ordered)}</span>
+            <span className="poProg"
+                  title={`${n(po.received)} of ${n(po.units)} ${po.seasonLabel || 'season'} units received`
+                    + (po.progress ? ` · the whole PO is ${n(po.progress.received)} of ${n(po.progress.ordered)}, across every season on it` : '')}>
+              <span className="poProgNums">{n(po.received)} / {n(po.units)}</span>
               <span className="poProgBar">
-                <span className={po.progress.remaining === 0 ? 'poProgFill done' : 'poProgFill'}
-                      style={{ width: `${po.progress.ordered ? Math.round((po.progress.received / po.progress.ordered) * 100) : 0}%` }} />
+                <span className={po.received >= po.units ? 'poProgFill done' : 'poProgFill'}
+                      style={{ width: `${po.units ? Math.min(100, Math.round((po.received / po.units) * 100)) : 0}%` }} />
               </span>
             </span>
           )
@@ -158,6 +160,15 @@ function Season({ s }) {
           {/* ⚠️ AND WHAT IS ACTUALLY COMING HERE, which excludes FOB and unrouted
               stock. Holiday 2026 is 6,547 bought and 3,600 arriving. */}
           {s.arriving !== s.units && <span className="pill">{n(s.arriving)} arriving here</span>}
+          {/* ⚠️ THE NUMBER THIS SCREEN EXISTS FOR — how much of the drop is actually in.
+              Null when nothing has been synced, so an empty bar can never be mistaken
+              for "nothing has arrived". */}
+          {s.receivedUnits != null && s.receivedOf > 0 && (
+            <span className={`pill${s.receivedUnits >= s.receivedOf ? ' fresh' : ''}`}
+                  title={`${n(s.receivedUnits)} of ${n(s.receivedOf)} ordered units have been received`}>
+              {Math.round((s.receivedUnits / s.receivedOf) * 100)}% received · {n(s.receivedUnits)} in
+            </span>
+          )}
           <span className="pill">{s.poCount} PO{s.poCount > 1 ? 's' : ''}</span>
         </div>
       </header>
@@ -168,7 +179,7 @@ function Season({ s }) {
             <tr>
               <th>PO</th><th>Vendor</th><th>Lane</th>
               <th className="num">{s.label}<br /><span className="muted">units on this PO</span></th>
-              <th className="num">Received<br /><span className="muted">whole PO · all seasons</span></th>
+              <th className="num">Received<br /><span className="muted">of this season's units</span></th>
               <th>Due</th><th>Reason</th><th>Verdict</th>
             </tr>
           </thead>

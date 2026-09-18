@@ -7085,7 +7085,7 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
       GROUP BY po_number, vendor, status, destination`)
 
   const { rows: mixRows } = await pool.query(
-    `SELECT s.po_number, s.season, s.units FROM po_item_season s
+    `SELECT s.po_number, s.season, s.units, s.received FROM po_item_season s
       WHERE EXISTS (SELECT 1 FROM purchase_orders p
                      WHERE p.po_number = s.po_number AND p.qty_remaining > 0)`)
 
@@ -7128,7 +7128,11 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
   const mixByPo = new Map()
   for (const m of mixRows) {
     if (!mixByPo.has(m.po_number)) mixByPo.set(m.po_number, [])
-    mixByPo.get(m.po_number).push({ season: m.season, units: Number(m.units) || 0 })
+    mixByPo.get(m.po_number).push({
+      season: m.season, units: Number(m.units) || 0,
+      // ⚠️ null, NOT 0, when it has never been synced — "not asked" is not "none landed".
+      received: m.received == null ? null : Number(m.received),
+    })
   }
   const typesByPo = new Map()
   for (const t of typeRows) {

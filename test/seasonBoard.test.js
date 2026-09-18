@@ -272,3 +272,63 @@ test('⚠️ an overdue PO is counted once however many seasons it spans', () =>
   })
   assert.equal(b.totals.overdue, 1)
 })
+
+// ── What has actually landed, per season (2026-09-18) ───────────────────────
+// Nima: "if it burnt us twice then we should fix it." The mix knew what was ORDERED for
+// a season and nothing about what had ARRIVED — which blocked a completion bar, and then
+// blocked "is this PO fully received or does it have another season pending".
+
+test('⚠️ received is summed per SEASON, not per PO', () => {
+  // PO1785 is 1,330 Holiday units with 830 in. PO1786 is 750 Holiday units inside a
+  // 1,690-unit order with nothing in. The Holiday figure is 830 of 2,080 — the PO totals
+  // never enter it.
+  const b = seasonBoard({
+    pos: [
+      { poNumber: 'PO1785', destination: 'Virtual Warehouse', mix: [{ season: 'Holiday 2026', units: 1330, received: 830 }] },
+      { poNumber: 'PO1786', destination: 'Warehouse', mix: [{ season: 'Holiday 2026', units: 750, received: 0 }, { season: 'Core', units: 400, received: 0 }] },
+    ],
+    drops: DROPS, today: TODAY,
+  })
+  const h = b.seasons.find((s) => s.label === 'Holiday 2026')
+  assert.equal(h.receivedUnits, 830)
+  assert.equal(h.receivedOf, 2080)
+  // And Core is its own tally, untouched by Holiday's.
+  assert.equal(b.seasons.find((s) => s.label === 'Core').receivedUnits, 0)
+})
+
+test('⚠️ NOT SYNCED is null, never zero', () => {
+  // An empty bar drawn from a missing figure reads as "nothing has arrived", which is a
+  // different and much worse claim than "we have not asked".
+  const b = seasonBoard({
+    pos: [{ poNumber: 'PO-X', destination: 'Warehouse', mix: [{ season: 'Holiday 2026', units: 500 }] }],
+    drops: DROPS, today: TODAY,
+  })
+  const h = b.seasons.find((s) => s.label === 'Holiday 2026')
+  assert.equal(h.receivedUnits, null)
+  assert.equal(h.receivedOf, null)
+  assert.equal(h.pos[0].received, null)
+})
+
+test('a season where only some POs are synced counts only those', () => {
+  const b = seasonBoard({
+    pos: [
+      { poNumber: 'A', destination: 'Warehouse', mix: [{ season: 'Holiday 2026', units: 100, received: 40 }] },
+      { poNumber: 'B', destination: 'Warehouse', mix: [{ season: 'Holiday 2026', units: 900 }] },
+    ],
+    drops: DROPS, today: TODAY,
+  })
+  const h = b.seasons.find((s) => s.label === 'Holiday 2026')
+  assert.equal(h.receivedUnits, 40)
+  // ⚠️ The denominator is the SYNCED 100, not the 1,000 on the board — otherwise the
+  // percentage would read 4% when what is known is 40%.
+  assert.equal(h.receivedOf, 100)
+})
+
+test('a fully received season reports its own total, not more', () => {
+  const b = seasonBoard({
+    pos: [{ poNumber: 'A', destination: 'Warehouse', mix: [{ season: 'Holiday 2026', units: 200, received: 200 }] }],
+    drops: DROPS, today: TODAY,
+  })
+  const h = b.seasons.find((s) => s.label === 'Holiday 2026')
+  assert.equal(h.receivedUnits, h.receivedOf)
+})
