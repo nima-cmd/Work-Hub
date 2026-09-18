@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BUILDINGS, BUILDING, ROADS, roadFor, buildingStates, moversFrom, isMoverEvent,
+  BUILDINGS, BUILDING, ROADS, roadFor, buildingStates, moversFrom, isMoverEvent, centreOf,
 } from '../src/model/baseMap.js'
 
 // ── The base is coherent ────────────────────────────────────────────────────
@@ -484,43 +484,76 @@ test('⚠️ the OPS CENTRE label now says what it counts', () => {
 })
 
 
-// ── Seasons joins the Base (2026-09-18) ──────────────────────────────────────
-// Nima: Seasons belongs on the Base — "i think its the heart of what were getting at".
+// ── The Command Center joins the Base (2026-09-18) ──────────────────────────
+// Nima: it belongs on the Base — "i think its the heart of what were getting at".
+// The lane key stays `seasons`; the label and the building are what is new.
 
-test('Seasons is a building, in the PLANNING row beside the Almanac', () => {
-  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
-  assert.ok(seasons, 'seasons is on the map')
-  assert.equal(seasons.view, 'seasons')
-  const almanac = BUILDINGS.find((b) => b.key === 'calendar')
-  // Same row as the Almanac — both are date buildings, and a PO that will miss its
-  // launch is a planning fact before it is a freight one.
-  assert.equal(seasons.y, almanac.y)
-  // And it does not overlap it.
-  assert.ok(seasons.x >= almanac.x + almanac.w, 'seasons starts after the Almanac ends')
+test('the Command Center sits at the DEAD CENTRE, between the two rows', () => {
+  const cc = BUILDINGS.find((b) => b.key === 'seasons')
+  assert.ok(cc, 'it is on the map')
+  assert.equal(cc.label, 'Command Center')
+  assert.equal(cc.view, 'seasons')
+  const pack = BUILDINGS.find((b) => b.key === 'pack')       // goods row, above
+  const routing = BUILDINGS.find((b) => b.key === 'routing') // supply row, below
+  assert.ok(cc.y > pack.y + pack.h, 'below the goods row')
+  assert.ok(cc.y + cc.h <= routing.y, 'above the supply row')
 })
 
-test('⚠️ Seasons is NOT COUNTABLE — its real number has no feed here', () => {
+test('⚠️ NO ROAD MAY CUT THROUGH A BUILDING IT DOES NOT CONNECT', () => {
+  // The header's rule, made mechanical. Taking the Scan bay's slot literally sent
+  // `pack-scan` straight through the new building — a road visibly cutting it in half.
+  // Three crossings exist and all three pre-date this (the Landing bay, added
+  // 2026-09-15). ⚠️ This number may only ever go DOWN. If a change makes it rise, the
+  // layout moved without its roads being re-earned.
+  const seg = (f, t) => {
+    const a = centreOf(BUILDING[f]); const b = centreOf(BUILDING[t]); const mx = (a.x + b.x) / 2
+    return [[a.x, a.y, mx, a.y], [mx, a.y, mx, b.y], [mx, b.y, b.x, b.y]]
+  }
+  const hits = ([x1, y1, x2, y2], bl) =>
+    Math.min(x1, x2) < bl.x + bl.w && Math.max(x1, x2) > bl.x
+    && Math.min(y1, y2) < bl.y + bl.h && Math.max(y1, y2) > bl.y
+  const crossings = new Set()
+  for (const r of ROADS) {
+    for (const s of seg(r.from, r.to)) {
+      for (const bl of BUILDINGS) {
+        if (bl.key === r.from || bl.key === r.to) continue
+        if (hits(s, bl)) crossings.add(`${r.key} -> ${bl.key}`)
+      }
+    }
+  }
+  assert.ok(crossings.size <= 3, `roads cut through buildings: ${[...crossings].join(', ')}`)
+  // And the Command Center is not one of them — it is the one this test was written for.
+  for (const c of crossings) assert.ok(!c.endsWith('-> seasons'), `a road cuts the Command Center: ${c}`)
+})
+
+test('⚠️ the Command Center is NOT COUNTABLE — its real number has no feed here', () => {
   // The honest figure is "POs late for their drop", which costs the season board's six
   // queries. The Base is the always-open screen, so it shows its label instead of a
   // cheaper number that almost means the same thing.
-  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
-  assert.equal(seasons.countable, false)
+  const cc = BUILDINGS.find((b) => b.key === 'seasons')
+  assert.equal(cc.countable, false)
   const s = buildingStates({ orders: [so()] })
   assert.equal(s.seasons.count, 0)
 })
 
-test('Seasons is on the road network, not stranded', () => {
-  const touching = ROADS.filter((r) => r.from === 'seasons' || r.to === 'seasons')
-  assert.ok(touching.length >= 2, 'seasons is reachable from both rows')
-  assert.ok(roadFor('calendar', 'seasons'), 'the planning link')
-  assert.ok(roadFor('seasons', 'port'), 'the real one — season stock arrives by container')
+test('the Command Center reaches the floor above it and the row below', () => {
+  assert.ok(roadFor('seasons', 'scan'), 'the goods floor directly above')
+  assert.ok(roadFor('seasons', 'routing'), 'the partner row directly below')
 })
 
-test('Seasons mirrors the Almanac rather than reusing its look', () => {
-  // sprite+flip must stay unique across the map, and the twin reads as a pair.
-  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
-  const almanac = BUILDINGS.find((b) => b.key === 'calendar')
-  assert.equal(seasons.sprite, almanac.sprite)
-  assert.equal(seasons.flip, true)
-  assert.ok(!almanac.flip)
+test('the Scan bay kept its slot, and the roads its EVENTS need', () => {
+  // CUSTODY_OUT/IN and PACKED/DEPARTURE_CONFIRMED travel these. Moving the Scan bay
+  // out of the middle of the chain is what broke them.
+  const scan = BUILDINGS.find((b) => b.key === 'scan')
+  assert.equal(scan.x, 48)
+  assert.ok(roadFor('pack', 'scan'))
+  assert.ok(roadFor('scan', 'launch'))
+})
+
+test('the Command Center mirrors the Ops centre — the desk and the strategic view', () => {
+  const cc = BUILDINGS.find((b) => b.key === 'seasons')
+  const ops = BUILDINGS.find((b) => b.key === 'ops')
+  assert.equal(cc.sprite, ops.sprite)
+  assert.equal(cc.flip, true)
+  assert.ok(!ops.flip)
 })
