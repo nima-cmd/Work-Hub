@@ -28,6 +28,7 @@ import {
   recordContainerDelivered,
   getContainers,
   getSeasonBoard,
+  getBarracks, grantRank, postCrew,
   getPo850Resends,
   waiveShipmentAsn,
   setTransferPurpose,
@@ -1610,6 +1611,31 @@ app.get('/api/season-board', async (_req, res) => {
     console.error(e)
     res.status(500).json({ error: e.message })
   }
+})
+
+// The barracks — rank and today's postings (2026-09-18).
+app.get('/api/barracks', async (req, res) => {
+  try { res.json(await getBarracks({ on: req.query.on || null })) }
+  catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+// ⚠️ THE ONLY WAY A RANK EVER CHANGES. Nothing computes it, nothing schedules it.
+app.post('/api/barracks/rank', async (req, res) => {
+  try {
+    const r = await grantRank(req.body || {})
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/barracks/post', async (req, res) => {
+  try {
+    const r = await postCrew(req.body || {})
+    // ⚠️ 409 CARRIES THE REASON — "they are already posted to X today", or the rank the
+    // post requires. A bare 400 would make the screen say "failed".
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error })
+    res.json(r)
+  } catch (e) { console.error(e); res.status(500).json({ error: e.message }) }
 })
 
 // Document links — attach any doc/transaction to any other (Nima, 2026-07-20).

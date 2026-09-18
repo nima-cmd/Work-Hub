@@ -3,6 +3,7 @@ import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from
 import { rankFor } from '../../../src/model/crewRank.js'
 import { imagesFor } from '../data/characterImages.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
+import { crewOnRoads } from '../../../src/model/crewOnBase.js'
 
 const CREW_NAME = new Map(CHARACTERS.map((c) => [c.id, c.name]))
 
@@ -122,7 +123,7 @@ const AGE = (iso) => {
 
 // ⚠️ `postings` IS AN INPUT, not something this view fetches or invents. It arrives as
 // {buildingKey: {characterId, rank}} and is EMPTY today — see CrewSlot.
-export default function Base({ orders = [], tasks = [], emails = [], events = [], containers = null, postings = {}, onNavigate, viewFor }) {
+export default function Base({ orders = [], tasks = [], emails = [], events = [], containers = null, postings = {}, crewRoster = [], onNavigate, viewFor }) {
   // ── OPENING A BUILDING, WITHOUT MAKING THE CLICK WAIT FOR IT ──────────────
   //
   // Measured 2026-08-21 in Nima's Performance panel: INP 208ms on a pointer, against
@@ -204,6 +205,15 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
     [orders, tasks, emails, events, containers],
   )
   const movers = useMemo(() => moversFrom(events), [events])
+  // ⚠️ THE DOTS BECOME FACES — of the crew NOT on duty (Nima, 2026-09-18). Seeded on the
+  // mover's id inside crewOnRoads, never Math.random(), so the map does not reshuffle on
+  // every render. The posted crew are excluded: somebody manning the Pack house should
+  // not also be walking the road to it.
+  const postedIds = useMemo(
+    () => new Set(Object.values(postings).map((p) => p?.characterId).filter(Boolean)), [postings])
+  const walkers = useMemo(
+    () => crewOnRoads({ movers, roster: crewRoster.length ? crewRoster : CHARACTERS, postedIds }),
+    [movers, crewRoster, postedIds])
 
   const busiest = Math.max(1, ...BUILDINGS.map((b) => states[b.key]?.count || 0))
   const sel = open ? BUILDING[open] : null
@@ -244,7 +254,12 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               </button>
             ))}
           </div>
-          <BuildingInterior building={sel} state={selState} onBack={() => openBuilding(null)} />
+          <BuildingInterior building={sel} state={selState}
+                            posting={postings[sel.key] ? {
+                              ...postings[sel.key],
+                              name: CREW_NAME.get(postings[sel.key].characterId) || postings[sel.key].characterId,
+                            } : null}
+                            onBack={() => openBuilding(null)} />
           {/* The items stay reachable here too: the embedded view is the lane's own
               surface, but a building's ALERTS are findings that live nowhere else. */}
           {!!(selState.alerts || []).length && (
@@ -310,13 +325,33 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
 
           {/* Movers travel the road PATH ITSELF via mpath, so a dot physically cannot
               leave the network — the guarantee the model exists to make good on. */}
-          {movers.map((m, i) => (
-            <circle key={m.id} r="5" className={`bsMover tone-${m.tone}`}>
-              <animateMotion dur={`${16 + (i % 4) * 5}s`} begin={`-${i * 3}s`} repeatCount="indefinite">
-                <mpath href={`#bsRoad-${m.road}`} />
-              </animateMotion>
-            </circle>
-          ))}
+          {/* ⚠️ A CLIPPED PORTRAIT, NOT AN <image> ALONE — an unclipped one is a square
+              on a road. The clip path is defined once and reused. ⚠️ AND THE ANIMATION
+              IS UNCHANGED: still SMIL following the road path, so the browser drives it
+              and the app does no work per frame. A face costs a decode, not a frame. */}
+          <defs>
+            <clipPath id="bsWalkerClip"><circle cx="0" cy="0" r="9" /></clipPath>
+          </defs>
+          {walkers.map((m, i) => {
+            const src = m.characterId ? (imagesFor(m.characterId)?.[0] || null) : null
+            return (
+              <g key={m.id} className={`bsMover tone-${m.tone}`}>
+                <animateMotion dur={`${16 + (i % 4) * 5}s`} begin={`-${i * 3}s`} repeatCount="indefinite">
+                  <mpath href={`#bsRoad-${m.road}`} />
+                </animateMotion>
+                {src
+                  ? (
+                    <>
+                      <image href={src} x="-9" y="-9" width="18" height="18"
+                             clipPath="url(#bsWalkerClip)" preserveAspectRatio="xMidYMid slice" />
+                      <circle r="9" className="bsWalkerRing" />
+                    </>
+                  )
+                  /* ⚠️ No crew left means the dot stays — never a blank gap on the road. */
+                  : <circle r="5" className="bsMoverDot" />}
+              </g>
+            )
+          })}
         </svg>
 
         {BUILDINGS.map((b) => {

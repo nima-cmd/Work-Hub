@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ScanToNetsuite from './lib/ScanToNetsuite.jsx'
-import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers, fetchContainers, fetchPo850Resends, fetchTransfers, recordViewVisit } from './api.js'
+import { fetchPulse, fetchOrders, fetchQuestTasks, fetchQuestEmails, fetchQuestActivity, fetchOrderEvents, fetchCredits, fetchAsnDue, fetchEdiArrivals, dismissEdiArrival, fetchLabelGaps, fetchEdiDeliveryGaps, fetchAsnCartons, refreshNetsuite, netsuiteRefreshStatus, fetchCustodyRegister, fetchLaunchBay, fetchSyncHealth, fetchUnfiledPaper, fetchInboundContainers, fetchContainers, fetchPo850Resends, fetchTransfers, recordViewVisit, fetchBarracks } from './api.js'
 import { CourtStrip } from './ShipDesk.jsx'
 import { syncHealthLine } from '../../src/model/syncHealth.js'
 import { pulseChanged, PULSE_INTERVAL_MS } from '../../src/model/pulse.js'
@@ -11,6 +11,7 @@ import Calendar from './views/Calendar.jsx'
 import Allocations from './views/Allocations.jsx'
 import Containers from './views/Containers.jsx'
 import Seasons from './views/Seasons.jsx'
+import Barracks from './views/Barracks.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Routing from './views/Routing.jsx'
 import Catalogue from './views/Catalogue.jsx'
@@ -169,6 +170,8 @@ const VIEWS = [
   // vessel"; Seasons asks "is what we bought for the Holiday drop going to make it".
   // Same POs, a different question — and the second one has a deadline (2026-09-18).
   { key: 'seasons', label: 'Seasons', C: Seasons },
+  // Crew management — rank and post. The Base's Barracks building opens here.
+  { key: 'barracks', label: 'Barracks', C: Barracks },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'routing', label: 'Routing', C: Routing },
   { key: 'catalogue', label: 'Catalogue', C: Catalogue },
@@ -277,6 +280,7 @@ export default function App() {
   // ⚠️ null UNTIL IT LOADS, and buildingStates reads that as "no honest number" rather
   // than an empty port — see the Landing bay in src/model/baseMap.js.
   const [containers, setContainers] = useState(null)
+  const [barracks, setBarracks] = useState(null)
   // ⚠️ null until it loads — see the Landing bay note. An empty object here would read
   // as "no POs were resent", which is a claim rather than a loading state.
   const [resends, setResends] = useState(null)
@@ -338,6 +342,10 @@ export default function App() {
     // Inbound containers past their arrival date (open POs grouped by due date).
     fetchInboundContainers().then(setInbound).catch(() => setInbound(null))
     fetchContainers().then(setContainers).catch(() => setContainers(null))
+    // ⚠️ The Base needs to know who is on duty — both to draw them on their building and
+    // to keep them OFF the roads. Failing soft to null leaves every post reading
+    // "needs crew", which is the honest picture when this cannot be loaded.
+    fetchBarracks().then(setBarracks).catch(() => setBarracks(null))
     fetchPo850Resends().then(setResends).catch(() => setResends(null))
     fetchCustodyRegister().then(setCustody).catch(() => setCustody([]))
     fetchLaunchBay().then(setBay).catch(() => setBay([]))
@@ -454,6 +462,10 @@ export default function App() {
   const viewProps = {
     orders, transfers, tasks, taskMeta, onLoadAllTasks: loadAllTasks, emails, activity, events, views: VIEWS,
     labelGaps, custody, bay, containers, resends,
+    // Who is on duty today — the Base draws them on their building and keeps them off
+    // the roads; BuildingInterior shows the one manning the building you opened.
+    postings: barracks?.byBuilding || {},
+    crewRoster: barracks?.crew || [],
     handoffTrace, onHandoffTaken: () => setHandoffTrace(null),
     handoffPo, onHandoffPoTaken: () => setHandoffPo(null), onOpenBulkPick: openBulkPick,
     asnFocus, onAsnFocusTaken: () => setAsnFocus(null),

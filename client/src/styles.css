@@ -3663,3 +3663,33 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
    that it asks to be filled. */
 .bsCrewEmpty .bsCrewText { color: var(--mid); }
 .bsCrewEmpty .bsCrewFace { border-style: dashed; }
+
+/* ── Crew portraits on the roads (2026-09-18) ────────────────────────────── */
+/* ⚠️ Deliberately quiet. Nima: "we dont want it distracting" — so the ring is thin,
+   the face is small, and neither pulses. The movement is the signal, not the face. */
+.bsWalkerRing { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .85; }
+.bsMoverDot { fill: currentColor; }
+
+/* ── The Barracks screen ─────────────────────────────────────────────────── */
+.bkTable { width: 100%; }
+.bkTable td { vertical-align: middle; padding: 4px 8px 4px 0; }
+.bkFace { border-radius: 50%; object-fit: cover; border: 1px solid var(--line); display: block; }
+.bkFaceNone { display: grid; place-items: center; background: var(--panel2); color: var(--muted);
+  border-style: dashed; font-size: 12px; }
+.bkName { font-weight: 600; }
+.bkUniverse { font-size: 10px; }
+.bkCaseCell { max-width: 38ch; font-size: 11px; }
+.bkSuggest { color: var(--lo); }
+/* A crew member with an earned case waiting on a decision. */
+.bkCase td:first-child { box-shadow: inset 3px 0 var(--lo); }
+.bkEmpty td { opacity: .75; }
+.bkErr { color: var(--hi); font-size: 11px; margin-left: 6px; }
+.bkRankPick select, .bkTable select { background: var(--panel2); color: inherit;
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; font-size: 11px; }
+/* Who is manning the building you walked into. */
+.biCrew { display: flex; align-items: center; gap: 7px; margin-left: auto; font-size: 11px; }
+.biCrewFace { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
+.biCrewNone { display: grid; place-items: center; background: var(--panel2); color: var(--muted); border-style: dashed; }
+.biCrewText { display: flex; align-items: baseline; gap: 5px; }
+.biCrewRank { color: var(--lo); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.biCrewEmpty .biCrewText { color: var(--mid); }
