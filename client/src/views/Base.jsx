@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from '../../../src/model/baseMap.js'
+
+// ⚠️ AN UNCOUNTABLE BUILDING MUST NOT BE DESCRIBED WITH A ZERO (fixed 2026-09-18).
+// The visible plate has always shown "open" for the Archive, the Catalogue and now
+// Seasons — but the TOOLTIP read "Archive — 0 trace anything", fabricating exactly the
+// figure the plate refuses to invent, and the two disagreed on the same button. The
+// screen-reader name is the tooltip, so the only version some people get was the wrong
+// one. One helper, used by both call sites, so they cannot drift again.
+const buildingTitle = (b, count) =>
+  (b.countable === false ? `${b.label} — ${b.of}` : `${b.label} — ${count} ${b.of}`)
 import { NsLink } from '../lib.jsx'
 import BuildingInterior from './BuildingInterior.jsx'
 import './base.css'
@@ -178,9 +187,10 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               <button key={b.key} type="button"
                       className={`bsNavBtn tone-${b.tone}`}
                       onClick={() => openBuilding(b.key)}
-                      title={`${b.label} — ${states[b.key]?.count ?? 0} ${b.of}`}>
+                      title={buildingTitle(b, states[b.key]?.count ?? 0)}>
                 <span className="bsNavLabel">{b.label}</span>
-                <span className="bsNavN">{states[b.key]?.count ?? 0}</span>
+                {/* ⚠️ And no digit at all for an uncountable building — see buildingTitle. */}
+                {b.countable !== false && <span className="bsNavN">{states[b.key]?.count ?? 0}</span>}
               </button>
             ))}
           </div>
@@ -273,7 +283,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
               // geometry governs and the sprite fits inside it.
               style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` }}
               onClick={() => openBuilding(b.key)}
-              title={`${b.label} — ${st.count} ${b.of}`}
+              title={buildingTitle(b, st.count)}
             >
               <img src={`/base/${b.sprite}.png`} alt=""
                    className={`bsSprite${b.flip ? ' bsSpriteFlip' : ''}`} />

@@ -60,6 +60,29 @@ export const BUILDINGS = [
     of: 'ship windows closing or closed', view: 'calendar',
   },
   {
+    key: 'seasons', label: 'Seasons', sprite: 'bldg-09', tone: 'arrive', flip: true,
+    // ⚠️ THE ALMANAC'S SPRITE, MIRRORED, AND DELIBERATELY SO — the same logic as the
+    // Catalogue mirroring the Stock depot. The Almanac asks "which ship windows are
+    // closing"; Seasons asks "will the stock we bought arrive before its drop". Both
+    // are date buildings, so they read as twins and stand side by side. Same width (8)
+    // as the Almanac for the same reason.
+    //
+    // Nima, 2026-09-18: Seasons belongs on the Base — "i think its the heart of what
+    // were getting at". It sits in the NORTH row, which is the planning row (the desk
+    // and the wires), not the middle row, which is the physical flow of goods. A PO
+    // that will miss its launch is a planning fact before it is a freight one.
+    x: 66, y: 3, w: 8, h: 13,
+    // ⚠️ NOT COUNTABLE, and this is the Archive's and Catalogue's reason exactly.
+    // The season board is SIX queries (purchase orders, the item-season mix, the
+    // confirmations, the drops, product types and order links). `buildingStates` is
+    // built only from what App already passes, so that the always-open landing screen
+    // adds no query load to a one-vCPU deploy — and the Base is not given a season
+    // feed. The honest number here is "11 POs late for their drop"; inventing a
+    // cheaper stand-in that ALMOST means that is the counts-something-other-than-its-
+    // label bug this file keeps catching. Give the Base the feed, then make it count.
+    of: 'drops, and what will miss them', view: 'seasons', countable: false,
+  },
+  {
     key: 'datapad', label: 'Archive', sprite: 'bldg-07', tone: 'accent',
     // The data packet surface. ⚠️ NOT COUNTABLE — see `countable` below.
     x: 76, y: 3, w: 10, h: 13,
@@ -193,6 +216,12 @@ export const ROADS = [
   { key: 'ops-calendar', from: 'ops', to: 'calendar' },
   { key: 'ops-scan', from: 'ops', to: 'scan' },
   { key: 'calendar-archive', from: 'calendar', to: 'datapad' },
+  // ⚠️ SEASONS IS WIRED TO BOTH ROWS ON PURPOSE. `calendar-seasons` is the planning
+  // link (two date buildings side by side); `seasons-port` is the real one — a season's
+  // stock arrives by container, so a document moving between the Landing bay and
+  // Seasons is a journey that actually happens.
+  { key: 'calendar-seasons', from: 'calendar', to: 'seasons' },
+  { key: 'seasons-port', from: 'seasons', to: 'port' },
   { key: 'archive-launch', from: 'datapad', to: 'launch' },
 ]
 
@@ -379,6 +408,12 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
     datapad: state(0, [], 'none', () => null),
     // ⚠️ NOT COUNTABLE either — see the building. The view renders its label instead.
     catalogue: state(0, [], 'none', () => null),
+    // ⚠️ NOT COUNTABLE, and the ONE number that belongs here is a real one this view
+    // is simply not fed: "POs late for their drop" (11 on 2026-09-18). It takes the
+    // season board's six queries, and the Base is the always-open screen. So it shows
+    // its label until the feed reaches it — never a cheaper number that almost means
+    // the same thing. See the building's note.
+    seasons: state(0, [], 'none', () => null),
     comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
     ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }

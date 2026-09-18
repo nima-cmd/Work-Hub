@@ -425,13 +425,16 @@ test('the Archive declares itself uncountable rather than inventing a number', (
   assert.equal(s.datapad.count, 0)
 })
 
-test('every building still has a state after growing to thirteen', () => {
+test('every building still has a state after growing to fourteen', () => {
   const s = buildingStates({ orders: [so()] })
   // ⚠️ A DELIBERATE CANARY: adding a building must trip this and make someone check
   // that it has a state, a road and a real sprite. Bump it knowingly, never reflexively.
   // Bumped 2026-09-15 for the Landing bay — checked: it has a state (above), two roads
   // (port→receiving, port→stock) and a real sprite (bldg-02, mirrored off Receiving).
-  assert.equal(BUILDINGS.length, 13)
+  // Bumped 2026-09-18 for Seasons — checked: it has a state (uncountable, like the
+  // Archive), two roads (calendar→seasons, seasons→port) and a real sprite (bldg-09,
+  // mirrored off the Almanac, which is the only other date building).
+  assert.equal(BUILDINGS.length, 14)
   for (const b of BUILDINGS) {
     assert.ok(s[b.key], `${b.key} has no state`)
     assert.ok(Array.isArray(s[b.key].items))
@@ -478,4 +481,46 @@ test('⚠️ the OPS CENTRE label now says what it counts', () => {
   // And it still counts exactly that.
   const s = buildingStates({ orders: [], tasks: [{ status: 'open' }, { status: 'open' }, { status: 'done' }] })
   assert.equal(s.ops.count, 2)
+})
+
+
+// ── Seasons joins the Base (2026-09-18) ──────────────────────────────────────
+// Nima: Seasons belongs on the Base — "i think its the heart of what were getting at".
+
+test('Seasons is a building, in the PLANNING row beside the Almanac', () => {
+  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
+  assert.ok(seasons, 'seasons is on the map')
+  assert.equal(seasons.view, 'seasons')
+  const almanac = BUILDINGS.find((b) => b.key === 'calendar')
+  // Same row as the Almanac — both are date buildings, and a PO that will miss its
+  // launch is a planning fact before it is a freight one.
+  assert.equal(seasons.y, almanac.y)
+  // And it does not overlap it.
+  assert.ok(seasons.x >= almanac.x + almanac.w, 'seasons starts after the Almanac ends')
+})
+
+test('⚠️ Seasons is NOT COUNTABLE — its real number has no feed here', () => {
+  // The honest figure is "POs late for their drop", which costs the season board's six
+  // queries. The Base is the always-open screen, so it shows its label instead of a
+  // cheaper number that almost means the same thing.
+  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
+  assert.equal(seasons.countable, false)
+  const s = buildingStates({ orders: [so()] })
+  assert.equal(s.seasons.count, 0)
+})
+
+test('Seasons is on the road network, not stranded', () => {
+  const touching = ROADS.filter((r) => r.from === 'seasons' || r.to === 'seasons')
+  assert.ok(touching.length >= 2, 'seasons is reachable from both rows')
+  assert.ok(roadFor('calendar', 'seasons'), 'the planning link')
+  assert.ok(roadFor('seasons', 'port'), 'the real one — season stock arrives by container')
+})
+
+test('Seasons mirrors the Almanac rather than reusing its look', () => {
+  // sprite+flip must stay unique across the map, and the twin reads as a pair.
+  const seasons = BUILDINGS.find((b) => b.key === 'seasons')
+  const almanac = BUILDINGS.find((b) => b.key === 'calendar')
+  assert.equal(seasons.sprite, almanac.sprite)
+  assert.equal(seasons.flip, true)
+  assert.ok(!almanac.flip)
 })
