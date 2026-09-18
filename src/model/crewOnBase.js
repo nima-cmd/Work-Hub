@@ -99,3 +99,67 @@ export function crewOnRoads({ movers = [], roster = [], postedIds = new Set() } 
     return { ...m, characterId: pick.id }
   })
 }
+
+/**
+ * Fill the unassigned posts for a day, rotating the crew.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ Nima, 2026-09-18: "we also need you to rotate daily on these position with  │
+ * │ the ability to assign specific people."                                     │
+ * │                                                                             │
+ * │ So a post is filled one of two ways:                                        │
+ * │   PINNED   you chose this person — it is stored, and it does not move.      │
+ * │   ROTATED  nobody chose, so the day picks one. Different every day.         │
+ * │                                                                             │
+ * │ ⚠️ A ROTATION IS NEVER STORED. It is worked out from the DATE, so it is the  │
+ * │ same all day, different tomorrow, and the same for anyone who opens the      │
+ * │ app. Writing rotations into the table would mean a nightly job that could    │
+ * │ fail silently, and a row nobody decided would look exactly like a row        │
+ * │ somebody did — which is the distinction the schema exists to keep.           │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * @param buildings [{ key, minRank }]
+ * @param crew      [{ id, record }] the whole roster
+ * @param day       'YYYY-MM-DD'
+ * @param pinned    [{ building, characterId }] the stored, deliberate assignments
+ * @param canMan    injected from crewRank.js
+ *
+ * ⚠️ PINNED PEOPLE ARE OUT OF THE ROTATION ENTIRELY, not merely off their own building.
+ * One post per person per day is the rule the database enforces; a rotation that could
+ * place a pinned person elsewhere would produce an assignment the database then refuses.
+ */
+export function rotateCrew({ buildings = [], crew = [], day = '', pinned = [], canMan } = {}) {
+  const pinnedByBuilding = new Map(pinned.filter((p) => p?.building && p?.characterId)
+    .map((p) => [p.building, p.characterId]))
+  const spoken = new Set(pinnedByBuilding.values())
+
+  // ⚠️ SEEDED ON THE DAY, so the order is stable for everyone all day and different
+  // tomorrow. Sorting by a hash of (day + id) rotates people through posts without
+  // anyone tracking whose turn it is.
+  const pool = crew
+    .filter((c) => c?.id && !spoken.has(c.id))
+    .map((c) => ({ c, k: hash(`${day}:${c.id}`) }))
+    .sort((a, b) => a.k - b.k)
+    .map((x) => x.c)
+
+  const out = {}
+  let i = 0
+  for (const b of buildings) {
+    const pin = pinnedByBuilding.get(b.key)
+    if (pin) { out[b.key] = { characterId: pin, pinned: true }; continue }
+    // The first unused person who may hold this post. ⚠️ A post nobody can fill stays
+    // EMPTY rather than borrowing someone under-ranked — the gate is the point.
+    let picked = null
+    for (let n = 0; n < pool.length; n++) {
+      const cand = pool[(i + n) % pool.length]
+      if (!cand || spoken.has(cand.id)) continue
+      const check = canMan ? canMan(cand.record || null, b.minRank) : { ok: true }
+      if (check.ok) { picked = cand; i = (i + n + 1) % Math.max(1, pool.length); break }
+    }
+    if (picked) {
+      spoken.add(picked.id)
+      out[b.key] = { characterId: picked.id, pinned: false }
+    }
+  }
+  return out
+}

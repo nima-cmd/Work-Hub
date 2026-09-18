@@ -112,12 +112,26 @@ function PostRow({ post, crew, ranks, onDone }) {
         <div className="muted bkUniverse">{need ? `${need.name} or above` : 'open to all ranks'}</div></td>
       <td colSpan={3}>
         {post.characterId
-          ? <span>{post.characterName}{post.underRanked && <span className="pill danger"> outranked by this post</span>}</span>
-          : <span className="muted">nobody is posted here</span>}
+          ? (
+            <span>
+              {post.characterName}
+              {/* ⚠️ A DECISION AND A ROTATION LOOK THE SAME UNLESS ONE SAYS SO. Without
+                  this the screen shows a name either way, and you cannot tell what you
+                  chose from what the day dealt. */}
+              {post.pinned
+                ? <span className="pill">you chose this</span>
+                : <span className="pill fresh">rotating</span>}
+              {post.underRanked && <span className="pill danger"> outranked by this post</span>}
+            </span>
+          )
+          : <span className="muted">nobody on the roster holds this rank</span>}
       </td>
       <td colSpan={2}>
-        <select value={post.characterId || ''} disabled={busy} onChange={(e) => send(e.target.value)}>
-          <option value="">— nobody —</option>
+        <select value={post.pinned ? (post.characterId || '') : ''} disabled={busy} onChange={(e) => send(e.target.value)}>
+          {/* ⚠️ THE EMPTY OPTION IS "ROTATE", NOT "NOBODY". Clearing the row hands the
+              post back to the daily rotation — it does not empty the building. Labelling
+              it "nobody" made the only way to un-pin someone look destructive. */}
+          <option value="">— rotate daily —</option>
           {eligible.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         {/* ⚠️ A refusal from the server is SHOWN. It carries the reason — "already posted
@@ -138,17 +152,11 @@ export default function Barracks() {
   if (err) return <div className="view"><p className="pill danger">{err}</p></div>
   if (!data) return <div className="view"><p className="muted">Opening the barracks…</p></div>
 
-  const byChar = new Map(data.crew.map((c) => [c.id, c]))
-  const posts = [...data.unmanned.map((u) => ({ ...u })), ...data.postings.map((p) => {
-    const b = data.byBuilding[p.building] || {}
-    return {
-      key: p.building, label: p.building, minRank: null,
-      characterId: p.characterId, characterName: byChar.get(p.characterId)?.name || p.characterId,
-      underRanked: b.underRanked,
-    }
-  })].sort((a, b) => String(a.label).localeCompare(String(b.label)))
-
+  // ⚠️ THE API BUILDS THIS ROW PER BUILDING, label and all. Assembling it here from
+  // `unmanned` and `postings` printed building KEYS ("seasons") instead of names.
+  const posts = data.posts || []
   const cases = data.crew.filter((c) => c.recommendation.promote).length
+  const pinnedCount = posts.filter((p) => p.pinned).length
 
   return (
     <div className="view barracks">
@@ -157,14 +165,17 @@ export default function Barracks() {
         <div className="season-figs">
           <span className="pill">{data.crew.length} crew</span>
           <span className="pill">{data.postings.length} posted today</span>
-          {data.unmanned.length > 0 && <span className="pill warn">{data.unmanned.length} posts unmanned</span>}
+          <span className="pill">{pinnedCount} you chose</span>
+          <span className="pill fresh">{posts.length - pinnedCount} rotating</span>
+          {data.unmanned.length > 0 && <span className="pill warn">{data.unmanned.length} nobody can hold</span>}
           {cases > 0 && <span className="pill fresh">{cases} earned a promotion</span>}
         </div>
       </header>
       <p className="muted seasons-note">
         <strong>Bond</strong> is earned by working together and cannot be given.
         <strong> Rank</strong> is given by you and cannot be earned. Bond only makes the case —
-        every promotion below is yours.
+        every promotion below is yours. A post you do not choose <strong>rotates daily</strong>;
+        set one back to &ldquo;rotate daily&rdquo; to hand it back.
       </p>
 
       <section className="card">

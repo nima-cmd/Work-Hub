@@ -41,6 +41,36 @@ export default function BuildingInterior({ building, state, posting = null, onBa
         <span className="biScan" />
         {/* The affordance. Without it the image is a secret door. */}
         <span className="biBackHint">← the whole base</span>
+
+        {/* ⚠️ WHO MANS THIS BUILDING, LARGE, IN THE TOP-RIGHT (Nima, 2026-09-18: "the
+            portrait should be in the top right corner as big as we can without
+            conflicting with the actual base"). The sprite is centred and its corners are
+            empty, so this claims space nothing else uses.
+            ⚠️ IT IS AN <img> AND A <span>, DELIBERATELY. This subtree lives inside the
+            back button, and anything interactive here would be a button in a button —
+            the trap the note above records. Clicking the portrait leaves the building,
+            exactly like clicking the roof does, so the gesture stays consistent. */}
+        <span className={`biStageCrew${posting?.characterId ? '' : ' biStageCrewEmpty'}`}>
+          {posting?.characterId && (faceFor(posting.characterId) || imagesFor(posting.characterId)?.[0])
+            ? <img className="biStageFace"
+                   src={faceFor(posting.characterId) || imagesFor(posting.characterId)[0]} alt="" />
+            : <span className="biStageFace biStageFaceNone">?</span>}
+          <span className="biStageWho">
+            {posting?.characterId
+              ? (
+                <>
+                  <span className="biStageName">{posting.name || posting.characterId}</span>
+                  {posting.rank && <span className="biStageRank">{posting.rank}</span>}
+                </>
+              )
+              : (
+                <>
+                  <span className="biStageName">unmanned</span>
+                  {building.minRank && <span className="biStageRank">needs {building.minRank}</span>}
+                </>
+              )}
+          </span>
+        </span>
       </button>
 
       {/* ── The console ───────────────────────────────────────────────────── */}

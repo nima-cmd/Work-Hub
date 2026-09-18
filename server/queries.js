@@ -21,7 +21,7 @@ import { dropsFrom, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
 import { seasonBoard } from '../src/model/seasonBoard.js'
 import { mirrorFreshness } from '../src/model/mirrorFreshness.js'
 import { RANKS, rankFor, canMan, recommend, promotionBoard } from '../src/model/crewRank.js'
-import { postingsForBase } from '../src/model/crewOnBase.js'
+import { postingsForBase, rotateCrew } from '../src/model/crewOnBase.js'
 import { BUILDINGS } from '../src/model/baseMap.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
@@ -7203,23 +7203,61 @@ export async function getBarracks({ on = null } = {}) {
 
   const board = promotionBoard(crew.map((c) => ({ ...c, record: c.record })))
 
-  const postings = postRows.map((p) => ({
+  // ⚠️ THE STORED ROWS ARE THE PINNED ONES — somebody chose them. Every other post is
+  // ROTATED: worked out from the date, never written down. Nima, 2026-09-18: "rotate
+  // daily on these position with the ability to assign specific people."
+  //
+  // ⚠️ AND THE ROTATION IS NOT STORED ON PURPOSE. Writing it would need a nightly job
+  // that could fail silently, and a row nobody decided would be indistinguishable from
+  // a row somebody did — which is the whole distinction crew_posting exists to keep.
+  const pinned = postRows.map((p) => ({
     building: p.building, characterId: p.character_id,
     postedBy: p.posted_by, postedAt: p.posted_at,
   }))
+  const rotation = rotateCrew({
+    buildings: BUILDINGS,
+    crew: crew.map((c) => ({ id: c.id, record: c.record })),
+    day, pinned, canMan,
+  })
+  const postings = Object.entries(rotation).map(([building, r]) => {
+    const pin = pinned.find((p) => p.building === building)
+    return {
+      building, characterId: r.characterId, pinned: r.pinned,
+      postedBy: pin?.postedBy || null, postedAt: pin?.postedAt || null,
+    }
+  })
   const postedIds = new Set(postings.map((p) => p.characterId))
+
+  const byBuildingOut = postingsForBase({ postings, ranks: rankByChar, buildings: BUILDINGS, canMan })
+  // ⚠️ `pinned` RIDES ALONG so a screen can say "you chose this" rather than showing a
+  // rotation as though it were a decision.
+  for (const p of postings) if (byBuildingOut[p.building]) byBuildingOut[p.building].pinned = p.pinned
 
   return {
     day,
     crew: board,
     postings,
-    byBuilding: postingsForBase({
-      postings, ranks: rankByChar, buildings: BUILDINGS, canMan,
-    }),
+    byBuilding: byBuildingOut,
     // ⚠️ Posts nobody is standing in — the honest headline for the Barracks building,
     // and the number it will show once the Base is given this feed.
-    unmanned: BUILDINGS.filter((b) => !postedIds.has(null) && !postings.some((p) => p.building === b.key))
+    // ⚠️ UNMANNED NOW MEANS THE ROTATION COULD NOT FILL IT EITHER — nobody on the roster
+    // holds the rank this post requires. That is a real finding, not an empty diary.
+    unmanned: BUILDINGS.filter((b) => !rotation[b.key])
       .map((b) => ({ key: b.key, label: b.label, minRank: b.minRank || null })),
+    // One row per building, ready to render — the building's own LABEL rather than its
+    // key, and `pinned` so the screen can tell a decision from a rotation.
+    posts: BUILDINGS.map((b) => {
+      const r = rotation[b.key] || null
+      const who = r ? crew.find((c) => c.id === r.characterId) : null
+      return {
+        key: b.key, label: b.label, minRank: b.minRank || null,
+        characterId: r?.characterId || null,
+        characterName: who?.name || r?.characterId || null,
+        rank: who?.record?.rank || null,
+        pinned: r?.pinned ?? false,
+        underRanked: !!byBuildingOut[b.key]?.underRanked,
+      }
+    }),
     ranks: RANKS,
   }
 }
