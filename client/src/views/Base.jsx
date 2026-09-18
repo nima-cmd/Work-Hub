@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { BUILDINGS, ROADS, BUILDING, centreOf, buildingStates, moversFrom } from '../../../src/model/baseMap.js'
 import { rankFor } from '../../../src/model/crewRank.js'
 import { imagesFor } from '../data/characterImages.js'
+import { faceFor } from '../data/crewFaces.js'
 import { CHARACTERS } from '../../../src/model/characters.js'
 import { crewOnRoads } from '../../../src/model/crewOnBase.js'
 
@@ -28,7 +29,7 @@ function CrewSlot({ building, posting }) {
       </span>
     )
   }
-  const face = imagesFor(posting.characterId)?.[0] || null
+  const face = faceFor(posting.characterId) || imagesFor(posting.characterId)?.[0] || null
   const name = CREW_NAME.get(posting.characterId) || posting.characterId
   const held = rankFor(posting.rank)
   return (
@@ -333,7 +334,7 @@ export default function Base({ orders = [], tasks = [], emails = [], events = []
             <clipPath id="bsWalkerClip"><circle cx="0" cy="0" r="9" /></clipPath>
           </defs>
           {walkers.map((m, i) => {
-            const src = m.characterId ? (imagesFor(m.characterId)?.[0] || null) : null
+            const src = m.characterId ? (faceFor(m.characterId) || imagesFor(m.characterId)?.[0] || null) : null
             return (
               <g key={m.id} className={`bsMover tone-${m.tone}`}>
                 <animateMotion dur={`${16 + (i % 4) * 5}s`} begin={`-${i * 3}s`} repeatCount="indefinite">

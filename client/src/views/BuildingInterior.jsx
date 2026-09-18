@@ -17,6 +17,7 @@
 const CRT_ROWS = 7
 
 import { imagesFor } from '../data/characterImages.js'
+import { faceFor } from '../data/crewFaces.js'
 
 export default function BuildingInterior({ building, state, posting = null, onBack }) {
   const alerts = state?.alerts || []
@@ -55,8 +56,8 @@ export default function BuildingInterior({ building, state, posting = null, onBa
             {posting?.characterId
               ? (
                 <>
-                  {imagesFor(posting.characterId)?.[0]
-                    ? <img className="biCrewFace" src={imagesFor(posting.characterId)[0]} alt="" />
+                  {faceFor(posting.characterId) || imagesFor(posting.characterId)?.[0]
+                    ? <img className="biCrewFace" src={faceFor(posting.characterId) || imagesFor(posting.characterId)[0]} alt="" />
                     : <span className="biCrewFace biCrewNone">{(posting.name || '?').slice(0, 1)}</span>}
                   <span className="biCrewText">
                     {posting.name || posting.characterId}

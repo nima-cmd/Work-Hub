@@ -19,8 +19,9 @@
 import { useEffect, useState } from 'react'
 import { fetchBarracks, grantRank, postCrew } from '../api.js'
 import { imagesFor } from '../data/characterImages.js'
+import { faceFor } from '../data/crewFaces.js'
 
-const face = (id) => imagesFor(id)?.[0] || null
+const face = (id) => faceFor(id) || imagesFor(id)?.[0] || null
 
 function Portrait({ id, name, size = 34 }) {
   const src = face(id)
