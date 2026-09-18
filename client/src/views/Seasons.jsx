@@ -100,6 +100,34 @@ function PoRow({ po, risk }) {
       {/* ⚠️ AN OVERDUE DUE DATE IS MARKED, NOT QUIETLY REUSED. The verdict column
           deliberately stops predicting once this date has gone by — see seasonBoard.js.
           Showing the date alone would read as a plan. */}
+      {/* ⚠️ WHO IT IS FOR. Different question from the lane: the lane says WHERE the
+          stock goes, this says WHO ordered it. "China" cannot tell Eve Group from Yagi
+          Tsusho, and ship-to fills 5 of the 20 POs with no destination at all.
+          ⚠️ Free text, for reading — the same store appears under five spellings. */}
+      <td className="shipTo" title={po.shipTo ? [po.shipTo.addressee, po.shipTo.city, po.shipTo.country].filter(Boolean).join(' · ') : 'no ship-to on this PO'}>
+        {po.shipTo?.addressee || <span className="muted">—</span>}
+      </td>
+      {/* ⚠️ WHICH CONTAINER IT RIDES ON, and where that vessel is. A PO can be on
+          SEVERAL — a transfer order carries a subset, so a big order ships across
+          sailings. PO1747 is on two, and collapsing them would hide freight. */}
+      <td className="legs">
+        {po.legs?.length
+          ? po.legs.map((l) => (
+            <span key={l.toNumber} className={`pill${l.receivedOn ? ' fresh' : ''}`}
+                  title={[
+                    `${l.toNumber} · ${l.units} units on ${l.container}`,
+                    l.receivedOn ? `received ${l.receivedOn}${l.receiptNumber ? ` (${l.receiptNumber})` : ''}`
+                      : l.deliveredOn ? `container landed ${l.deliveredOn}, transfer not yet received`
+                        : l.etaOn ? `due ${l.etaOn}` : 'no arrival date known',
+                  ].join(' · ')}>
+              {l.container.split(' ')[0]}
+              {/* ⚠️ The TO's own receipt beats the container's ETA: a received transfer
+                  is an observation, an ETA is a forecast. Never shown as the same thing. */}
+              {l.receivedOn ? ' ✓' : l.etaOn ? ` ${d(l.etaOn)}` : ''}
+            </span>
+          ))
+          : <span className="muted">—</span>}
+      </td>
       <td>
         {d(po.expectedReceipt) || <span className="muted">no date</span>}
         {risk?.overdue != null && (
@@ -178,6 +206,8 @@ function Season({ s }) {
           <thead>
             <tr>
               <th>PO</th><th>Vendor</th><th>Lane</th>
+              <th>Ship to<br /><span className="muted">who it is for</span></th>
+              <th>Container<br /><span className="muted">✓ = received</span></th>
               <th className="num">{s.label}<br /><span className="muted">units on this PO</span></th>
               <th className="num">Received<br /><span className="muted">of this season's units</span></th>
               <th>Due</th><th>Reason</th><th>Verdict</th>

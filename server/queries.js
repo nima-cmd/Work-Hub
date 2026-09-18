@@ -7130,12 +7130,52 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
   // that is 62% delivered. See the schema note.
   const { rows: progressRows } = await pool.query(
     'SELECT po_number, lines, ordered, received, remaining FROM po_progress')
+  // ⚠️ WHO THE PO IS FOR — free text on an address record, for reading only. The same
+  // store appears under five spellings, so nothing may join on it. See the schema note.
+  const { rows: shipToRows } = await pool.query(
+    'SELECT po_number, addressee, city, country FROM po_ship_to WHERE addressee IS NOT NULL')
+  const shipToByPo = new Map(shipToRows.map((r) => [r.po_number, {
+    addressee: r.addressee, city: r.city, country: r.country,
+  }]))
   const progressByPo = new Map(progressRows.map((r) => [r.po_number, {
     lines: Number(r.lines) || 0,
     ordered: Number(r.ordered) || 0,
     received: Number(r.received) || 0,
     remaining: Number(r.remaining) || 0,
   }]))
+
+  // ⚠️ WHICH CONTAINER EACH PO IS ON, and where that vessel is. Nima asked for this:
+  // "we would like to see the TO and IR associated with these open POs [and] any
+  // incoming unreceived shipment with these on them."
+  //
+  // ⚠️ A PO CAN BE ON SEVERAL CONTAINERS, and that is normal rather than an error — a
+  // transfer order carries a SUBSET of its PO, so a big order ships across sailings.
+  // PO1747 is on two. Collapsing to one would silently hide freight.
+  const { rows: legRows } = await pool.query(
+    `SELECT ct.po_number, ct.container_label, ct.to_number, ct.units, ct.received_on,
+            ct.receipt_number, i.eta_on, i.delivered_on, i.departed_on
+       FROM container_transfer ct
+       LEFT JOIN inbound_shipment i ON i.container_label = ct.container_label
+      WHERE ct.po_number IS NOT NULL AND ct.container_label IS NOT NULL
+      ORDER BY ct.container_label, ct.to_number`)
+  const legsByPo = new Map()
+  for (const l of legRows) {
+    if (!legsByPo.has(l.po_number)) legsByPo.set(l.po_number, [])
+    legsByPo.get(l.po_number).push({
+      container: l.container_label,
+      toNumber: l.to_number,
+      units: Number(l.units) || 0,
+      // ⚠️ THREE DIFFERENT DATES, KEPT APART. `received_on` is the transfer order booked
+      // in; `delivered_on` is somebody saying the container reached our floor;
+      // `eta_on` is a forecast. Merging them into one "arrived" would make a prediction
+      // indistinguishable from an observation — the whole point of containerDelivery.js.
+      receivedOn: iso(l.received_on),
+      receiptNumber: l.receipt_number || null,
+      deliveredOn: iso(l.delivered_on),
+      etaOn: iso(l.eta_on),
+      departedOn: iso(l.departed_on),
+    })
+  }
 
   // PO→order links, so a linked PO can read as a re-order — a fact, not a date reading.
   const { rows: linkRows } = await pool.query(
@@ -7182,6 +7222,10 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
     // ⚠️ THE WHOLE PO's progress, across every season on it. Null when NetSuite has not
     // been asked yet — a screen must be able to tell "not synced" from "nothing landed".
     progress: progressByPo.get(p.po_number) || null,
+    // Every container leg this PO rides on. Empty is a real answer: most POs are not
+    // on a container at all.
+    legs: legsByPo.get(p.po_number) || [],
+    shipTo: shipToByPo.get(p.po_number) || null,
   }))
 
   const board = seasonBoard({ pos, drops, today })
