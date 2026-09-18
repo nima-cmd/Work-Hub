@@ -3693,3 +3693,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
 .biCrewText { display: flex; align-items: baseline; gap: 5px; }
 .biCrewRank { color: var(--lo); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
 .biCrewEmpty .biCrewText { color: var(--mid); }
+/* The whole-PO total beside what it still owes — context for a number that is not
+   this season's. See the note in Seasons.jsx. */
+.ofTotal { color: var(--muted); font-size: 10px; }
