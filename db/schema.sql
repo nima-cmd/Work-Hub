@@ -2501,3 +2501,30 @@ CREATE TABLE IF NOT EXISTS crew_posting (
 CREATE UNIQUE INDEX IF NOT EXISTS crew_posting_one_post_per_day
   ON crew_posting (on_date, character_id);
 CREATE INDEX IF NOT EXISTS crew_posting_by_character ON crew_posting (character_id, on_date DESC);
+
+-- ── How much of a PO has actually landed (2026-09-18) ───────────────────────
+--
+-- Nima, on PO1785: "are you saying that that PO need 500 units of the total 500 units
+-- for holiday? ... we would also like to know if the po is fully received or if it has
+-- more units of another season pending to be received on it."
+--
+-- ⚠️ `purchase_orders` CANNOT ANSWER THAT, and the reason is its scope. It stores only
+-- lines that still owe units (foldPurchaseOrderLines filters `qtyRemaining > 0`), which
+-- mirrors the saved search it replaced. So a FULLY received line is not in it at all:
+-- PO1785 is 31 lines and 1,330 units in NetSuite with 830 received, and 12 lines / 500
+-- units / 0 received here. Across the 80 open POs we are missing 415 lines and 8,202
+-- units of received stock.
+--
+-- ⚠️ AND THE SCOPE IS NOT WIDENED, DELIBERATELY. Nine other queries read
+-- `purchase_orders` and every one of them assumes an open line; adding received lines
+-- would change what each counts without touching any of them — the counts-something-
+-- other-than-its-label bug, applied to nine surfaces at once. This table sits BESIDE it
+-- and says only what it is: the whole PO's progress, straight from NetSuite.
+CREATE TABLE IF NOT EXISTS po_progress (
+  po_number   TEXT PRIMARY KEY,
+  lines       INTEGER,
+  ordered     NUMERIC,
+  received    NUMERIC,
+  remaining   NUMERIC,
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

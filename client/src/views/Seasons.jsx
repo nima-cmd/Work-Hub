@@ -78,9 +78,22 @@ function PoRow({ po, risk }) {
           map we do not hold; the sync caches the mix per (PO, season) only. Until then
           the headers name the denominator and the PO total is shown beside it. */}
       <td className="num">{n(po.units)}</td>
-      <td className="num muted" title={po.ordered != null ? `${n(po.ordered)} ordered on the whole PO, across every season` : undefined}>
-        {n(po.remaining)}
-        {po.ordered != null && <span className="ofTotal"> / {n(po.ordered)}</span>}
+      {/* ⚠️ THE WHOLE PO's PROGRESS, and it is deliberately not this season's. PO1785 is
+          830 of 1,330 received; which season those 830 belong to needs an item→season map
+          we do not hold. So the bar is labelled as the PO's, never as the season's.
+          ⚠️ AND "not synced" IS NOT "nothing landed" — no progress row shows a dash. */}
+      <td className="num muted">
+        {po.progress
+          ? (
+            <span className="poProg" title={`${n(po.progress.received)} of ${n(po.progress.ordered)} units received on the whole PO (every season on it)`}>
+              <span className="poProgNums">{n(po.progress.received)} / {n(po.progress.ordered)}</span>
+              <span className="poProgBar">
+                <span className={po.progress.remaining === 0 ? 'poProgFill done' : 'poProgFill'}
+                      style={{ width: `${po.progress.ordered ? Math.round((po.progress.received / po.progress.ordered) * 100) : 0}%` }} />
+              </span>
+            </span>
+          )
+          : <span title="NetSuite has not been asked about this PO yet — not the same as nothing having landed">—</span>}
       </td>
       {/* ⚠️ AN OVERDUE DUE DATE IS MARKED, NOT QUIETLY REUSED. The verdict column
           deliberately stops predicting once this date has gone by — see seasonBoard.js.
@@ -155,7 +168,7 @@ function Season({ s }) {
             <tr>
               <th>PO</th><th>Vendor</th><th>Lane</th>
               <th className="num">{s.label}<br /><span className="muted">units on this PO</span></th>
-              <th className="num">Still owed<br /><span className="muted">whole PO · all seasons</span></th>
+              <th className="num">Received<br /><span className="muted">whole PO · all seasons</span></th>
               <th>Due</th><th>Reason</th><th>Verdict</th>
             </tr>
           </thead>

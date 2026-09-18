@@ -232,3 +232,69 @@ export async function syncPoItemSeasons({ db = pool } = {}) {
     client.release()
   }
 }
+
+/**
+ * How much of each PO has actually been received — the WHOLE PO, every line.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ The purchase_orders table only keeps lines that still owe units, so it      │
+ * │ cannot say how much of a PO has arrived. PO1785 has had 830 of its 1,330    │
+ * │ units delivered and our table shows zero received, because the delivered    │
+ * │ lines are simply not in it.                                                 │
+ * │                                                                             │
+ * │ This asks NetSuite for the totals across every line and stores them beside  │
+ * │ that table, so "is this PO fully received?" has an answer.                   │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ⚠️ IT DOES NOT WIDEN purchase_orders, and that is the point — see the schema note.
+ * Nine queries read that table expecting open lines only.
+ */
+export async function fetchPoProgress({ poNumbers = [] } = {}) {
+  const pos = poNumbers.map((p) => String(p).trim().toUpperCase()).filter((p) => /^PO\d+$/.test(p))
+  if (!pos.length) return { ok: true, rows: [] }
+  const r = await runSuiteQL(`
+    SELECT t.tranid AS po, COUNT(*) AS lines, SUM(tl.quantity) AS ordered,
+           SUM(COALESCE(tl.quantityshiprecv, 0)) AS received
+      FROM transaction t
+      JOIN transactionline tl ON tl.transaction = t.id
+     WHERE t.type = 'PurchOrd' AND t.tranid IN (${pos.map((p) => `'${p}'`).join(',')})
+       AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+     GROUP BY t.tranid`)
+  if (!r.ok) return { ok: false, error: r.error }
+  return {
+    ok: true,
+    rows: r.rows.map((x) => {
+      const ordered = Number(x.ordered) || 0
+      const received = Number(x.received) || 0
+      return {
+        poNumber: x.po, lines: Number(x.lines) || 0, ordered, received,
+        // ⚠️ DERIVED HERE, NOT ASKED FOR. SuiteQL will happily sum a per-line
+        // subtraction, but a line whose received exceeds its ordered (it happens) would
+        // make the total smaller than reality. Clamped at zero, from two honest sums.
+        remaining: Math.max(0, ordered - received),
+      }
+    }),
+  }
+}
+
+/** Cache it for every PO still owing units, and every PO on a container. */
+export async function syncPoProgress({ db = pool } = {}) {
+  const { rows } = await db.query(
+    `SELECT po_number FROM purchase_orders WHERE qty_remaining > 0
+      UNION
+     SELECT po_number FROM container_transfer WHERE po_number IS NOT NULL`)
+  const poNumbers = rows.map((r) => r.po_number)
+  if (!poNumbers.length) return { ok: true, pos: 0 }
+  const r = await fetchPoProgress({ poNumbers })
+  if (!r.ok) return { ok: false, error: r.error }
+  for (const x of r.rows) {
+    await db.query(
+      `INSERT INTO po_progress (po_number, lines, ordered, received, remaining, synced_at)
+            VALUES ($1,$2,$3,$4,$5, now())
+       ON CONFLICT (po_number) DO UPDATE SET
+         lines = EXCLUDED.lines, ordered = EXCLUDED.ordered, received = EXCLUDED.received,
+         remaining = EXCLUDED.remaining, synced_at = now()`,
+      [x.poNumber, x.lines, x.ordered, x.received, x.remaining])
+  }
+  return { ok: true, pos: r.rows.length, asked: poNumbers.length }
+}

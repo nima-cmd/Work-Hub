@@ -7108,6 +7108,18 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
       WHERE p.qty_remaining > 0
       GROUP BY p.po_number, w.product_type`)
 
+  // ⚠️ HOW MUCH OF EACH PO HAS LANDED — from `po_progress`, not from `purchase_orders`,
+  // which only holds lines that still owe units and therefore reports 0 received on a PO
+  // that is 62% delivered. See the schema note.
+  const { rows: progressRows } = await pool.query(
+    'SELECT po_number, lines, ordered, received, remaining FROM po_progress')
+  const progressByPo = new Map(progressRows.map((r) => [r.po_number, {
+    lines: Number(r.lines) || 0,
+    ordered: Number(r.ordered) || 0,
+    received: Number(r.received) || 0,
+    remaining: Number(r.remaining) || 0,
+  }]))
+
   // PO→order links, so a linked PO can read as a re-order — a fact, not a date reading.
   const { rows: linkRows } = await pool.query(
     `SELECT a_number AS po, b_type AS doc_type, b_number AS doc_number
@@ -7146,6 +7158,9 @@ export async function getSeasonBoard({ today = new Date() } = {}) {
     types: (typesByPo.get(p.po_number) || []).sort((a, b) => b.units - a.units),
     confirmed: confirmedByPo.get(p.po_number) || null,
     orderLinks: linksByPo.get(p.po_number) || [],
+    // ⚠️ THE WHOLE PO's progress, across every season on it. Null when NetSuite has not
+    // been asked yet — a screen must be able to tell "not synced" from "nothing landed".
+    progress: progressByPo.get(p.po_number) || null,
   }))
 
   const board = seasonBoard({ pos, drops, today })

@@ -116,6 +116,10 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
         // Carried, never summed into the season — see the header note.
         remaining: po.qtyRemaining ?? null,
         ordered: po.qtyOrdered ?? null,
+        // ⚠️ THE WHOLE PO's real progress, and it is NOT this season's. PO1785 is 830 of
+        // 1,330 received — but which season those 830 belong to needs an item→season map
+        // we do not hold, so this is labelled as the PO's figure and never as Holiday's.
+        progress: po.progress || null,
         lane,
         confirmed: po.confirmed || null,
         orderLinks: po.orderLinks || [],
