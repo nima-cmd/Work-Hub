@@ -127,6 +127,10 @@ export function seasonBoard({ pos = [], drops = [], today = new Date() } = {}) {
         // 1,330 received — but which season those 830 belong to needs an item→season map
         // we do not hold, so this is labelled as the PO's figure and never as Holiday's.
         progress: po.progress || null,
+        // Which container(s) this PO rides on, and who it is for. Both are context a
+        // person reads; neither is joined on or counted.
+        legs: po.legs || [],
+        shipTo: po.shipTo || null,
         lane,
         confirmed: po.confirmed || null,
         orderLinks: po.orderLinks || [],

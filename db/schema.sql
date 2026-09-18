@@ -2550,3 +2550,35 @@ ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS vendor      TEXT;
 ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS status      TEXT;
 ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS destination TEXT;
 ALTER TABLE po_progress ADD COLUMN IF NOT EXISTS due_date    DATE;
+
+-- ⚠️ SHIP-TO: WHO THE PO IS FOR (2026-09-18) ────────────────────────────────
+--
+-- Nima: "something more important on the PO level is the field shipto this tells us the
+-- customer the PO is intended for."
+--
+-- `purchase_orders.ship_to` exists and is FROZEN at the 2026-07-29 CSV export, because
+-- src/ingest/netsuiteSync.js deliberately never synced it: the saved search's "Ship To"
+-- did not map to any single line of `transaction.shipaddress`. That objection is real
+-- and is now obsolete — the HEADER's `shippingaddress` joins cleanly to
+-- `transactionShippingAddress`, one row per PO, with an `addressee`.
+--
+-- Measured 2026-09-18: live on 77 of 80 open POs, against 50 from the stale CSV — and
+-- EVERY PO without it was created after 2026-09-15, so the gap grew with each new PO.
+--
+-- ⚠️ IT IS FREE TEXT ON AN ADDRESS RECORD, NOT A CUSTOMER KEY, AND MUST NEVER BE JOINED
+-- ON. The Mitchells family alone appears as five strings (DBA MITCHELLS, Marios
+-- Mitchells LLC DBA Marios, Mitchells Huntington, Richards Greenwich, DBA WILKES
+-- BASHFORD SF); Bloomingdale's appears as "Macy's/Bloomingdale's Accounts Payable",
+-- which is an AP department rather than a ship-to. It is a signal a person reads.
+--
+-- ⚠️ AND IT IS A DIFFERENT QUESTION FROM `destination`. That says WHERE the stock goes
+-- (the lane); this says WHO it is for. The combination is what neither gives alone:
+-- "China" cannot tell Eve Group from Yagi Tsusho, and ship-to fills 5 of the 20 POs
+-- that have no destination at all.
+CREATE TABLE IF NOT EXISTS po_ship_to (
+  po_number   TEXT PRIMARY KEY,
+  addressee   TEXT,
+  city        TEXT,
+  country     TEXT,
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

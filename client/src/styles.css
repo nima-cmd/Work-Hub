@@ -3704,3 +3704,6 @@ h2, .colHead, .sectorTitle, .taskGroupHead, .calTitle, .calWeekday {
   border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
 .poProgFill { display: block; height: 100%; background: var(--mid); }
 .poProgFill.done { background: #7ee787; }
+.season-grid .shipTo { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.season-grid .legs { white-space: nowrap; }
+.season-grid .legs .pill { font-size: 10px; padding: 1px 6px; margin-right: 3px; }

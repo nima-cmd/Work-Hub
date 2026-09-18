@@ -334,3 +334,61 @@ export async function syncPoProgress({ db = pool, sinceMonths = SEASON_WINDOW_MO
   }
   return { ok: true, pos: r.rows.length, windowMonths: sinceMonths }
 }
+
+/**
+ * Who each PO is FOR — the addressee on its shipping address.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ Every purchase order has a "ship to" in NetSuite naming the customer the    │
+ * │ goods are for — Nordstrom, Eve Group, Holt Renfrew, or NAGHEDI when it is    │
+ * │ our own stock. The app has never read it; the copy it holds is frozen at a   │
+ * │ CSV export from July, and every PO raised since September has none.          │
+ * │                                                                             │
+ * │ This reads it live. It is a name a person reads, NOT something to join on —  │
+ * │ the same store appears under five different spellings.                       │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * ⚠️ THE HEADER'S ADDRESS, NOT A LINE'S. The original objection to syncing this was that
+ * the saved search's "Ship To" did not map to any single line of `transaction.shipaddress`
+ * (PO1745 had it on line 2). `transaction.shippingaddress` is a header field that joins
+ * to one address record, which is why this works where that did not.
+ */
+export async function fetchPoShipTo({ sinceMonths = SEASON_WINDOW_MONTHS } = {}) {
+  const r = await runSuiteQL(`
+    SELECT t.tranid AS po, a.addressee, a.city, a.country
+      FROM transaction t
+      LEFT JOIN transactionShippingAddress a ON a.nkey = t.shippingaddress
+     WHERE t.type = 'PurchOrd'
+       AND t.trandate >= ADD_MONTHS(SYSDATE, -${Number(sinceMonths)})`)
+  if (!r.ok) return { ok: false, error: r.error }
+  return {
+    ok: true,
+    // ⚠️ A PO WITH NO ADDRESSEE IS KEPT, with null. Dropping it would make "we have not
+    // synced this PO" and "this PO has no ship-to" the same thing, and 3 of 80 open POs
+    // genuinely have none.
+    rows: r.rows.map((x) => ({
+      poNumber: x.po,
+      addressee: (x.addressee || '').trim() || null,
+      city: (x.city || '').trim() || null,
+      country: (x.country || '').trim() || null,
+    })),
+  }
+}
+
+/** Cache it. Same window as the season mix, for the same reason. */
+export async function syncPoShipTo({ db = pool, sinceMonths = SEASON_WINDOW_MONTHS } = {}) {
+  const r = await fetchPoShipTo({ sinceMonths })
+  if (!r.ok) return { ok: false, error: r.error }
+  let named = 0
+  for (const x of r.rows) {
+    if (x.addressee) named++
+    await db.query(
+      `INSERT INTO po_ship_to (po_number, addressee, city, country, synced_at)
+            VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (po_number) DO UPDATE SET
+         addressee = EXCLUDED.addressee, city = EXCLUDED.city,
+         country = EXCLUDED.country, synced_at = now()`,
+      [x.poNumber, x.addressee, x.city, x.country])
+  }
+  return { ok: true, pos: r.rows.length, named, windowMonths: sinceMonths }
+}
