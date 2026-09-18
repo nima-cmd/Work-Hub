@@ -1426,3 +1426,8 @@ export async function linkPoToOrder(poNumber, { docType, docNumber, label } = {}
 export async function fetchPo850Resends() {
   return asJson(await fetch('/api/edi/850-resends'), 'checking for resent POs')
 }
+
+// The season board — open POs grouped by season, with lane and deadline (2026-09-18).
+export async function fetchSeasonBoard() {
+  return asJson(await fetch('/api/season-board'), 'loading the season board')
+}

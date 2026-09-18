@@ -60,6 +60,46 @@ export const BUILDINGS = [
     of: 'ship windows closing or closed', view: 'calendar',
   },
   {
+    key: 'seasons', label: 'Command Center', sprite: 'bldg-01', tone: 'arrive', flip: true,
+    // ⚠️ THE ALMANAC'S SPRITE, MIRRORED, AND DELIBERATELY SO — the same logic as the
+    // Catalogue mirroring the Stock depot. The Almanac asks "which ship windows are
+    // closing"; Seasons asks "will the stock we bought arrive before its drop". Both
+    // are date buildings, so they read as twins and stand side by side. Same width (8)
+    // as the Almanac for the same reason.
+    //
+    // Nima, 2026-09-18: Seasons belongs on the Base — "i think its the heart of what
+    // were getting at". It sits in the NORTH row, which is the planning row (the desk
+    // and the wires), not the middle row, which is the physical flow of goods. A PO
+    // that will miss its launch is a planning fact before it is a freight one.
+    // ⚠️ THE DEAD CENTRE OF THE MAP — below the goods row, above the supply row.
+    //
+    // Nima asked to swap it with the Scan bay: "i think this fits in better with how
+    // important and central seasons is". Taking the Scan bay's slot literally did make
+    // it central and BROKE THE ROAD NETWORK: the Scan bay sits in the middle of the
+    // Pack house → Scan bay → Launch pad chain, so moving it to the north row sent
+    // those roads the length of the map. Measured every road against every building:
+    // 3 crossings before, 7 after — and `pack-scan` ran straight THROUGH the Command
+    // Center, so a road would have visibly cut the new building in half.
+    //
+    // This placement is more central than the Scan bay's slot ever was (the middle of
+    // everything rather than the middle of one row), leaves the goods chain unbroken,
+    // and measures back at 3 — all of them pre-existing. The layout is the topology.
+    //
+    // ⚠️ THE OPS CENTRE'S BLOCK, MIRRORED — the twin rule again, and the right twin:
+    // Ops is the desk (what is open today), the Command Center is the strategic view
+    // (what is coming and what will miss its drop). Same building, facing the other way.
+    x: 47, y: 53, w: 15, h: 12,
+    // ⚠️ NOT COUNTABLE, and this is the Archive's and Catalogue's reason exactly.
+    // The season board is SIX queries (purchase orders, the item-season mix, the
+    // confirmations, the drops, product types and order links). `buildingStates` is
+    // built only from what App already passes, so that the always-open landing screen
+    // adds no query load to a one-vCPU deploy — and the Base is not given a season
+    // feed. The honest number here is "11 POs late for their drop"; inventing a
+    // cheaper stand-in that ALMOST means that is the counts-something-other-than-its-
+    // label bug this file keeps catching. Give the Base the feed, then make it count.
+    of: 'drops, and what will miss them', view: 'seasons', countable: false,
+  },
+  {
     key: 'datapad', label: 'Archive', sprite: 'bldg-07', tone: 'accent',
     // The data packet surface. ⚠️ NOT COUNTABLE — see `countable` below.
     x: 76, y: 3, w: 10, h: 13,
@@ -104,6 +144,9 @@ export const BUILDINGS = [
     // duplicating buildings for the new lanes, and a second dock hall beside the
     // first is what a warehouse complex actually looks like. `flip` keeps them
     // visually distinct; the sprite+flip pair is what has to be unique.
+    // ⚠️ IT STAYS HERE, and the Command Center's note records why the swap was undone:
+    // this slot is the middle of the Pack house → Scan bay → Launch pad chain, and the
+    // roads those events travel are only honest while it sits between them.
     x: 48, y: 33, w: 13, h: 18,
     of: 'scanned back in, needs a label', view: 'scan',
   },
@@ -193,6 +236,16 @@ export const ROADS = [
   { key: 'ops-calendar', from: 'ops', to: 'calendar' },
   { key: 'ops-scan', from: 'ops', to: 'scan' },
   { key: 'calendar-archive', from: 'calendar', to: 'datapad' },
+  // ⚠️ `seasons-port` WAS REMOVED WHEN THE COMMAND CENTER TOOK THE CENTRAL SPOT
+  // (2026-09-18). It made sense when Seasons sat in the north row; from the middle of
+  // the map the straight line to the Landing bay runs THROUGH THE PACK HOUSE, which is
+  // the dot-crosses-a-building failure this file's header warns about. The layout is
+  // the topology: move a building and its roads have to be re-earned, not inherited.
+  // ⚠️ `calendar-seasons` WENT WITH THE MOVE. From the dead centre the dogleg up to the
+  // Almanac runs through the Scan bay; these two are the honest neighbours now — the
+  // floor directly above, and the partner row directly below.
+  { key: 'seasons-scan', from: 'seasons', to: 'scan' },
+  { key: 'seasons-routing', from: 'seasons', to: 'routing' },
   { key: 'archive-launch', from: 'datapad', to: 'launch' },
 ]
 
@@ -379,6 +432,12 @@ export function buildingStates({ orders = [], tasks = [], emails = [], events = 
     datapad: state(0, [], 'none', () => null),
     // ⚠️ NOT COUNTABLE either — see the building. The view renders its label instead.
     catalogue: state(0, [], 'none', () => null),
+    // ⚠️ NOT COUNTABLE, and the ONE number that belongs here is a real one this view
+    // is simply not fed: "POs late for their drop" (11 on 2026-09-18). It takes the
+    // season board's six queries, and the Base is the always-open screen. So it shows
+    // its label until the feed reaches it — never a cheaper number that almost means
+    // the same thing. See the building's note.
+    seasons: state(0, [], 'none', () => null),
     comms: state(unread.length, unread, 'email', (e) => e.receivedAt || e.received_at),
     ops: state(openTasks.length, openTasks, 'task', (t) => t.createdAt || t.created_at),
   }

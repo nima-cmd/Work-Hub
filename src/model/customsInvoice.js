@@ -41,6 +41,81 @@ export function categoryOf(itemId) {
   return 'unknown'
 }
 
+/**
+ * Decide WHAT to declare: the contents of the box, priced from the order.
+ *
+ * ┌─ IN PLAIN WORDS ───────────────────────────────────────────────────────────┐
+ * │ A customs form has to answer two different questions, and the answers live  │
+ * │ in two different NetSuite records:                                          │
+ * │                                                                             │
+ * │   WHAT is in the box?   -> the Item Fulfilment (what was actually picked)   │
+ * │   WHAT is it worth?     -> the Sales Order (the price the customer pays)    │
+ * │                                                                             │
+ * │ Before this function, the form was built entirely from the Sales Order. If  │
+ * │ you pulled an item out of the shipment, the paperwork still listed it —     │
+ * │ declaring goods that were not in the box. This takes the QUANTITIES from    │
+ * │ the fulfilment and the PRICES from the order, so the two always agree.      │
+ * │                                                                             │
+ * │ Nima, 2026-09-18: "lets use that method if possible of IF for units and     │
+ * │ sales order for price."                                                     │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * @param priced  [{ item, displayName, qty, rate, coo, weight }] — from the SALES ORDER
+ * @param shipped [{ item, qty }] — from the ITEM FULFILMENT
+ *
+ * ⚠️ AN ITEM IN THE BOX WITH NO PRICE IS A PROBLEM, NOT A ZERO. It cannot be declared
+ * at all — a customs line with no value is a false declaration, and defaulting it to 0
+ * or to another line's price is exactly the kind of guess that gets a shipment held.
+ * It is returned in `unpriced` so the caller can BLOCK the document and name the item.
+ *
+ * ⚠️ AND AN UNREADABLE FULFILMENT FALLS BACK TO THE ORDER, loudly. If `shipped` is
+ * empty we cannot tell "the box is empty" from "NetSuite did not answer" — and emitting
+ * a zero-line customs form for a real shipment is far worse than over-declaring. The
+ * caller is told the contents were NOT verified (`verified: false`) so the existing
+ * "not checked" warning still fires.
+ */
+export function declarableLines({ priced = [], shipped = [] } = {}) {
+  const byItem = new Map()
+  for (const l of priced) {
+    const k = String(l.item || '').trim()
+    if (!k) continue
+    // A style can appear on several order lines; the first priced line carries the
+    // item's own facts (name, origin, weight) and they do not differ between lines.
+    if (!byItem.has(k)) byItem.set(k, l)
+  }
+
+  // ⚠️ THE FALLBACK. See the header note — empty means "unread", not "empty box".
+  if (!shipped.length) {
+    return { lines: priced, excluded: [], unpriced: [], verified: false, source: 'order' }
+  }
+
+  const lines = []
+  const unpriced = []
+  const shippedItems = new Set()
+  for (const sLine of shipped) {
+    const k = String(sLine.item || '').trim()
+    if (!k) continue
+    shippedItems.add(k)
+    const qty = Number(sLine.qty || 0)
+    if (!qty) continue
+    const p = byItem.get(k)
+    if (!p) {
+      // In the box, never priced. Cannot be declared; the caller must not ship on this.
+      unpriced.push({ item: k, qty })
+      continue
+    }
+    // ⚠️ QUANTITY FROM THE BOX, EVERYTHING ELSE FROM THE ORDER.
+    lines.push({ ...p, item: k, qty })
+  }
+
+  // Priced but not shipped — normal for a partial shipment, and simply left off.
+  const excluded = [...byItem.values()]
+    .filter((l) => !shippedItems.has(String(l.item || '').trim()))
+    .map((l) => ({ item: l.item, qty: Number(l.qty || 0), rate: Number(l.rate || 0) }))
+
+  return { lines, excluded, unpriced, verified: true, source: 'fulfilment' }
+}
+
 const money = (n) => Math.round(Number(n || 0) * 100) / 100
 const round2 = (n) => Math.round(Number(n || 0) * 100) / 100
 

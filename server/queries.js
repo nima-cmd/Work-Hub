@@ -18,6 +18,7 @@ import { deliveryFor, unusableWindow, awaitingReceipt } from '../src/model/conta
 import { purposeFor, purposeBreakdown } from '../src/model/transferPurpose.js'
 import { seasonFor, REASONS, SEASONS } from '../src/model/poSeason.js'
 import { dropsFrom, dropRisk, suggestReason } from '../src/model/seasonDrops.js'
+import { seasonBoard } from '../src/model/seasonBoard.js'
 import { displayNameFor } from '../src/model/containerAlias.js'
 // ⚠️ ALIASED — `anchorFor` is already taken in this file by orderLane.js, where it means
 // something entirely different (which lane an order anchors to). Two unrelated functions
@@ -118,7 +119,7 @@ import { computeSyncHealth, LIVE_SYNCS, CONDITIONAL_SYNCS } from '../src/model/s
 import { ASSUMPTIONS, MECHANICAL, summarize as summarizeAssumptions } from '../src/model/fieldAssumptions.js'
 import { summarizeTransfer } from '../src/model/transferMeter.js'
 import {
-  buildCustomsLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
+  buildCustomsLines, declarableLines, toDhlRows, toUpsRows, toCsv, DHL_COLUMNS, UPS_COLUMNS,
 } from '../src/model/customsInvoice.js'
 import { reconcileShipment, priceAnomalies, reconcileWarnings } from '../src/model/customsReconcile.js'
 export { toCsv }
@@ -4647,7 +4648,39 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
     rate: Number(r.rate || 0), coo: r.coo || null, weight: Number(r.weight || 0),
   }))
 
-  const built = buildCustomsLines(lines)
+  // ⚠️ THE FULFILMENT IS READ BEFORE THE FORM IS BUILT, and that ordering is the fix
+  // (2026-09-18). It used to be read afterwards, only to RECONCILE — so pulling an item
+  // off the IF left it on the declaration and merely raised a warning. Nima: "lets use
+  // that method if possible of IF for units and sales order for price."
+  //
+  // ⚠️ POSITIVE InvtPart LINES ONLY. An Item Fulfilment writes THREE lines per item
+  // (-qty, +qty, -qty) for the inventory movement — verified on IF7594: SN03013LD-
+  // BORDEAUX comes back as -2, +2, -2. SUM(ABS()) triples every count.
+  let shippedRows = []
+  let readError = null
+  try {
+    const f = await runSuiteQL(
+      `SELECT BUILTIN.DF(tl.item) AS item, SUM(tl.quantity) AS qty
+         FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
+        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}'
+          AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
+        GROUP BY BUILTIN.DF(tl.item)`)
+    shippedRows = (f.rows || []).map((r) => ({ item: r.item, qty: Number(r.qty || 0) }))
+  } catch (e) {
+    // ⚠️ A failed read is "not checked", never "agrees" — and never an empty box.
+    readError = e.message
+  }
+
+  // Contents from the fulfilment, prices from the order. See declarableLines.
+  const declared = declarableLines({ priced: lines, shipped: shippedRows })
+  const built = buildCustomsLines(declared.lines)
+
+  // ⚠️ AN ITEM IN THE BOX WITH NO PRICE BLOCKS THE DOCUMENT. `problems` is the gate that
+  // already stops an unclassified line being exported; an unpriced one is the same class
+  // of failure — a line we cannot legally fill in.
+  const unpricedProblems = declared.unpriced.map(
+    (u) => `${u.item} is in ${ifNum} (${u.qty}) but is not priced on ${head.soNumber} — it cannot be declared until someone gives it a value.`)
+  if (unpricedProblems.length) built.problems = [...(built.problems || []), ...unpricedProblems]
 
   // ⚠️ PER ITEM, NOT A TOTAL. This compared the fulfilment's unit COUNT against the
   // order's, which cannot see a SWAP: ship 2 Onyx in place of 2 Rosso and the total is
@@ -4660,25 +4693,13 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
   // same rule as ediPackagesLive.ifUnitsSql, which measured it on IF7420, rather than
   // a second private fix for one NetSuite quirk. The old code deduped on `item|qty`,
   // which also collapsed two genuine lines of the same item and quantity into one.
-  let reconciliation = null
+  // ⚠️ THE RECONCILIATION STILL RUNS, and still compares the ORDER against the BOX —
+  // not the declaration against the box, which would now always agree and prove nothing.
+  // Its job changed from gatekeeper to explanation: it is how the screen says WHY the
+  // form shows 9 units when the order was for 10.
   let shipmentNote = null
-  try {
-    const f = await runSuiteQL(
-      `SELECT BUILTIN.DF(tl.item) AS item, SUM(tl.quantity) AS qty
-         FROM transaction t JOIN transactionline tl ON tl.transaction = t.id
-        WHERE t.tranid = '${ifNum.replace(/'/g, "''")}'
-          AND tl.itemtype = 'InvtPart' AND tl.quantity > 0
-        GROUP BY BUILTIN.DF(tl.item)`)
-    reconciliation = reconcileShipment({
-      priced: lines,
-      shipped: (f.rows || []).map((r) => ({ item: r.item, qty: Number(r.qty || 0) })),
-    })
-  } catch (e) {
-    // ⚠️ A failed read is "not checked", never "agrees". Swallowing this to null was
-    // how an unreadable fulfilment came to look like a verified one.
-    reconciliation = reconcileShipment({ priced: lines, shipped: [] })
-    reconciliation.error = e.message
-  }
+  const reconciliation = reconcileShipment({ priced: lines, shipped: shippedRows })
+  if (readError) reconciliation.error = readError
   if (reconciliation && reconciliation.checked && !reconciliation.agrees
       && reconciliation.pricedUnits !== reconciliation.shippedUnits) {
     shipmentNote = `${ifNum} holds ${reconciliation.shippedUnits} unit(s) but ${head.soNumber} is priced at `
@@ -4699,6 +4720,13 @@ export async function getCustomsInvoice(ifNumber, { runSuiteQL: run = null } = {
     status: head.status, location: head.location,
     ...built,
     shipmentNote,
+    // ⚠️ WHAT THE FORM IS BUILT FROM, stated rather than assumed. 'fulfilment' means the
+    // lines are the box's contents; 'order' means the IF could not be read and the form
+    // fell back to the order UNVERIFIED — a reader must be able to tell those apart.
+    declaredFrom: declared.source,
+    contentsVerified: declared.verified,
+    excludedFromBox: declared.excluded,
+    unpricedInBox: declared.unpriced,
     reconciliation, priceAnomalies: anomalies, warnings,
     dhl: { columns: DHL_COLUMNS, rows: toDhlRows(built) },
     ups: { columns: UPS_COLUMNS, rows: toUpsRows(built) },
@@ -6108,9 +6136,11 @@ export async function refreshFromNetsuite({ preflighted = false, onStep } = {}) 
         containerLegs = { matched: r.matched, containers: r.containers, dated: r.dated }
         // Aliases second — it reads the names the leg sync just recorded.
         await syncContainerAliases({})
-        // ⚠️ AND THE SEASON MIXES AFTER THAT — both are scoped to the transfer orders
-        // and POs the sync just matched, so running them earlier would miss this
-        // cycle's new legs entirely.
+        // ⚠️ AND THE SEASON MIXES AFTER THAT — the LEG mix is scoped to the transfer
+        // orders this sync just matched, so running it earlier would miss this cycle's
+        // new legs entirely. The PO mix now also covers every PO still owing units
+        // (2026-09-18), which is what the season board reads; it is still ordered after
+        // the legs so a newly matched container's POs are included the same cycle.
         await syncToItemSeasons({})
         await syncPoItemSeasons({})
       } else if (busyFrom(r.error)) {
@@ -6969,5 +6999,115 @@ export async function getPo850Resends({ withinDays } = {}) {
     recent: out.recent.map((f) => ({ ...f, partner: partnerOf.get(f.po) ?? null })),
     banner: resendBanner(out),
     checkedAt: new Date().toISOString(),
+  }
+}
+
+// ── The season board (2026-09-18) ────────────────────────────────────────────
+// Nima: *"build the season view — POs grouped by season + year, with lane and deadline."*
+//
+// ⚠️ EVERY FIELD THIS READS WAS ALREADY IN POSTGRES. The handoff called these three
+// "unread NetSuite fields"; measured before building, all three were already landing
+// locally and simply nothing asked them a question:
+//
+//   custbody_acs_final_destination → purchase_orders.destination (synced since the PO
+//     table went live) — stored, shown raw, never CLASSIFIED. src/model/poLane.js is
+//     the missing half.
+//   custitem_product_type          → weaver_netsuite_item.product_type, 4,272 of 4,280
+//     items, and `purchase_orders.item` is the bare SKU so it joins at 1,381 of 1,382
+//     lines. No new NetSuite read was needed.
+//   quantityavailable / on hand    → weaver_inventory, per item-location, synced nightly.
+//
+// The one thing that genuinely was not local is the ITEM SEASON, and its problem was
+// scope rather than absence: `po_item_season` was container-scoped and overlapped the
+// open PO table by FIVE of 80. See the note on syncPoItemSeasons.
+//
+// ⚠️ SIX QUERIES, NOT SIX PER PO. Same rule as the Landing bay — this screen is meant to
+// stay open on a one-vCPU deploy.
+export async function getSeasonBoard({ today = new Date() } = {}) {
+  // Same helper the Landing bay uses: a `date` column arrives as local midnight, which
+  // lands on the same calendar day in a negative UTC offset.
+  const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null)
+  const { rows: poRows } = await pool.query(
+    `SELECT po_number, vendor, status, destination,
+            MIN(expected_receipt) AS expected_receipt,
+            SUM(qty_ordered)   AS qty_ordered,
+            SUM(qty_remaining) AS qty_remaining
+       FROM purchase_orders
+      WHERE qty_remaining > 0 AND NOT COALESCE(dismissed, false)
+      GROUP BY po_number, vendor, status, destination`)
+
+  const { rows: mixRows } = await pool.query(
+    `SELECT s.po_number, s.season, s.units FROM po_item_season s
+      WHERE EXISTS (SELECT 1 FROM purchase_orders p
+                     WHERE p.po_number = s.po_number AND p.qty_remaining > 0)`)
+
+  const { rows: confirmedRows } = await pool.query(
+    `SELECT doc_number, season, seasons, drop_number, reason, confirmed_by, suggested_was
+       FROM doc_seasons WHERE doc_type = 'PO'`)
+
+  const { rows: dropRows } = await pool.query(
+    'SELECT season, drop_number, year, on_date, title, single FROM season_drop')
+
+  // ⚠️ THE PRODUCT TYPE JOINS ON THE BARE SKU, and that is checked rather than assumed:
+  // `purchase_orders.item` is "SN02262NB-CERISE", which is `weaver_netsuite_item.sku`
+  // verbatim. 1,381 of 1,382 open lines match. The one that does not is reported as
+  // `null` rather than folded into a type, because an unmatched SKU is a catalogue
+  // question and "Handbags" would be a guess.
+  const { rows: typeRows } = await pool.query(
+    `SELECT p.po_number, w.product_type, SUM(p.qty_remaining) AS units
+       FROM purchase_orders p
+       LEFT JOIN weaver_netsuite_item w ON w.sku = p.item
+      WHERE p.qty_remaining > 0
+      GROUP BY p.po_number, w.product_type`)
+
+  // PO→order links, so a linked PO can read as a re-order — a fact, not a date reading.
+  const { rows: linkRows } = await pool.query(
+    `SELECT a_number AS po, b_type AS doc_type, b_number AS doc_number
+       FROM doc_links WHERE a_type = 'PO'`)
+
+  const mixByPo = new Map()
+  for (const m of mixRows) {
+    if (!mixByPo.has(m.po_number)) mixByPo.set(m.po_number, [])
+    mixByPo.get(m.po_number).push({ season: m.season, units: Number(m.units) || 0 })
+  }
+  const typesByPo = new Map()
+  for (const t of typeRows) {
+    if (!typesByPo.has(t.po_number)) typesByPo.set(t.po_number, [])
+    typesByPo.get(t.po_number).push({ type: t.product_type, units: Number(t.units) || 0 })
+  }
+  const linksByPo = new Map()
+  for (const l of linkRows) {
+    if (!linksByPo.has(l.po)) linksByPo.set(l.po, [])
+    linksByPo.get(l.po).push({ docType: l.doc_type, docNumber: l.doc_number })
+  }
+  const confirmedByPo = new Map(confirmedRows.map((c) => [c.doc_number, c]))
+
+  const drops = dropRows.map((d) => ({
+    season: d.season, drop: d.drop_number, on: iso(d.on_date), title: d.title, single: d.single,
+  }))
+
+  const pos = poRows.map((p) => ({
+    poNumber: p.po_number,
+    vendor: p.vendor,
+    status: p.status,
+    destination: p.destination,
+    expectedReceipt: iso(p.expected_receipt),
+    qtyOrdered: Number(p.qty_ordered) || 0,
+    qtyRemaining: Number(p.qty_remaining) || 0,
+    mix: mixByPo.get(p.po_number) || [],
+    types: (typesByPo.get(p.po_number) || []).sort((a, b) => b.units - a.units),
+    confirmed: confirmedByPo.get(p.po_number) || null,
+    orderLinks: linksByPo.get(p.po_number) || [],
+  }))
+
+  const board = seasonBoard({ pos, drops, today })
+  return {
+    ...board,
+    // ⚠️ REPORTED, BECAUSE AN EMPTY SEASON IS AMBIGUOUS. A PO with no mix row means
+    // nobody asked NetSuite for its item seasons — not that its items have none. That
+    // distinction is the standing lesson from the four modules that had no caller, so
+    // the count is on the screen rather than inferred from a blank column.
+    unmixed: pos.filter((p) => !p.mix.length).map((p) => p.poNumber),
+    drops,
   }
 }

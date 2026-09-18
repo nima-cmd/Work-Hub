@@ -10,6 +10,7 @@ import TableView from './views/TableView.jsx'
 import Calendar from './views/Calendar.jsx'
 import Allocations from './views/Allocations.jsx'
 import Containers from './views/Containers.jsx'
+import Seasons from './views/Seasons.jsx'
 import EdiOrders from './views/EdiOrders.jsx'
 import Routing from './views/Routing.jsx'
 import Catalogue from './views/Catalogue.jsx'
@@ -164,6 +165,10 @@ const VIEWS = [
   // per container, its identity and aliases, its China leg, where its freight is and
   // what to do next. Same NetSuite records, a different question.
   { key: 'containers', label: 'Containers', C: Containers },
+  // ⚠️ A PEER TO 'Containers', NOT A TAB INSIDE IT. Containers asks "where is this
+  // vessel"; Seasons asks "is what we bought for the Holiday drop going to make it".
+  // Same POs, a different question — and the second one has a deadline (2026-09-18).
+  { key: 'seasons', label: 'Seasons', C: Seasons },
   { key: 'edi', label: 'EDI', C: EdiOrders },
   { key: 'routing', label: 'Routing', C: Routing },
   { key: 'catalogue', label: 'Catalogue', C: Catalogue },

@@ -175,15 +175,31 @@ export async function syncToItemSeasons({ db = pool } = {}) {
 }
 
 /**
- * Cache the mix for every PO our containers carry.
+ * Cache the mix for every PO our containers carry, AND every PO still owing units.
  *
- * ⚠️ SCOPED TO THE POs ON CONTAINERS, not every PO in NetSuite. This exists to answer a
- * container question; widening it is a decision about query cost on a one-vCPU deploy,
- * not a tidy-up.
+ * ⚠️ THE SCOPE WAS WIDENED ON PURPOSE (2026-09-18), and the old comment here said
+ * widening it was "a decision about query cost, not a tidy-up". This is that decision,
+ * made because the container scope could not answer the question the season view asks.
+ *
+ * Measured before changing it: `po_item_season` held 89 POs and `purchase_orders` holds
+ * 80 — and the two sets OVERLAP BY FIVE. A season view built on the container scope
+ * would have grouped 5 of 80 open POs and shown empty seasons for the rest, which reads
+ * as "no stock coming for Holiday" rather than "nobody asked NetSuite". That is the
+ * empty-table-looks-like-a-quiet-one shape this repo keeps finding.
+ *
+ * ⚠️ THE TWO SCOPES ARE UNIONED, NOT SWAPPED. A container PO can be fully received and
+ * so carry no remaining units, which is exactly when `purchase_orders` drops it — and
+ * the Landing bay still needs its mix to describe freight already on the water.
+ *
+ * Cost: one SuiteQL call, grouped per (PO, season) in NetSuite rather than per line.
+ * The union is ~164 POs against the 89 it asked for before.
  */
 export async function syncPoItemSeasons({ db = pool } = {}) {
   const { rows: pos } = await db.query(
-    `SELECT DISTINCT po_number FROM container_transfer WHERE po_number IS NOT NULL ORDER BY po_number`)
+    `SELECT po_number FROM container_transfer WHERE po_number IS NOT NULL
+      UNION
+     SELECT po_number FROM purchase_orders WHERE qty_remaining > 0
+      ORDER BY po_number`)
   const poNumbers = pos.map((r) => r.po_number)
   if (!poNumbers.length) return { ok: true, pos: 0, rows: 0 }
 
